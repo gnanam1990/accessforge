@@ -18,9 +18,9 @@ in-memory store) stand in for a real boundary while still being reported as proo
 ## Decision
 
 **1. A new dedicated repository, not an existing project.**
-Implementation lives at `/Users/kratos/Documents/Codex/2026-09-09/accessforge`, published as the
-public repository `github.com/gnanam1990/accessforge`. The session's original working directory
-(`capitaldesk`) is an unrelated project and was left untouched.
+Implementation lives at `<implementation-checkout>`, published as the
+public repository `github.com/gnanam1990/accessforge`. The session's original working directory belonged to
+an unrelated project and was left untouched.
 
 **2. The specification pack is vendored, not referenced.**
 The complete pack is committed at `specs/accessforge/` (43 files) exactly as supplied, preserving
@@ -66,8 +66,10 @@ separate approval); and an authorized target application with permitted effects 
 product and contradicted the pack's explicit instruction.
 
 **Rejected alternative — proceed with the virtual screen reader to keep the pipeline green.**
-`@guidepup/virtual-screen-reader` would pass here today with VoiceOver never running. Reporting that
-as E0 proof would violate INV-02, which is precisely the failure this product exists to prevent.
+`@guidepup/virtual-screen-reader` is registry-available and was deliberately not installed or run,
+so no claim is made about its output. It simulates a reader rather than driving one, so reporting
+its results as E0 proof would violate INV-02 whatever they said — precisely the failure this product
+exists to prevent.
 
 **Rejected alternative — defer all CI to module 27.** MASTER-BUILD-AND-MERGE §5 requires meaningful
 CI from module 01 onward; module 27 hardens a pipeline rather than inventing the first trustworthy one.

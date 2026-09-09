@@ -16,7 +16,7 @@ Status is tracked in four independent fields, because a merged foundation is not
 
 | # | Module | Depends on | Requirements | Impl | Verify | Deliver | Scope |
 |---|---|---|---|---|---|---|---|
-| 00 | Repository and runtime capability gate | — | FR-004, 008, 022, 024 | implemented | passed (docs/capability only) | open | E0 |
+| 00 | Repository and runtime capability gate | — | FR-004, 008, 022, 024 | implemented | passed | open | E0 |
 | 01 | Workspace foundation, pinned runtimes, first CI | 00 | FR-016, 022, 024 | not started | pending | local | E0 |
 | 02 | Canonical schemas and deterministic reducers | 01 | FR-002, 003, 007, 015, 016 | not started | pending | local | E0 |
 | 03 | Human, tenant and service identities | 02 | FR-001, 014, 020 | not started | pending | local | E0 |
@@ -57,9 +57,15 @@ their own owned paths in their handoffs.
 
 ## Sequencing
 
-Modules 01–07 are the reachable foundation: none of them require a screen reader, a model
-endpoint, or a target application. That is the work that can proceed honestly from the current
-environment.
+Modules 01–07 are the largely reachable foundation, but the line is not clean at 05. Modules 01–04,
+06 and 07 need no screen reader, model endpoint, or target application and can proceed honestly
+from the current environment.
+
+**Module 05 is the exception.** Authorized projects and immutable build manifests are target-bound:
+its schemas, authorization rules, and digest handling can be built and unit-tested, but real
+manifests and any target-bound validation stay BLOCKED until an authorized target application
+exists. Module 01 builds a local reference application, which may satisfy that need without an
+external target — that has to be established by module 05's own evidence, not assumed here.
 
 Module 08 is where the delivery loop meets its first hard external gate. Its implementation can be
 written and unit-tested against labelled fakes, but its actual-AT proof stays BLOCKED until the
