@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 from typing import Literal
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,6 +19,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 _PLACEHOLDER_TOKENS = ("changeme", "placeholder", "replace_me", "replaceme", "your_", "xxxx")
+
+
+def _is_local_host(host: str) -> bool:
+    """Whether a host component actually refers to this machine.
+
+    Parsed, never substring-matched. The previous substring check accepted
+    `postgresql://user:pw@evil.example.com/db?application_name=x@localhost`, because the marker
+    text appeared outside the authority while the real host was remote.
+    """
+    candidate = unquote(host).strip().lower()
+    if not candidate:
+        return True  # empty authority means a local unix socket
+    if candidate.startswith("/"):
+        return True  # explicit unix socket directory
+    if candidate in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(candidate.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def _is_placeholder(value: str) -> bool:
@@ -66,11 +87,26 @@ class ReferenceAppSettings(BaseSettings):
     def _require_local_database(cls, value: str) -> str:
         if not value.startswith(("postgresql://", "postgres://")):
             raise ValueError("database_url must be a PostgreSQL URL")
-        lowered = value.lower()
-        if not any(h in lowered for h in ("@localhost", "@127.0.0.1", "@/", "@[::1]")):
+
+        parts = urlsplit(value)
+
+        # A `host=` query parameter overrides the authority for libpq, so checking only the
+        # authority would leave the real destination unconstrained.
+        for override in parse_qs(parts.query).get("host", []):
+            if not _is_local_host(override):
+                raise ValueError(
+                    "refusing a non-local database: the host query parameter points at "
+                    f"{override!r}"
+                )
+
+        host = parts.hostname
+        if host is None or host == "":
+            return value  # local unix socket, e.g. postgresql:///dbname
+
+        if not _is_local_host(host):
             raise ValueError(
-                "refusing a non-local database; the reference application must never write to a "
-                "shared or production database"
+                f"refusing a non-local database at host {host!r}; the reference application must "
+                "never write to a shared or production database"
             )
         return value
 

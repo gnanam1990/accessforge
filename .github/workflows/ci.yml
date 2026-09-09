@@ -129,6 +129,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the specification-pack guard compares against the merge base with main.
+          # With the default shallow fetch there is no origin/main ref at all, and the comparison
+          # silently degrades to "nothing changed".
+          fetch-depth: 0
 
       - name: Internal links resolve
         run: |
@@ -149,13 +154,35 @@ jobs:
       - name: Specification pack is unmodified
         # specs/accessforge/ is supplied input. A change there is a contract change and must be
         # deliberate, not a drive-by edit inside an implementation PR.
+        #
+        # No error is suppressed here. The previous version piped git's stderr to /dev/null and
+        # appended `|| true`, so when origin/main could not be resolved the guard reported
+        # success unconditionally — a check that proved nothing while showing green.
         run: |
-          changed=$(git diff --name-only origin/main...HEAD -- specs/ 2>/dev/null || true)
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          base="$(git merge-base refs/remotes/origin/main HEAD)"
+          echo "comparing against merge-base $base"
+
+          # Self-test: if the comparison machinery is broken, it returns empty for everything and
+          # the guard below is vacuous. On a pull request this branch must differ from the merge
+          # base somewhere, so an empty overall diff means the mechanism itself has failed.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            all_changed="$(git diff --name-only "$base" HEAD)"
+            if [ -z "$all_changed" ]; then
+              echo "::error::diff against the merge base returned nothing; this guard is not working"
+              exit 1
+            fi
+            echo "mechanism verified: $(echo "$all_changed" | wc -l | tr -d ' ') file(s) differ from base"
+          fi
+
+          changed="$(git diff --name-only "$base" HEAD -- specs/)"
           if [ -n "$changed" ]; then
             echo "::error::specification pack modified: $changed"
             echo "Contract changes require reconciling PRD/CONTRACTS/TDD/TEST-PLAN together."
             exit 1
           fi
+          echo "specification pack unmodified"
 
       - name: No secrets or local paths committed
         run: |

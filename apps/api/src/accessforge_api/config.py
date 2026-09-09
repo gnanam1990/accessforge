@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _PLACEHOLDER_TOKENS = ("changeme", "placeholder", "replace_me", "replaceme", "your_", "xxxx")
+
+
+def _is_loopback(database_url: str) -> bool:
+    host = urlsplit(database_url).hostname
+    if not host:
+        return True  # local unix socket
+    if host.lower() in {"localhost"}:
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def _is_placeholder(value: str) -> bool:
@@ -52,10 +66,29 @@ class ApiSettings(BaseSettings):
             raise ValueError("refusing a placeholder credential value")
         return value
 
-    @field_validator("environment")
-    @classmethod
-    def _production_defaults(cls, value: str) -> str:
-        return value
+    @model_validator(mode="after")
+    def _enforce_environment_appropriate_defaults(self) -> ApiSettings:
+        """Rules that depend on which environment this is.
+
+        This replaces an earlier validator that was named for this purpose but only returned its
+        input unchanged — a function that looked like enforcement while enforcing nothing. In a
+        product whose thesis is that claims must not outrun evidence, dead code shaped like a
+        guard is worse than no guard at all.
+        """
+        if self.environment in ("staging", "production"):
+            if urlsplit(self.evidence_endpoint_url).scheme != "https":
+                raise ValueError(
+                    f"environment {self.environment!r} requires an https evidence endpoint; "
+                    "object-store credentials must not cross the network in plaintext"
+                )
+
+        if self.environment == "production" and _is_loopback(self.database_url):
+            raise ValueError(
+                "refusing a loopback database in production; a production deployment pointing at "
+                "its own localhost is a misconfiguration, not a deliberate choice"
+            )
+
+        return self
 
     def redacted(self) -> dict[str, str | int]:
         """Diagnostics view. Credentials are never included, in any environment."""
