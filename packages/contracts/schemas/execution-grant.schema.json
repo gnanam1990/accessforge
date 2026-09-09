@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://accessforge.dev/schemas/execution-grant.schema.json",
+  "title": "ExecutionGrant",
+  "description": "A standing authorization for recurring runs. Not an exact-run approval. It never authorizes a repair or a publication, which is why no patch or publish scope appears here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "grantId", "workspaceId", "projectId", "environment", "allowedJourneyVersionIds", "allowedPolicyVersionIds", "permittedEffects", "actionBudget", "wallTimeBudgetSeconds", "expiresAt", "revision"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "grantId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "workspaceId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "projectId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "environment": { "type": "string", "minLength": 1 },
+    "allowedJourneyVersionIds": {
+      "type": "array", "items": { "$ref": "common.schema.json#/$defs/uuid" },
+      "uniqueItems": true, "minItems": 1
+    },
+    "allowedPolicyVersionIds": {
+      "type": "array", "items": { "$ref": "common.schema.json#/$defs/uuid" },
+      "uniqueItems": true, "minItems": 1
+    },
+    "permittedEffects": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "actionBudget": { "$ref": "common.schema.json#/$defs/positiveBudget" },
+    "wallTimeBudgetSeconds": { "$ref": "common.schema.json#/$defs/positiveBudget" },
+    "expiresAt": { "$ref": "common.schema.json#/$defs/rfc3339Utc" },
+    "revision": { "$ref": "common.schema.json#/$defs/safeInteger" },
+    "revoked": { "type": "boolean", "default": false }
+  }
+}

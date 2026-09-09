@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://accessforge.dev/schemas/run-manifest.schema.json",
+  "title": "RunManifest",
+  "description": "The sealed identity of a run. Its digest is SHA-256 over the RFC8785 canonical form. Changing any sealed input requires a new run and a new authorization; it is never edited in place.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "workspaceId", "projectId", "runId", "journeyVersionId",
+    "journeyDigest", "assertionSetDigest", "fixtureDigest", "sourceCommitSha",
+    "sourceTreeDigest", "buildArtifactDigest", "environmentConfigDigest",
+    "runnerProfileDigest", "navigatorPolicyDigest", "evaluatorVersion",
+    "modelConfigDigest", "authorizationId", "expiresAt", "actionBudget",
+    "wallTimeBudgetSeconds", "permittedEffects"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "workspaceId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "projectId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "runId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "journeyVersionId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "journeyDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "assertionSetDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "fixtureDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "sourceCommitSha": { "$ref": "common.schema.json#/$defs/gitSha" },
+    "sourceTreeDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "buildArtifactDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "environmentConfigDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "runnerProfileDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "navigatorPolicyDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "evaluatorVersion": { "type": "string", "minLength": 1 },
+    "modelConfigDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "authorizationId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "expiresAt": { "$ref": "common.schema.json#/$defs/rfc3339Utc" },
+    "actionBudget": { "$ref": "common.schema.json#/$defs/positiveBudget" },
+    "wallTimeBudgetSeconds": { "$ref": "common.schema.json#/$defs/positiveBudget" },
+    "permittedEffects": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Effects this run may cause. An empty list means the run may cause none."
+    }
+  },
+  "$comment": "additionalProperties is false on purpose. A security-sensitive object that tolerated unknown fields would let an unrecognized authority claim ride along unnoticed."
+}

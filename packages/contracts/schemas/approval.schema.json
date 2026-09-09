@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://accessforge.dev/schemas/approval.schema.json",
+  "title": "Approval",
+  "description": "An exact, single-target authorization. Rechecked at dispatch, never cached as a standing permission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "approvalId", "scope", "actorId", "workspaceId", "targetId", "targetDigest", "expectedRevision", "expiresAt"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "approvalId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "scope": { "$ref": "common.schema.json#/$defs/approvalScope" },
+    "actorId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "workspaceId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "targetId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "targetDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "expectedRevision": { "$ref": "common.schema.json#/$defs/safeInteger" },
+    "expiresAt": { "$ref": "common.schema.json#/$defs/rfc3339Utc" },
+    "revoked": { "type": "boolean", "default": false }
+  }
+}

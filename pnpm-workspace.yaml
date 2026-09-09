@@ -1,4 +1,4 @@
 packages:
   - "apps/web"
   - "apps/desktop-runner"
-  - "packages/*"
+  - "packages/contracts/ts"

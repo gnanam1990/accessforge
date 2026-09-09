@@ -1,0 +1,293 @@
+{
+  "valid": {
+    "run-manifest.schema.json": {
+      "schemaVersion": 1,
+      "workspaceId": "00000001-0000-4000-8000-000000000000",
+      "projectId": "00000002-0000-4000-8000-000000000000",
+      "runId": "00000003-0000-4000-8000-000000000000",
+      "journeyVersionId": "00000004-0000-4000-8000-000000000000",
+      "journeyDigest": "cde56892bbebbf6c5fe56cf3317f558aec67aeb0ba19504ca3c9e6801cb45b28",
+      "assertionSetDigest": "a45aa98be5baa34ed2e14854ea741747e6ba9d2f22fed1f272171b835f5054c0",
+      "fixtureDigest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+      "sourceCommitSha": "000000000000000000000000000000000000000a",
+      "sourceTreeDigest": "dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622",
+      "buildArtifactDigest": "44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66",
+      "environmentConfigDigest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+      "runnerProfileDigest": "527aa9f431539da8e151d5434d1d5e611d973f601d8e970790882624554146b0",
+      "navigatorPolicyDigest": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+      "evaluatorVersion": "1.0.0",
+      "modelConfigDigest": "9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+      "authorizationId": "00000005-0000-4000-8000-000000000000",
+      "expiresAt": "2026-09-09T13:00:00Z",
+      "actionBudget": 200,
+      "wallTimeBudgetSeconds": 900,
+      "permittedEffects": [
+        "FIXTURE_SUBMIT"
+      ]
+    },
+    "outcome-record.schema.json": {
+      "schemaVersion": 1,
+      "workspaceId": "00000001-0000-4000-8000-000000000000",
+      "runId": "00000003-0000-4000-8000-000000000000",
+      "manifestDigest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+      "status": "COMPLETED",
+      "outcome": "INCONCLUSIVE",
+      "evaluatorVersion": "1.0.0",
+      "decidedAt": "2026-09-09T12:30:00Z",
+      "evidenceValidity": {
+        "identityBound": true,
+        "preflightPassed": true,
+        "evidenceChainIntact": true,
+        "producerTailsClosed": false
+      },
+      "requiredAssertions": [
+        {
+          "assertionId": "error-announced",
+          "result": "UNKNOWN"
+        }
+      ],
+      "completion": "TRUE",
+      "reasons": [
+        "required producer closing watermarks missing"
+      ]
+    }
+  },
+  "invalid": [
+    {
+      "schema": "run-manifest.schema.json",
+      "why": "unknown field on a security-sensitive object",
+      "payload": {
+        "schemaVersion": 1,
+        "workspaceId": "00000001-0000-4000-8000-000000000000",
+        "projectId": "00000002-0000-4000-8000-000000000000",
+        "runId": "00000003-0000-4000-8000-000000000000",
+        "journeyVersionId": "00000004-0000-4000-8000-000000000000",
+        "journeyDigest": "cde56892bbebbf6c5fe56cf3317f558aec67aeb0ba19504ca3c9e6801cb45b28",
+        "assertionSetDigest": "a45aa98be5baa34ed2e14854ea741747e6ba9d2f22fed1f272171b835f5054c0",
+        "fixtureDigest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "sourceCommitSha": "000000000000000000000000000000000000000a",
+        "sourceTreeDigest": "dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622",
+        "buildArtifactDigest": "44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66",
+        "environmentConfigDigest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "runnerProfileDigest": "527aa9f431539da8e151d5434d1d5e611d973f601d8e970790882624554146b0",
+        "navigatorPolicyDigest": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "evaluatorVersion": "1.0.0",
+        "modelConfigDigest": "9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+        "authorizationId": "00000005-0000-4000-8000-000000000000",
+        "expiresAt": "2026-09-09T13:00:00Z",
+        "actionBudget": 200,
+        "wallTimeBudgetSeconds": 900,
+        "permittedEffects": [
+          "FIXTURE_SUBMIT"
+        ],
+        "grantsAdminAccess": true
+      }
+    },
+    {
+      "schema": "run-manifest.schema.json",
+      "why": "action budget beyond the safe-integer range",
+      "payload": {
+        "schemaVersion": 1,
+        "workspaceId": "00000001-0000-4000-8000-000000000000",
+        "projectId": "00000002-0000-4000-8000-000000000000",
+        "runId": "00000003-0000-4000-8000-000000000000",
+        "journeyVersionId": "00000004-0000-4000-8000-000000000000",
+        "journeyDigest": "cde56892bbebbf6c5fe56cf3317f558aec67aeb0ba19504ca3c9e6801cb45b28",
+        "assertionSetDigest": "a45aa98be5baa34ed2e14854ea741747e6ba9d2f22fed1f272171b835f5054c0",
+        "fixtureDigest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "sourceCommitSha": "000000000000000000000000000000000000000a",
+        "sourceTreeDigest": "dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622",
+        "buildArtifactDigest": "44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66",
+        "environmentConfigDigest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "runnerProfileDigest": "527aa9f431539da8e151d5434d1d5e611d973f601d8e970790882624554146b0",
+        "navigatorPolicyDigest": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "evaluatorVersion": "1.0.0",
+        "modelConfigDigest": "9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+        "authorizationId": "00000005-0000-4000-8000-000000000000",
+        "expiresAt": "2026-09-09T13:00:00Z",
+        "actionBudget": 9007199254740992,
+        "wallTimeBudgetSeconds": 900,
+        "permittedEffects": [
+          "FIXTURE_SUBMIT"
+        ]
+      }
+    },
+    {
+      "schema": "run-manifest.schema.json",
+      "why": "non-UTC timestamp",
+      "payload": {
+        "schemaVersion": 1,
+        "workspaceId": "00000001-0000-4000-8000-000000000000",
+        "projectId": "00000002-0000-4000-8000-000000000000",
+        "runId": "00000003-0000-4000-8000-000000000000",
+        "journeyVersionId": "00000004-0000-4000-8000-000000000000",
+        "journeyDigest": "cde56892bbebbf6c5fe56cf3317f558aec67aeb0ba19504ca3c9e6801cb45b28",
+        "assertionSetDigest": "a45aa98be5baa34ed2e14854ea741747e6ba9d2f22fed1f272171b835f5054c0",
+        "fixtureDigest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "sourceCommitSha": "000000000000000000000000000000000000000a",
+        "sourceTreeDigest": "dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622",
+        "buildArtifactDigest": "44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66",
+        "environmentConfigDigest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "runnerProfileDigest": "527aa9f431539da8e151d5434d1d5e611d973f601d8e970790882624554146b0",
+        "navigatorPolicyDigest": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "evaluatorVersion": "1.0.0",
+        "modelConfigDigest": "9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+        "authorizationId": "00000005-0000-4000-8000-000000000000",
+        "expiresAt": "2026-09-09T13:00:00+05:30",
+        "actionBudget": 200,
+        "wallTimeBudgetSeconds": 900,
+        "permittedEffects": [
+          "FIXTURE_SUBMIT"
+        ]
+      }
+    },
+    {
+      "schema": "run-manifest.schema.json",
+      "why": "uppercase digest",
+      "payload": {
+        "schemaVersion": 1,
+        "workspaceId": "00000001-0000-4000-8000-000000000000",
+        "projectId": "00000002-0000-4000-8000-000000000000",
+        "runId": "00000003-0000-4000-8000-000000000000",
+        "journeyVersionId": "00000004-0000-4000-8000-000000000000",
+        "journeyDigest": "CDE56892BBEBBF6C5FE56CF3317F558AEC67AEB0BA19504CA3C9E6801CB45B28",
+        "assertionSetDigest": "a45aa98be5baa34ed2e14854ea741747e6ba9d2f22fed1f272171b835f5054c0",
+        "fixtureDigest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "sourceCommitSha": "000000000000000000000000000000000000000a",
+        "sourceTreeDigest": "dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622",
+        "buildArtifactDigest": "44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66",
+        "environmentConfigDigest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "runnerProfileDigest": "527aa9f431539da8e151d5434d1d5e611d973f601d8e970790882624554146b0",
+        "navigatorPolicyDigest": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "evaluatorVersion": "1.0.0",
+        "modelConfigDigest": "9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+        "authorizationId": "00000005-0000-4000-8000-000000000000",
+        "expiresAt": "2026-09-09T13:00:00Z",
+        "actionBudget": 200,
+        "wallTimeBudgetSeconds": 900,
+        "permittedEffects": [
+          "FIXTURE_SUBMIT"
+        ]
+      }
+    },
+    {
+      "schema": "run-manifest.schema.json",
+      "why": "missing required sealed input",
+      "payload": {
+        "schemaVersion": 1,
+        "workspaceId": "00000001-0000-4000-8000-000000000000",
+        "projectId": "00000002-0000-4000-8000-000000000000",
+        "runId": "00000003-0000-4000-8000-000000000000",
+        "journeyVersionId": "00000004-0000-4000-8000-000000000000",
+        "journeyDigest": "cde56892bbebbf6c5fe56cf3317f558aec67aeb0ba19504ca3c9e6801cb45b28",
+        "fixtureDigest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "sourceCommitSha": "000000000000000000000000000000000000000a",
+        "sourceTreeDigest": "dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622",
+        "buildArtifactDigest": "44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66",
+        "environmentConfigDigest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "runnerProfileDigest": "527aa9f431539da8e151d5434d1d5e611d973f601d8e970790882624554146b0",
+        "navigatorPolicyDigest": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "evaluatorVersion": "1.0.0",
+        "modelConfigDigest": "9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+        "authorizationId": "00000005-0000-4000-8000-000000000000",
+        "expiresAt": "2026-09-09T13:00:00Z",
+        "actionBudget": 200,
+        "wallTimeBudgetSeconds": 900,
+        "permittedEffects": [
+          "FIXTURE_SUBMIT"
+        ]
+      }
+    },
+    {
+      "schema": "outcome-record.schema.json",
+      "why": "a status outside the vocabulary",
+      "payload": {
+        "schemaVersion": 1,
+        "workspaceId": "00000001-0000-4000-8000-000000000000",
+        "runId": "00000003-0000-4000-8000-000000000000",
+        "manifestDigest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "status": "ALMOST_DONE",
+        "outcome": "INCONCLUSIVE",
+        "evaluatorVersion": "1.0.0",
+        "decidedAt": "2026-09-09T12:30:00Z",
+        "evidenceValidity": {
+          "identityBound": true,
+          "preflightPassed": true,
+          "evidenceChainIntact": true,
+          "producerTailsClosed": false
+        },
+        "requiredAssertions": [
+          {
+            "assertionId": "error-announced",
+            "result": "UNKNOWN"
+          }
+        ],
+        "completion": "TRUE",
+        "reasons": [
+          "required producer closing watermarks missing"
+        ]
+      }
+    },
+    {
+      "schema": "outcome-record.schema.json",
+      "why": "a confidence score has nowhere to live",
+      "payload": {
+        "schemaVersion": 1,
+        "workspaceId": "00000001-0000-4000-8000-000000000000",
+        "runId": "00000003-0000-4000-8000-000000000000",
+        "manifestDigest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "status": "COMPLETED",
+        "outcome": "INCONCLUSIVE",
+        "evaluatorVersion": "1.0.0",
+        "decidedAt": "2026-09-09T12:30:00Z",
+        "evidenceValidity": {
+          "identityBound": true,
+          "preflightPassed": true,
+          "evidenceChainIntact": true,
+          "producerTailsClosed": false
+        },
+        "requiredAssertions": [
+          {
+            "assertionId": "error-announced",
+            "result": "UNKNOWN"
+          }
+        ],
+        "completion": "TRUE",
+        "reasons": [
+          "required producer closing watermarks missing"
+        ],
+        "confidence": 0.93
+      }
+    },
+    {
+      "schema": "outcome-record.schema.json",
+      "why": "condition outside the tri-state",
+      "payload": {
+        "schemaVersion": 1,
+        "workspaceId": "00000001-0000-4000-8000-000000000000",
+        "runId": "00000003-0000-4000-8000-000000000000",
+        "manifestDigest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "status": "COMPLETED",
+        "outcome": "INCONCLUSIVE",
+        "evaluatorVersion": "1.0.0",
+        "decidedAt": "2026-09-09T12:30:00Z",
+        "evidenceValidity": {
+          "identityBound": true,
+          "preflightPassed": true,
+          "evidenceChainIntact": true,
+          "producerTailsClosed": false
+        },
+        "requiredAssertions": [
+          {
+            "assertionId": "error-announced",
+            "result": "UNKNOWN"
+          }
+        ],
+        "completion": "PROBABLY",
+        "reasons": [
+          "required producer closing watermarks missing"
+        ]
+      }
+    }
+  ]
+}
