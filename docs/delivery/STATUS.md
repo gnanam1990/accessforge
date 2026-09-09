@@ -29,8 +29,9 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 
 Module 00: **merged** at `fc00eb8`, verified on main.
 Module 01: **merged** at `23fe6c8`, verified on main with a clean-checkout smoke.
-Module 02: **implemented and locally verified** (339 Python tests, 46 Node tests, property tests,
-cross-language digest agreement), delivery **open**. All other modules: not started.
+Module 02: **implemented and locally verified** (351 Python tests, 54 Node tests, property tests,
+cross-language digest agreement, three review rounds closed), delivery **open**.
+All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
 
