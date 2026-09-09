@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://accessforge.dev/schemas/common.schema.json",
+  "title": "Shared primitives",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Opaque lower-case UUID. Identifiers carry no meaning and are never parsed for one."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lower-case hex SHA-256 of an RFC8785 canonical form."
+    },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "rfc3339Utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "UTC only. A local-offset timestamp would make string comparison of expiry unsafe."
+    },
+    "safeInteger": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991,
+      "description": "Within JSON safe-integer bounds; overflow is rejected rather than truncated."
+    },
+    "positiveBudget": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "approvalScope": { "enum": ["RUN_EFFECTS", "PATCH_APPLY", "GITHUB_PUBLISH"] },
+    "runStatus": {
+      "enum": ["QUEUED", "LEASED", "RUNNING", "FINALIZING", "COMPLETED", "INTERRUPTED", "CANCELLED"]
+    },
+    "outcome": { "enum": ["NOT_EVALUATED", "PASS", "FAIL", "INCONCLUSIVE"] },
+    "condition": { "enum": ["TRUE", "FALSE", "UNKNOWN"] },
+    "atAction": {
+      "enum": ["NEXT", "PREVIOUS", "ACTIVATE", "TYPE_TEXT", "KEY_CHORD", "READ_CURRENT", "WAIT_FOR_READER_IDLE", "STOP"],
+      "description": "The complete allowlist. These are AccessForge abstractions, not screen-reader library method names."
+    },
+    "eventType": {
+      "enum": ["RUN_STARTED", "PREFLIGHT_RESULT", "ACTION_INTENT", "ACTION_RESULT", "READER_OBSERVATION", "ASSERTION_OBSERVATION", "EFFECT_RECEIPT", "BUDGET_EVENT", "INTERRUPTION", "RUN_FINISHED"]
+    }
+  }
+}
