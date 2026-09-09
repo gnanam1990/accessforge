@@ -99,3 +99,25 @@ def test_every_schema_forbids_unknown_top_level_fields() -> None:
         if schema.get("type") != "object":
             continue  # common.schema.json is a $defs library, not an object schema
         assert schema.get("additionalProperties") is False, f"{name} tolerates unknown fields"
+
+
+def test_load_schema_returns_a_copy_the_caller_cannot_use_to_weaken_validation() -> None:
+    """The cache is private.
+
+    Handing out the cached object let a caller drop `additionalProperties` and weaken validation
+    for the rest of the process.
+    """
+    from accessforge_contracts import load_schema
+
+    schema = load_schema("run-manifest.schema.json")
+    assert schema["additionalProperties"] is False
+    schema["additionalProperties"] = True
+    schema["properties"]["runId"] = {"type": "string"}
+
+    assert load_schema("run-manifest.schema.json")["additionalProperties"] is False
+
+    # And validation itself is unaffected by the attempted mutation.
+    manifest = dict(FIXTURES["valid"]["run-manifest.schema.json"])
+    manifest["injected"] = True
+    with pytest.raises(SchemaValidationError):
+        validate("run-manifest.schema.json", manifest)

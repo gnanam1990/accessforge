@@ -37,11 +37,15 @@ name = "accessforge-contracts"
 version = "0.0.0"
 source = { editable = "packages/contracts/python" }
 dependencies = [
+    { name = "accessforge-domain" },
     { name = "jsonschema" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "jsonschema", specifier = ">=4.23" }]
+requires-dist = [
+    { name = "accessforge-domain", editable = "packages/domain" },
+    { name = "jsonschema", specifier = ">=4.23" },
+]
 
 [[package]]
 name = "accessforge-domain"

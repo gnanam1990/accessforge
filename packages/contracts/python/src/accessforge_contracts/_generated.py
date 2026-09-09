@@ -6,7 +6,7 @@ from typing import Final
 
 SCHEMA_DIGESTS: Final[dict[str, str]] = {
     "approval.schema.json": "d324217014f3457394f819abc4fffe0938219113b720a675c9d4e544108e4da0",
-    "common.schema.json": "fbafe43b9bfee896a00c01843ff66e9ec7899b108818635f112d3b68fdd0db72",
+    "common.schema.json": "7461d10941b092d3fd118e6b87ee4357a3157959b278e64108dd713a164c7802",
     "evidence-envelope.schema.json": "181d7e3ffd00f49867e70185291a0393a70d3f44b944c0d4358fd9b8fc299a53",
     "execution-grant.schema.json": "6509fa2b1622b36400d51ab80d147db8d90258437b8fae4f3d7c684f1d336cb4",
     "outcome-record.schema.json": "fc4f9078aca36c8d40253ff60d76944a41cb9d9fa26f35974395ec46f895552d",

@@ -313,3 +313,48 @@ def test_malformed_expiry_is_refused_at_construction(bad: str) -> None:
 
     with pytest.raises(TimestampError):
         replace(APPROVAL, expires_at=bad)
+
+
+def test_a_forged_child_with_the_correct_parent_revision_is_still_refused() -> None:
+    """Regression: containment was only checked at minting, not at dispatch.
+
+    ChildAuthorization is a plain dataclass and can be constructed directly, so a child that never
+    passed through mint_child_authorization could present itself at dispatch. Carrying the correct
+    current parent revision was enough to be accepted, authorizing effects and budgets the grant
+    never permitted.
+    """
+    forged = ChildAuthorization(
+        authorization_id="auth-forged",
+        run_id="run-1",
+        workspace_id="ws-1",
+        project_id="p1",
+        journey_version_id="jv-not-allowed",
+        policy_version_id="pv-not-allowed",
+        permitted_effects=frozenset({"SEND_EMAIL"}),
+        action_budget=999999,
+        wall_time_budget_seconds=999999,
+        expires_at=LATER,
+        parent_grant_id="g1",
+        parent_grant_revision=7,  # the grant's actual current revision
+        issuing_service_identity="attacker",
+    )
+    with pytest.raises(AuthorityError):
+        check_child_at_dispatch(forged, GRANT, **_dispatch_args())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("journey_version_id", "jv-not-allowed"),
+        ("policy_version_id", "pv-not-allowed"),
+        ("permitted_effects", frozenset({"SEND_EMAIL"})),
+        ("action_budget", 999999),
+        ("wall_time_budget_seconds", 999999),
+    ],
+)
+def test_every_containment_axis_is_rechecked_at_dispatch(field_name: str, value: object) -> None:
+    """Minting is not enough: each axis must be verified again when the child is used."""
+    legitimate = mint_child_authorization(GRANT, **MINT)
+    tampered = replace(legitimate, **{field_name: value})
+    with pytest.raises(AuthorityError):
+        check_child_at_dispatch(tampered, GRANT, **_dispatch_args())  # type: ignore[arg-type]

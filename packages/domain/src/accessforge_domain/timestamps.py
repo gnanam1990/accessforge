@@ -48,7 +48,12 @@ def parse_rfc3339_utc(value: str, *, field: str = "timestamp") -> datetime:
             f"{field} must be an RFC3339 UTC timestamp ending in Z "
             f"(for example 2026-09-09T12:00:00Z or 2026-09-09T12:00:00.000001Z), got {value!r}"
         )
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        # The pattern above accepts shapes that are not real instants, such as month 13 or
+        # 30 February. Those must surface as TimestampError, not a raw ValueError.
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise TimestampError(f"{field} is not a valid instant: {value!r} ({exc})") from exc
     if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(None):
         raise TimestampError(f"{field} must be UTC, got {value!r}")
     return parsed

@@ -84,3 +84,36 @@ test('a lone surrogate no longer hashes as U+FFFD', () => {
   assert.throws(() => digest({ s: '\uD800' }), CanonicalizationError);
   assert.equal(digest({ s: '�' }).length, 64); // the replacement character itself is fine
 });
+
+// --- values with no JSON counterpart (CodeRabbit finding) --------------------------------
+// Object.keys returns [] for these, so they used to serialize as "{}" and digest to a
+// confident, wrong hash. Python refuses all of them; TypeScript must agree.
+
+for (const [name, value] of [
+  ['Date', new Date(0)],
+  ['Map', new Map([['a', 1]])],
+  ['Set', new Set([1])],
+  ['RegExp', /x/],
+  ['class instance', new (class Foo { constructor() { Object.defineProperty(this, 'x', { value: 1 }); } })()],
+]) {
+  test(`rejects a ${name} instead of digesting it as {}`, () => {
+    assert.throws(() => canonicalize({ v: value }), CanonicalizationError);
+  });
+}
+
+test('rejects sparse arrays, which have no JSON representation', () => {
+  // Array.prototype.map skips holes, so this used to serialize to the invalid JSON "[,1]".
+  const sparse = [, 1];
+  assert.throws(() => canonicalize({ a: sparse }), CanonicalizationError);
+});
+
+test('rejects functions and symbols', () => {
+  assert.throws(() => canonicalize({ f: () => 1 }), CanonicalizationError);
+  assert.throws(() => canonicalize({ s: Symbol('x') }), CanonicalizationError);
+});
+
+test('plain objects and dense arrays are unaffected', () => {
+  // Allowed-path control.
+  assert.equal(canonicalize({ a: [1, 2], b: { c: 3 } }), '{"a":[1,2],"b":{"c":3}}');
+  assert.equal(canonicalize(Object.create(null, { x: { value: 1, enumerable: true } })), '{"x":1}');
+});

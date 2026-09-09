@@ -17,7 +17,7 @@
     "rfc3339Utc": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
-      "description": "UTC only. A local-offset timestamp would make string comparison of expiry unsafe."
+      "description": "UTC only, with optional fractional seconds. Note that these values must not be compared as strings even in this form: two valid instants differing only in fractional-second precision sort the wrong way round, because '.' (0x2E) is lower than 'Z' (0x5A). Consumers parse before comparing."
     },
     "safeInteger": {
       "type": "integer",
