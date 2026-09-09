@@ -236,3 +236,29 @@ def test_a_running_run_has_begun_execution_even_before_its_first_action() -> Non
     state = request_cancellation(state, requested_at="2026-09-09T12:00:00Z")
     state = acknowledge_stop(state, acknowledged_at="2026-09-09T12:00:05Z", epoch=0)
     assert cancel(state).outcome is Outcome.INCONCLUSIVE
+
+
+def test_a_stop_acknowledged_before_cancellation_was_requested_is_not_stop_proof() -> None:
+    """Regression: an acknowledgement that predates the request proves nothing about it.
+
+    The runner may have acknowledged stopping for some earlier reason and then resumed acting.
+    Accepting it conflates "we asked it to stop" with "it stopped because we asked" — the exact
+    conflation this module exists to prevent.
+    """
+    state = running()
+    state = acknowledge_stop(state, acknowledged_at="2026-09-09T12:00:00Z", epoch=0)
+    state = request_cancellation(state, requested_at="2026-09-09T12:00:05Z")
+
+    with pytest.raises(TransitionError, match="predates|not physically stopped"):
+        cancel(state)
+
+    # A fresh acknowledgement after the request does establish it.
+    state = acknowledge_stop(state, acknowledged_at="2026-09-09T12:00:06Z", epoch=0)
+    assert cancel(state).status is RunStatus.CANCELLED
+
+
+def test_an_acknowledgement_exactly_at_the_request_instant_is_accepted() -> None:
+    # Allowed-path control at the boundary.
+    state = request_cancellation(running(), requested_at="2026-09-09T12:00:00Z")
+    state = acknowledge_stop(state, acknowledged_at="2026-09-09T12:00:00Z", epoch=0)
+    assert cancel(state).status is RunStatus.CANCELLED

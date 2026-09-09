@@ -10,7 +10,7 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 
 | Claim | Answer |
 |---|---|
-| Is code merged? | Bootstrap plus module 00 documentation. Module 01 (workspace, reference application, CI) is **open in a pull request**, not yet merged. |
+| Is code merged? | Modules 00 and 01 are merged. Module 02 (contracts and reducers) is **open in a pull request**, not yet merged. |
 | Is a runtime verified? | **Partly.** The reference application and control-plane API were started and exercised over real HTTP against real PostgreSQL, including restart durability. **No screen reader has ever run.** |
 | Is R1 release-ready? | **No**, and it cannot become ready on this host — module 09 requires Windows/NVDA. |
 | Did deployment or event submission occur? | **No.** Neither is authorized. |
@@ -29,7 +29,7 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 
 Module 00: **merged** at `fc00eb8`, verified on main.
 Module 01: **merged** at `23fe6c8`, verified on main with a clean-checkout smoke.
-Module 02: **implemented and locally verified** (301 Python tests, 39 Node tests, property tests,
+Module 02: **implemented and locally verified** (339 Python tests, 46 Node tests, property tests,
 cross-language digest agreement), delivery **open**. All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.

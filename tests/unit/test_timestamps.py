@@ -82,3 +82,17 @@ def test_comparison_refuses_malformed_input_rather_than_guessing() -> None:
         is_expired(now="whenever", expires_at="2026-09-09T12:00:00Z")
     with pytest.raises(TimestampError):
         is_expired(now="2026-09-09T12:00:00Z", expires_at="2026-09-09T12:00:00+00:00")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-13-45T99:99:99Z",  # matches the pattern, is not an instant
+        "2026-02-30T12:00:00Z",  # February 30th
+        "2026-00-01T12:00:00Z",  # month zero
+    ],
+)
+def test_pattern_valid_but_impossible_instants_raise_the_domain_error(value: str) -> None:
+    """The regex accepts shapes that are not real dates; those must not escape as ValueError."""
+    with pytest.raises(TimestampError):
+        parse_rfc3339_utc(value)

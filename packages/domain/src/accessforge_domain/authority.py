@@ -156,28 +156,23 @@ class ChildAuthorization:
         parse_rfc3339_utc(self.expires_at, field="ChildAuthorization.expires_at")
 
 
-def mint_child_authorization(
+def _assert_child_within_grant(
     grant: ExecutionGrant,
     *,
-    now: str,
-    authorization_id: str,
-    run_id: str,
     journey_version_id: str,
     policy_version_id: str,
     permitted_effects: frozenset[str],
     action_budget: int,
     wall_time_budget_seconds: int,
     expires_at: str,
-    issuing_service_identity: str,
-) -> ChildAuthorization:
-    """Mint an exact child authorization, or refuse.
+) -> None:
+    """Verify a child is contained by its parent along every axis.
 
-    A child may only ever be narrower than or equal to its parent. Every widening attempt below is
-    a refusal rather than a clamp: silently narrowing a request would hide the fact that a
-    schedule tried to exceed its grant.
+    Called at minting *and* again at dispatch. Checking only at minting was not enough:
+    ChildAuthorization is a plain dataclass that can be constructed directly, so a child that
+    never passed through minting could present itself at dispatch and, as long as it carried the
+    parent's current revision, be accepted with effects and budgets the grant never permitted.
     """
-    grant.check_usable(now=now)
-
     if journey_version_id not in grant.allowed_journey_version_ids:
         raise AuthorityError(
             f"journey version {journey_version_id} is not permitted by grant {grant.grant_id}"
@@ -204,6 +199,39 @@ def mint_child_authorization(
         raise AuthorityError(
             "child would outlive its parent grant; a child cannot extend the grant's expiry"
         )
+
+
+def mint_child_authorization(
+    grant: ExecutionGrant,
+    *,
+    now: str,
+    authorization_id: str,
+    run_id: str,
+    journey_version_id: str,
+    policy_version_id: str,
+    permitted_effects: frozenset[str],
+    action_budget: int,
+    wall_time_budget_seconds: int,
+    expires_at: str,
+    issuing_service_identity: str,
+) -> ChildAuthorization:
+    """Mint an exact child authorization, or refuse.
+
+    A child may only ever be narrower than or equal to its parent. Every widening attempt below is
+    a refusal rather than a clamp: silently narrowing a request would hide the fact that a
+    schedule tried to exceed its grant.
+    """
+    grant.check_usable(now=now)
+
+    _assert_child_within_grant(
+        grant,
+        journey_version_id=journey_version_id,
+        policy_version_id=policy_version_id,
+        permitted_effects=permitted_effects,
+        action_budget=action_budget,
+        wall_time_budget_seconds=wall_time_budget_seconds,
+        expires_at=expires_at,
+    )
     if not issuing_service_identity.strip():
         raise AuthorityError("the issuing service identity must be recorded on every child")
 
@@ -249,6 +277,19 @@ def check_child_at_dispatch(
 
     # The parent must still be usable *and* unchanged since minting.
     parent.check_usable(now=now, expected_revision=child.parent_grant_revision)
+
+    # Containment is re-verified rather than assumed from minting. A child is a data structure,
+    # not a capability token: carrying the right parent revision is not evidence that it was ever
+    # legitimately issued.
+    _assert_child_within_grant(
+        parent,
+        journey_version_id=child.journey_version_id,
+        policy_version_id=child.policy_version_id,
+        permitted_effects=child.permitted_effects,
+        action_budget=child.action_budget,
+        wall_time_budget_seconds=child.wall_time_budget_seconds,
+        expires_at=child.expires_at,
+    )
 
 
 def authorizes_patch(scope: ApprovalScope) -> bool:

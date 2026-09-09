@@ -103,13 +103,38 @@ function serialize(value: unknown): string {
   if (value === false) return 'false';
   if (typeof value === 'string') return serializeString(value);
   if (typeof value === 'number') return serializeNumber(value);
+  if (typeof value === 'function' || typeof value === 'symbol' || value === undefined) {
+    throw new CanonicalizationError(`${typeof value} has no JSON representation`);
+  }
   if (typeof value === 'bigint') {
     throw new CanonicalizationError('bigint cannot be canonicalized within the safe-integer range');
   }
   if (Array.isArray(value)) {
-    return `[${value.map(serialize).join(',')}]`;
+    // Array.prototype.map skips holes, so a sparse array like [, 1] would serialize to "[,1]",
+    // which is not valid JSON and has no Python counterpart.
+    const parts: string[] = [];
+    for (let i = 0; i < value.length; i += 1) {
+      if (!(i in value)) {
+        throw new CanonicalizationError(
+          `array index ${i} is a hole; sparse arrays have no JSON representation`,
+        );
+      }
+      parts.push(serialize(value[i]));
+    }
+    return `[${parts.join(',')}]`;
   }
   if (typeof value === 'object') {
+    // Object.keys returns [] for a Date, Map, Set, RegExp or any class instance whose state is
+    // not an own enumerable property, so these would serialize as "{}" and digest to a
+    // confident, wrong hash. The Python implementation refuses them, so this must too — the same
+    // silent-success failure mode the surrogate check exists to prevent.
+    const prototype = Object.getPrototypeOf(value) as object | null;
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new CanonicalizationError(
+        `${(value as object).constructor?.name ?? 'object'} has no JSON representation; ` +
+          'only plain objects, arrays and JSON primitives can be canonicalized',
+      );
+    }
     const record = value as Record<string, unknown>;
     // Array.prototype.sort on strings compares UTF-16 code units, which is exactly what RFC8785
     // requires. The Python side has to ask for this explicitly.

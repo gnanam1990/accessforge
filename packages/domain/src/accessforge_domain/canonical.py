@@ -114,9 +114,9 @@ def _serialize_number(value: int | float) -> str:
 def _utf16_sort_key(key: str) -> bytes:
     """Sort key ordering object properties by UTF-16 code unit, as RFC8785 requires.
 
-    Python's natural string ordering compares code points, which differs above the BMP: U+1F600
-    sorts before U+FF00 by code point, but after it by UTF-16 code unit, because its surrogate
-    pair begins at 0xD83D.
+    Python's natural string ordering compares code points, which differs above the BMP. By code
+    point U+FF00 (0xFF00) sorts before U+1F600 (0x1F600); by UTF-16 code unit the order reverses,
+    because U+1F600 is the surrogate pair 0xD83D 0xDE00 and 0xD83D < 0xFF00.
     """
     return key.encode("utf-16-be")
 

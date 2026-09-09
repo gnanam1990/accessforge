@@ -30,6 +30,7 @@ from .states import (
     admissible_outcomes,
     is_terminal,
 )
+from .timestamps import is_after
 
 
 class TransitionError(Exception):
@@ -75,14 +76,30 @@ class RunState:
 
     @property
     def physically_stopped(self) -> bool:
-        """Whether a stop has actually been acknowledged for the *current* epoch.
+        """Whether a stop has been acknowledged for the *current* epoch.
 
         The UI must show "cancellation requested" rather than "stopped" while this is False.
+
+        This does not by itself establish that the run stopped *in response to* a cancellation —
+        see ``stopped_in_response_to_cancellation``.
         """
         return (
             self.stop_acknowledged_at is not None
             and self.stop_acknowledged_epoch == self.lease_epoch
         )
+
+    @property
+    def stopped_in_response_to_cancellation(self) -> bool:
+        """Whether the acknowledgement actually answers the cancellation request.
+
+        An acknowledgement recorded *before* the request proves nothing about it: the runner may
+        have acknowledged stopping for an earlier reason and then resumed acting. Checking only
+        the epoch conflated "we asked it to stop" with "it stopped because we asked".
+        """
+        if not self.physically_stopped or self.cancel_requested_at is None:
+            return False
+        assert self.stop_acknowledged_at is not None  # implied by physically_stopped
+        return not is_after(later=self.cancel_requested_at, earlier=self.stop_acknowledged_at)
 
 
 def _require_expected_revision(state: RunState, expected_revision: int | None) -> None:
@@ -220,6 +237,12 @@ def cancel(state: RunState, *, expected_revision: int | None = None) -> RunState
             raise TransitionError(
                 "no stop acknowledgement for the current epoch; the run is "
                 "cancellation-requested, not physically stopped"
+            )
+        if not state.stopped_in_response_to_cancellation:
+            raise TransitionError(
+                f"the stop acknowledgement at {state.stop_acknowledged_at} predates the "
+                f"cancellation request at {state.cancel_requested_at}; it does not establish "
+                "that the run stopped in response to the request"
             )
 
     outcome = Outcome.INCONCLUSIVE if state.execution_began else Outcome.NOT_EVALUATED
