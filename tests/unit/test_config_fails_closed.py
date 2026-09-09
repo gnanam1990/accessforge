@@ -109,3 +109,72 @@ def test_secrets_never_appear_in_diagnostics() -> None:
     for secret in ("o" * 32, "s" * 32, "pw", "access-key-value", "secret-key-value"):
         assert secret not in rendered, f"{secret!r} leaked into diagnostics"
     assert "<redacted>" in rendered
+
+
+# --- findings from independent review of module 01 -----------------------------------------
+# Each of these reproduces a confirmed bypass and must fail before the corresponding fix.
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # The marker substring appears outside the authority, so a substring check accepts a
+        # URL whose real host is remote.
+        "postgresql://user:pass@evil.example.com:5432/refapp?application_name=x@localhost",
+        "postgresql://user:pass@evil.example.com:5432/db?options=-c%20search_path=@127.0.0.1",
+        "postgresql://user:pass@evil.example.com:5432/@localhost",
+        # A query parameter can override the authority host entirely.
+        "postgresql://localhost:5432/db?host=evil.example.com",
+    ],
+)
+def test_non_local_database_cannot_be_smuggled_past_the_guard(url: str) -> None:
+    with pytest.raises(ValidationError):
+        ReferenceAppSettings(**{**REFAPP_VALID, "database_url": url})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://user:pw@localhost:5432/refapp",
+        "postgresql://user:pw@127.0.0.1:5432/refapp",
+        "postgresql://user:pw@[::1]:5432/refapp",
+        "postgresql:///refapp",  # local unix socket
+        "postgresql://user@/refapp",
+    ],
+)
+def test_genuinely_local_databases_are_still_accepted(url: str) -> None:
+    # Allowed-path control: a guard that rejected everything would fail here.
+    assert ReferenceAppSettings(**{**REFAPP_VALID, "database_url": url}).database_url == url
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_non_tls_evidence_endpoint_is_refused_outside_local(environment: str) -> None:
+    # Object-store credentials must not cross the network in plaintext.
+    with pytest.raises(ValidationError, match="https"):
+        ApiSettings(
+            **{
+                **API_VALID,
+                "environment": environment,
+                "evidence_endpoint_url": "http://evidence.example.com",
+            }
+        )
+
+
+def test_production_refuses_a_loopback_database() -> None:
+    # A production deployment pointing at its own loopback is a misconfiguration, not a choice.
+    with pytest.raises(ValidationError, match="loopback"):
+        ApiSettings(
+            **{
+                **API_VALID,
+                "environment": "production",
+                "evidence_endpoint_url": "https://evidence.example.com",
+                "database_url": "postgresql://u:p@localhost:5432/db",
+            }
+        )
+
+
+def test_local_development_is_unaffected_by_production_rules() -> None:
+    # Allowed-path control for the environment-conditional rules.
+    s = ApiSettings(**API_VALID)  # environment defaults to "local"
+    assert s.environment == "local"
+    assert s.evidence_endpoint_url.startswith("http://")
