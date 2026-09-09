@@ -1,46 +1,124 @@
 # Verification command manifest
 
-Commands recorded here must be **real commands in this repository** that fail when their
-prerequisites are missing. A command is added only once it exists and has actually been executed.
+Every command here exists, has been executed, and fails when its prerequisites are missing.
+A command that would pass with its dependency absent is not listed as proof of that dependency.
 
-## Current state — 2026-09-09
+## Prerequisites
 
-No application code, package manifest, or test harness exists yet. Module 01 owns creating the
-workspace and the first meaningful CI pipeline, and will populate the table below.
+- Python 3.13 with [uv](https://docs.astral.sh/uv/)
+- Node 22 with pnpm 11
+- A running PostgreSQL 17 server
+- Copy `.env.example` → `.env`, `.env.refapp.example` → `.env.refapp`, `.env.test.example` → `.env.test`,
+  and replace every placeholder. Startup and configuration validation reject example values.
 
-| Layer | Entry point | Status |
-|---|---|---|
-| Static / build | — | not yet created (module 01) |
-| Unit / property | — | not yet created (module 01) |
-| Integration (real PostgreSQL) | — | not yet created (module 02+) |
-| Failure / recovery | — | not yet created (module 04+) |
-| Security | — | not yet created (module 03+) |
-| Runtime (real services) | — | not yet created (module 18+) |
-| **Actual VoiceOver** | — | not yet created (module 08) — **capability BLOCKED**, see `docs/capabilities.md` §5.1 |
-| **Actual NVDA** | — | not yet created (module 09) — **capability BLOCKED**, no Windows host |
-| Human / UI | — | not yet created (module 21+) |
-| Release operations | — | not yet created (module 27+) |
+One file per settings consumer is deliberate: each settings class uses `extra="forbid"`, so a typo
+in a variable name fails startup instead of silently leaving a default in place. A single shared
+file would make every other prefix look like an unknown key.
 
-## Commands executed by module 00
-
-Read-only capability probes only; none of these are acceptance tests.
+## Install
 
 ```bash
-sw_vers; uname -m                         # host OS and architecture
-node -v; pnpm -v; python3 -V; uv --version # runtimes
-pg_isready                                 # PostgreSQL reachability
-psql -d postgres -tAc "select version();"  # PostgreSQL server version
-docker info                                # Docker daemon state (observed: not running)
-colima status                              # Colima state (observed: not running)
-ls -d /System/Library/CoreServices/VoiceOver.app
-defaults read com.apple.VoiceOver4/default SCREnableAppleScript          # legacy path
-/usr/libexec/PlistBuddy -c "Print :SCREnableAppleScript" \
-  "$HOME/Library/Group Containers/group.com.apple.VoiceOver/Library/Preferences/com.apple.VoiceOver4/default.plist"  # Sequoia+ path
-npm view @guidepup/guidepup version        # adapter availability
+uv sync --frozen      # fails if uv.lock does not match pyproject.toml
+pnpm install --frozen-lockfile
 ```
+
+## First-time local database
+
+```bash
+createuser accessforge --login --pwprompt
+createdb accessforge      --owner accessforge
+createdb accessforge_refapp --owner accessforge
+createdb accessforge_test   --owner accessforge
+```
+
+The role is intentionally **not** a superuser, and the databases are dedicated. Nothing here
+reuses an existing database.
+
+## Verification ladder
+
+| Layer | Command | What it actually proves |
+|---|---|---|
+| Format | `uv run ruff format --check .` | Formatting is normalized |
+| Lint | `uv run ruff check .` | Lint rules including security (`S`) and import boundaries (`TID`) |
+| Types | `uv run mypy apps/api/src fixtures/reference-app/src` | Strict typing across both Python packages |
+| Unit | `uv run pytest tests/unit -q` | Validation, fail-closed configuration, redaction, fixture-variant integrity |
+| Integration | `uv run pytest tests/integration -q` | Real PostgreSQL: journey, identity boundaries, durability, readiness |
+| Node types | `pnpm -r --if-present typecheck` | TypeScript strict mode |
+| Node build | `pnpm -r --if-present build` | Both TS packages compile |
+| Node tests | `pnpm -r --if-present test` | Runner reports non-implementation rather than false success |
+| Everything | `uv run pytest tests -q && pnpm -r --if-present test` | Full local suite |
+
+`tests/integration` **fails** rather than skips when `TEST_DATABASE_URL` is absent
+(`test_integration_suite_is_actually_configured`), so a missing database cannot present itself as
+a green run.
+
+## Running the services
+
+```bash
+uv run python -m reference_app     # http://127.0.0.1:8081  (loopback binding is enforced)
+uv run python -m accessforge_api   # http://127.0.0.1:8080
+```
+
+Shutdown: stop those processes only. Do not stop the PostgreSQL server; it is not owned by this
+project.
+
+## Health inspection
+
+```bash
+curl -s http://127.0.0.1:8081/health/live     # process is running
+curl -s http://127.0.0.1:8081/health/ready    # dependencies are actually reachable
+curl -s http://127.0.0.1:8080/health/ready    # 503 until an S3-compatible store is running
+curl -s http://127.0.0.1:8080/diagnostics     # configuration with every credential redacted
+```
+
+Liveness and readiness answer different questions. A 200 from `/health/live` says only that the
+process responds. With no object store running, `/health/ready` on the API returns **503** and
+names `evidence-store` — that is the intended behaviour, not a defect to be smoothed over.
+
+## Exercising the reference application
+
+```bash
+SETUP=$(grep '^REFAPP_SETUP_TOKEN=' .env.refapp | cut -d= -f2)
+OBS=$(grep  '^REFAPP_OBSERVER_TOKEN=' .env.refapp | cut -d= -f2)
+
+# Create a fresh fixture instance (setup identity)
+curl -s -X POST 'http://127.0.0.1:8081/api/_test/fixtures?variant=inaccessible' \
+     -H "x-setup-token: $SETUP"
+
+# Read durable state (observer identity only — never give this token to a navigator)
+curl -s "http://127.0.0.1:8081/api/_test/receipt/<nonce>" -H "x-observer-token: $OBS"
+
+# Reset this application's own tables (setup identity)
+curl -s -X POST 'http://127.0.0.1:8081/api/_test/reset' -H "x-setup-token: $SETUP"
+```
+
+## Mutation checks for high-risk guards
+
+Run in a scratch copy; never commit mutated code. Each guard, when broken, must make specific
+tests fail:
+
+| Mutation | Expected result |
+|---|---|
+| Authorization checks always allow | integration identity tests fail |
+| Email validation removed | validation and journey tests fail |
+| Readiness always reports ready | readiness-failure test fails |
+| Inaccessible variant rendered accessible | fixture-variant tests fail |
+| Loopback binding guard removed | configuration tests fail |
+
+Verified on 2026-09-09; results are in `docs/handoffs/01.md`.
+
+## Not yet available
+
+| Layer | Status |
+|---|---|
+| **Actual VoiceOver** | **BLOCKED** — not configured on this host; module 08 owns the runner. See `docs/capabilities.md` §5.1 |
+| **Actual NVDA** | **BLOCKED** — no Windows host; module 09 |
+| Object store integration | Configuration and readiness only; module 10 owns the real contract |
+| UI | Module 21 onward. `apps/web` is a build target with no interface |
+| Release operations | Module 27 onward |
 
 ## Evidence storage
 
-Run outputs belong in the git-ignored `.evidence/` directory and are referenced from pull requests
-and handoffs by path and run identity. They are never committed, and a passing run is never
-recorded by adding a "tests passed" file to the tree.
+Run outputs go to the git-ignored `.evidence/` directory and are referenced by path from pull
+requests and handoffs. They are never committed, and a passing run is never recorded by adding a
+"tests passed" file to the tree.

@@ -1,0 +1,195 @@
+name: CI
+
+# Runs on pull-request candidates, on main, and on merge-queue integration candidates. A merge
+# queue validates a commit that neither branch contains, so merge_group must be covered or the
+# thing actually being merged is never tested.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+# Least privilege: this workflow only ever reads the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to the versions module 01 actually verified. Widening this matrix requires evidence,
+  # not optimism.
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  python:
+    name: Python — static, unit, integration
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: accessforge
+          POSTGRES_PASSWORD: accessforge-ci
+          POSTGRES_DB: accessforge_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U accessforge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://accessforge:accessforge-ci@localhost:5432/accessforge_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install pinned dependencies
+        # --frozen fails if uv.lock does not match pyproject.toml, so a dependency change cannot
+        # land without its lockfile.
+        run: uv sync --frozen
+
+      - name: Formatter check
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check (strict)
+        run: uv run mypy apps/api/src fixtures/reference-app/src
+
+      - name: Confirm PostgreSQL is genuinely reachable
+        # Without this, a broken service container would turn every integration test into a skip
+        # and the job would still be green.
+        run: |
+          uv run python - <<'PY'
+          import os, psycopg
+          with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as c:
+              row = c.execute("SELECT version()").fetchone()
+          assert row and "PostgreSQL" in row[0], row
+          print("connected:", row[0].split(",")[0])
+          PY
+
+      - name: Unit tests
+        run: uv run pytest tests/unit -q
+
+      - name: Integration tests (real PostgreSQL)
+        # Fails, rather than skips, if TEST_DATABASE_URL is absent — see
+        # tests/integration/test_reference_app_journey.py::test_integration_suite_is_actually_configured
+        run: uv run pytest tests/integration -q
+
+      - name: Assert the integration suite actually executed
+        # A suite that collected nothing must not be reported as a passing boundary.
+        run: |
+          count=$(uv run pytest tests/integration --collect-only -q 2>/dev/null | tail -1)
+          echo "collected: $count"
+          uv run pytest tests/integration --collect-only -q 2>/dev/null \
+            | grep -qE "^[1-9][0-9]* tests? collected" \
+            || { echo "::error::integration suite collected no tests"; exit 1; }
+
+  node:
+    name: Node — build, typecheck, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install pinned dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm -r --if-present typecheck
+
+      - name: Build
+        run: pnpm -r --if-present build
+
+      - name: Test
+        run: pnpm -r --if-present test
+
+  documentation:
+    name: Documentation integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the specification-pack guard compares against the merge base with main.
+          # With the default shallow fetch there is no origin/main ref at all, and the comparison
+          # silently degrades to "nothing changed".
+          fetch-depth: 0
+
+      - name: Internal links resolve
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            d=$(dirname "$f")
+            while read -r link; do
+              case "$link" in http*|mailto:*|"") continue;; esac
+              target="${link%%#*}"
+              [ -z "$target" ] && continue
+              if [ ! -e "$d/$target" ]; then
+                echo "::error file=$f::broken internal link: $link"; fail=1
+              fi
+            done < <(grep -oE '\]\([^)#][^)]*\)' "$f" | sed -E 's/^\]\(//; s/\)$//')
+          done < <(find README.md docs -name '*.md')
+          exit $fail
+
+      - name: Specification pack is unmodified
+        # specs/accessforge/ is supplied input. A change there is a contract change and must be
+        # deliberate, not a drive-by edit inside an implementation PR.
+        #
+        # No error is suppressed here. The previous version piped git's stderr to /dev/null and
+        # appended `|| true`, so when origin/main could not be resolved the guard reported
+        # success unconditionally — a check that proved nothing while showing green.
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          base="$(git merge-base refs/remotes/origin/main HEAD)"
+          echo "comparing against merge-base $base"
+
+          # Self-test: if the comparison machinery is broken, it returns empty for everything and
+          # the guard below is vacuous. On a pull request this branch must differ from the merge
+          # base somewhere, so an empty overall diff means the mechanism itself has failed.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            all_changed="$(git diff --name-only "$base" HEAD)"
+            if [ -z "$all_changed" ]; then
+              echo "::error::diff against the merge base returned nothing; this guard is not working"
+              exit 1
+            fi
+            echo "mechanism verified: $(echo "$all_changed" | wc -l | tr -d ' ') file(s) differ from base"
+          fi
+
+          changed="$(git diff --name-only "$base" HEAD -- specs/)"
+          if [ -n "$changed" ]; then
+            echo "::error::specification pack modified: $changed"
+            echo "Contract changes require reconciling PRD/CONTRACTS/TDD/TEST-PLAN together."
+            exit 1
+          fi
+          echo "specification pack unmodified"
+
+      - name: No secrets or local paths committed
+        run: |
+          if grep -rEn 'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+               --include='*.md' --include='*.py' --include='*.ts' --include='*.yml' . ; then
+            echo "::error::possible secret committed"; exit 1
+          fi
+          if grep -rEn '/Users/[a-z]+/' --include='*.md' docs/ ; then
+            echo "::error::local filesystem path committed to documentation"; exit 1
+          fi
