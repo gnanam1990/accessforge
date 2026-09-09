@@ -16,8 +16,8 @@ Status is tracked in four independent fields, because a merged foundation is not
 
 | # | Module | Depends on | Requirements | Impl | Verify | Deliver | Scope |
 |---|---|---|---|---|---|---|---|
-| 00 | Repository and runtime capability gate | — | FR-004, 008, 022, 024 | implemented | passed | open | E0 |
-| 01 | Workspace foundation, pinned runtimes, first CI | 00 | FR-016, 022, 024 | not started | pending | local | E0 |
+| 00 | Repository and runtime capability gate | — | FR-004, 008, 022, 024 | implemented | passed | merged | E0 |
+| 01 | Workspace foundation, pinned runtimes, first CI | 00 | FR-016, 022, 024 | implemented | passed | open | E0 |
 | 02 | Canonical schemas and deterministic reducers | 01 | FR-002, 003, 007, 015, 016 | not started | pending | local | E0 |
 | 03 | Human, tenant and service identities | 02 | FR-001, 014, 020 | not started | pending | local | E0 |
 | 04 | Authoritative journal and transactional outbox | 02, 03 | FR-006, 014, 015, 021 | not started | pending | local | E0 |
@@ -50,7 +50,9 @@ Status is tracked in four independent fields, because a merged foundation is not
 ## Owned paths
 
 Module 00 owns `docs/capabilities.md`, `docs/adr/0001-implementation-environment.md`,
-`docs/handoffs/00.md`. The delivery records (`docs/delivery/`, `docs/development/VERIFICATION.md`)
+`docs/handoffs/00.md`. Module 01 owns the workspace manifests and lockfiles, `apps/api`,
+`apps/web`, `apps/desktop-runner`, `fixtures/reference-app`, `tests/`, `.github/workflows/ci.yml`,
+`docs/adr/0002-*` and `docs/development/VERIFICATION.md`. The delivery records (`docs/delivery/`, `docs/development/VERIFICATION.md`)
 are coordinator-owned per MASTER-BUILD-AND-MERGE §3 and were created alongside module 00's delivery
 so the record is honest from the first merge; they contain no product scope. Later modules declare
 their own owned paths in their handoffs.

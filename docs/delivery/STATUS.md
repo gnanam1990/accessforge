@@ -1,6 +1,6 @@
 # Delivery status
 
-**Last refreshed:** 2026-09-09 (module 00 delivery)
+**Last refreshed:** 2026-09-09 (module 01 delivery)
 **Repository:** `github.com/gnanam1990/accessforge` (public)
 **Target branch:** `main`
 
@@ -10,8 +10,8 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 
 | Claim | Answer |
 |---|---|
-| Is code merged? | Only a bootstrap commit and module 00 documentation. **No application code exists.** |
-| Is a runtime verified? | **No.** Nothing runs yet. |
+| Is code merged? | Bootstrap plus module 00 documentation. Module 01 (workspace, reference application, CI) is **open in a pull request**, not yet merged. |
+| Is a runtime verified? | **Partly.** The reference application and control-plane API were started and exercised over real HTTP against real PostgreSQL, including restart durability. **No screen reader has ever run.** |
 | Is R1 release-ready? | **No**, and it cannot become ready on this host — module 09 requires Windows/NVDA. |
 | Did deployment or event submission occur? | **No.** Neither is authorized. |
 
@@ -20,13 +20,15 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 | Item | Value |
 |---|---|
 | Bootstrap commit | `7576c05` — specification pack and repository hygiene only |
-| Latest verified integration commit | pending module 00 merge |
-| CI on main | **NOT YET CONFIGURED — never passed.** Module 01 introduces it. |
+| Module 00 integration commit | `fc00eb8` — verified on main |
+| Latest verified integration commit | `fc00eb8` |
+| CI on main | **Never passed yet.** The workflow is introduced by the open module 01 pull request; its first real run is on that PR. |
 
 ## Modules
 
-Module 00: **implemented**, verification passed at the documentation/capability level permitted by
-the pre-CI exception, delivery **open** (pull request). All other modules: not started.
+Module 00: **merged** at `fc00eb8`, verified on main.
+Module 01: **implemented and locally verified** (69 Python tests, 2 Node tests, mutation checks,
+real-runtime proof), delivery **open**. All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
 
@@ -43,7 +45,9 @@ See `docs/delivery/PLAN.md` for the full ledger.
 
 ## Outstanding debts
 
-- Executable negative-verification tests (unconfigured reader must yield BLOCKED/INCONCLUSIVE, never
-  PASS) are documented in `docs/capabilities.md` §11 but **not yet executable**. Owed by modules 01 and 08.
-- `docs/development/VERIFICATION.md` records this module's read-only capability probes but has no
-  **acceptance or CI commands** — there is nothing yet to verify. Owed by module 01.
+- Executable negative-verification tests now exist for the fixture and configuration guards, proved
+  by mutation in module 01. The *reader-specific* case — an unconfigured screen reader must yield
+  BLOCKED/INCONCLUSIVE and never PASS — still has no executable test, because no runner exists yet.
+  Owed by module 08.
+- Test-first ordering was not followed in module 01; guards were mutated afterwards to prove the
+  tests are falsifiable. See `docs/handoffs/01.md`.
