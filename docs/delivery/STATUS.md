@@ -35,6 +35,15 @@ All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
 
+## Post-merge findings
+
+| Found at | Issue | Status |
+|---|---|---|
+| `dbca481` (module 02) | `pnpm -r test` failed from a clean clone: the Node test scripts import from `dist/` but did not build it. CI masked this by running `build` before `test`. | fixed in a follow-up PR |
+
+Caught by the clean-clone smoke rather than by CI, which is the point of running it: CI's step
+ordering made a broken standalone command look fine.
+
 ## Open blockers
 
 | Blocker | Owner action required | Blocks |
