@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://accessforge.dev/schemas/outcome-record.schema.json",
+  "title": "OutcomeRecord",
+  "description": "The immutable terminal record of a run. Corrections and reviews are separate append-only records that link to this one; this record is never rewritten (INV-11).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workspaceId", "runId", "manifestDigest", "status", "outcome", "evaluatorVersion", "decidedAt", "evidenceValidity", "requiredAssertions", "completion"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "workspaceId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "runId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "manifestDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "status": { "$ref": "common.schema.json#/$defs/runStatus" },
+    "outcome": { "$ref": "common.schema.json#/$defs/outcome" },
+    "evaluatorVersion": { "type": "string", "minLength": 1 },
+    "decidedAt": { "$ref": "common.schema.json#/$defs/rfc3339Utc" },
+    "evidenceValidity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identityBound", "preflightPassed", "evidenceChainIntact", "producerTailsClosed"],
+      "properties": {
+        "identityBound": { "type": "boolean" },
+        "preflightPassed": { "type": "boolean" },
+        "evidenceChainIntact": { "type": "boolean" },
+        "producerTailsClosed": { "type": "boolean" }
+      }
+    },
+    "requiredAssertions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assertionId", "result"],
+        "properties": {
+          "assertionId": { "type": "string", "minLength": 1 },
+          "result": { "$ref": "common.schema.json#/$defs/condition" }
+        }
+      }
+    },
+    "completion": { "$ref": "common.schema.json#/$defs/condition" },
+    "reasons": { "type": "array", "items": { "type": "string" }, "description": "Why an INCONCLUSIVE or FAIL verdict was reached. An unexplained INCONCLUSIVE is indistinguishable from a broken evaluator." }
+  },
+  "$comment": "No confidence score field exists anywhere in this record. CONTRACTS section 4 forbids a floating-point value deciding an outcome, and the simplest enforcement is to give it nowhere to live."
+}

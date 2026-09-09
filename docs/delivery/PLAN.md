@@ -17,8 +17,8 @@ Status is tracked in four independent fields, because a merged foundation is not
 | # | Module | Depends on | Requirements | Impl | Verify | Deliver | Scope |
 |---|---|---|---|---|---|---|---|
 | 00 | Repository and runtime capability gate | — | FR-004, 008, 022, 024 | implemented | passed | merged | E0 |
-| 01 | Workspace foundation, pinned runtimes, first CI | 00 | FR-016, 022, 024 | implemented | passed | open | E0 |
-| 02 | Canonical schemas and deterministic reducers | 01 | FR-002, 003, 007, 015, 016 | not started | pending | local | E0 |
+| 01 | Workspace foundation, pinned runtimes, first CI | 00 | FR-016, 022, 024 | implemented | passed | merged | E0 |
+| 02 | Canonical schemas and deterministic reducers | 01 | FR-002, 003, 007, 015, 016 | implemented | passed | open | E0 |
 | 03 | Human, tenant and service identities | 02 | FR-001, 014, 020 | not started | pending | local | E0 |
 | 04 | Authoritative journal and transactional outbox | 02, 03 | FR-006, 014, 015, 021 | not started | pending | local | E0 |
 | 05 | Authorized projects and immutable builds | 03, 04 | FR-001, 002, 010, 014 | not started | pending | local | E0 |

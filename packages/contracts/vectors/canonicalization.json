@@ -1,0 +1,145 @@
+{
+  "$comment": "Shared RFC8785 (JCS) canonicalization vectors. Python and TypeScript must produce byte-identical canonical output and identical lower-case SHA-256 digests for every case. Consumed by tests in both languages; neither language owns these.",
+  "cases": [
+    {
+      "name": "empty-object",
+      "input": {},
+      "canonical": "{}"
+    },
+    {
+      "name": "property-order-is-by-utf16-code-unit",
+      "input": {
+        "b": 1,
+        "a": 2,
+        "C": 3,
+        "ä": 4,
+        "A": 5
+      },
+      "canonical": "{\"A\":5,\"C\":3,\"a\":2,\"b\":1,\"ä\":4}"
+    },
+    {
+      "name": "nested-objects-sort-independently",
+      "input": {
+        "z": {
+          "y": 1,
+          "x": 2
+        },
+        "a": {
+          "b": 3
+        }
+      },
+      "canonical": "{\"a\":{\"b\":3},\"z\":{\"x\":2,\"y\":1}}"
+    },
+    {
+      "name": "arrays-preserve-order",
+      "input": {
+        "k": [
+          3,
+          1,
+          2
+        ]
+      },
+      "canonical": "{\"k\":[3,1,2]}"
+    },
+    {
+      "name": "integers",
+      "input": {
+        "zero": 0,
+        "one": 1,
+        "neg": -1,
+        "big": 9007199254740991
+      },
+      "canonical": "{\"big\":9007199254740991,\"neg\":-1,\"one\":1,\"zero\":0}"
+    },
+    {
+      "name": "negative-zero-serializes-as-zero",
+      "$comment": "ES6 Number::toString renders -0 as 0. Manifests differing only by the sign of zero must not produce different digests.",
+      "input": {
+        "v": -0.0
+      },
+      "canonical": "{\"v\":0}"
+    },
+    {
+      "name": "string-escaping",
+      "input": {
+        "s": "quote:\" backslash:\\ tab:\t newline:\n"
+      },
+      "canonical": "{\"s\":\"quote:\\\" backslash:\\\\ tab:\\t newline:\\n\"}"
+    },
+    {
+      "name": "control-characters-use-lowercase-hex-escapes",
+      "input": {
+        "s": "\u0000\u001f"
+      },
+      "canonical": "{\"s\":\"\\u0000\\u001f\"}"
+    },
+    {
+      "name": "unicode-is-not-escaped",
+      "input": {
+        "s": "தமிழ் ✓ 😀"
+      },
+      "canonical": "{\"s\":\"தமிழ் ✓ 😀\"}"
+    },
+    {
+      "name": "literals",
+      "input": {
+        "t": true,
+        "f": false,
+        "n": null
+      },
+      "canonical": "{\"f\":false,\"n\":null,\"t\":true}"
+    },
+    {
+      "name": "rfc3339-timestamps-are-plain-strings",
+      "input": {
+        "at": "2026-09-09T12:00:00Z"
+      },
+      "canonical": "{\"at\":\"2026-09-09T12:00:00Z\"}"
+    },
+    {
+      "name": "realistic-manifest-subset",
+      "input": {
+        "schemaVersion": 1,
+        "workspaceId": "0b7c1f4e-2a1d-4c3b-8f5e-9a0d1c2b3e4f",
+        "runId": "8f14e45f-ceea-467a-9b8a-1c2d3e4f5a6b",
+        "sourceCommitSha": "23fe6c80f4939c040fc117eaacb919e9e7e7925e",
+        "actionBudget": 200,
+        "permittedEffects": [
+          "FIXTURE_SUBMIT"
+        ],
+        "expiresAt": "2026-09-09T13:00:00Z"
+      },
+      "canonical": "{\"actionBudget\":200,\"expiresAt\":\"2026-09-09T13:00:00Z\",\"permittedEffects\":[\"FIXTURE_SUBMIT\"],\"runId\":\"8f14e45f-ceea-467a-9b8a-1c2d3e4f5a6b\",\"schemaVersion\":1,\"sourceCommitSha\":\"23fe6c80f4939c040fc117eaacb919e9e7e7925e\",\"workspaceId\":\"0b7c1f4e-2a1d-4c3b-8f5e-9a0d1c2b3e4f\"}"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "nan",
+      "reason": "not representable in JSON"
+    },
+    {
+      "name": "infinity",
+      "reason": "not representable in JSON"
+    },
+    {
+      "name": "integer-above-2^53-1",
+      "reason": "outside JSON safe-integer range; CONTRACTS section 4 requires rejecting overflow"
+    },
+    {
+      "name": "integer-below--2^53+1",
+      "reason": "outside JSON safe-integer range"
+    },
+    {
+      "name": "unpaired-high-surrogate",
+      "reason": "no UTF-8 encoding exists; Python raised a raw encoding error while TypeScript silently substituted U+FFFD and returned a wrong digest"
+    },
+    {
+      "name": "unpaired-low-surrogate",
+      "reason": "no UTF-8 encoding exists"
+    },
+    {
+      "name": "unpaired-surrogate-in-an-object-key",
+      "reason": "must be refused before sorting, since the sort key is itself an encoding"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://accessforge.dev/schemas/evidence-envelope.schema.json",
+  "title": "EvidenceEnvelope",
+  "description": "One admitted event in the canonical chain. sequence, eventId and previousEventHash are assigned by the trusted ingestion sequencer, never chosen by the producer; producer provenance lives inside the payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workspaceId", "runId", "attemptId", "leaseEpoch", "sequence", "eventId", "type", "sourceTime", "receivedTime", "manifestDigest", "previousEventHash", "payloadDigest", "payload"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "workspaceId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "runId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "attemptId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "leaseEpoch": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Starts at 1. Ordering is by this integer, never by wall-clock time." },
+    "eventId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "type": { "$ref": "common.schema.json#/$defs/eventType" },
+    "sourceTime": { "$ref": "common.schema.json#/$defs/rfc3339Utc" },
+    "receivedTime": { "$ref": "common.schema.json#/$defs/rfc3339Utc", "description": "Assigned by trusted ingestion. Excluded from the source event hash." },
+    "manifestDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "previousEventHash": { "$ref": "common.schema.json#/$defs/sha256" },
+    "payloadDigest": { "$ref": "common.schema.json#/$defs/sha256" },
+    "payload": {
+      "type": "object",
+      "required": ["producerId", "sourceRecordId", "producerSequence", "sourceRecordDigest"],
+      "properties": {
+        "producerId": { "type": "string", "minLength": 1 },
+        "sourceRecordId": { "type": "string", "minLength": 1 },
+        "producerSequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Per-producer, distinct from canonical sequence." },
+        "sourceRecordDigest": { "$ref": "common.schema.json#/$defs/sha256" }
+      }
+    }
+  }
+}
