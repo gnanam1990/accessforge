@@ -42,7 +42,36 @@ class CanonicalizationError(ValueError):
     """
 
 
+def _reject_lone_surrogates(value: str) -> None:
+    """Refuse text containing an unpaired surrogate code unit.
+
+    A lone surrogate has no UTF-8 encoding. Left unchecked, Python raised a raw
+    UnicodeEncodeError from inside digest() while TypeScript silently substituted U+FFFD and
+    returned a confident, wrong hash — the more dangerous of the two, and precisely the kind of
+    successful-looking wrong answer this product exists to prevent. Both implementations now
+    refuse at the same point with the same error.
+    """
+    index = 0
+    length = len(value)
+    while index < length:
+        code = ord(value[index])
+        if 0xD800 <= code <= 0xDBFF:  # high surrogate: must be followed by a low surrogate
+            if index + 1 >= length or not (0xDC00 <= ord(value[index + 1]) <= 0xDFFF):
+                raise CanonicalizationError(
+                    f"unpaired high surrogate U+{code:04X} at index {index}: no UTF-8 encoding "
+                    "exists, so no digest over it can be meaningful"
+                )
+            index += 2
+            continue
+        if 0xDC00 <= code <= 0xDFFF:  # low surrogate with no preceding high surrogate
+            raise CanonicalizationError(
+                f"unpaired low surrogate U+{code:04X} at index {index}: no UTF-8 encoding exists"
+            )
+        index += 1
+
+
 def _serialize_string(value: str) -> str:
+    _reject_lone_surrogates(value)
     out = ['"']
     for char in value:
         code = ord(char)
@@ -111,6 +140,9 @@ def _serialize(value: Any) -> str:
                 raise CanonicalizationError(
                     f"object keys must be strings, found {type(key).__name__}"
                 )
+            # Validate before sorting: _utf16_sort_key encodes, and encoding a lone surrogate
+            # raises UnicodeEncodeError before serialization would have caught it.
+            _reject_lone_surrogates(key)
         items = sorted(value.items(), key=lambda kv: _utf16_sort_key(kv[0]))
         return "{" + ",".join(f"{_serialize_string(k)}:{_serialize(v)}" for k, v in items) + "}"
     raise CanonicalizationError(f"type {type(value).__name__} cannot be canonicalized")

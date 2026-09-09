@@ -252,3 +252,64 @@ def test_patch_apply_authorizes_a_candidate_but_never_a_merge_or_deploy() -> Non
 @pytest.mark.parametrize("scope", list(ApprovalScope))
 def test_no_scope_whatsoever_authorizes_a_merge_or_deployment(scope: ApprovalScope) -> None:
     assert not authorizes_merge_or_deploy(scope)
+
+
+# --- timestamp comparison (independent review finding 2) -------------------------------------
+
+
+def test_an_expired_approval_is_refused_across_fractional_second_precision() -> None:
+    """Regression: lexicographic comparison failed open here.
+
+    "2026-09-09T12:00:00.000001Z" is one microsecond AFTER "2026-09-09T12:00:00Z", but as text it
+    sorts BEFORE it, because "." (0x2E) is lower than "Z" (0x5A). Both are valid under the
+    rfc3339Utc schema pattern, so this was reachable from ordinary inputs — Python emits the
+    fractional part only when microseconds are non-zero.
+    """
+    with pytest.raises(AuthorityError, match="expired"):
+        APPROVAL.check(**{**VALID_CHECK, "now": "2026-09-09T18:00:00.000001Z"})
+
+
+@pytest.mark.parametrize(
+    ("now", "expired"),
+    [
+        ("2026-09-09T17:59:59.999999Z", False),
+        ("2026-09-09T18:00:00Z", True),
+        ("2026-09-09T18:00:00.000000Z", True),
+        ("2026-09-09T18:00:00.000001Z", True),
+        ("2026-09-09T18:00:01Z", True),
+    ],
+)
+def test_expiry_boundary_is_precision_independent(now: str, expired: bool) -> None:
+    if expired:
+        with pytest.raises(AuthorityError, match="expired"):
+            APPROVAL.check(**{**VALID_CHECK, "now": now})
+    else:
+        APPROVAL.check(**{**VALID_CHECK, "now": now})  # allowed-path control
+
+
+def test_a_child_cannot_outlive_its_parent_by_a_fraction_of_a_second() -> None:
+    with pytest.raises(AuthorityError, match="outlive"):
+        mint_child_authorization(GRANT, **{**MINT, "expires_at": "2026-09-09T18:00:00.000001Z"})
+
+
+def test_a_child_expiring_exactly_with_its_parent_is_allowed() -> None:
+    child = mint_child_authorization(GRANT, **{**MINT, "expires_at": LATER})
+    assert child.expires_at == LATER
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "2026-09-09T12:00:00+05:30",  # local offset reintroduces the comparison hazard
+        "2026-09-09 12:00:00Z",  # space instead of T
+        "2026-09-09T12:00:00",  # naive
+        "not-a-timestamp",
+        "",
+    ],
+)
+def test_malformed_expiry_is_refused_at_construction(bad: str) -> None:
+    """The domain package defends its own invariant rather than trusting upstream validation."""
+    from accessforge_domain.timestamps import TimestampError
+
+    with pytest.raises(TimestampError):
+        replace(APPROVAL, expires_at=bad)
