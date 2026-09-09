@@ -1,0 +1,59 @@
+[project]
+name = "accessforge-workspace"
+version = "0.0.0"
+description = "AccessForge workspace root (not a distributable package)"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "accessforge-api",
+  "accessforge-reference-app",
+]
+
+[tool.uv.sources]
+accessforge-api = { workspace = true }
+accessforge-reference-app = { workspace = true }
+
+[tool.uv.workspace]
+members = ["apps/api", "fixtures/reference-app"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "httpx>=0.28",
+  "ruff>=0.8",
+  "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["apps/api/src", "fixtures/reference-app/src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "TID"]
+ignore = ["S101"]  # assert is how pytest expresses expectations
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106"]  # test tokens are fixtures, not secrets
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"accessforge_api.internal".msg = "apps must not import another app's private implementation"
+"reference_app.internal".msg = "apps must not import another app's private implementation"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = "apps/api/src:fixtures/reference-app/src"
+namespace_packages = true
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: requires a real PostgreSQL server",
+  "fake: uses a labelled in-process fake, never actual-AT or real-service evidence",
+]
+addopts = "-ra --strict-markers"

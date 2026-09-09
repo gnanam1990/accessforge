@@ -1,6 +1,9 @@
 # AccessForge
 
-**Status: implementation in progress. No working application exists in this repository yet.**
+**Status: implementation in progress. The AccessForge product itself does not exist yet.**
+
+What runs today is the workspace foundation and a reference application used as a test target.
+No screen reader has ever been driven by this repository, and no accessibility claim is made.
 
 AccessForge is intended to help engineers reproduce a web accessibility barrier with a real
 screen reader, prepare a constrained source repair, independently rerun the journey, and
@@ -13,6 +16,10 @@ chatbot, or a legal-compliance certificate.
 |---|---|
 | `specs/accessforge/` | The complete product specification package (PRD, TDD, CONTRACTS, TEST-PLAN, UI-UX, SECURITY-PRIVACY, RELEASE-CHECKLIST, SOURCES, and 30 numbered build prompts). Specification only. |
 | `docs/` | Implementation-owned records produced as modules land: capability evidence, ADRs, module handoffs, and the delivery plan. |
+| `apps/` | `api` (control-plane configuration and health), `web` and `desktop-runner` build targets. Runner behaviour is module 07/08; the UI is module 21. |
+| `fixtures/reference-app/` | A genuinely working local service-request application with PostgreSQL persistence, used as the authorized target under test. |
+| `tests/` | Unit and integration suites. Integration runs against a real PostgreSQL server and fails rather than skips when one is absent. |
+| `packages/`, `infra/` | Boundary markers naming the owning module. No implementation yet. |
 
 Nothing in `specs/` asserts that code, tests, integrations, or releases exist. Claims about
 this repository's actual state live in `docs/delivery/STATUS.md` once module 00 lands.
@@ -25,6 +32,11 @@ this repository's actual state live in `docs/delivery/STATUS.md` once module 00 
 - **R1** — the complete web product, adding actual Windows/NVDA support and production operations.
 - **R2+** — mobile, PDF remediation, native desktop apps, managed multi-tenant desktop fleets.
   Out of scope here.
+
+## Getting started
+
+See [docs/development/VERIFICATION.md](docs/development/VERIFICATION.md) for install, database
+setup, the full verification ladder, and how to run and inspect the services.
 
 ## Build workflow
 
