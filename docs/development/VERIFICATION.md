@@ -40,12 +40,14 @@ reuses an existing database.
 |---|---|---|
 | Format | `uv run ruff format --check .` | Formatting is normalized |
 | Lint | `uv run ruff check .` | Lint rules including security (`S`) and import boundaries (`TID`) |
-| Types | `uv run mypy apps/api/src fixtures/reference-app/src` | Strict typing across both Python packages |
-| Unit | `uv run pytest tests/unit -q` | Validation, fail-closed configuration, redaction, fixture-variant integrity |
+| Types | `uv run mypy apps/api/src fixtures/reference-app/src packages/domain/src packages/contracts/python/src` | Strict typing across all four Python packages |
+| Unit | `uv run pytest tests/unit -q` | Validation, fail-closed configuration, redaction, fixture-variant integrity, outcome precedence, reducers, authority, property tests |
+| Contract | `uv run pytest tests/contract -q` | Schema validation, RFC8785 canonicalization, and Python/TypeScript digest agreement |
+| Binding drift | `uv run python scripts/generate_contract_bindings.py --check` | Generated bindings still match the authoritative schemas |
 | Integration | `uv run pytest tests/integration -q` | Real PostgreSQL: journey, identity boundaries, durability, readiness |
 | Node types | `pnpm -r --if-present typecheck` | TypeScript strict mode |
 | Node build | `pnpm -r --if-present build` | Both TS packages compile |
-| Node tests | `pnpm -r --if-present test` | Runner reports non-implementation rather than false success |
+| Node tests | `pnpm -r --if-present test` | Runner reports non-implementation rather than false success; TypeScript canonicalization matches the shared vectors |
 | Everything | `uv run pytest tests -q && pnpm -r --if-present test` | Full local suite |
 
 `tests/integration` **fails** rather than skips when `TEST_DATABASE_URL` is absent
@@ -92,6 +94,26 @@ curl -s "http://127.0.0.1:8081/api/_test/receipt/<nonce>" -H "x-observer-token: 
 curl -s -X POST 'http://127.0.0.1:8081/api/_test/reset' -H "x-setup-token: $SETUP"
 ```
 
+## Regenerating contract bindings
+
+```bash
+uv run python scripts/generate_contract_bindings.py           # write
+uv run python scripts/generate_contract_bindings.py --check   # verify, non-zero if stale
+```
+
+The JSON Schemas in `packages/contracts/schemas/` are authoritative. The generated files are
+committed only so drift is detectable; editing one by hand is pointless, because the next check
+overwrites the intent and fails.
+
+The cross-language differential test requires the TypeScript build:
+
+```bash
+pnpm --filter @accessforge/contracts build
+uv run pytest tests/contract -q
+```
+
+It fails rather than skips when that build output is missing.
+
 ## Mutation checks for high-risk guards
 
 Run in a scratch copy; never commit mutated code. Each guard, when broken, must make specific
@@ -104,6 +126,8 @@ tests fail:
 | Readiness always reports ready | readiness-failure test fails |
 | Inaccessible variant rendered accessible | fixture-variant tests fail |
 | Loopback binding guard removed | configuration tests fail |
+| Canonical key order changed to code point | UTF-16 ordering test fails |
+| Cancelled outcome keyed on status rather than execution | reducer regression and property tests fail |
 
 Verified on 2026-09-09; results are in `docs/handoffs/01.md`.
 
