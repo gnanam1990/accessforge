@@ -128,6 +128,18 @@
     {
       "name": "integer-below--2^53+1",
       "reason": "outside JSON safe-integer range"
+    },
+    {
+      "name": "unpaired-high-surrogate",
+      "reason": "no UTF-8 encoding exists; Python raised a raw encoding error while TypeScript silently substituted U+FFFD and returned a wrong digest"
+    },
+    {
+      "name": "unpaired-low-surrogate",
+      "reason": "no UTF-8 encoding exists"
+    },
+    {
+      "name": "unpaired-surrogate-in-an-object-key",
+      "reason": "must be refused before sorting, since the sort key is itself an encoding"
     }
   ]
 }

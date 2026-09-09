@@ -112,3 +112,48 @@ def test_unsupported_types_are_rejected() -> None:
         canonicalize({"v": {1, 2}})
     with pytest.raises(CanonicalizationError):
         canonicalize({"v": b"bytes"})
+
+
+# --- lone surrogates (independent review finding 1) -----------------------------------------
+
+
+def _lone_surrogates() -> list[str]:
+    # Constructed, never pasted: a high surrogate with no low, a low with no high, and a high
+    # followed by a non-surrogate.
+    return [chr(0xD800), chr(0xDFFF), chr(0xD83D) + "a", "a" + chr(0xDE00)]
+
+
+@pytest.mark.parametrize("text", _lone_surrogates(), ids=["high", "low", "high+char", "char+low"])
+def test_lone_surrogates_are_rejected_by_canonicalization(text: str) -> None:
+    """A lone surrogate has no UTF-8 encoding, so no digest over it can be meaningful.
+
+    Previously Python raised a raw UnicodeEncodeError from inside digest() while TypeScript
+    silently substituted U+FFFD and returned a confident, wrong hash. Both must now refuse, in the
+    same place, with the same domain error.
+    """
+    with pytest.raises(CanonicalizationError, match="surrogate"):
+        canonicalize({"s": text})
+    with pytest.raises(CanonicalizationError, match="surrogate"):
+        digest({"s": text})
+
+
+def test_lone_surrogates_are_rejected_in_keys_too() -> None:
+    with pytest.raises(CanonicalizationError, match="surrogate"):
+        canonicalize({chr(0xD800): 1})
+
+
+def test_valid_surrogate_pairs_are_still_accepted() -> None:
+    """Allowed-path control: an implementation rejecting all surrogates would break every emoji."""
+    assert canonicalize({"s": chr(0x1F600)}) == '{"s":"' + chr(0x1F600) + '"}'
+    assert len(digest({"s": chr(0x1F600)})) == 64
+
+
+def test_digest_never_raises_a_non_domain_exception() -> None:
+    """digest() must fail as CanonicalizationError or not at all."""
+    for text in _lone_surrogates():
+        try:
+            digest({"s": text})
+        except CanonicalizationError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            pytest.fail(f"digest raised {type(exc).__name__}, not CanonicalizationError: {exc}")

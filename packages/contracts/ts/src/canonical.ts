@@ -28,7 +28,38 @@ const SHORT_ESCAPES = new Map<number, string>([
   [0x5c, '\\\\'],
 ]);
 
+/**
+ * Refuse text containing an unpaired surrogate code unit.
+ *
+ * A lone surrogate has no UTF-8 encoding. Without this check Node's encoder silently substitutes
+ * U+FFFD and `digest()` returns a confident, wrong hash, while the Python implementation raised a
+ * raw UnicodeEncodeError. Neither is agreement, and the silent-success side is the more dangerous.
+ */
+function rejectLoneSurrogates(value: string): void {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < value.length ? value.charCodeAt(i + 1) : -1;
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new CanonicalizationError(
+          `unpaired high surrogate U+${code.toString(16).toUpperCase().padStart(4, '0')} at ` +
+            `index ${i}: no UTF-8 encoding exists, so no digest over it can be meaningful`,
+        );
+      }
+      i += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new CanonicalizationError(
+        `unpaired low surrogate U+${code.toString(16).toUpperCase().padStart(4, '0')} at ` +
+          `index ${i}: no UTF-8 encoding exists`,
+      );
+    }
+  }
+}
+
 function serializeString(value: string): string {
+  rejectLoneSurrogates(value);
   let out = '"';
   // Iterating by code unit (not by code point) keeps lone surrogates from being reordered or
   // silently replaced, and matches the ordering rule used for object keys.
@@ -82,7 +113,10 @@ function serialize(value: unknown): string {
     const record = value as Record<string, unknown>;
     // Array.prototype.sort on strings compares UTF-16 code units, which is exactly what RFC8785
     // requires. The Python side has to ask for this explicitly.
-    const keys = Object.keys(record).sort();
+    const keys = Object.keys(record);
+    // Validate before sorting so both implementations refuse at the same point.
+    for (const key of keys) rejectLoneSurrogates(key);
+    keys.sort();
     const parts = keys.map((key) => {
       const entry = record[key];
       if (entry === undefined) {

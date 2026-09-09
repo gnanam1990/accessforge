@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .states import ApprovalScope
+from .timestamps import is_after, is_expired, parse_rfc3339_utc
 
 
 class AuthorityError(Exception):
@@ -39,6 +40,11 @@ class Approval:
     expires_at: str
     revoked: bool = False
 
+    def __post_init__(self) -> None:
+        # Validated here rather than trusted from upstream schema validation: this package is
+        # pure domain logic and can be constructed directly.
+        parse_rfc3339_utc(self.expires_at, field="Approval.expires_at")
+
     def check(
         self,
         *,
@@ -57,8 +63,9 @@ class Approval:
         """
         if self.revoked:
             raise AuthorityError(f"approval {self.approval_id} has been revoked")
-        # RFC3339 UTC timestamps compare correctly as strings when normalized to Z.
-        if now >= self.expires_at:
+        # Parsed, never compared as text: a difference in fractional-second precision between
+        # two schema-valid timestamps would otherwise decide expiry, failing open.
+        if is_expired(now=now, expires_at=self.expires_at):
             raise AuthorityError(
                 f"approval {self.approval_id} expired at {self.expires_at} (now {now})"
             )
@@ -105,10 +112,13 @@ class ExecutionGrant:
     revision: int
     revoked: bool = False
 
+    def __post_init__(self) -> None:
+        parse_rfc3339_utc(self.expires_at, field="ExecutionGrant.expires_at")
+
     def check_usable(self, *, now: str, expected_revision: int | None = None) -> None:
         if self.revoked:
             raise AuthorityError(f"execution grant {self.grant_id} has been revoked")
-        if now >= self.expires_at:
+        if is_expired(now=now, expires_at=self.expires_at):
             raise AuthorityError(
                 f"execution grant {self.grant_id} expired at {self.expires_at} (now {now})"
             )
@@ -141,6 +151,9 @@ class ChildAuthorization:
     parent_grant_revision: int
     issuing_service_identity: str
     scope: ApprovalScope = field(default=ApprovalScope.RUN_EFFECTS)
+
+    def __post_init__(self) -> None:
+        parse_rfc3339_utc(self.expires_at, field="ChildAuthorization.expires_at")
 
 
 def mint_child_authorization(
@@ -187,7 +200,7 @@ def mint_child_authorization(
             f"child wall-time budget {wall_time_budget_seconds} exceeds the grant's "
             f"{grant.wall_time_budget_seconds}"
         )
-    if expires_at > grant.expires_at:
+    if is_after(later=expires_at, earlier=grant.expires_at):
         raise AuthorityError(
             "child would outlive its parent grant; a child cannot extend the grant's expiry"
         )
@@ -227,7 +240,7 @@ def check_child_at_dispatch(
     """
     if child.parent_grant_id != parent.grant_id:
         raise AuthorityError("child authorization does not belong to this grant")
-    if now >= child.expires_at:
+    if is_expired(now=now, expires_at=child.expires_at):
         raise AuthorityError(f"child authorization expired at {child.expires_at} (now {now})")
     if child.workspace_id != workspace_id:
         raise AuthorityError("child authorization belongs to a different workspace")

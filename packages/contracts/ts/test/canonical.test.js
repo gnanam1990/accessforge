@@ -52,3 +52,35 @@ test('undefined properties are rejected rather than dropped', () => {
   // JSON.stringify silently omits them, which would make two different objects share a digest.
   assert.throws(() => canonicalize({ a: undefined }), CanonicalizationError);
 });
+
+// --- lone surrogates (independent review finding 1) --------------------------------------
+// Node's UTF-8 encoder silently substitutes U+FFFD for an unpaired surrogate, so digest() used
+// to return a confident, wrong hash while Python raised a raw encoding error. Both now refuse.
+
+for (const [name, s] of [
+  ['unpaired high', '\uD800'],
+  ['unpaired low', '\uDFFF'],
+  ['high followed by a non-surrogate', '\uD83Da'],
+  ['non-surrogate followed by low', 'a\uDE00'],
+]) {
+  test(`rejects a lone surrogate: ${name}`, () => {
+    assert.throws(() => canonicalize({ s }), CanonicalizationError);
+    assert.throws(() => digest({ s }), CanonicalizationError);
+  });
+}
+
+test('rejects a lone surrogate in an object key, before sorting', () => {
+  assert.throws(() => canonicalize({ '\uD800': 1 }), CanonicalizationError);
+});
+
+test('valid surrogate pairs are unaffected', () => {
+  // Allowed-path control: rejecting all surrogates would break every emoji.
+  assert.equal(canonicalize({ s: '\u{1F600}' }), '{"s":"\u{1F600}"}');
+  assert.equal(digest({ s: '\u{1F600}' }).length, 64);
+});
+
+test('a lone surrogate no longer hashes as U+FFFD', () => {
+  // The specific silent-corruption case: these two digests were identical before the fix.
+  assert.throws(() => digest({ s: '\uD800' }), CanonicalizationError);
+  assert.equal(digest({ s: '�' }).length, 64); // the replacement character itself is fine
+});

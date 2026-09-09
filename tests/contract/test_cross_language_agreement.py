@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from accessforge_domain.canonical import canonicalize, digest
+from accessforge_domain.canonical import CanonicalizationError, canonicalize, digest
 
 ROOT = Path(__file__).resolve().parents[2]
 TS_DIST = ROOT / "packages/contracts/ts/dist/index.js"
@@ -102,6 +102,38 @@ def test_both_languages_produce_identical_canonical_form_and_digest() -> None:
     assert not mismatches, "cross-language canonicalization divergence:\n" + json.dumps(
         mismatches, indent=2, ensure_ascii=False
     )
+
+
+def test_both_languages_reject_lone_surrogates_identically() -> None:
+    """Independent review finding 1.
+
+    Python raised a raw UnicodeEncodeError from inside digest(); TypeScript silently substituted
+    U+FFFD and returned a successful, wrong hash. Agreement here means agreeing to refuse.
+    """
+    _require_built_ts()
+    for text in (chr(0xD800), chr(0xDFFF), chr(0xD83D) + "a", "a" + chr(0xDE00)):
+        with pytest.raises(CanonicalizationError):
+            digest({"s": text})
+
+        # The payload cannot survive a JSON round-trip to the subprocess intact, so drive the
+        # TypeScript side with an escaped literal it decodes itself.
+        escaped = "".join(f"\\u{ord(c):04x}" for c in text)
+        script = (
+            f"import {{ digest, CanonicalizationError }} from {json.dumps(str(TS_DIST))};\n"
+            f'const s = "{escaped}";\n'
+            "try { digest({ s }); process.stdout.write('ACCEPTED'); }\n"
+            "catch (e) { process.stdout.write(e instanceof CanonicalizationError "
+            "? 'REFUSED' : 'WRONG_ERROR:' + e.constructor.name); }\n"
+        )
+        proc = subprocess.run(  # noqa: S603
+            ["node", "--input-type=module", "-e", script],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == "REFUSED", f"TypeScript did not refuse {text!r}: {proc.stdout}"
 
 
 def test_the_differential_harness_can_actually_detect_a_difference() -> None:
