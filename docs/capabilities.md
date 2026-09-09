@@ -3,13 +3,20 @@
 **Produced by:** module 00 (repository and runtime capability gate)
 **Probe date:** 2026-09-09
 **Host:** macOS 26.6 (build 25G72), arm64 (Apple silicon)
-**Implementation checkout:** `/Users/kratos/Documents/Codex/2026-09-09/accessforge`
+**Implementation checkout:** `<implementation-checkout>`
 **Repository:** `github.com/gnanam1990/accessforge` (public), default branch `main`
 
-Every row below records a command that was actually executed and the output that was actually
-observed. Where a capability was not probed, the row says so rather than implying a result.
+Rows are of three different kinds and must not be read as if they were one. Most record a
+**command that was actually executed** and the output actually observed. Some record the
+**absence of a configuration file or binary**, which establishes that a checked source was not
+present — not that no such capability could exist by another route. One (§9) records an
+**owner decision that has not been made**, which no command can settle. Where a capability was not
+probed at all, the row says so rather than implying a result.
+
 Status values are **GO** (proven usable now), **PARTIAL** (present but not yet usable for its
 required proof), and **BLOCKED** (cannot be used until a named external action occurs).
+**NOT YET CONFIGURED** is not a capability status; it describes repository state and is used only
+for CI in §10.
 
 ---
 
@@ -28,7 +35,7 @@ required proof), and **BLOCKED** (cannot be used until a named external action o
 | 9 | **Windows NVDA actual-AT control** | **BLOCKED** | module 09; R1 completion |
 | 10 | **Strands / Bedrock model access** | **BLOCKED** | modules 12, 13, 14 real-model proof |
 | 11 | **Authorized target application** | **BLOCKED** | modules 05, 08; all E0 acceptance |
-| 12 | Remote CI | NOT YET CONFIGURED | introduced by module 01 |
+| 12 | Remote CI | n/a — repository state, see §10 | introduced by module 01 |
 
 Four blockers are load-bearing. Three of them (8, 10, 11) sit directly on the E0 critical path,
 so **E0 cannot be completed from the current environment** regardless of how much code lands.
@@ -42,7 +49,7 @@ Blocker 9 additionally prevents any honest claim of full R1.
 |---|---|---|
 | Operating system | macOS 26.6, build 25G72 | `sw_vers` |
 | CPU architecture | arm64 | `uname -m` |
-| Xcode command line tools | `/Volumes/ExternalSSD/Applications/Xcode.app/Contents/Developer` | `xcode-select -p` |
+| Xcode command line tools | `<external-volume>/Xcode.app/Contents/Developer` | `xcode-select -p` |
 | Node.js | v22.23.1 | `node -v` |
 | npm | 10.9.8 | `npm -v` |
 | pnpm | 11.10.0 | `pnpm -v` |
@@ -67,7 +74,7 @@ assumed here.
 | Client version | PostgreSQL 17.10 (Homebrew) | `psql --version` |
 | Server reachable | `/tmp:5432 - accepting connections` | `pg_isready` |
 | Server version | PostgreSQL 17.10 on aarch64-apple-darwin24.6.0 | `psql -d postgres -tAc "select version();"` |
-| Connected role | `kratos` | `psql -d postgres -tAc "select current_user;"` |
+| Connected role | local development superuser (name redacted) | `psql -d postgres -tAc "select current_user;"` |
 | Service management | `postgresql@17 started` via launchd | `brew services list` |
 
 A real local PostgreSQL server is running and accepting connections. Integration proof that
@@ -75,7 +82,7 @@ requires authoritative business state (CONTRACTS §"PostgreSQL is authoritative 
 transitions, outbox and idempotency") can be executed locally without an in-memory substitute.
 
 Not yet done: no AccessForge role, database, or schema exists. Module 01 owns creating a dedicated
-non-superuser role and database rather than reusing the `kratos` superuser login.
+non-superuser role and database rather than reusing the local superuser login.
 
 ---
 
@@ -86,7 +93,7 @@ non-superuser role and database rather than reusing the `kratos` superuser login
 | MinIO server binary | not present | `command -v minio` |
 | MinIO client (`mc`) | not present | `command -v mc` |
 | Docker CLI | 29.6.1 | `docker --version` |
-| Docker daemon | **not running** — `Cannot connect to the Docker daemon at unix:///Users/kratos/.colima/default/docker.sock` | `docker info` |
+| Docker daemon | **not running** — `Cannot connect to the Docker daemon at unix://<user-home>/.colima/default/docker.sock` | `docker info` |
 | Colima | installed but stopped — `colima is not running` | `colima status` |
 
 Docker is installed via Colima and is startable with `colima start`, which would then make a
@@ -112,10 +119,16 @@ hidden behind a filesystem fallback presented as object-store success.
 | `SCREnableAppleScript` | **not set at either path** | `defaults read`, `PlistBuddy -c Print` |
 | Accessibility (TCC) grant for a controlling terminal/IDE | **not determinable read-only** | not probed — see below |
 
-**Finding: VoiceOver has never been configured on this user account.** The preferences container
-does not exist at the legacy path *or* at the sandboxed path that macOS Sequoia (15) and later use.
-Since `SCREnableAppleScript` is absent rather than set to `0`, the "Allow VoiceOver to be controlled
-with AppleScript" option is at its default of **off**, and Guidepup cannot drive VoiceOver.
+**Finding: no VoiceOver configuration was found at either inspected path.** The preferences
+container is absent from the legacy path *and* from the sandboxed path that macOS Sequoia (15) and
+later use. `SCREnableAppleScript` is therefore unreadable rather than set to `0`, so the "Allow
+VoiceOver to be controlled with AppleScript" option is at its default of **off** and Guidepup cannot
+drive VoiceOver as things stand.
+
+The evidence supports "not configured at the paths Guidepup and macOS use", which is what blocks the
+run. It does not support the stronger claim that VoiceOver was never configured at any time — a
+deleted or relocated container would look identical from here, and that distinction is not needed to
+establish the blocker.
 
 The initial probe in this session checked only the legacy path. That was wrong for macOS 26.6 and
 was corrected by re-probing the sandboxed Group Containers path; the conclusion is the same at both
@@ -171,10 +184,13 @@ E0, and it does not block foundation work in modules 01–07 that is platform-in
 
 ### 5.3 What the virtual screen reader does *not* buy us
 
-`@guidepup/virtual-screen-reader` (0.32.1) is installable here and would produce green results
-without VoiceOver ever running. Under **INV-02** — *"Missing AT capability/evidence never becomes
-PASS or an automatic confirmed defect"* — those results are not E0 proof. The virtual reader is
-admissible only as a labelled unit-level fake (SESSION-HEADER §3), never as the actual-AT boundary.
+`@guidepup/virtual-screen-reader` (0.32.1) is **available from the registry**. It was not installed
+and not run here, so this section claims nothing about what it would output.
+
+The point rests on policy, not on a result: it simulates a reader rather than driving one, so under
+**INV-02** — *"Missing AT capability/evidence never becomes PASS or an automatic confirmed defect"*
+— its output could not constitute E0 proof at any value. It is admissible only as a labelled
+unit-level fake (SESSION-HEADER §3), never as the actual-AT boundary.
 
 ---
 
@@ -205,10 +221,11 @@ pinning the browser profile and installing the matching binaries.
 | `strands` Python package | not installed | `importlib.util.find_spec('strands')` |
 | Caller identity | not attempted (no CLI, no credentials) | — |
 
-No AWS credentials exist on this machine, so Bedrock model access cannot be verified and Strands
-cannot invoke a real model. No environment variables were dumped in the course of this check, per
-the module's explicit prohibition; the absence of both the CLI and the credentials files is
-sufficient to establish the blocker without inspecting any secret.
+None of the credential sources checked above were observed, and Bedrock access was **not verified**.
+Environment variables were deliberately not enumerated, per the module's explicit prohibition, so
+this is not a proof that no credential of any kind exists — an environment-injected key or an
+attached role would not have been visible to these checks. What is established is narrower and
+sufficient: no verified path to a real model invocation exists, and none may be assumed.
 
 This blocks the *real-model* proof for modules 12 (Strands navigator), 13 (diagnosis) and 14 (patch
 proposal). It does not block their schemas, tool-restriction logic, supervisor allowlists, or
@@ -264,7 +281,7 @@ Module 00 requires demonstrating that the following cannot be reported as real E
 | Claim that must fail | Why it fails here | Basis |
 |---|---|---|
 | "Linux-only environment proves E0" | Host is macOS; but note that a Linux CI runner has no VoiceOver at all, so an all-green Linux pipeline would prove nothing about actual AT. | INV-02 |
-| "Virtual screen reader results prove E0" | `@guidepup/virtual-screen-reader` would pass on this machine *right now*, with VoiceOver never launched and AppleScript control off. Green output would be produced by a capability that is provably absent. | INV-02 |
+| "Virtual screen reader results prove E0" | The package is registry-available but was not installed or run, so no output is claimed. It simulates a reader rather than driving one, so its result could not be E0 proof at any value — and VoiceOver is not configured to have produced a real one. | INV-02 |
 | "Accessibility permission is fine" | Not established. The VoiceOver preferences container does not exist at either the legacy or the Sequoia+ sandboxed path; the grant state is recorded as unknown, not assumed. | INV-02 |
 | "Browser version is known" | No Playwright binaries are installed. A run today would bind no exact browser build. | INV-03 |
 | "Model access works" | No AWS CLI, config, or credentials exist. A credential file's mere existence would not have proven service access either. | INV-02, SESSION-HEADER §3 |

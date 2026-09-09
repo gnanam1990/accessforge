@@ -45,4 +45,5 @@ See `docs/delivery/PLAN.md` for the full ledger.
 
 - Executable negative-verification tests (unconfigured reader must yield BLOCKED/INCONCLUSIVE, never
   PASS) are documented in `docs/capabilities.md` §11 but **not yet executable**. Owed by modules 01 and 08.
-- `docs/development/VERIFICATION.md` contains no real commands yet. Owed by module 01.
+- `docs/development/VERIFICATION.md` records this module's read-only capability probes but has no
+  **acceptance or CI commands** — there is nothing yet to verify. Owed by module 01.
