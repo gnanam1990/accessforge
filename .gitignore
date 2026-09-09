@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Build output
+dist/
+build/
+.next/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Private run evidence (never committed; see docs/development/VERIFICATION.md)
+.evidence/
+
+# Local databases and caches
+*.sqlite
+*.db
+.cache/
+coverage/
+
+# OS
+.DS_Store
