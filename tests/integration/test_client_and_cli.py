@@ -325,7 +325,63 @@ def test_the_cli_signs_in_and_stores_a_session_that_only_the_owner_can_read(
     assert result.returncode == 0, result.stderr
     assert session_file.exists()
     assert oct(session_file.stat().st_mode)[-3:] == "600"
+    assert oct(session_file.parent.stat().st_mode)[-3:] == "700"
     assert "sessionToken" in json.loads(session_file.read_text())
+
+
+def test_the_session_file_is_never_readable_by_anyone_else_even_briefly(
+    db: str, server: str, tmp_path: Path
+) -> None:
+    """The window a mode check after the fact cannot see.
+
+    Writing the file and then chmodding it leaves it at the umask default — 644 on a normal
+    configuration — for the interval between the two calls. A session token world-readable for a
+    millisecond on a shared machine is a session token world-readable, and the previous version of
+    the test above passed against exactly that code because it only looked at the end state.
+
+    Forced here by running under a permissive umask: if the mode came from the umask rather than
+    from the `open` call, this is where it shows.
+    """
+    session_file = tmp_path / "nested" / "session.json"
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [
+            sys.executable,
+            "-c",
+            "import os,sys;os.umask(0o000);"
+            "from accessforge_client.cli import main;sys.exit(main(sys.argv[1:]))",
+            "--base-url",
+            server,
+            "sign-in",
+            "--email",
+            EMAIL,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=ROOT,
+        env={**os.environ, "ACCESSFORGE_CLI_SESSION": str(session_file)},
+    )
+    assert result.returncode == 0, result.stderr
+    assert oct(session_file.stat().st_mode)[-3:] == "600"
+    assert oct(session_file.parent.stat().st_mode)[-3:] == "700"
+    # And nothing was left behind by the atomic write.
+    assert [p.name for p in session_file.parent.iterdir()] == ["session.json"]
+
+
+def test_a_session_is_not_printed_by_its_own_repr(db: str, server: str) -> None:
+    """A dataclass prints every field, and this one holds a live credential.
+
+    Nothing in this package prints a `Session` today. That is a property of this month's code, not
+    of the type, and the places it would surface — a traceback, a log line, a debugger watch, a bug
+    report someone pastes — are exactly the places nobody is looking when it happens.
+    """
+    with AccessForgeClient(server) as api:
+        session = api.sign_in(EMAIL)
+
+    rendered = repr(session)
+    assert session.session_token not in rendered
+    assert session.csrf_token not in rendered
+    assert "Session(" in rendered
 
 
 def test_the_cli_refuses_a_mutation_when_nobody_is_signed_in(

@@ -854,11 +854,13 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "A server-sent event stream. Frames carry `id:` (the durable outbox cursor), `event:` and a JSON `data:` payload. A `reset` frame means the cursor fell below the retention floor: discard local state and resynchronise from /events/snapshot."
           },
           "400": {
             "content": {
