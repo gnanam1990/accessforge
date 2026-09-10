@@ -45,6 +45,43 @@ CREATE_FIELDS = frozenset(
 )
 
 
+def _strings(body: dict[str, Any], field: str, request_id: str) -> list[str]:
+    """Require a JSON array, because a string is iterable and would pass silently.
+
+    `[str(v) for v in body["allowedJourneyVersionIds"]]` turns `"abc"` into `["a", "b", "c"]` --
+    three journey versions named after letters, accepted, stored, and discovered only when a
+    schedule fails to match any of them. Every scope field on a grant is a list of identities, and
+    a caller who sent one identity instead of a list of one made a mistake worth telling them about.
+    """
+    value = body.get(field, [])
+    if not isinstance(value, list):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            f"{field} must be an array. A bare string is iterable, so it would be accepted as one "
+            "entry per character and stored as a scope nobody meant.",
+            request_id=request_id,
+        )
+    for entry in value:
+        if not isinstance(entry, str) or not entry.strip():
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT,
+                f"every entry in {field} must be a non-empty string",
+                request_id=request_id,
+            )
+    return [str(v) for v in value]
+
+
+def _identifiers(body: dict[str, Any], field: str, request_id: str) -> list[str]:
+    """The same, and each entry must be a well-formed identifier.
+
+    Checked here rather than left to the database: a malformed UUID reaching a UUID comparison is an
+    unhandled driver error and a 500, and these values come straight from a request body.
+    """
+    return [
+        as_identifier(v, what=f"an entry in {field}") for v in _strings(body, field, request_id)
+    ]
+
+
 def _refuse(exc: grants.GrantError) -> ProblemDetail:
     """Map a domain refusal onto the one code that matches it.
 
@@ -86,9 +123,13 @@ def create_execution_grant(
                 workspace_id=workspace_id,
                 project_id=as_identifier(str(body["projectId"]), what="projectId"),
                 environment=str(body["environment"]),
-                allowed_journey_version_ids=[str(v) for v in body["allowedJourneyVersionIds"]],
-                allowed_policy_version_ids=[str(v) for v in body["allowedPolicyVersionIds"]],
-                permitted_effects=[str(v) for v in body.get("permittedEffects", [])],
+                allowed_journey_version_ids=_identifiers(
+                    body, "allowedJourneyVersionIds", context.request_id
+                ),
+                allowed_policy_version_ids=_strings(
+                    body, "allowedPolicyVersionIds", context.request_id
+                ),
+                permitted_effects=_strings(body, "permittedEffects", context.request_id),
                 action_budget=int(body["actionBudget"]),
                 wall_time_budget_seconds=int(body["wallTimeBudgetSeconds"]),
                 expires_at=str(body["expiresAt"]),

@@ -64,6 +64,114 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     _log.info("shutdown complete; in-flight requests were drained by the server")
 
 
+#: Paths that legitimately answer without a session. Everything else requires one, and the contract
+#: says so rather than leaving a consumer to infer it from a 401 in production.
+_UNAUTHENTICATED = frozenset({"/health/live", "/health/ready", "/diagnostics", "/v1/sessions"})
+
+#: FastAPI attaches this to every operation with a body or a path parameter, describing a 422 that
+#: this application never returns: `RequestValidationError` is caught and reshaped into an RFC7807
+#: document with status 400. A generated contract is only worth diffing if it describes the
+#: application that exists, and a documented error shape nobody can receive is worse than none --
+#: a client library generated from it would branch on a field that never arrives.
+_FASTAPI_DEFAULT_VALIDATION = "422"
+
+
+def _describe_contract(app: FastAPI) -> dict[str, Any]:
+    """Correct the generated OpenAPI so it describes the application that actually runs.
+
+    Two things FastAPI cannot know, both of which a consumer needs:
+
+    **How authentication works.** Authority comes from an HttpOnly session cookie, plus a CSRF
+    header on every mutating request. None of that appears in a route signature -- it is resolved
+    inside `build_context` -- so the generated document declared no security at all, and a reader
+    would conclude the API was open.
+
+    **What a validation failure looks like.** Every refusal in this system is an RFC7807 problem
+    document; there is exactly one handler and no route can answer any other way. The default 422
+    entry described a shape that cannot occur.
+    """
+    from fastapi.openapi.utils import get_openapi
+
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+
+    schema.setdefault("components", {})["securitySchemes"] = {
+        "sessionCookie": {
+            "type": "apiKey",
+            "in": "cookie",
+            "name": "accessforge_session",
+            "description": (
+                "HttpOnly session cookie issued by POST /v1/sessions. Not readable by script, "
+                "which is why the CSRF token is a separate value rather than the same one."
+            ),
+        },
+        "csrfHeader": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "x-csrf-token",
+            "description": (
+                "Required on every mutating request. The cookie alone proves the browser has a "
+                "session; it does not prove this page made the request."
+            ),
+        },
+    }
+
+    problem = {
+        "type": "object",
+        "required": ["type", "title", "status", "code", "detail", "requestId"],
+        "properties": {
+            "type": {"type": "string"},
+            "title": {"type": "string"},
+            "status": {"type": "integer"},
+            "code": {
+                "type": "string",
+                "enum": sorted(str(code) for code in ProblemCode),
+                "description": "Branch on this. The prose in `detail` changes; this does not.",
+            },
+            "detail": {"type": "string"},
+            "requestId": {"type": "string"},
+        },
+        "description": (
+            "RFC7807. RESOURCE_NOT_FOUND is returned both for a resource that does not exist and "
+            "for one belonging to another workspace: distinguishing them would let a caller "
+            "discover what other tenants hold."
+        ),
+    }
+    schema["components"].setdefault("schemas", {})["ProblemDetail"] = problem
+    problem_response = {
+        "description": "An RFC7807 problem document.",
+        "content": {
+            "application/problem+json": {"schema": {"$ref": "#/components/schemas/ProblemDetail"}}
+        },
+    }
+
+    for path, operations in schema.get("paths", {}).items():
+        for operation in operations.values():
+            if not isinstance(operation, dict):
+                continue
+            responses = operation.setdefault("responses", {})
+            responses.pop(_FASTAPI_DEFAULT_VALIDATION, None)
+            for status_code in ("400", "401", "403", "404", "409", "428", "429", "503"):
+                responses.setdefault(status_code, dict(problem_response))
+            operation["security"] = (
+                []
+                if path in _UNAUTHENTICATED
+                else [{"sessionCookie": []}]
+                if operation is operations.get("get")
+                else [{"sessionCookie": [], "csrfHeader": []}]
+            )
+
+    # No longer referenced now that every 422 is gone, and leaving an orphan schema in a contract
+    # invites somebody to generate a client type for an error that cannot happen.
+    schema.get("components", {}).get("schemas", {}).pop("HTTPValidationError", None)
+    schema.get("components", {}).get("schemas", {}).pop("ValidationError", None)
+
+    app.openapi_schema = schema
+    return schema
+
+
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
     config = settings or ApiSettings()  # type: ignore[call-arg]
     app = FastAPI(title="AccessForge API", version="0.0.0", lifespan=_lifespan)
@@ -135,6 +243,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 "desktopRunner": physical_runner_note(),
             },
         )
+
+    app.openapi = lambda: _describe_contract(app)  # type: ignore[method-assign]
 
     @app.get("/diagnostics")
     def diagnostics() -> dict[str, Any]:

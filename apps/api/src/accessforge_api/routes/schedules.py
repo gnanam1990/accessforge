@@ -14,6 +14,7 @@ means a schedule that quietly stops firing is a question to ask of the grant, so
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Annotated, Any
 
 import psycopg
@@ -188,8 +189,15 @@ def pause_schedule(
     """
     context = authorize(conn, request, workspace_id, Permission.RUN_APPROVE, body={})
     revision = require_if_match(context)
-    stored = _load_at(conn, schedule_id, revision)
-    schedules.pause(conn, schedule_id=stored.schedule_id, actor_id=context.principal.user_id)
+    stored = _resolve(conn, schedule_id)
+    _guard(
+        lambda: schedules.pause(
+            conn,
+            schedule_id=stored.schedule_id,
+            actor_id=context.principal.user_id,
+            expected_revision=revision,
+        )
+    )
     updated = schedules.load_schedule(conn, schedule_id=stored.schedule_id)
     response.headers["ETag"] = f'"{updated.revision}"'
     return updated.as_dict()
@@ -206,34 +214,40 @@ def resume_schedule(
     """
     context = authorize(conn, request, workspace_id, Permission.RUN_APPROVE, body={})
     revision = require_if_match(context)
-    stored = _load_at(conn, schedule_id, revision)
-    schedules.resume(conn, schedule_id=stored.schedule_id)
+    stored = _resolve(conn, schedule_id)
+    _guard(
+        lambda: schedules.resume(conn, schedule_id=stored.schedule_id, expected_revision=revision)
+    )
     updated = schedules.load_schedule(conn, schedule_id=stored.schedule_id)
     response.headers["ETag"] = f'"{updated.revision}"'
     return updated.as_dict()
 
 
-def _load_at(
-    conn: psycopg.Connection[Any], schedule_id: str, revision: int
-) -> schedules.StoredSchedule:
-    """Load a schedule and refuse if it moved since the caller read it.
+def _resolve(conn: psycopg.Connection[Any], schedule_id: str) -> schedules.StoredSchedule:
+    """Find the schedule, or return the uniform 404.
 
-    Pausing a schedule somebody else has just repointed at a different journey is a decision about
-    state that no longer exists, and the pause would look like it had worked.
+    Deliberately does **not** check the revision. An earlier version did, and that made the check a
+    check-then-use: the route compared `If-Match` and the persistence function acquired the row
+    afterwards, leaving a window in which somebody else's pause landed, went unnoticed, and was then
+    undone by a re-approval's `paused_at = NULL`. The revision is now verified inside the
+    transaction while the row is locked, which is the only place it means anything.
     """
     try:
-        stored = schedules.load_schedule(
+        return schedules.load_schedule(
             conn, schedule_id=as_identifier(schedule_id, what="scheduleId")
         )
     except schedules.ScheduleError:
         raise not_found() from None
-    if stored.revision != revision:
-        raise ProblemDetail(
-            ProblemCode.STALE_REVISION,
-            f"this schedule is at revision {stored.revision} and you supplied {revision}; it "
-            "changed since you read it",
-        )
-    return stored
+
+
+def _guard(operation: Callable[[], None]) -> None:
+    """Run a schedule mutation, turning a lost race into a 409 rather than a 500."""
+    try:
+        operation()
+    except schedules.StaleScheduleRevision as exc:
+        raise ProblemDetail(ProblemCode.STALE_REVISION, str(exc)) from exc
+    except schedules.ScheduleError as exc:
+        raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
 
 
 @router.post("/schedules/{schedule_id}/reapprove")
@@ -259,7 +273,7 @@ def reapprove_schedule(
     """
     context = authorize(conn, request, workspace_id, Permission.RUN_APPROVE, body={})
     revision = require_if_match(context)
-    stored = _load_at(conn, schedule_id, revision)
+    stored = _resolve(conn, schedule_id)
 
     try:
         stored_grant = grants.load_grant(conn, grant_id=stored.grant_id)
@@ -272,12 +286,15 @@ def reapprove_schedule(
             schedule_id=stored.schedule_id,
             grant=stored_grant.grant,
             actor_id=context.principal.user_id,
+            expected_revision=revision,
         )
     except AuthorityError as exc:
         raise ProblemDetail(
             ProblemCode.CONFLICT,
             f"{exc} Re-approving a schedule cannot make its grant usable; confirm the grant first.",
         ) from exc
+    except schedules.StaleScheduleRevision as exc:
+        raise ProblemDetail(ProblemCode.STALE_REVISION, str(exc)) from exc
     except schedules.ScheduleError as exc:
         raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
 
