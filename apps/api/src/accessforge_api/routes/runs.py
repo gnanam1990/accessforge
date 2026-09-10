@@ -15,7 +15,7 @@ from accessforge_api.routes._common import as_body, as_identifier, authorize, wo
 from accessforge_domain import reducers
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.timestamps import to_rfc3339_utc
-from accessforge_persistence import evidence, runners, runs
+from accessforge_persistence import budgets, evidence, runners, runs
 from accessforge_persistence.evidence import artifacts as artifacts_module
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runs"])
@@ -108,6 +108,38 @@ def request_run(
             raise ProblemDetail(
                 ProblemCode.QUOTA_EXHAUSTED, str(exc), request_id=context.request_id
             ) from exc
+
+        # The workspace's configured allowance, checked and charged in this same transaction. The
+        # entitlement row is locked for the duration, so two requests arriving together cannot both
+        # read the same total, both find room, and both be admitted.
+        #
+        # The idempotency key doubles as the usage event key where the caller supplied one: a retry
+        # of an admission already granted must not be charged twice, and a retry is exactly what an
+        # idempotency key identifies. Without one the request is its own operation and gets its own
+        # event key.
+        event_key = context.idempotency_key or f"run-request:{uuid.uuid4()}"
+        try:
+            budgets.admit_within_budget(
+                conn,
+                workspace_id=workspace_id,
+                kind="RUN_ADMITTED",
+                quantity=1,
+                event_key=event_key,
+            )
+        except budgets.NoEntitlement as exc:
+            raise ProblemDetail(
+                ProblemCode.DEPENDENCY_UNAVAILABLE,
+                f"{exc} An administrator configures it before any run can be requested.",
+                request_id=context.request_id,
+            ) from exc
+        except budgets.BudgetExhausted as exc:
+            raise ProblemDetail(
+                ProblemCode.QUOTA_EXHAUSTED,
+                str(exc),
+                extra={"kind": exc.kind, "limit": exc.limit, "used": exc.used},
+                request_id=context.request_id,
+            ) from exc
+
         run_id = runs.create_run(
             conn,
             workspace_id=workspace_id,

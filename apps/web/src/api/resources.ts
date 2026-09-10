@@ -217,6 +217,56 @@ export interface ExportRecord {
   readonly limitations: readonly string[]
 }
 
+export interface UsageRow {
+  readonly kind: string
+  /** What this system counted. */
+  readonly measured: number
+  /** What a provider reported about its own consumption. Counts against the limit. */
+  readonly estimated: number
+  /** A count of events whose quantity could not be obtained. Not zero usage. */
+  readonly unavailableEvents: number
+  readonly countedAgainstLimit: number
+  readonly limit: number
+  readonly remaining: number
+}
+
+export interface Usage {
+  readonly entitlementRevision: number
+  readonly configuredBy: string
+  readonly reason: string
+  readonly window: string
+  readonly usage: readonly UsageRow[]
+  readonly concurrentRuns: number
+  readonly maxConcurrentRuns: number
+  readonly meaning: string
+}
+
+export interface Entitlement {
+  readonly revision: number
+  readonly maxRunsPerDay: number
+  readonly maxActionsPerDay: number
+  readonly maxWallSecondsPerDay: number
+  readonly maxModelTokensPerDay: number
+  readonly maxConcurrentRuns: number
+  readonly configuredBy: string
+  readonly reason: string
+}
+
+export interface RetentionClass {
+  readonly evidenceClass: string
+  readonly retainDays: number
+  readonly consentRequired: boolean
+  /** Whether deleting under this class makes a completeness claim untrue. Not configurable. */
+  readonly invalidatesCompleteness: boolean
+  readonly meaning: string
+}
+
+export interface RetentionPolicy {
+  readonly revision: number
+  readonly classes: readonly RetentionClass[]
+  readonly limits: readonly string[]
+}
+
 export interface JourneyCapabilities {
   readonly allowedActions: readonly string[]
   readonly allowedKeyChordsByPlatform: Readonly<Record<string, readonly string[]>>
@@ -690,6 +740,41 @@ export const requestExport = (
   idempotencyKey: string,
 ): Promise<ApiOutcome<Record<string, unknown>>> =>
   client.request(`${base(workspaceId)}/exports`, { method: 'POST', body, idempotencyKey })
+
+export const readUsage = (
+  client: ApiClient,
+  workspaceId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<Usage>> =>
+  client.request<Usage>(`${base(workspaceId)}/usage`, { signal })
+
+export const readEntitlement = (
+  client: ApiClient,
+  workspaceId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<Entitlement>> =>
+  client.request<Entitlement>(`${base(workspaceId)}/settings/entitlement`, { signal })
+
+export const configureEntitlement = (
+  client: ApiClient,
+  workspaceId: string,
+  body: Record<string, unknown>,
+  revision: number,
+): Promise<ApiOutcome<{ readonly revision: number; readonly meaning: string }>> =>
+  client.request(`${base(workspaceId)}/settings/entitlement`, {
+    method: 'PUT',
+    body,
+    // The revision the caller last read. Changing a limit is a decision about the one currently in
+    // force, and a caller who did not read it is deciding about nothing.
+    ifMatch: revision,
+  })
+
+export const readRetention = (
+  client: ApiClient,
+  workspaceId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<RetentionPolicy>> =>
+  client.request<RetentionPolicy>(`${base(workspaceId)}/settings/retention`, { signal })
 
 export const requestCancellation = (
   client: ApiClient,

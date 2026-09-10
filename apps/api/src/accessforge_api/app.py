@@ -19,6 +19,7 @@ from .routes import (
     runners_router,
     runs_router,
     session_router,
+    settings_router,
 )
 
 
@@ -57,6 +58,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         journeys_router,
         runners_router,
         runs_router,
+        settings_router,
         findings_router,
         exports_router,
     ):

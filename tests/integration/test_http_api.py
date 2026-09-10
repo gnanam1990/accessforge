@@ -26,6 +26,7 @@ from accessforge_api.config import ApiSettings
 from accessforge_domain.canonical import digest
 from accessforge_persistence import (
     assert_row_level_security_enforced,
+    budgets,
     migrate,
     unscoped_connection,
     workspace_connection,
@@ -81,6 +82,23 @@ def db(test_database_url: str) -> Iterator[str]:
             "VALUES (%s, %s, 'OWNER')",
             (WS_OTHER, OUTSIDER),
         )
+    # Both workspaces need an entitlement, because requesting a run is now charged against one.
+    # A workspace with none is refused rather than treated as unlimited: "nobody has decided what
+    # your allowance is" and "you may do anything" are different states, and the second is not a
+    # safe default for a system that drives a desktop and spends money on a model.
+    for workspace in (WS, WS_OTHER):
+        with workspace_connection(test_database_url, workspace) as conn:
+            budgets.configure_entitlement(
+                conn,
+                workspace_id=workspace,
+                max_runs_per_day=100,
+                max_actions_per_day=10_000,
+                max_wall_seconds_per_day=86_400,
+                max_model_tokens_per_day=1_000_000,
+                max_concurrent_runs=10,
+                configured_by="test-fixture",
+                reason="generous, so these tests exercise the routes rather than the limit",
+            )
     yield test_database_url
 
 
