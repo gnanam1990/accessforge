@@ -1,4 +1,8 @@
-"""Migrations and workspace-scoped database access.
+"""Migrations, workspace-scoped database access, and the durable journal.
+
+Submodules: ``runs`` (reducer-backed run persistence), ``idempotency``, ``outbox`` (transactional
+outbox and durable jobs), ``sequencer`` (the single trusted evidence sequencer), ``recovery``,
+``transport`` and ``metrics``.
 
 PostgreSQL is authoritative for business state (CONTRACTS section 2). This package owns schema
 migration and the connection discipline that makes row-level security actually apply; repositories

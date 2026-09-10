@@ -1,6 +1,6 @@
 # Delivery status
 
-**Last refreshed:** 2026-09-10 (module 03 delivery)
+**Last refreshed:** 2026-09-10 (module 04 delivery)
 **Repository:** `github.com/gnanam1990/accessforge` (public)
 **Target branch:** `main`
 
@@ -10,7 +10,7 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 
 | Claim | Answer |
 |---|---|
-| Is code merged? | Modules 00, 01 and 02 are merged. Module 03 (identity and tenancy) is **open in a pull request**, not yet merged. |
+| Is code merged? | Modules 00 through 03 are merged. Module 04 (journal and outbox) is **open in a pull request**, not yet merged. |
 | Is a runtime verified? | **Partly.** The reference application and control-plane API were started and exercised over real HTTP against real PostgreSQL, including restart durability, and tenant isolation was proved by direct SQL. **No screen reader has ever run.** |
 | Is R1 release-ready? | **No**, and it cannot become ready on this host — module 09 requires Windows/NVDA. |
 | Did deployment or event submission occur? | **No.** Neither is authorized. |
@@ -23,7 +23,8 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 | Module 00 integration commit | `fc00eb8` — verified on main |
 | Module 01 integration commit | `23fe6c8` — verified on main, CI green |
 | Module 02 integration commit | `dbca481`, plus follow-up fix `bb52c30` — verified on main |
-| Latest verified integration commit | `bb52c30` |
+| Module 03 integration commit | `141e3de` — verified on main, CI green with RLS genuinely enforced |
+| Latest verified integration commit | `141e3de` |
 | CI on main | **Passing** for `23fe6c8`. Three jobs: Python (real PostgreSQL), Node, documentation integrity. |
 
 ## Modules
@@ -31,14 +32,21 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 Module 00: **merged** at `fc00eb8`, verified on main.
 Module 01: **merged** at `23fe6c8`, verified on main with a clean-checkout smoke.
 Module 02: **merged** at `dbca481`, verified on main; a post-merge defect was fixed in `bb52c30`.
-Module 03: **partial and locally verified** (594 Python tests, database-level tenant isolation proved
-directly against PostgreSQL), delivery **open**. Partial by design — the authorization primitives are
-complete, but no HTTP surface exposes them until module 18.
+Module 03: **merged** at `141e3de`, verified on main. Partial by design — the authorization
+primitives are complete, but no HTTP surface exposes them until module 18.
+Module 04: **implemented and locally verified** (659 Python tests including a crash matrix and real
+two-connection concurrency), delivery **open**.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
 
 ## Post-merge findings
+
+A second entry was added after module 03: CI ran the entire tenant-isolation suite against a
+PostgreSQL **superuser**, which bypasses row-level security including FORCE. Sixteen assertions failed
+at once — the correct outcome, but a poor diagnosis. CI now uses a NOSUPERUSER NOBYPASSRLS role and
+`assert_row_level_security_enforced` fails with one sentence if that regresses.
+
 
 | Found at | Issue | Status |
 |---|---|---|
