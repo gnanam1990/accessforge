@@ -30,7 +30,7 @@ for CI in §10.
 | 4 | PostgreSQL (authoritative business state) | GO | — |
 | 5 | Guidepup adapter availability (registry) | GO | — |
 | 6 | Browsers for journey execution | PARTIAL | pinned E0 browser profile |
-| 7 | S3-compatible object storage | PARTIAL | modules 10, 17 real-artifact proof |
+| 7 | S3-compatible object storage | **AVAILABLE** (MinIO under Colima, started 2026-09-10) | modules 10, 17 real-artifact proof |
 | 8 | **macOS VoiceOver actual-AT control** | **BLOCKED** | modules 08, 12; all E0 acceptance |
 | 9 | **Windows NVDA actual-AT control** | **BLOCKED** | module 09; R1 completion |
 | 10 | **Strands / Bedrock model access** | **BLOCKED** | modules 12, 13, 14 real-model proof |
@@ -90,19 +90,23 @@ non-superuser role and database rather than reusing the local superuser login.
 
 | Item | Observed | Command |
 |---|---|---|
-| MinIO server binary | not present | `command -v minio` |
+| MinIO server binary | not present natively | `command -v minio` |
 | MinIO client (`mc`) | not present | `command -v mc` |
 | Docker CLI | 29.6.1 | `docker --version` |
-| Docker daemon | **not running** — `Cannot connect to the Docker daemon at unix://<user-home>/.colima/default/docker.sock` | `docker info` |
-| Colima | installed but stopped — `colima is not running` | `colima status` |
+| Docker daemon | **running** under Colima | `docker info` |
+| Colima | **running** (2 CPU, 4 GiB, 20 GiB disk) | `colima status` |
+| MinIO container | **running** and healthy, HTTP 200 | `curl http://127.0.0.1:9000/minio/health/live` |
 
-Docker is installed via Colima and is startable with `colima start`, which would then make a
-containerised MinIO viable. The daemon was deliberately **not** started during this gate: module 00
-must not change machine state to make its own result look better, and nothing yet needs it.
+**Resolved on 2026-09-10, when module 10 needed it.** Module 00 deliberately did not start the daemon
+during the original gate — a capability gate that changes machine state to improve its own result is
+not a gate. Module 10's artifact requirements are the first thing that actually needs an object
+store, so it was started then: `colima start`, then MinIO in a container, with credentials generated
+locally and written to `.env.objectstore`, which `.gitignore` already excludes.
 
-Consequence: evidence-artifact modules (10, 17) can begin schema and contract work, but their
-real object-store boundary proof is not yet available. Per SESSION-HEADER §12 this must not be
-hidden behind a filesystem fallback presented as object-store success.
+This is a real S3-compatible endpoint, not a filesystem fallback wearing an object-store name.
+SESSION-HEADER §12 forbids the latter, and the distinction is load-bearing: a filesystem stand-in
+would silently pass every test that a bucket-scoped credential, a server-side hash and a
+content-type check are supposed to fail.
 
 ---
 
