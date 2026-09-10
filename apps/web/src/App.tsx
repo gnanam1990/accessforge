@@ -32,10 +32,12 @@ import { LoadingState, OfflineState } from './components/states'
 import { Notice } from './components/Notice'
 import { ChooseWorkspaceScreen } from './routes/ChooseWorkspaceScreen'
 import { ScreenNotBuilt } from './routes/ScreenNotBuilt'
+import { FindingScreen } from './screens/FindingScreen'
 import { JourneyScreen } from './screens/JourneyScreen'
 import { OverviewScreen } from './screens/OverviewScreen'
 import { ProjectScreen } from './screens/ProjectScreen'
 import { ProjectsScreen } from './screens/ProjectsScreen'
+import { RunScreen } from './screens/RunScreen'
 import { RunnersScreen } from './screens/RunnersScreen'
 import { SignInScreen } from './routes/SignInScreen'
 import { WorkspaceRoute } from './routes/WorkspaceRoute'
@@ -57,6 +59,8 @@ const SCREENS: Readonly<Record<string, JSX.Element>> = {
   'projects/:projectId': <ProjectScreen />,
   'projects/:projectId/journeys/:journeyId': <JourneyScreen />,
   runners: <RunnersScreen />,
+  'runs/:runId': <RunScreen />,
+  'findings/:findingId': <FindingScreen />,
 }
 
 const AuthenticatedRoutes = (): JSX.Element => (

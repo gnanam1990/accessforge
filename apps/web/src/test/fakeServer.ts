@@ -33,6 +33,13 @@ export interface SessionResponse {
  * type here lets a test build a fixture that is missing a field the screen reads, which then fails
  * for a reason that has nothing to do with what the test was about.
  */
+export interface AttemptRow {
+  attemptId: string
+  leaseEpoch: number
+  startedAt: string
+  endedAt: string | null
+}
+
 export interface WorkspaceData {
   projects: Project[]
   environments: Environment[]
@@ -40,6 +47,10 @@ export interface WorkspaceData {
   runners: Runner[]
   runs: Run[]
   sealedManifests: SealedManifest[]
+  attempts: AttemptRow[]
+  timeline: Record<string, unknown>
+  completeness: Record<string, unknown>
+  findings: Record<string, unknown>
 }
 
 export interface FakeServer {
@@ -99,6 +110,23 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     runners: [],
     runs: [],
     sealedManifests: [],
+    attempts: [],
+    timeline: {
+      events: [],
+      nextAfterSequence: 0,
+      exhausted: true,
+      orderingMeaning: 'Ordered by the sequence the trusted sequencer assigned, not by any clock.',
+    },
+    completeness: {
+      reasons: [],
+      contiguous: true,
+      producersClosed: true,
+      artifactsPresent: true,
+      lifecycleBounded: true,
+      producers: [],
+      meaning: 'This describes the evidence, not the run.',
+    },
+    findings: {},
   }
   const refusals = new Map<string, { status: number; code: string; detail: string }>()
   const bodies: {
@@ -252,6 +280,38 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         })
       }
 
+      if (url.includes('/cancel') && method === 'POST') {
+        return json(
+          {
+            stopAcknowledged: false,
+            cancellationRequestedAt: '2026-09-10T12:03:00Z',
+            meaning:
+              'Cancellation is requested. Nothing has established that the desktop stopped, and ' +
+              'any action already dispatched may still complete.',
+          },
+          202,
+        )
+      }
+      if (url.includes('/attempts') && method === 'GET') {
+        return json({ items: data.attempts })
+      }
+      if (url.includes('/timeline') && method === 'GET') {
+        return json(data.timeline)
+      }
+      if (url.includes('/completeness') && method === 'GET') {
+        return json(data.completeness)
+      }
+      if (url.includes('/findings/') && method === 'GET') {
+        return json(data.findings)
+      }
+      if (url.includes('/runs/') && method === 'GET') {
+        const id = (url.split('/runs/')[1] ?? '').split('?')[0] ?? ''
+        const found = data.runs.find((run) => run.runId === id)
+        if (found === undefined) {
+          return problem(404, 'RESOURCE_NOT_FOUND', 'no such resource', 'Not found')
+        }
+        return json(found)
+      }
       if (url.includes('/runs') && method === 'GET') {
         return json({ items: data.runs, nextCursor: null })
       }

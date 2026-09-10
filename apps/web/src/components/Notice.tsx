@@ -18,6 +18,7 @@
 
 import type { JSX } from 'react'
 
+import { useId } from 'react'
 import type { ReactNode } from 'react'
 
 import { Button } from './Button'
@@ -48,14 +49,21 @@ export const Notice = ({
   onDismiss,
 }: NoticeProps): JSX.Element => {
   const Heading = `h${headingLevel}` as 'h2' | 'h3' | 'h4'
+  // The heading names the region. Without this a live region is announced as an unnamed alert or
+  // status, so a reader hears the message with nothing saying what it is about — and a page with
+  // two of them gives no way to tell which one just spoke.
+  const headingId = useId()
   return (
     <div
       className={`af-notice af-notice--${tone}`}
+      aria-labelledby={headingId}
       // `alert` for a problem the person needs now; a polite status for the rest. Not `alert` for
       // everything: an assertive region interrupts whatever the reader was in the middle of.
       role={live ? (tone === 'problem' ? 'alert' : 'status') : undefined}
     >
-      <Heading className="af-notice__heading">{heading}</Heading>
+      <Heading id={headingId} className="af-notice__heading">
+        {heading}
+      </Heading>
       {children}
       {(actions !== undefined || onDismiss !== undefined) && (
         <div className="af-row">
