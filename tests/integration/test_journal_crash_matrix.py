@@ -1058,3 +1058,121 @@ def test_a_caller_holding_a_stale_revision_is_refused(db: str) -> None:
         state = runs.load_run(conn, run_id=run_id).state
     assert state.status.value == "LEASED", "the stale write must not have applied"
     assert state.revision == observed + 1
+
+
+def test_the_full_cancellation_cycle_survives_a_database_round_trip(db: str) -> None:
+    """Regression found while building module 05.
+
+    PostgreSQL returns `timestamptz` in the **session** timezone, not necessarily UTC. The old
+    formatter was `isoformat().replace("+00:00", "Z")`, which silently produced
+    `2026-09-10T05:00:00-07:00` on a machine in Los Angeles — a string every parser here correctly
+    refuses.
+
+    Module 04's reviewer flagged this as an unexecuted hypothesis and it turned out to be real. It
+    stayed hidden because the existing tests never reloaded a cancellation timestamp from the
+    database and then *compared* it: `cancel()` refused earlier, for a different reason, before
+    reaching the comparison. This test does the full request → reload → acknowledge → reload →
+    cancel
+    cycle with every step in its own transaction.
+    """
+    run_id = _new_run(db)
+    for _ in range(2):  # QUEUED -> LEASED -> RUNNING
+        with workspace_connection(db, WS_A) as conn:
+            runs.apply_transition(
+                conn,
+                run_id=run_id,
+                reducer=progress,
+                operation_id=str(uuid.uuid4()),
+                topic="t",
+                now=NOW,
+            )
+
+    with workspace_connection(db, WS_A) as conn:
+        runs.apply_transition(
+            conn,
+            run_id=run_id,
+            reducer=lambda s: request_cancellation(s, requested_at="2026-09-10T12:00:00Z"),
+            operation_id=str(uuid.uuid4()),
+            topic="t",
+            now=NOW,
+        )
+
+    # Reloaded from the database, so cancel_requested_at is whatever the driver returned.
+    with workspace_connection(db, WS_A) as conn:
+        reloaded = runs.load_run(conn, run_id=run_id).state
+    assert reloaded.cancel_requested_at is not None
+    assert reloaded.cancel_requested_at.endswith("Z"), (
+        f"a reloaded timestamp must be RFC3339 UTC, got {reloaded.cancel_requested_at!r}"
+    )
+
+    with workspace_connection(db, WS_A) as conn:
+        runs.apply_transition(
+            conn,
+            run_id=run_id,
+            reducer=lambda s: acknowledge_stop(
+                s, acknowledged_at="2026-09-10T12:00:05Z", epoch=s.lease_epoch
+            ),
+            operation_id=str(uuid.uuid4()),
+            topic="t",
+            now=NOW,
+        )
+
+    # The comparison that the formatting bug broke: is the acknowledgement after the request?
+    with workspace_connection(db, WS_A) as conn:
+        state = runs.apply_transition(
+            conn,
+            run_id=run_id,
+            reducer=cancel,
+            operation_id=str(uuid.uuid4()),
+            topic="t",
+            now=NOW,
+        )
+    assert state.status.value == "CANCELLED"
+    assert state.outcome.value == "INCONCLUSIVE"
+
+
+def test_an_acknowledgement_predating_the_request_is_still_refused_after_a_round_trip(
+    db: str,
+) -> None:
+    """The ordering rule must survive reloading too, not only hold in memory."""
+    run_id = _new_run(db)
+    for _ in range(2):
+        with workspace_connection(db, WS_A) as conn:
+            runs.apply_transition(
+                conn,
+                run_id=run_id,
+                reducer=progress,
+                operation_id=str(uuid.uuid4()),
+                topic="t",
+                now=NOW,
+            )
+    with workspace_connection(db, WS_A) as conn:
+        runs.apply_transition(
+            conn,
+            run_id=run_id,
+            reducer=lambda s: acknowledge_stop(
+                s, acknowledged_at="2026-09-10T12:00:00Z", epoch=s.lease_epoch
+            ),
+            operation_id=str(uuid.uuid4()),
+            topic="t",
+            now=NOW,
+        )
+    with workspace_connection(db, WS_A) as conn:
+        runs.apply_transition(
+            conn,
+            run_id=run_id,
+            reducer=lambda s: request_cancellation(s, requested_at="2026-09-10T12:00:05Z"),
+            operation_id=str(uuid.uuid4()),
+            topic="t",
+            now=NOW,
+        )
+    with pytest.raises(Exception, match="predates"):
+        with workspace_connection(db, WS_A) as conn:
+            runs.apply_transition(
+                conn,
+                run_id=run_id,
+                reducer=cancel,
+                operation_id=str(uuid.uuid4()),
+                topic="t",
+                now=NOW,
+            )

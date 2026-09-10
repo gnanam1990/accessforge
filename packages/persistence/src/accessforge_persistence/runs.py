@@ -28,6 +28,7 @@ from psycopg.types.json import Jsonb
 
 from accessforge_domain.reducers import RunState, TransitionError
 from accessforge_domain.states import Outcome, RunStatus
+from accessforge_domain.timestamps import to_rfc3339_utc
 
 from .outbox import enqueue_message
 
@@ -88,17 +89,13 @@ def _row_to_state(row: dict[str, Any]) -> RunState:
         execution_began=bool(row["execution_began"]),
         unresolved_action=bool(row["unresolved_action"]),
         cancel_requested_at=(
-            row["cancel_requested_at"].isoformat().replace("+00:00", "Z")
-            if row["cancel_requested_at"]
-            else None
+            to_rfc3339_utc(row["cancel_requested_at"]) if row["cancel_requested_at"] else None
         ),
         cancellation_revision=(
             int(row["cancellation_revision"]) if row["cancellation_revision"] is not None else None
         ),
         stop_acknowledged_at=(
-            row["stop_acknowledged_at"].isoformat().replace("+00:00", "Z")
-            if row["stop_acknowledged_at"]
-            else None
+            to_rfc3339_utc(row["stop_acknowledged_at"]) if row["stop_acknowledged_at"] else None
         ),
         stop_acknowledged_epoch=(
             int(row["stop_acknowledged_epoch"])
