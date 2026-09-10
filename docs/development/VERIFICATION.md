@@ -73,6 +73,24 @@ application under test.
 `migrate` now refuses both shapes up front rather than relying on anyone remembering this section —
 see below — but the refusal is a backstop. Recreating the database is the procedure.
 
+## Object store for the evidence-artifact suite
+
+```bash
+colima start
+docker run -d --name accessforge-minio -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=accessforge -e MINIO_ROOT_PASSWORD="$(openssl rand -base64 24)" \
+  quay.io/minio/minio server /data --console-address ":9001"
+```
+
+Then copy `.env.objectstore.example` to `.env.objectstore` and fill in the password you generated.
+
+**There is no filesystem fallback, and the suite fails rather than skips without a store.** A skipped
+artifact suite on a machine with no object store looks like a passing build, and SESSION-HEADER §12
+forbids presenting a filesystem stand-in as object-store success. The distinction is load-bearing
+rather than procedural: a stand-in passes every assertion about size limits and content types while
+proving none of what only a real store does — most importantly that an object can be swapped
+underneath a row that still records the old digest, which is the reason `promote` re-reads the bytes.
+
 ## Database migrations
 
 ```bash

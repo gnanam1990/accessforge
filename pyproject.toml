@@ -77,6 +77,13 @@ mypy_path = "apps/api/src:fixtures/reference-app/src:packages/domain/src:package
 namespace_packages = true
 explicit_package_bases = true
 
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*"]
+# boto3 ships no type information. boto3-stubs is a very large dependency for the four S3 methods
+# this project calls, and those calls are already wrapped in typed functions of our own, so the
+# untyped surface is four method names rather than an API.
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
