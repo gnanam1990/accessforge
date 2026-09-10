@@ -75,14 +75,14 @@
   "paths": {
     "/diagnostics": {
       "get": {
-        "operationId": "diagnostics_diagnostics_get",
+        "operationId": "diagnostics",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Diagnostics Diagnostics Get",
+                  "title": "Response Diagnostics",
                   "type": "object"
                 }
               }
@@ -176,7 +176,7 @@
     },
     "/health/live": {
       "get": {
-        "operationId": "live_health_live_get",
+        "operationId": "live",
         "responses": {
           "200": {
             "content": {
@@ -185,7 +185,7 @@
                   "additionalProperties": {
                     "type": "string"
                   },
-                  "title": "Response Live Health Live Get",
+                  "title": "Response Live",
                   "type": "object"
                 }
               }
@@ -280,7 +280,7 @@
     "/health/ready": {
       "get": {
         "description": "Every dependency this process needs, plus one it deliberately does not claim.\n\n`desktopRunner` is reported separately from `dependencies` on purpose. Anything inside\n`dependencies` contributes to the overall verdict; the runner note contributes nothing,\nbecause this probe has no way to establish that a machine somewhere is attached and able to\ndrive a real screen reader. Folding it in either way would be a lie -- as a passing check it\nclaims a desktop, and as a failing one it makes a healthy control plane look broken.",
-        "operationId": "ready_health_ready_get",
+        "operationId": "ready",
         "responses": {
           "200": {
             "content": {
@@ -378,7 +378,7 @@
     "/v1/session": {
       "delete": {
         "description": "End this session.\n\nCSRF-protected like any other mutation. A forced sign-out is a small attack, but it is still an\nattack a cross-site request could mount, and exempting it would make the rule conditional.\n\nSigning out with no session succeeds and clears the cookies. Reporting 401 would leave a browser\nholding a cookie it cannot use and no way to discard it.\n\nThe cookies are cleared by writing to the **injected** response rather than by constructing a\nnew one. An earlier version built a fresh `Response(headers=dict(response.headers))`, and\n`dict()` over a header collection keeps one value per name \u2014 so of the two `Set-Cookie`\ndeletions, one silently vanished and the browser kept a cookie the server believed it had\ncleared. A real browser found that; nothing in a status-code assertion would have.",
-        "operationId": "sign_out_v1_session_delete",
+        "operationId": "sign_out",
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -477,14 +477,14 @@
       },
       "get": {
         "description": "Who this is, and which workspaces they may enter right now.\n\nMemberships are read through `user_connection`, whose only widened policy matches the acting\nuser's own rows. Revocation therefore takes effect immediately: a workspace removed a moment ago\nis absent from the next answer rather than lingering in a cached navigation.",
-        "operationId": "read_session_v1_session_get",
+        "operationId": "read_session",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Read Session V1 Session Get",
+                  "title": "Response Read Session",
                   "type": "object"
                 }
               }
@@ -586,7 +586,7 @@
     "/v1/sessions": {
       "post": {
         "description": "Exchange an identity-provider assertion for a browser session.\n\nThe only implemented provider is the local-development bridge described in the module docstring.\nWith no provider configured this is a 503 naming the missing configuration, not a 401: the\ncaller's credentials were never the problem.",
-        "operationId": "sign_in_v1_sessions_post",
+        "operationId": "sign_in",
         "requestBody": {
           "content": {
             "application/json": {
@@ -605,7 +605,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Sign In V1 Sessions Post",
+                  "title": "Response Sign In",
                   "type": "object"
                 }
               }
@@ -703,7 +703,7 @@
     "/v1/workspaces/{workspace_id}/events/snapshot": {
       "get": {
         "description": "Authoritative current state, and the cursor it was taken at.\n\nThe cursor is the point. A client applies this and then resumes the stream from\n`asOfEventId`, so events already reflected here are not applied twice and events after it are\nnot missed. A snapshot without a cursor is a race with no safe resume, and it is the thing a\n`reset` instruction sends a client to.",
-        "operationId": "read_snapshot_v1_workspaces__workspace_id__events_snapshot_get",
+        "operationId": "read_snapshot",
         "parameters": [
           {
             "in": "path",
@@ -721,7 +721,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Read Snapshot V1 Workspaces  Workspace Id  Events Snapshot Get",
+                  "title": "Response Read Snapshot",
                   "type": "object"
                 }
               }
@@ -823,7 +823,7 @@
     "/v1/workspaces/{workspace_id}/events/stream": {
       "get": {
         "description": "Live events, resumable, with authority rechecked on every poll.\n\nDeliberately does **not** take the `Conn` dependency every other route uses. FastAPI closes a\ngenerator dependency after the *response* completes, which for a streaming response means after\nthe stream ends \u2014 so a subscriber would hold an open transaction for five minutes, showing up in\n`pg_stat_activity` as \"idle in transaction\" and blocking vacuum on every table it touched. One\nconnection is opened here for the authorization check and closed immediately; the stream then\nopens a short-lived one per poll.",
-        "operationId": "stream_events_v1_workspaces__workspace_id__events_stream_get",
+        "operationId": "stream_events",
         "parameters": [
           {
             "in": "path",
@@ -955,7 +955,7 @@
     "/v1/workspaces/{workspace_id}/execution-grants": {
       "get": {
         "description": "Every grant, revoked ones included, each saying whether it is usable and why not.\n\n`unusableBecause` comes from the same `check_usable` the dispatch path calls rather than being\nre-derived here. A listing with its own idea of usability eventually disagrees with the code\nthat enforces it, and the disagreement surfaces as a grant this endpoint calls usable and every\nrun refuses.",
-        "operationId": "list_execution_grants_v1_workspaces__workspace_id__execution_grants_get",
+        "operationId": "list_execution_grants",
         "parameters": [
           {
             "in": "path",
@@ -989,7 +989,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Execution Grants V1 Workspaces  Workspace Id  Execution Grants Get",
+                  "title": "Response List Execution Grants",
                   "type": "object"
                 }
               }
@@ -1089,7 +1089,7 @@
       },
       "post": {
         "description": "Mint a standing grant. Bounded on every axis, and expiring.\n\n`RUN_APPROVE` rather than `RUN_REQUEST`: a grant is a machine that requests runs, and somebody\nwho may request one run has not been trusted to build one of those.",
-        "operationId": "create_execution_grant_v1_workspaces__workspace_id__execution_grants_post",
+        "operationId": "create_execution_grant",
         "parameters": [
           {
             "in": "path",
@@ -1119,7 +1119,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Create Execution Grant V1 Workspaces  Workspace Id  Execution Grants Post",
+                  "title": "Response Create Execution Grant",
                   "type": "object"
                 }
               }
@@ -1221,7 +1221,7 @@
     },
     "/v1/workspaces/{workspace_id}/execution-grants/{grant_id}": {
       "get": {
-        "operationId": "read_execution_grant_v1_workspaces__workspace_id__execution_grants__grant_id__get",
+        "operationId": "read_execution_grant",
         "parameters": [
           {
             "in": "path",
@@ -1248,7 +1248,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Read Execution Grant V1 Workspaces  Workspace Id  Execution Grants  Grant Id  Get",
+                  "title": "Response Read Execution Grant",
                   "type": "object"
                 }
               }
@@ -1350,7 +1350,7 @@
     "/v1/workspaces/{workspace_id}/execution-grants/{grant_id}/revalidations": {
       "post": {
         "description": "Confirm that a grant a restore brought back is still authorized.\n\nThe door out of `revalidation_required`, which module 27 introduced without one. A restored\ngrant was therefore unusable forever, and the failure was silent: schedules simply stopped\nadmitting occurrences with a skip reason nobody was reading.\n\n`RUN_APPROVE`, and the approving user is recorded on the row. \"Somebody confirmed this\" with no\nname attached is not a confirmation, and this is the one operation in the system whose entire\nvalue is that a person looked.",
-        "operationId": "revalidate_execution_grant_v1_workspaces__workspace_id__execution_grants__grant_id__revalidations_post",
+        "operationId": "revalidate_execution_grant",
         "parameters": [
           {
             "in": "path",
@@ -1377,7 +1377,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Revalidate Execution Grant V1 Workspaces  Workspace Id  Execution Grants  Grant Id  Revalidations Post",
+                  "title": "Response Revalidate Execution Grant",
                   "type": "object"
                 }
               }
@@ -1480,7 +1480,7 @@
     "/v1/workspaces/{workspace_id}/execution-grants/{grant_id}/revoke": {
       "post": {
         "description": "Withdraw a grant. A revision, never a delete.\n\nIdempotent: the operator most likely to revoke twice is the one who is not sure the first\nattempt landed, and that is precisely when the second call must not be an error.",
-        "operationId": "revoke_execution_grant_v1_workspaces__workspace_id__execution_grants__grant_id__revoke_post",
+        "operationId": "revoke_execution_grant",
         "parameters": [
           {
             "in": "path",
@@ -1507,7 +1507,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Revoke Execution Grant V1 Workspaces  Workspace Id  Execution Grants  Grant Id  Revoke Post",
+                  "title": "Response Revoke Execution Grant",
                   "type": "object"
                 }
               }
@@ -1610,7 +1610,7 @@
     "/v1/workspaces/{workspace_id}/exports": {
       "post": {
         "description": "Build a bundle from authoritative stored records.\n\nThere is no parameter through which a caller could supply a summary to be packaged. Everything\nin the bundle is read here, from the database and the object store, because a bundle assembled\nfrom caller-supplied JSON would attest to whatever the caller said.",
-        "operationId": "create_export_v1_workspaces__workspace_id__exports_post",
+        "operationId": "create_export",
         "parameters": [
           {
             "in": "path",
@@ -1640,7 +1640,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Create Export V1 Workspaces  Workspace Id  Exports Post",
+                  "title": "Response Create Export",
                   "type": "object"
                 }
               }
@@ -1743,7 +1743,7 @@
     "/v1/workspaces/{workspace_id}/exports/{export_id}": {
       "get": {
         "description": "Export status and limitations.\n\nAuthorization is rechecked even for a read, because this row says what was exported and to whom.",
-        "operationId": "get_export_v1_workspaces__workspace_id__exports__export_id__get",
+        "operationId": "get_export",
         "parameters": [
           {
             "in": "path",
@@ -1770,7 +1770,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Get Export V1 Workspaces  Workspace Id  Exports  Export Id  Get",
+                  "title": "Response Get Export",
                   "type": "object"
                 }
               }
@@ -1871,7 +1871,7 @@
     },
     "/v1/workspaces/{workspace_id}/findings": {
       "get": {
-        "operationId": "list_findings_v1_workspaces__workspace_id__findings_get",
+        "operationId": "list_findings",
         "parameters": [
           {
             "in": "path",
@@ -1921,7 +1921,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Findings V1 Workspaces  Workspace Id  Findings Get",
+                  "title": "Response List Findings",
                   "type": "object"
                 }
               }
@@ -2022,7 +2022,7 @@
     },
     "/v1/workspaces/{workspace_id}/findings/{finding_id}": {
       "get": {
-        "operationId": "get_finding_v1_workspaces__workspace_id__findings__finding_id__get",
+        "operationId": "get_finding",
         "parameters": [
           {
             "in": "path",
@@ -2049,7 +2049,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Get Finding V1 Workspaces  Workspace Id  Findings  Finding Id  Get",
+                  "title": "Response Get Finding",
                   "type": "object"
                 }
               }
@@ -2151,7 +2151,7 @@
     "/v1/workspaces/{workspace_id}/findings/{finding_id}/transitions": {
       "post": {
         "description": "Move a finding, recording who and why.\n\nRESOLVED requires an accepting review, enforced by the domain rather than here. The route passes\nthe reviewer's role straight through: a route that decided for itself which roles may transition\na finding would be a second copy of the permission matrix.",
-        "operationId": "transition_finding_v1_workspaces__workspace_id__findings__finding_id__transitions_post",
+        "operationId": "transition_finding",
         "parameters": [
           {
             "in": "path",
@@ -2190,7 +2190,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Transition Finding V1 Workspaces  Workspace Id  Findings  Finding Id  Transitions Post",
+                  "title": "Response Transition Finding",
                   "type": "object"
                 }
               }
@@ -2293,7 +2293,7 @@
     "/v1/workspaces/{workspace_id}/journey-capabilities": {
       "get": {
         "description": "What a journey may ask for, from the domain's own allowlists.\n\nServed rather than duplicated in the client, because a client-side copy is a second definition\nof the policy and it will disagree the day the allowlist changes. An author offered a control\nthe server refuses is being invited to fail.",
-        "operationId": "journey_capabilities_v1_workspaces__workspace_id__journey_capabilities_get",
+        "operationId": "journey_capabilities",
         "parameters": [
           {
             "in": "path",
@@ -2311,7 +2311,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Journey Capabilities V1 Workspaces  Workspace Id  Journey Capabilities Get",
+                  "title": "Response Journey Capabilities",
                   "type": "object"
                 }
               }
@@ -2413,7 +2413,7 @@
     "/v1/workspaces/{workspace_id}/journeys": {
       "post": {
         "description": "Compile and seal a new immutable journey version.\n\n201, not 202: unlike a run, this finishes inside the request. The response carries the digests\nthat were actually sealed, so a caller can show a reviewer what freezing committed to rather\nthan a re-derivation of it.",
-        "operationId": "freeze_journey_version_v1_workspaces__workspace_id__journeys_post",
+        "operationId": "freeze_journey_version",
         "parameters": [
           {
             "in": "path",
@@ -2443,7 +2443,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Freeze Journey Version V1 Workspaces  Workspace Id  Journeys Post",
+                  "title": "Response Freeze Journey Version",
                   "type": "object"
                 }
               }
@@ -2545,7 +2545,7 @@
     },
     "/v1/workspaces/{workspace_id}/journeys/{journey_version_id}": {
       "get": {
-        "operationId": "get_journey_version_v1_workspaces__workspace_id__journeys__journey_version_id__get",
+        "operationId": "get_journey_version",
         "parameters": [
           {
             "in": "path",
@@ -2572,7 +2572,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Get Journey Version V1 Workspaces  Workspace Id  Journeys  Journey Version Id  Get",
+                  "title": "Response Get Journey Version",
                   "type": "object"
                 }
               }
@@ -2674,7 +2674,7 @@
     "/v1/workspaces/{workspace_id}/journeys/{journey_version_id}/policy": {
       "get": {
         "description": "The navigator policy for a frozen version, exactly as sealed.\n\nServed so a reviewer can read what the navigator will be given. It contains no oracle material\nby construction \u2014 the compiler builds it that way \u2014 and showing it is how that claim becomes\ncheckable by a person rather than asserted in a document.",
-        "operationId": "journey_navigator_policy_v1_workspaces__workspace_id__journeys__journey_version_id__policy_get",
+        "operationId": "journey_navigator_policy",
         "parameters": [
           {
             "in": "path",
@@ -2701,7 +2701,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Journey Navigator Policy V1 Workspaces  Workspace Id  Journeys  Journey Version Id  Policy Get",
+                  "title": "Response Journey Navigator Policy",
                   "type": "object"
                 }
               }
@@ -2803,7 +2803,7 @@
     "/v1/workspaces/{workspace_id}/members": {
       "get": {
         "description": "The people who hold an active membership in this workspace.\n\nNeeded because several records in this product name a person \u2014 who authorized a repository, who\nreviewed a finding \u2014 and a form that asked for a raw identifier would be a form nobody can fill\nin. Scoped to this workspace by row-level security, so it discloses nothing about anyone else.\n\nRevoked memberships are excluded rather than listed as inactive. A picker offering someone who\ncan no longer be named here is offering an authorization the server will refuse.",
-        "operationId": "list_members_v1_workspaces__workspace_id__members_get",
+        "operationId": "list_members",
         "parameters": [
           {
             "in": "path",
@@ -2821,7 +2821,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Members V1 Workspaces  Workspace Id  Members Get",
+                  "title": "Response List Members",
                   "type": "object"
                 }
               }
@@ -2922,7 +2922,7 @@
     },
     "/v1/workspaces/{workspace_id}/projects": {
       "get": {
-        "operationId": "list_projects_v1_workspaces__workspace_id__projects_get",
+        "operationId": "list_projects",
         "parameters": [
           {
             "in": "path",
@@ -2972,7 +2972,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Projects V1 Workspaces  Workspace Id  Projects Get",
+                  "title": "Response List Projects",
                   "type": "object"
                 }
               }
@@ -3071,7 +3071,7 @@
         ]
       },
       "post": {
-        "operationId": "create_project_v1_workspaces__workspace_id__projects_post",
+        "operationId": "create_project",
         "parameters": [
           {
             "in": "path",
@@ -3101,7 +3101,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Create Project V1 Workspaces  Workspace Id  Projects Post",
+                  "title": "Response Create Project",
                   "type": "object"
                 }
               }
@@ -3203,7 +3203,7 @@
     },
     "/v1/workspaces/{workspace_id}/projects/{project_id}": {
       "get": {
-        "operationId": "get_project_v1_workspaces__workspace_id__projects__project_id__get",
+        "operationId": "get_project",
         "parameters": [
           {
             "in": "path",
@@ -3230,7 +3230,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Get Project V1 Workspaces  Workspace Id  Projects  Project Id  Get",
+                  "title": "Response Get Project",
                   "type": "object"
                 }
               }
@@ -3332,7 +3332,7 @@
     "/v1/workspaces/{workspace_id}/projects/{project_id}/environments": {
       "get": {
         "description": "Environments for a project, with the reasons an unusable one is unusable.\n\n`usable` is reported alongside the specific cause rather than instead of it. \"Expired\",\n\"revoked\" and \"superseded\" send an operator to three different actions, and a single false\nwould send them to none of them.\n\nPaginated by keyset like every other listing here. An earlier version took the first 200 with no\ncursor and no indication that it had stopped \u2014 so a project with more environments than that\nlost the older ones silently, including ones still usable, and the screen presented what\nremained as the complete inventory.",
-        "operationId": "list_environments_v1_workspaces__workspace_id__projects__project_id__environments_get",
+        "operationId": "list_environments",
         "parameters": [
           {
             "in": "path",
@@ -3391,7 +3391,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Environments V1 Workspaces  Workspace Id  Projects  Project Id  Environments Get",
+                  "title": "Response List Environments",
                   "type": "object"
                 }
               }
@@ -3491,7 +3491,7 @@
       },
       "post": {
         "description": "Authorize an environment for a project.\n\nThe refusals this can produce are the point of the route, and they come from the domain rather\nthan from here: an environment needs at least one explicitly permitted origin, and the observer\nand reset credentials must be different references. One identity that can both set up the answer\nand attest to it is not an independent observer, and every completion assertion in the product\ndepends on that separation being real.\n\nCredential *references* are stored and echoed; no credential value is accepted by this route at\nall, so there is no path by which one reaches the database, a digest or an export.",
-        "operationId": "register_environment_v1_workspaces__workspace_id__projects__project_id__environments_post",
+        "operationId": "register_environment",
         "parameters": [
           {
             "in": "path",
@@ -3530,7 +3530,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Register Environment V1 Workspaces  Workspace Id  Projects  Project Id  Environments Post",
+                  "title": "Response Register Environment",
                   "type": "object"
                 }
               }
@@ -3632,7 +3632,7 @@
     },
     "/v1/workspaces/{workspace_id}/projects/{project_id}/journeys": {
       "get": {
-        "operationId": "list_journey_versions_v1_workspaces__workspace_id__projects__project_id__journeys_get",
+        "operationId": "list_journey_versions",
         "parameters": [
           {
             "in": "path",
@@ -3691,7 +3691,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Journey Versions V1 Workspaces  Workspace Id  Projects  Project Id  Journeys Get",
+                  "title": "Response List Journey Versions",
                   "type": "object"
                 }
               }
@@ -3793,7 +3793,7 @@
     "/v1/workspaces/{workspace_id}/projects/{project_id}/manifests": {
       "get": {
         "description": "The manifests this project has sealed, and what each one was sealed against.\n\nA run is requested against a **sealed manifest digest**, not against a journey digest. The\nmanifest covers the source commit, the built artifact, the environment configuration, the\njourney, its assertions, its fixture, the runner profile, the evaluator version and the model\nconfiguration \u2014 all of it, together. A run queued with a journey digest in that field carries an\nidentity that matches nothing, and dispatch would later refuse it for naming a different sealed\nmanifest.\n\nThis listing exists so the interface can offer a real one rather than assemble a plausible\nvalue. Where a project has sealed none, the honest answer is an empty list, and the screen that\nreads it must refuse to request a run rather than invent a digest.",
-        "operationId": "list_sealed_manifests_v1_workspaces__workspace_id__projects__project_id__manifests_get",
+        "operationId": "list_sealed_manifests",
         "parameters": [
           {
             "in": "path",
@@ -3852,7 +3852,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Sealed Manifests V1 Workspaces  Workspace Id  Projects  Project Id  Manifests Get",
+                  "title": "Response List Sealed Manifests",
                   "type": "object"
                 }
               }
@@ -3954,7 +3954,7 @@
     "/v1/workspaces/{workspace_id}/review-requests": {
       "get": {
         "description": "Reviews that have been asked for, and whether anyone has answered.\n\nA request and an assessment are different events, and this listing keeps them that way: an\nentry with `reviewCount: 0` records that somebody was asked, and nothing more. Treating an\nassignment as a review is how a process reports completed review that never happened.\n\n`currentPatchDigest` and `currentVerificationDigest` are what the request was bound to. They are\nreported under those names because a review form has to send both what the reviewer looked at\nand what the system holds now, and a form that read one value and sent it twice would make the\nstaleness check agree with itself.\n\n**There is no route that creates one.** A request binds a patch digest and a verification\ndigest, and nothing in this system produces either: modules 14 and 15 do not exist. A create\nroute would have to accept digests invented by its caller.",
-        "operationId": "list_review_requests_v1_workspaces__workspace_id__review_requests_get",
+        "operationId": "list_review_requests",
         "parameters": [
           {
             "in": "path",
@@ -4004,7 +4004,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Review Requests V1 Workspaces  Workspace Id  Review Requests Get",
+                  "title": "Response List Review Requests",
                   "type": "object"
                 }
               }
@@ -4106,7 +4106,7 @@
     "/v1/workspaces/{workspace_id}/reviews": {
       "post": {
         "description": "Record one person's assessment of exact material.\n\nBoth the digests the reviewer looked at and the digests the system currently holds are required\nin the body. That looks redundant and is not: comparing a stored record to itself always agrees,\nso a route that read the current digests for both sides would make the staleness check pass\nunconditionally while appearing to protect something.",
-        "operationId": "submit_review_v1_workspaces__workspace_id__reviews_post",
+        "operationId": "submit_review",
         "parameters": [
           {
             "in": "path",
@@ -4136,7 +4136,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Submit Review V1 Workspaces  Workspace Id  Reviews Post",
+                  "title": "Response Submit Review",
                   "type": "object"
                 }
               }
@@ -4239,7 +4239,7 @@
     "/v1/workspaces/{workspace_id}/reviews/{review_id}": {
       "get": {
         "description": "One recorded assessment, with what it was bound to and what it does not authorize.\n\n`meansNothingAbout` is served rather than written into the interface, because the limits of a\nreview are a property of the record and travel with it: a client that rendered its own list\nwould be free to shorten it.",
-        "operationId": "get_review_v1_workspaces__workspace_id__reviews__review_id__get",
+        "operationId": "get_review",
         "parameters": [
           {
             "in": "path",
@@ -4266,7 +4266,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Get Review V1 Workspaces  Workspace Id  Reviews  Review Id  Get",
+                  "title": "Response Get Review",
                   "type": "object"
                 }
               }
@@ -4368,7 +4368,7 @@
     "/v1/workspaces/{workspace_id}/runners": {
       "get": {
         "description": "The runner inventory, with the evidence behind each status.\n\n`preflightPassedAt` is the field that matters, and it is separate from `status` on purpose. A\nrunner process being reachable is not proof that a screen reader is running on it, that the\nreader is the one enrolled, or that anything was ever read back from a real desktop. INV-02\nturns on that distinction: a missing reader capability must never resolve to a pass, and a UI\nthat inferred readiness from \"the row exists\" would be the first place that inference is made.\n\nThe reset counter is included because a desktop that keeps needing resets is a desktop nobody\nshould be scheduling work onto, and that pattern is invisible from a single status word.",
-        "operationId": "list_runners_v1_workspaces__workspace_id__runners_get",
+        "operationId": "list_runners",
         "parameters": [
           {
             "in": "path",
@@ -4418,7 +4418,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Runners V1 Workspaces  Workspace Id  Runners Get",
+                  "title": "Response List Runners",
                   "type": "object"
                 }
               }
@@ -4517,7 +4517,7 @@
         ]
       },
       "post": {
-        "operationId": "enroll_runner_v1_workspaces__workspace_id__runners_post",
+        "operationId": "enroll_runner",
         "parameters": [
           {
             "in": "path",
@@ -4547,7 +4547,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Enroll Runner V1 Workspaces  Workspace Id  Runners Post",
+                  "title": "Response Enroll Runner",
                   "type": "object"
                 }
               }
@@ -4650,7 +4650,7 @@
     "/v1/workspaces/{workspace_id}/runners/enrollment-tokens": {
       "post": {
         "description": "Issue a short-lived single-use enrollment credential.\n\nThe token is returned exactly once, here. There is no route that reads one back: an endpoint\nthat could reveal an enrollment token would be a way to take over a tenant's desktop, and\n\"only administrators can call it\" is a weaker property than \"it does not exist\".",
-        "operationId": "issue_enrollment_token_v1_workspaces__workspace_id__runners_enrollment_tokens_post",
+        "operationId": "issue_enrollment_token",
         "parameters": [
           {
             "in": "path",
@@ -4680,7 +4680,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Issue Enrollment Token V1 Workspaces  Workspace Id  Runners Enrollment Tokens Post",
+                  "title": "Response Issue Enrollment Token",
                   "type": "object"
                 }
               }
@@ -4783,7 +4783,7 @@
     "/v1/workspaces/{workspace_id}/runners/{runner_id}": {
       "get": {
         "description": "Everything an operator needs before deciding whether a reset is safe.\n\nIncludes the unresolved actions and the local-impact warning, because \"is anything still in\nflight\" is what separates a reset that is an inconvenience from one that interrupts work.",
-        "operationId": "inspect_runner_v1_workspaces__workspace_id__runners__runner_id__get",
+        "operationId": "inspect_runner",
         "parameters": [
           {
             "in": "path",
@@ -4810,7 +4810,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Inspect Runner V1 Workspaces  Workspace Id  Runners  Runner Id  Get",
+                  "title": "Response Inspect Runner",
                   "type": "object"
                 }
               }
@@ -4912,7 +4912,7 @@
     "/v1/workspaces/{workspace_id}/runners/{runner_id}/resets": {
       "post": {
         "description": "Attempt the trusted reset that is the only route out of quarantine.\n\n`succeeded` comes from the reset procedure, never from the runner. A failed reset leaves the\ndesktop quarantined: failing to prove the old actor cannot act is not proof that it cannot.",
-        "operationId": "reset_runner_v1_workspaces__workspace_id__runners__runner_id__resets_post",
+        "operationId": "reset_runner",
         "parameters": [
           {
             "in": "path",
@@ -4951,7 +4951,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Reset Runner V1 Workspaces  Workspace Id  Runners  Runner Id  Resets Post",
+                  "title": "Response Reset Runner",
                   "type": "object"
                 }
               }
@@ -5053,7 +5053,7 @@
     },
     "/v1/workspaces/{workspace_id}/runs": {
       "get": {
-        "operationId": "list_runs_v1_workspaces__workspace_id__runs_get",
+        "operationId": "list_runs",
         "parameters": [
           {
             "in": "path",
@@ -5103,7 +5103,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Runs V1 Workspaces  Workspace Id  Runs Get",
+                  "title": "Response List Runs",
                   "type": "object"
                 }
               }
@@ -5203,7 +5203,7 @@
       },
       "post": {
         "description": "Request a run. 202, because requesting is not running.\n\nThe response carries an identity to poll and nothing that looks like a result. A 201 with a run\nbody would invite a caller to read a status as an outcome, and at this point there is no outcome\nat all \u2014 `NOT_EVALUATED` is what the run actually holds.",
-        "operationId": "request_run_v1_workspaces__workspace_id__runs_post",
+        "operationId": "request_run",
         "parameters": [
           {
             "in": "path",
@@ -5233,7 +5233,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Request Run V1 Workspaces  Workspace Id  Runs Post",
+                  "title": "Response Request Run",
                   "type": "object"
                 }
               }
@@ -5335,7 +5335,7 @@
     },
     "/v1/workspaces/{workspace_id}/runs/{run_id}": {
       "get": {
-        "operationId": "get_run_v1_workspaces__workspace_id__runs__run_id__get",
+        "operationId": "get_run",
         "parameters": [
           {
             "in": "path",
@@ -5362,7 +5362,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Get Run V1 Workspaces  Workspace Id  Runs  Run Id  Get",
+                  "title": "Response Get Run",
                   "type": "object"
                 }
               }
@@ -5464,7 +5464,7 @@
     "/v1/workspaces/{workspace_id}/runs/{run_id}/attempts": {
       "get": {
         "description": "The attempts made on one run, newest epoch first.\n\nEvery other evidence route is scoped to an attempt, and until now a caller had to already know\nan attempt id to use them. A run can have more than one attempt only in the sense that a lease\nwas granted more than once; each has its own canonical chain, and mixing two attempts' events\ninto one timeline would produce a sequence that never happened.",
-        "operationId": "list_attempts_v1_workspaces__workspace_id__runs__run_id__attempts_get",
+        "operationId": "list_attempts",
         "parameters": [
           {
             "in": "path",
@@ -5491,7 +5491,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Attempts V1 Workspaces  Workspace Id  Runs  Run Id  Attempts Get",
+                  "title": "Response List Attempts",
                   "type": "object"
                 }
               }
@@ -5593,7 +5593,7 @@
     "/v1/workspaces/{workspace_id}/runs/{run_id}/cancel": {
       "post": {
         "description": "Record a cancellation request. Returns request metadata, never a stopped claim.\n\nThe distinction the module prompt insists on, and the response is shaped to make it unmissable:\n`cancellationRequestedAt` is set, `stopAcknowledged` is false, and `meaning` says in words that\nnothing has established the desktop stopped. A 200 with `{\"cancelled\": true}` would be a lie\ntold by a field name.",
-        "operationId": "request_cancellation_v1_workspaces__workspace_id__runs__run_id__cancel_post",
+        "operationId": "request_cancellation",
         "parameters": [
           {
             "in": "path",
@@ -5632,7 +5632,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Request Cancellation V1 Workspaces  Workspace Id  Runs  Run Id  Cancel Post",
+                  "title": "Response Request Cancellation",
                   "type": "object"
                 }
               }
@@ -5735,7 +5735,7 @@
     "/v1/workspaces/{workspace_id}/runs/{run_id}/completeness": {
       "get": {
         "description": "What is missing from this attempt's evidence, and nothing about what it means.\n\nThere is deliberately no outcome in this response. Completeness is an input to a verdict, not a\nverdict: a complete evidence set can still describe a failure, and an incomplete one does not\nbecome a pass by being tidy. The reasons are the product.\n\n`contiguous` and `producersClosed` are separate fields because they are separate properties.\nA contiguous chain proves no record is missing from the *middle*; it says nothing about a\nproducer that stopped halfway and left a perfect chain covering half the attempt (INV-06).",
-        "operationId": "evidence_completeness_v1_workspaces__workspace_id__runs__run_id__completeness_get",
+        "operationId": "evidence_completeness",
         "parameters": [
           {
             "in": "path",
@@ -5771,7 +5771,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Evidence Completeness V1 Workspaces  Workspace Id  Runs  Run Id  Completeness Get",
+                  "title": "Response Evidence Completeness",
                   "type": "object"
                 }
               }
@@ -5873,7 +5873,7 @@
     "/v1/workspaces/{workspace_id}/runs/{run_id}/events": {
       "get": {
         "description": "Paginated canonical replay.\n\n`exhausted` is true only for a short page. A full page cannot distinguish \"four events exist\"\nfrom \"four events exist so far\", and reporting exhaustion on one would stop a reader a page\nearly whenever the total is a multiple of the page size.",
-        "operationId": "replay_events_v1_workspaces__workspace_id__runs__run_id__events_get",
+        "operationId": "replay_events",
         "parameters": [
           {
             "in": "path",
@@ -5935,7 +5935,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Replay Events V1 Workspaces  Workspace Id  Runs  Run Id  Events Get",
+                  "title": "Response Replay Events",
                   "type": "object"
                 }
               }
@@ -6037,7 +6037,7 @@
     "/v1/workspaces/{workspace_id}/runs/{run_id}/evidence": {
       "get": {
         "description": "Counts, producer identities and artifact digests. No object keys, no transcript text.\n\nA summary is the thing most likely to be rendered somewhere unexpected, and an object key in a\nsummary is a step towards an object key in a log.",
-        "operationId": "evidence_summary_v1_workspaces__workspace_id__runs__run_id__evidence_get",
+        "operationId": "evidence_summary",
         "parameters": [
           {
             "in": "path",
@@ -6073,7 +6073,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Evidence Summary V1 Workspaces  Workspace Id  Runs  Run Id  Evidence Get",
+                  "title": "Response Evidence Summary",
                   "type": "object"
                 }
               }
@@ -6175,7 +6175,7 @@
     "/v1/workspaces/{workspace_id}/runs/{run_id}/timeline": {
       "get": {
         "description": "The canonical chain with provenance, for a reader rather than a verifier.\n\nSeparate from `/events`, which serves digests only. A person inspecting a run needs to know\n*who* said each thing and *what they said*, and the two questions have different safety\nproperties \u2014 so they have different routes and this one carries the extra care.\n\nThree rules hold here.\n\n**Ordering is the sequencer's, never a clock.** `sequence` is assigned by the trusted sequencer\ninside the transaction that admits a record. Producers submit source times from their own\nmachines, and those disagree; sorting by them would reorder an attempt according to whose clock\nwas fast.\n\n**Provenance travels with every event.** `producerId` says which identity submitted it and\n`producerSequence` says where that producer thought it sat. A supervisor's receipt is not\nindependent observer proof, and a timeline that rendered both as \"evidence\" would erase the\ndistinction the whole outcome depends on.\n\nThe producer's *role* is not a stored column \u2014 module 10 records a producer identifier and\nnothing typed alongside it \u2014 so this route reports the identifier and the screen says that the\nrole is a convention rather than a field. Making it a field is a schema change to a module this\none does not own, and inventing a role here by parsing the identifier would be exactly the kind\nof derived authority this product refuses everywhere else.\n\n**The payload is the recorded one.** Not a summary, not a narration. Where a payload carries\nfixture input it was already redacted at ingestion; nothing is redacted here, because a\nredaction applied at read time is one that can be forgotten at the next read.",
-        "operationId": "replay_timeline_v1_workspaces__workspace_id__runs__run_id__timeline_get",
+        "operationId": "replay_timeline",
         "parameters": [
           {
             "in": "path",
@@ -6237,7 +6237,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Replay Timeline V1 Workspaces  Workspace Id  Runs  Run Id  Timeline Get",
+                  "title": "Response Replay Timeline",
                   "type": "object"
                 }
               }
@@ -6338,7 +6338,7 @@
     },
     "/v1/workspaces/{workspace_id}/schedules": {
       "get": {
-        "operationId": "list_schedules_v1_workspaces__workspace_id__schedules_get",
+        "operationId": "list_schedules",
         "parameters": [
           {
             "in": "path",
@@ -6372,7 +6372,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response List Schedules V1 Workspaces  Workspace Id  Schedules Get",
+                  "title": "Response List Schedules",
                   "type": "object"
                 }
               }
@@ -6472,7 +6472,7 @@
       },
       "post": {
         "description": "Bind a schedule to a grant at a specific revision.\n\nThe grant is loaded here and passed to the domain rather than trusted from the body. A caller\nsupplying grant fields would be describing an authorization instead of drawing on one, and the\ndescription is the part an attacker controls.",
-        "operationId": "create_schedule_v1_workspaces__workspace_id__schedules_post",
+        "operationId": "create_schedule",
         "parameters": [
           {
             "in": "path",
@@ -6502,7 +6502,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Create Schedule V1 Workspaces  Workspace Id  Schedules Post",
+                  "title": "Response Create Schedule",
                   "type": "object"
                 }
               }
@@ -6604,7 +6604,7 @@
     },
     "/v1/workspaces/{workspace_id}/schedules/{schedule_id}": {
       "get": {
-        "operationId": "read_schedule_v1_workspaces__workspace_id__schedules__schedule_id__get",
+        "operationId": "read_schedule",
         "parameters": [
           {
             "in": "path",
@@ -6631,7 +6631,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Read Schedule V1 Workspaces  Workspace Id  Schedules  Schedule Id  Get",
+                  "title": "Response Read Schedule",
                   "type": "object"
                 }
               }
@@ -6733,7 +6733,7 @@
     "/v1/workspaces/{workspace_id}/schedules/{schedule_id}/occurrences": {
       "get": {
         "description": "What this schedule actually did, including everything it declined to do.\n\nA skipped occurrence is a row with a reason, not an absence. That is the whole point: a schedule\nthat stopped firing because its grant was revoked looks identical to one nobody configured,\nunless the skip is recorded.",
-        "operationId": "read_occurrences_v1_workspaces__workspace_id__schedules__schedule_id__occurrences_get",
+        "operationId": "read_occurrences",
         "parameters": [
           {
             "in": "path",
@@ -6776,7 +6776,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Read Occurrences V1 Workspaces  Workspace Id  Schedules  Schedule Id  Occurrences Get",
+                  "title": "Response Read Occurrences",
                   "type": "object"
                 }
               }
@@ -6878,7 +6878,7 @@
     "/v1/workspaces/{workspace_id}/schedules/{schedule_id}/pause": {
       "post": {
         "description": "Stop admitting occurrences, keeping the schedule and who stopped it.\n\nPaused rather than deleted. Deleting loses the record that the schedule existed and that\nsomebody turned it off, which is exactly what the next operator asking \"why did this stop\"\nneeds.",
-        "operationId": "pause_schedule_v1_workspaces__workspace_id__schedules__schedule_id__pause_post",
+        "operationId": "pause_schedule",
         "parameters": [
           {
             "in": "path",
@@ -6905,7 +6905,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Pause Schedule V1 Workspaces  Workspace Id  Schedules  Schedule Id  Pause Post",
+                  "title": "Response Pause Schedule",
                   "type": "object"
                 }
               }
@@ -7008,7 +7008,7 @@
     "/v1/workspaces/{workspace_id}/schedules/{schedule_id}/reapprove": {
       "post": {
         "description": "Re-bind a schedule to its grant as the grant now stands.\n\nA schedule records the grant revision it was approved against, so a grant that has moved stops\nit. After a restore the grant moves twice \u2014 reconciliation marks it as needing revalidation, and\na person clearing that moves it again \u2014 which leaves every schedule stopped even once the grant\nis confirmed. This is the way out, and without it that state is a dead end.\n\nDeliberately *not* part of revalidating the grant. \"This standing authorization is still valid\"\nand \"this particular recurring job should start running again\" are two decisions, and a system\nthat made the second follow from the first would restart work nobody asked it to restart \u2014\npossibly at 2am, against a desktop, on the strength of an operator clicking one confirmation\nduring an incident.\n\nResuming a paused schedule is included, because a schedule paused *by* the restore should not\nneed a second click. The grant's own checks are re-run: a grant narrowed since is refused rather\nthan re-bound.",
-        "operationId": "reapprove_schedule_v1_workspaces__workspace_id__schedules__schedule_id__reapprove_post",
+        "operationId": "reapprove_schedule",
         "parameters": [
           {
             "in": "path",
@@ -7035,7 +7035,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Reapprove Schedule V1 Workspaces  Workspace Id  Schedules  Schedule Id  Reapprove Post",
+                  "title": "Response Reapprove Schedule",
                   "type": "object"
                 }
               }
@@ -7138,7 +7138,7 @@
     "/v1/workspaces/{workspace_id}/schedules/{schedule_id}/resume": {
       "post": {
         "description": "Start admitting occurrences again \u2014 which is not the same as making them run.\n\nResuming does not revalidate the grant. The next occurrence is rechecked as every occurrence is,\nso a schedule resumed under a revoked or unrevalidated grant will still skip, with a reason.",
-        "operationId": "resume_schedule_v1_workspaces__workspace_id__schedules__schedule_id__resume_post",
+        "operationId": "resume_schedule",
         "parameters": [
           {
             "in": "path",
@@ -7165,7 +7165,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Resume Schedule V1 Workspaces  Workspace Id  Schedules  Schedule Id  Resume Post",
+                  "title": "Response Resume Schedule",
                   "type": "object"
                 }
               }
@@ -7267,7 +7267,7 @@
     },
     "/v1/workspaces/{workspace_id}/settings/entitlement": {
       "get": {
-        "operationId": "read_entitlement_v1_workspaces__workspace_id__settings_entitlement_get",
+        "operationId": "read_entitlement",
         "parameters": [
           {
             "in": "path",
@@ -7285,7 +7285,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Read Entitlement V1 Workspaces  Workspace Id  Settings Entitlement Get",
+                  "title": "Response Read Entitlement",
                   "type": "object"
                 }
               }
@@ -7385,7 +7385,7 @@
       },
       "put": {
         "description": "Append a new entitlement revision.\n\n`If-Match` carries the revision the caller last read, and it is required. Without it a caller\nis replacing a limit they may not have seen \u2014 and the only reason to change a limit is a\ndecision about the one currently in force.\n\nThere is no route that *lowers* usage, and none that grants an exception to a single run. An\nexception granted per run would be a limit with a bypass, and the bypass is the thing an\nattacker looks for.",
-        "operationId": "configure_entitlement_v1_workspaces__workspace_id__settings_entitlement_put",
+        "operationId": "configure_entitlement",
         "parameters": [
           {
             "in": "path",
@@ -7415,7 +7415,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Configure Entitlement V1 Workspaces  Workspace Id  Settings Entitlement Put",
+                  "title": "Response Configure Entitlement",
                   "type": "object"
                 }
               }
@@ -7518,7 +7518,7 @@
     "/v1/workspaces/{workspace_id}/settings/retention": {
       "get": {
         "description": "The retention class table, with what deleting under each class costs.\n\n`invalidatesCompleteness` is on every row because it is the consequence nobody expects:\ndeleting evidence does not merely free space, it makes any completeness claim that depended on\nthat evidence untrue \u2014 and an export already downloaded still contains what was deleted.",
-        "operationId": "read_retention_v1_workspaces__workspace_id__settings_retention_get",
+        "operationId": "read_retention",
         "parameters": [
           {
             "in": "path",
@@ -7536,7 +7536,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Read Retention V1 Workspaces  Workspace Id  Settings Retention Get",
+                  "title": "Response Read Retention",
                   "type": "object"
                 }
               }
@@ -7635,7 +7635,7 @@
         ]
       },
       "put": {
-        "operationId": "configure_retention_v1_workspaces__workspace_id__settings_retention_put",
+        "operationId": "configure_retention",
         "parameters": [
           {
             "in": "path",
@@ -7665,7 +7665,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Configure Retention V1 Workspaces  Workspace Id  Settings Retention Put",
+                  "title": "Response Configure Retention",
                   "type": "object"
                 }
               }
@@ -7768,7 +7768,7 @@
     "/v1/workspaces/{workspace_id}/usage": {
       "get": {
         "description": "Measured consumption against the configured limit.\n\nEvery number is read from `usage_event`. `measured`, `estimated` and `unavailableEvents` are\nreported separately because they are different kinds of claim: something this system counted,\nsomething a provider reported about itself, and something that could not be obtained. A single\ntotal would make the third look like zero.",
-        "operationId": "read_usage_v1_workspaces__workspace_id__usage_get",
+        "operationId": "read_usage",
         "parameters": [
           {
             "in": "path",
@@ -7786,7 +7786,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Read Usage V1 Workspaces  Workspace Id  Usage Get",
+                  "title": "Response Read Usage",
                   "type": "object"
                 }
               }
