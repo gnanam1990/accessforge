@@ -106,10 +106,15 @@ def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> Co
         "platform": draft.platform,
         "whatItWillTry": draft.intent.summary,
         "whatCountsAsSuccess": draft.intent.success_condition,
+        # The description is the truth condition -- the sentence that says what must be announced,
+        # or what counts as the task being complete. Without it a reviewer sees an identifier, a
+        # kind and an observer and has to go and read the source to learn what they are approving,
+        # which is not a review of the assertions but a review of their names.
         "requiredAssertions": [
             {
                 "id": a.assertion_id,
                 "kind": a.kind.value,
+                "mustBeTrue": a.description,
                 "decidedBy": a.observer.value,
                 "canBeUnknownWhen": sorted(r.value for r in a.unknown_reasons),
             }

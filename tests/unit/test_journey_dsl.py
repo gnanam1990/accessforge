@@ -475,6 +475,23 @@ def test_the_reviewer_summary_names_each_assertions_observer_and_unknown_cases()
     assert "READER_UNAVAILABLE" in by_id["announcement.validation-error"]["canBeUnknownWhen"]
 
 
+def test_the_reviewer_summary_states_each_assertions_truth_condition() -> None:
+    """Raised by the module 06 independent review.
+
+    The summary listed an identifier, a kind, an observer and the unknown reasons -- everything
+    except the sentence saying what must actually be true. A reviewer approving from that is
+    approving assertion *names*, and would have to go and read the source to find out what they
+    were agreeing to.
+    """
+    draft = e0_draft()
+    summary = compile_journey(draft).reviewer_summary
+    required = summary["requiredAssertions"]
+    assert isinstance(required, list)
+    by_id = {r["id"]: r for r in required}
+    for assertion in draft.assertions.required:
+        assert by_id[assertion.assertion_id]["mustBeTrue"] == assertion.description
+
+
 def test_the_reviewer_summary_exposes_no_oracle_material() -> None:
     rendered = repr(compile_journey(e0_draft()).reviewer_summary)
     assert "expected_request_count" not in rendered
@@ -518,3 +535,119 @@ def test_a_copied_announcement_phrase_is_not_an_observation() -> None:
     assert any(phrase in a.description for a in e0_assertions().assertions)
     assert phrase not in repr(compiled.navigator_policy)
     assert phrase not in repr(compiled.version.draft.fixture.navigator_view())
+
+
+# --- findings from the module 06 independent review ---------------------------------------------
+#
+# All six below were raised by the automated reviewer on the module 06 pull request. Each is a real
+# way the boundary this module exists to enforce could have been walked around, and each is now a
+# test rather than a note.
+
+
+def test_the_observer_authority_mapping_cannot_be_reassigned() -> None:
+    """`Assertion.observer` reads this table at access time rather than storing the value.
+
+    Reassigning an entry would therefore change which identity is authoritative for an assertion
+    *without changing that assertion's digest*: a sealed journey would keep its digest and start
+    accepting the navigator's own word for what the screen reader announced (INV-05).
+    """
+    from accessforge_domain.journeys.assertions import (
+        ASSERTION_OBSERVERS,
+        AssertionKind,
+        Observer,
+    )
+
+    kind = AssertionKind.REQUIRED_ANNOUNCEMENT
+    with pytest.raises(TypeError):
+        ASSERTION_OBSERVERS[kind] = Observer.READER  # type: ignore[index]
+
+
+def test_the_observer_authority_mapping_cannot_gain_an_entry() -> None:
+    from accessforge_domain.journeys.assertions import ASSERTION_OBSERVERS, Observer
+
+    with pytest.raises(TypeError):
+        ASSERTION_OBSERVERS["INVENTED_KIND"] = Observer.READER  # type: ignore[index]
+
+
+def test_mutating_the_dictionary_passed_to_a_fixture_binding_does_not_reach_it() -> None:
+    """`frozen=True` freezes the field, not the dictionary the field points at.
+
+    The caller keeps its reference. Without a defensive copy it could insert the very credential the
+    constructor just rejected, after validation and after the digest.
+    """
+    values = {"full_name": "Test Person"}
+    binding = FixtureBinding(template_id="t", navigator_values=values)
+    values["smuggled"] = "#email-error"
+    assert "smuggled" not in binding.navigator_values
+
+
+def test_the_stored_fixture_mappings_cannot_be_written_through() -> None:
+    binding = FixtureBinding(
+        template_id="t",
+        navigator_values={"full_name": "Test Person"},
+        observer_config={"expected_request_count": "1"},
+    )
+    for mapping in (binding.navigator_values, binding.reset_values, binding.observer_config):
+        with pytest.raises(TypeError):
+            mapping["injected"] = "x"  # type: ignore[index]
+
+
+def test_mutating_the_observer_config_after_construction_does_not_reach_the_oracle() -> None:
+    """The observer config is the answer key. Editing it after the digest was taken would change
+    what the run is checked against while the sealed digest still says otherwise."""
+    oracle = {"expected_request_count": "1"}
+    binding = FixtureBinding(template_id="t", observer_config=oracle)
+    oracle["expected_request_count"] = "0"
+    assert binding.observer_config["expected_request_count"] == "1"
+
+
+def test_the_navigator_view_is_a_copy_the_caller_owns() -> None:
+    binding = FixtureBinding(template_id="t", navigator_values={"full_name": "Test Person"})
+    view = binding.navigator_view()
+    view["full_name"] = "Someone Else"
+    assert binding.navigator_values["full_name"] == "Test Person"
+
+
+@pytest.mark.parametrize(
+    "sneaky",
+    [
+        "(#email-error)",
+        "target:#email-error",
+        '"#email-error"',
+        "at:.email-error",
+        "[#email-error]",
+        "field=#email-error",
+        "see (.email-error) below",
+    ],
+)
+def test_a_selector_behind_punctuation_is_still_a_selector(sneaky: str) -> None:
+    """The whitespace-boundary rule let every one of these through.
+
+    A selector written into a task intent is most naturally written with punctuation in front of it,
+    which is precisely the shape the previous rule ignored.
+    """
+    with pytest.raises(JourneyError, match="selector or DOM expression"):
+        TaskIntent(
+            summary=f"Fix the thing at {sneaky}",
+            start_url="http://127.0.0.1:8081/form/X",
+            success_condition="One request recorded.",
+        )
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Submit the request and check the receipt.",
+        "Use the address test.person@example.test in the email field.",
+        "Fill in the form, e.g. the name and email fields, then submit.",
+        "The total should read 1.5 units.",
+        "Press Submit. Then read the confirmation.",
+    ],
+)
+def test_ordinary_prose_is_not_mistaken_for_a_selector(prose: str) -> None:
+    """The control for the rule above. A boundary rule that rejected these would be unusable."""
+    TaskIntent(
+        summary=prose,
+        start_url="http://127.0.0.1:8081/form/X",
+        success_condition="One request recorded.",
+    )

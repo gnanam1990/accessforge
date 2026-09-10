@@ -12,8 +12,10 @@ have it accepted for an existing run.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 
 
 class Observer(StrEnum):
@@ -69,14 +71,23 @@ class AssertionKind(StrEnum):
 
 # Which observer decides which kind. One entry per kind, deliberately: a kind decidable by two
 # observers would let the weaker one answer for the stronger.
-ASSERTION_OBSERVERS: dict[AssertionKind, Observer] = {
-    AssertionKind.TASK_COMPLETION: Observer.APPLICATION_OBSERVER,
-    AssertionKind.REQUIRED_ANNOUNCEMENT: Observer.READER,
-    AssertionKind.FOCUS_BEHAVIOUR: Observer.READER,
-    AssertionKind.READING_ORDER: Observer.READER,
-    AssertionKind.FORBIDDEN_EFFECT: Observer.EFFECT_MONITOR,
-    AssertionKind.FUNCTIONAL_VALIDATION: Observer.FUNCTIONAL_TEST,
-}
+#
+# Read through a MappingProxyType rather than exported as a plain dict. `Assertion.observer` looks
+# the value up at read time rather than storing it, so a caller that reassigned an entry here would
+# change which identity is authoritative for an assertion *without changing that assertion's
+# digest* -- a sealed journey would keep its digest and silently start accepting the navigator's own
+# word for what the screen reader announced. INV-05 says agents cannot edit the evaluator; a module
+# -level dict is an edit away from exactly that, and the proxy makes the assignment raise.
+ASSERTION_OBSERVERS: Mapping[AssertionKind, Observer] = MappingProxyType(
+    {
+        AssertionKind.TASK_COMPLETION: Observer.APPLICATION_OBSERVER,
+        AssertionKind.REQUIRED_ANNOUNCEMENT: Observer.READER,
+        AssertionKind.FOCUS_BEHAVIOUR: Observer.READER,
+        AssertionKind.READING_ORDER: Observer.READER,
+        AssertionKind.FORBIDDEN_EFFECT: Observer.EFFECT_MONITOR,
+        AssertionKind.FUNCTIONAL_VALIDATION: Observer.FUNCTIONAL_TEST,
+    }
+)
 
 
 class UnknownReason(StrEnum):
