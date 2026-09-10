@@ -30,6 +30,7 @@ from .routes import (
     schedules_router,
     session_router,
     settings_router,
+    stream_router,
 )
 
 _log = logging.getLogger("accessforge.api")
@@ -212,6 +213,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         settings_router,
         findings_router,
         exports_router,
+        stream_router,
     ):
         app.include_router(router)
 

@@ -20,6 +20,7 @@ from .runs import router as runs_router
 from .schedules import router as schedules_router
 from .session import router as session_router
 from .settings import router as settings_router
+from .stream import router as stream_router
 
 __all__ = [
     "exports_router",
@@ -32,4 +33,5 @@ __all__ = [
     "schedules_router",
     "settings_router",
     "session_router",
+    "stream_router",
 ]
