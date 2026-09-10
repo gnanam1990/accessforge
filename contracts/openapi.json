@@ -1816,6 +1816,60 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/runs/{run_id}/attempts": {
+      "get": {
+        "description": "The attempts made on one run, newest epoch first.\n\nEvery other evidence route is scoped to an attempt, and until now a caller had to already know\nan attempt id to use them. A run can have more than one attempt only in the sense that a lease\nwas granted more than once; each has its own canonical chain, and mixing two attempts' events\ninto one timeline would produce a sequence that never happened.",
+        "operationId": "list_attempts_v1_workspaces__workspace_id__runs__run_id__attempts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Attempts V1 Workspaces  Workspace Id  Runs  Run Id  Attempts Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Attempts",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/runs/{run_id}/cancel": {
       "post": {
         "description": "Record a cancellation request. Returns request metadata, never a stopped claim.\n\nThe distinction the module prompt insists on, and the response is shaped to make it unmissable:\n`cancellationRequestedAt` is set, `stopAcknowledged` is false, and `meaning` says in words that\nnothing has established the desktop stopped. A 200 with `{\"cancelled\": true}` would be a lie\ntold by a field name.",
@@ -1877,6 +1931,69 @@
           }
         },
         "summary": "Request Cancellation",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/runs/{run_id}/completeness": {
+      "get": {
+        "description": "What is missing from this attempt's evidence, and nothing about what it means.\n\nThere is deliberately no outcome in this response. Completeness is an input to a verdict, not a\nverdict: a complete evidence set can still describe a failure, and an incomplete one does not\nbecome a pass by being tidy. The reasons are the product.\n\n`contiguous` and `producersClosed` are separate fields because they are separate properties.\nA contiguous chain proves no record is missing from the *middle*; it says nothing about a\nproducer that stopped halfway and left a perfect chain covering half the attempt (INV-06).",
+        "operationId": "evidence_completeness_v1_workspaces__workspace_id__runs__run_id__completeness_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Evidence Completeness V1 Workspaces  Workspace Id  Runs  Run Id  Completeness Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evidence Completeness",
         "tags": [
           "runs"
         ]
@@ -2029,6 +2146,95 @@
           }
         },
         "summary": "Evidence Summary",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/runs/{run_id}/timeline": {
+      "get": {
+        "description": "The canonical chain with provenance, for a reader rather than a verifier.\n\nSeparate from `/events`, which serves digests only. A person inspecting a run needs to know\n*who* said each thing and *what they said*, and the two questions have different safety\nproperties \u2014 so they have different routes and this one carries the extra care.\n\nThree rules hold here.\n\n**Ordering is the sequencer's, never a clock.** `sequence` is assigned by the trusted sequencer\ninside the transaction that admits a record. Producers submit source times from their own\nmachines, and those disagree; sorting by them would reorder an attempt according to whose clock\nwas fast.\n\n**Provenance travels with every event.** `producerId` says which identity submitted it and\n`producerSequence` says where that producer thought it sat. A supervisor's receipt is not\nindependent observer proof, and a timeline that rendered both as \"evidence\" would erase the\ndistinction the whole outcome depends on.\n\nThe producer's *role* is not a stored column \u2014 module 10 records a producer identifier and\nnothing typed alongside it \u2014 so this route reports the identifier and the screen says that the\nrole is a convention rather than a field. Making it a field is a schema change to a module this\none does not own, and inventing a role here by parsing the identifier would be exactly the kind\nof derived authority this product refuses everywhere else.\n\n**The payload is the recorded one.** Not a summary, not a narration. Where a payload carries\nfixture input it was already redacted at ingestion; nothing is redacted here, because a\nredaction applied at read time is one that can be forgotten at the next read.",
+        "operationId": "replay_timeline_v1_workspaces__workspace_id__runs__run_id__timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_sequence",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "After Sequence",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Replay Timeline V1 Workspaces  Workspace Id  Runs  Run Id  Timeline Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replay Timeline",
         "tags": [
           "runs"
         ]

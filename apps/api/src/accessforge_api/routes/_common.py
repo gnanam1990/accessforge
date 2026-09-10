@@ -47,6 +47,29 @@ def authorize(
     return build_context(conn, request, workspace_id=workspace_id, permission=permission, body=body)
 
 
+def as_identifier(value: str, *, what: str) -> str:
+    """Refuse a value that is not a UUID, before it reaches a UUID comparison.
+
+    PostgreSQL raises `invalid input syntax for type uuid` on a malformed value, and that surfaces
+    as an unhandled driver error and a 500 with a stack trace in the log. Every identifier these
+    routes receive arrives from a path segment or a query string, so every one of them is supplied
+    by whoever made the request.
+
+    A 400 rather than a 404: the value is not a well-formed reference to anything, which is a
+    different statement from "no such resource is available to you" — and it discloses nothing,
+    because it is decided without looking anything up.
+    """
+    import uuid as _uuid
+
+    try:
+        _uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError) as exc:
+        from accessforge_api.problems import ProblemCode
+
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, f"{what} is not a valid identifier") from exc
+    return value
+
+
 def as_body(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         from accessforge_api.problems import ProblemCode

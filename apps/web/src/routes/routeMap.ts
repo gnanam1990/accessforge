@@ -79,7 +79,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 23,
     heading: 'Run',
-    built: false,
+    built: true,
   },
   {
     path: 'findings/:findingId',
@@ -87,7 +87,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 23,
     heading: 'Finding',
-    built: false,
+    built: true,
   },
   {
     path: 'patches/:patchId',

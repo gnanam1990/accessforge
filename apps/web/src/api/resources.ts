@@ -111,6 +111,62 @@ export interface Run {
   readonly retryOf: string | null
 }
 
+export interface Attempt {
+  readonly attemptId: string
+  readonly leaseEpoch: number
+  readonly startedAt: string
+  /** Null means no recorded end — not "still running". */
+  readonly endedAt: string | null
+}
+
+export interface TimelineEvent {
+  readonly sequence: number
+  readonly eventId: string
+  readonly eventType: string
+  readonly leaseEpoch: number
+  readonly sourceTime: string
+  readonly receivedTime: string
+  readonly payloadDigest: string
+  readonly previousEventHash: string
+  readonly payload: unknown
+  readonly producerId: string | null
+  readonly producerSequence: number | null
+  readonly sourceRecordDigest: string | null
+}
+
+export interface Timeline {
+  readonly events: readonly TimelineEvent[]
+  readonly nextAfterSequence: number
+  readonly exhausted: boolean
+  readonly orderingMeaning: string
+}
+
+export interface ProducerStream {
+  readonly producerId: string
+  readonly admittedThrough: number
+  readonly closedAt: number | null
+}
+
+export interface Completeness {
+  readonly reasons: readonly string[]
+  readonly contiguous: boolean
+  readonly producersClosed: boolean
+  readonly artifactsPresent: boolean
+  readonly lifecycleBounded: boolean
+  readonly producers: readonly ProducerStream[]
+  readonly meaning: string
+}
+
+export interface Finding {
+  readonly findingId: string
+  readonly runId: string
+  readonly assertionId: string
+  readonly status: string
+  readonly summary: string
+  readonly revision: number
+  readonly createdAt: string
+}
+
 export interface JourneyCapabilities {
   readonly allowedActions: readonly string[]
   readonly allowedKeyChordsByPlatform: Readonly<Record<string, readonly string[]>>
@@ -400,6 +456,118 @@ export const requestRun = (
   idempotencyKey: string,
 ): Promise<ApiOutcome<RunRequested>> =>
   client.request(`${base(workspaceId)}/runs`, { method: 'POST', body, idempotencyKey })
+
+export const getRun = (
+  client: ApiClient,
+  workspaceId: string,
+  runId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<Run>> =>
+  client.request<Run>(`${base(workspaceId)}/runs/${encodeURIComponent(runId)}`, { signal })
+
+export const listAttempts = (
+  client: ApiClient,
+  workspaceId: string,
+  runId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<{ readonly items: readonly Attempt[] }>> =>
+  client.request(`${base(workspaceId)}/runs/${encodeURIComponent(runId)}/attempts`, { signal })
+
+/**
+ * One page of the canonical chain.
+ *
+ * Deliberately *not* drained. Every other listing in this client follows its cursor because a page
+ * rendered as an inventory is a claim that there is no more; a replay is the opposite case — the
+ * chain can be very long, the reader moves through it deliberately, and UI-UX section 5 asks for a
+ * paginated reading mode rather than one enormous list. `exhausted` is what says whether the end
+ * has been reached, and it is true only for a short page.
+ */
+export const readTimeline = (
+  client: ApiClient,
+  workspaceId: string,
+  runId: string,
+  attemptId: string,
+  afterSequence: number,
+  signal: AbortSignal,
+): Promise<ApiOutcome<Timeline>> =>
+  client.request<Timeline>(
+    `${base(workspaceId)}/runs/${encodeURIComponent(runId)}/timeline` +
+      `?attempt_id=${encodeURIComponent(attemptId)}&after_sequence=${afterSequence}`,
+    { signal },
+  )
+
+export const readCompleteness = (
+  client: ApiClient,
+  workspaceId: string,
+  runId: string,
+  attemptId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<Completeness>> =>
+  client.request<Completeness>(
+    `${base(workspaceId)}/runs/${encodeURIComponent(runId)}/completeness` +
+      `?attempt_id=${encodeURIComponent(attemptId)}`,
+    { signal },
+  )
+
+export const listFindings = (
+  client: ApiClient,
+  workspaceId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<DrainedPage<Finding>>> =>
+  drain((cursor) =>
+    client.request<Page<Finding>>(
+      `${base(workspaceId)}/findings` +
+        (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    ),
+  )
+
+/**
+ * One finding, with machine outcome and human assessment kept separately attributable.
+ *
+ * Two top-level fields, never merged. The machine outcome is what the evidence established; a human
+ * assessment is what a person said about it. A view that flattened them would let a reviewer's
+ * ACCEPT read as the system having verified something (INV-12).
+ */
+export interface FindingDetail {
+  readonly machineOutcome: {
+    readonly runId: string
+    readonly runStatus: string
+    readonly runOutcome: string
+    readonly assertionId: string
+    readonly establishedBy: string
+  }
+  readonly humanAssessments: readonly {
+    readonly reviewId: string
+    readonly reviewerId: string
+    readonly verdict: string
+    readonly observations: string
+    readonly limitations: string
+    readonly usedAssistiveTechnology: boolean
+    readonly submittedAt: string
+    readonly establishedBy: string
+  }[]
+  readonly findingStatus: string
+  readonly summary: string
+  readonly history: readonly {
+    readonly fromStatus: string | null
+    readonly toStatus: string
+    readonly actorId: string
+    readonly reason: string
+    readonly reviewId: string | null
+    readonly occurredAt: string
+  }[]
+}
+
+export const getFinding = (
+  client: ApiClient,
+  workspaceId: string,
+  findingId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<FindingDetail>> =>
+  client.request<FindingDetail>(`${base(workspaceId)}/findings/${encodeURIComponent(findingId)}`, {
+    signal,
+  })
 
 export const requestCancellation = (
   client: ApiClient,
