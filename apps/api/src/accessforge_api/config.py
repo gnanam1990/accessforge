@@ -54,6 +54,13 @@ class ApiSettings(BaseSettings):
     signing_key_id: str = Field(default="af-unsigned-local", min_length=1)
 
     environment: Literal["local", "test", "staging", "production"] = "local"
+
+    # Who establishes that a person is who they say they are. "none" is the default and means this
+    # deployment cannot sign anyone in: POST /v1/sessions refuses with a missing dependency rather
+    # than inventing a credential store. "local-development" accepts an email with no secret, which
+    # is an authentication bypass by construction -- see the validator below and the docstring of
+    # `routes/session.py`.
+    identity_provider: Literal["none", "local-development"] = "none"
     host: str = "127.0.0.1"
     port: int = Field(default=8080, ge=1024, le=65535)
 
@@ -87,6 +94,13 @@ class ApiSettings(BaseSettings):
                     "object-store credentials must not cross the network in plaintext"
                 )
 
+        if self.identity_provider == "local-development" and self.environment != "local":
+            raise ValueError(
+                "identity_provider 'local-development' accepts an email with no secret and is "
+                f"refused in environment {self.environment!r}. Setting the variable is not enough: "
+                "a deployment that is not local cannot start with an authentication bypass enabled."
+            )
+
         if self.environment == "production" and _is_loopback(self.database_url):
             raise ValueError(
                 "refusing a loopback database in production; a production deployment pointing at "
@@ -101,6 +115,7 @@ class ApiSettings(BaseSettings):
         _, _, host_part = rest.rpartition("@")
         return {
             "environment": self.environment,
+            "identity_provider": self.identity_provider,
             "host": self.host,
             "port": self.port,
             "database": f"{scheme}://<redacted>@{host_part}",

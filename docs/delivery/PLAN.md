@@ -35,9 +35,9 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 16 | Human review and finding lifecycle | 03, 15 | FR-009, 011, 012, 014 | implemented | passed (no human reviewer) | merged | E0 |
 | 17 | Redacted export and offline verifier | 10, 11, 16 | FR-006, 007, 012, 013, 020 | implemented | passed (synthetic bundles only) | merged | E0 |
 | 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | partial (18 of ~28 routes) | passed | merged | E0 |
-| 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | implemented | passed (no SSE route, no real runner) | open | E0 |
+| 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | implemented | passed (no SSE route, no real runner) | merged | E0 |
 | 20 | Opt-in GitHub checks and publication | 15, 16, 18 | FR-001, 010–012, 014, 018 | not started | pending | local | R1 |
-| 21 | Accessible modern UI foundation | 18 | FR-014, 016, 019 | not started | pending | local | E0 |
+| 21 | Accessible modern UI foundation | 18 | FR-014, 016, 019 | implemented (shell only; screens are 22–24) | passed (no actual screen reader) | open | E0 |
 | 22 | Projects, journeys and runner UI | 19, 21 | FR-001–005, 015, 017, 019 | not started | pending | local | E0 |
 | 23 | Run and evidence replay UI | 10, 11, 19, 21 | FR-006, 007, 009, 015, 017, 019 | not started | pending | local | E0 |
 | 24 | Patch, comparison and review UI | 15, 16, 17, 21 | FR-010–013, 019, 020 | not started | pending | local | E0 |
@@ -63,6 +63,12 @@ so the record is honest from the first merge; they contain no product scope. Lat
 their own owned paths in their handoffs.
 
 ## Sequencing
+
+Module 21 added the three session routes the shell needs (`POST /v1/sessions`, `GET /v1/session`,
+`DELETE /v1/session`) rather than leaving the UI unable to establish who is signed in. It did **not**
+add a credential store: `ACCESSFORGE_IDENTITY_PROVIDER` defaults to `none`, sign-in then refuses
+with a named missing dependency, and the only implemented provider is a local-development bridge
+that `ApiSettings` refuses to start outside a `local` environment. See `docs/handoffs/21.md`.
 
 Modules 01–07 are the largely reachable foundation, but the line is not clean at 05. Modules 01–04,
 06 and 07 need no screen reader, model endpoint, or target application and can proceed honestly

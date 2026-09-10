@@ -1,0 +1,159 @@
+/*
+ * Design tokens from UI-UX.md section 2.
+ *
+ * Every colour in the product resolves through one of these variables. A component that reached for
+ * a literal would be a component that could not be re-themed and could not be contrast-audited, and
+ * the audit is the part that matters here: the specification is explicit that the palette below is
+ * a set of *candidate* pairs, not a substitute for measured contrast. The measured values are
+ * recorded in docs/handoffs/21.md and checked by src/styles/contrast.test.ts, which computes the
+ * ratios from these very declarations rather than from numbers copied into a table by hand.
+ *
+ * The light palette is defined on bare `:root`. The dark palette is defined twice — once under
+ * `prefers-color-scheme: dark` guarded so an explicit light choice wins, and once under an explicit
+ * `[data-theme='dark']`. A colour whose only definition lives inside a media query is a colour that
+ * disappears when someone toggles the theme.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Typography. Fira is named first and is not bundled: the licence permits redistribution, but
+     shipping a font this module cannot verify the provenance of is worse than a good fallback.
+     The stack degrades to the platform UI face, which is metrically reasonable and always present. */
+  --af-font-sans: 'Fira Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --af-font-mono: 'Fira Code', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  --af-text-body: 1rem;
+  --af-leading-body: 1.6;
+  --af-text-secondary-size: 0.875rem;
+  --af-leading-secondary: 1.5;
+  --af-text-title: clamp(1.75rem, 1.4rem + 1.2vw, 2rem);
+  --af-text-section: 1.25rem;
+
+  /* Spacing: a 4px scale, with the 8/12/16/24/32 intervals the specification calls common. */
+  --af-space-1: 0.25rem;
+  --af-space-2: 0.5rem;
+  --af-space-3: 0.75rem;
+  --af-space-4: 1rem;
+  --af-space-6: 1.5rem;
+  --af-space-8: 2rem;
+  --af-space-12: 3rem;
+
+  --af-radius-sm: 0.5rem;
+  --af-radius-md: 0.75rem;
+
+  /* Colour. Light palette. */
+  --af-background: #f8fafc;
+  --af-surface: #ffffff;
+  --af-surface-sunken: #f1f5f9;
+  --af-foreground: #1e293b;
+  --af-foreground-secondary: #475569;
+  /* `--af-border` is decorative: panel edges and table rules. It is deliberately light and does
+     not meet the 3:1 non-text requirement, because that requirement is about boundaries needed to
+     *identify a control* — and no control in this product is bounded by it. Every control boundary
+     uses `--af-border-strong`, which does meet it, and styles.test.ts asserts that division rather
+     than trusting it. */
+  --af-border: #cbd5e1;
+  --af-border-strong: #6b7f99;
+
+  --af-primary: #1d4ed8;
+  --af-primary-foreground: #ffffff;
+  --af-primary-hover: #1e40af;
+
+  --af-destructive: #b91c1c;
+  --af-destructive-foreground: #ffffff;
+  --af-destructive-hover: #991b1b;
+
+  /* Status colours are paired with text and a shape in every component that uses them; see
+     StatusBadge. Colour alone never carries a status, so these are emphasis rather than meaning. */
+  --af-status-neutral: #475569;
+  --af-status-progress: #1d4ed8;
+  --af-status-pass: #15803d;
+  --af-status-fail: #b91c1c;
+  --af-status-inconclusive: #a16207;
+  --af-status-interrupted: #7c2d12;
+
+  --af-focus-ring: #1d4ed8;
+  --af-focus-ring-contrast: #ffffff;
+
+  --af-elevation-overlay: 0 10px 30px rgb(15 23 42 / 18%);
+
+  /* One duration, used everywhere, and zeroed wholesale under reduced motion. Nothing in the
+     product waits for a transition to finish before it is correct. */
+  --af-motion-duration: 220ms;
+  --af-motion-easing: cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --af-background: #0f172a;
+    --af-surface: #1e293b;
+    --af-surface-sunken: #172033;
+    --af-foreground: #f8fafc;
+    --af-foreground-secondary: #cbd5e1;
+    --af-border: #475569;
+    --af-border-strong: #7c8ca3;
+
+    --af-primary: #93c5fd;
+    --af-primary-foreground: #0f172a;
+    --af-primary-hover: #bfdbfe;
+
+    --af-destructive: #fca5a5;
+    --af-destructive-foreground: #0f172a;
+    --af-destructive-hover: #fecaca;
+
+    --af-status-neutral: #cbd5e1;
+    --af-status-progress: #93c5fd;
+    --af-status-pass: #86efac;
+    --af-status-fail: #fca5a5;
+    --af-status-inconclusive: #fcd34d;
+    --af-status-interrupted: #fdba74;
+
+    --af-focus-ring: #93c5fd;
+    --af-focus-ring-contrast: #0f172a;
+
+    --af-elevation-overlay: 0 10px 30px rgb(2 6 23 / 60%);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --af-background: #0f172a;
+  --af-surface: #1e293b;
+  --af-surface-sunken: #172033;
+  --af-foreground: #f8fafc;
+  --af-foreground-secondary: #cbd5e1;
+  --af-border: #475569;
+  --af-border-strong: #7c8ca3;
+
+  --af-primary: #93c5fd;
+  --af-primary-foreground: #0f172a;
+  --af-primary-hover: #bfdbfe;
+
+  --af-destructive: #fca5a5;
+  --af-destructive-foreground: #0f172a;
+  --af-destructive-hover: #fecaca;
+
+  --af-status-neutral: #cbd5e1;
+  --af-status-progress: #93c5fd;
+  --af-status-pass: #86efac;
+  --af-status-fail: #fca5a5;
+  --af-status-inconclusive: #fcd34d;
+  --af-status-interrupted: #fdba74;
+
+  --af-focus-ring: #93c5fd;
+  --af-focus-ring-contrast: #0f172a;
+
+  --af-elevation-overlay: 0 10px 30px rgb(2 6 23 / 60%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --af-motion-duration: 0ms;
+  }
+}

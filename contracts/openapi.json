@@ -120,6 +120,89 @@
         "summary": "Ready"
       }
     },
+    "/v1/session": {
+      "delete": {
+        "description": "End this session.\n\nCSRF-protected like any other mutation. A forced sign-out is a small attack, but it is still an\nattack a cross-site request could mount, and exempting it would make the rule conditional.\n\nSigning out with no session succeeds and clears the cookies. Reporting 401 would leave a browser\nholding a cookie it cannot use and no way to discard it.\n\nThe cookies are cleared by writing to the **injected** response rather than by constructing a\nnew one. An earlier version built a fresh `Response(headers=dict(response.headers))`, and\n`dict()` over a header collection keeps one value per name \u2014 so of the two `Set-Cookie`\ndeletions, one silently vanished and the browser kept a cookie the server believed it had\ncleared. A real browser found that; nothing in a status-code assertion would have.",
+        "operationId": "sign_out_v1_session_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Sign Out",
+        "tags": [
+          "session"
+        ]
+      },
+      "get": {
+        "description": "Who this is, and which workspaces they may enter right now.\n\nMemberships are read through `user_connection`, whose only widened policy matches the acting\nuser's own rows. Revocation therefore takes effect immediately: a workspace removed a moment ago\nis absent from the next answer rather than lingering in a cached navigation.",
+        "operationId": "read_session_v1_session_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Session V1 Session Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Session",
+        "tags": [
+          "session"
+        ]
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "description": "Exchange an identity-provider assertion for a browser session.\n\nThe only implemented provider is the local-development bridge described in the module docstring.\nWith no provider configured this is a 503 naming the missing configuration, not a 401: the\ncaller's credentials were never the problem.",
+        "operationId": "sign_in_v1_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sign In V1 Sessions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sign In",
+        "tags": [
+          "session"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/exports": {
       "post": {
         "description": "Build a bundle from authoritative stored records.\n\nThere is no parameter through which a caller could supply a summary to be packaged. Everything\nin the bundle is read here, from the database and the object store, because a bundle assembled\nfrom caller-supplied JSON would attest to whatever the caller said.",
