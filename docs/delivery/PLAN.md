@@ -42,8 +42,8 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 23 | Run and evidence replay UI | 10, 11, 19, 21 | FR-006, 007, 009, 015, 017, 019 | implemented (run, timeline, finding; no SSE, no media) | **blocked — no per-assertion results are served, and no run has executed** | merged | E0 |
 | 24 | Patch, comparison and review UI | 15, 16, 17, 21 | FR-010–013, 019, 020 | implemented (review, export; repair workspace states its absence) | passed for export; **blocked — no patch or verification can exist** | merged | E0 |
 | 25 | Fault laboratory and benchmarks | 12, 15, 22, 23, 24; 09 for R1 | FR-004–013, 015, 019, 023 | not started | pending | local | R1 |
-| 26 | Security, privacy, metering and operations | 17, 19, 25 | FR-014, 015, 019–021, 025 | implemented (entitlements, metering, retention, settings, probes; no deletion route, telemetry or rate limits) | passed for what is enforced; **no external penetration test** | open | R1 |
-| 27 | CI, deployment preparation and restore | 26 | FR-004, 014, 015, 020–022, 025 | implemented (doctor, migrator, encrypted backup/restore, reconciliation, readiness, trusted/untrusted CI split, AWS proposal) | passed; real backup + restore + reconcile drill executed | local; **hosted PREPARED, never applied** | R1 |
+| 26 | Security, privacy, metering and operations | 17, 19, 25 | FR-014, 015, 019–021, 025 | implemented (entitlements, metering, retention, settings, probes; no deletion route, telemetry or rate limits) | passed for what is enforced; **no external penetration test** | merged | R1 |
+| 27 | CI, deployment preparation and restore | 26 | FR-004, 014, 015, 020–022, 025 | implemented (doctor, migrator, encrypted backup/restore, reconciliation, readiness, trusted/untrusted CI split, AWS proposal) | passed; real backup + restore + reconcile drill executed | merged; **hosted PREPARED, never applied** | R1 |
 | 28 | Release proof, documentation and pilot | 27; 09 and 20 for R1 | FR-001–025 | not started | pending | local | R1 |
 | 29 | Independent adversarial final review | 28 | FR-001–025 | not started | pending | local | R1 |
 
