@@ -34,6 +34,33 @@ createdb accessforge_test   --owner accessforge
 The role is intentionally **not** a superuser, and the databases are dedicated. Nothing here
 reuses an existing database.
 
+**This is load-bearing, not hygiene.** Tenant isolation is enforced by row-level security, and a
+PostgreSQL superuser — or any role with `BYPASSRLS` — ignores every policy including `FORCE`. Running
+the suite as a superuser would execute every isolation assertion against no isolation at all. CI found
+this the hard way: the official postgres image creates `POSTGRES_USER` as a superuser, so the first
+run of these tests failed sixteen assertions at once.
+
+`assert_row_level_security_enforced()` now checks this before the isolation suites run and fails with
+one sentence naming the cause:
+
+```bash
+uv run python -c "
+import os
+from accessforge_persistence import assert_row_level_security_enforced
+assert_row_level_security_enforced(os.environ['TEST_DATABASE_URL'])
+"
+```
+
+## Database migrations
+
+```bash
+uv run python -c "from accessforge_persistence import migrate; print(migrate('<database-url>'))"
+```
+
+Each migration runs in its own transaction and is recorded in the same transaction, so a failure
+leaves neither a half-applied schema nor a false record of success. The integration fixtures call
+`migrate()` themselves, so `pytest tests/integration` needs no separate migration step.
+
 ## Verification ladder
 
 | Layer | Command | What it actually proves |
@@ -44,7 +71,8 @@ reuses an existing database.
 | Unit | `uv run pytest tests/unit -q` | Validation, fail-closed configuration, redaction, fixture-variant integrity, outcome precedence, reducers, authority, property tests |
 | Contract | `uv run pytest tests/contract -q` | Schema validation, RFC8785 canonicalization, and Python/TypeScript digest agreement |
 | Binding drift | `uv run python scripts/generate_contract_bindings.py --check` | Generated bindings still match the authoritative schemas |
-| Integration | `uv run pytest tests/integration -q` | Real PostgreSQL: journey, identity boundaries, durability, readiness |
+| RLS precondition | `assert_row_level_security_enforced(TEST_DATABASE_URL)` | The test role cannot bypass row-level security, so the isolation suite means something |
+| Integration | `uv run pytest tests/integration -q` | Real PostgreSQL: journey, durability, readiness, row-level tenant isolation, session/CSRF/enrollment boundaries |
 | Node types | `pnpm -r --if-present typecheck` | TypeScript strict mode |
 | Node build | `pnpm -r --if-present build` | Both TS packages compile |
 | Node tests | `pnpm -r --if-present test` | Runner reports non-implementation rather than false success; TypeScript canonicalization matches the shared vectors. Builds first, since the tests import from `dist/` |
@@ -127,6 +155,10 @@ tests fail:
 | Readiness always reports ready | readiness-failure test fails |
 | Inaccessible variant rendered accessible | fixture-variant tests fail |
 | Loopback binding guard removed | configuration tests fail |
+| CSRF verification disabled | 8 auth tests fail |
+| Session or membership revocation not checked | 3 and 1 auth tests fail |
+| Enrollment redemption not single-use | 1 auth test fails |
+| `FORCE` removed from row-level security | both workspaces leak (asserted by a self-test) |
 | Canonical key order changed to code point | UTF-16 ordering test fails |
 | Cancelled outcome keyed on status rather than execution | reducer regression and property tests fail |
 

@@ -1,6 +1,6 @@
 # Delivery status
 
-**Last refreshed:** 2026-09-09 (module 02 delivery)
+**Last refreshed:** 2026-09-10 (module 03 delivery)
 **Repository:** `github.com/gnanam1990/accessforge` (public)
 **Target branch:** `main`
 
@@ -10,8 +10,8 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 
 | Claim | Answer |
 |---|---|
-| Is code merged? | Modules 00 and 01 are merged. Module 02 (contracts and reducers) is **open in a pull request**, not yet merged. |
-| Is a runtime verified? | **Partly.** The reference application and control-plane API were started and exercised over real HTTP against real PostgreSQL, including restart durability. **No screen reader has ever run.** |
+| Is code merged? | Modules 00, 01 and 02 are merged. Module 03 (identity and tenancy) is **open in a pull request**, not yet merged. |
+| Is a runtime verified? | **Partly.** The reference application and control-plane API were started and exercised over real HTTP against real PostgreSQL, including restart durability, and tenant isolation was proved by direct SQL. **No screen reader has ever run.** |
 | Is R1 release-ready? | **No**, and it cannot become ready on this host — module 09 requires Windows/NVDA. |
 | Did deployment or event submission occur? | **No.** Neither is authorized. |
 
@@ -22,15 +22,18 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 | Bootstrap commit | `7576c05` — specification pack and repository hygiene only |
 | Module 00 integration commit | `fc00eb8` — verified on main |
 | Module 01 integration commit | `23fe6c8` — verified on main, CI green |
-| Latest verified integration commit | `23fe6c8` |
+| Module 02 integration commit | `dbca481`, plus follow-up fix `bb52c30` — verified on main |
+| Latest verified integration commit | `bb52c30` |
 | CI on main | **Passing** for `23fe6c8`. Three jobs: Python (real PostgreSQL), Node, documentation integrity. |
 
 ## Modules
 
 Module 00: **merged** at `fc00eb8`, verified on main.
 Module 01: **merged** at `23fe6c8`, verified on main with a clean-checkout smoke.
-Module 02: **implemented and locally verified** (351 Python tests, 54 Node tests, property tests,
-cross-language digest agreement, three review rounds closed), delivery **open**.
+Module 02: **merged** at `dbca481`, verified on main; a post-merge defect was fixed in `bb52c30`.
+Module 03: **partial and locally verified** (594 Python tests, database-level tenant isolation proved
+directly against PostgreSQL), delivery **open**. Partial by design — the authorization primitives are
+complete, but no HTTP surface exposes them until module 18.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
