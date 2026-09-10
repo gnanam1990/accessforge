@@ -27,7 +27,7 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 08 | Actual macOS VoiceOver execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no real reader** | open | E0 |
 | 09 | Actual Windows NVDA execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no Windows host** | open | R1 |
 | 10 | Provenance-bound evidence ingestion | 04, 07, 08 | FR-006, 014, 015, 020 | implemented | passed (contract, not end-to-end) | open | E0 |
-| 11 | Independent deterministic outcome verifier | 06, 10 | FR-006, 007, 011, 023 | not started | pending | local | E0 |
+| 11 | Independent deterministic outcome verifier | 06, 10 | FR-006, 007, 011, 023 | implemented | passed (no real reader trace) | open | E0 |
 | 12 | Real Strands navigator and bounded tools | 07, 08, 11 | FR-005, 008, 015, 021 | not started | **blocked** | local | E0 |
 | 13 | Evidence-grounded diagnosis and findings | 11, 12 | FR-009, 012, 023 | not started | **blocked** | local | E0 |
 | 14 | Constrained patch proposal and sandbox | 05, 13 | FR-002, 010, 014, 015 | not started | **blocked** | local | E0 |

@@ -52,9 +52,11 @@ from .objectstore import (
     assert_uploadable,
     compute_digest,
 )
+from .observer import ApplicationObserver
 
 __all__ = [
     "ALLOWED_CONTENT_TYPES",
+    "ApplicationObserver",
     "MAX_ARTIFACT_BYTES",
     "MAX_STAGED_RECORDS_PER_ATTEMPT",
     "ArtifactError",
