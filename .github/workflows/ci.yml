@@ -43,7 +43,13 @@ jobs:
           --health-retries 10
 
     env:
-      TEST_DATABASE_URL: postgresql://accessforge:accessforge-ci@localhost:5432/accessforge_test
+      # Deliberately NOT the container's POSTGRES_USER. That role is a superuser, and superusers
+      # bypass row-level security entirely — including FORCE — so the whole tenant-isolation suite
+      # would run against no isolation at all. A dedicated NOSUPERUSER NOBYPASSRLS role is created
+      # below, and `assert_row_level_security_enforced` fails the suite if this is ever pointed at a
+      # bypassing role again.
+      SUPERUSER_URL: postgresql://accessforge:accessforge-ci@localhost:5432/accessforge_test
+      TEST_DATABASE_URL: postgresql://accessforge_app:accessforge-app-ci@localhost:5432/accessforge_test
 
     steps:
       - uses: actions/checkout@v4
@@ -84,6 +90,33 @@ jobs:
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
           packages/domain/src packages/contracts/python/src
+
+      - name: Create a non-superuser role for the tests
+        # Row-level security is the isolation mechanism, so the tests must not run as a role that
+        # ignores it. This role owns nothing yet; the migrations it runs will make it the table
+        # owner, and FORCE ROW LEVEL SECURITY applies to owners too.
+        run: |
+          psql "$SUPERUSER_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'accessforge_app') THEN
+              CREATE ROLE accessforge_app LOGIN PASSWORD 'accessforge-app-ci'
+                NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+            END IF;
+          END
+          $$;
+          GRANT ALL ON SCHEMA public TO accessforge_app;
+          SQL
+
+      - name: Confirm the test role cannot bypass row-level security
+        # One clear sentence instead of sixteen assertion failures if this regresses.
+        run: |
+          uv run python -c "
+          import os
+          from accessforge_persistence import assert_row_level_security_enforced
+          assert_row_level_security_enforced(os.environ['TEST_DATABASE_URL'])
+          print('test role enforces row-level security')
+          "
 
       - name: Confirm PostgreSQL is genuinely reachable
         # Without this, a broken service container would turn every integration test into a skip

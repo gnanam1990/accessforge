@@ -34,6 +34,23 @@ createdb accessforge_test   --owner accessforge
 The role is intentionally **not** a superuser, and the databases are dedicated. Nothing here
 reuses an existing database.
 
+**This is load-bearing, not hygiene.** Tenant isolation is enforced by row-level security, and a
+PostgreSQL superuser — or any role with `BYPASSRLS` — ignores every policy including `FORCE`. Running
+the suite as a superuser would execute every isolation assertion against no isolation at all. CI found
+this the hard way: the official postgres image creates `POSTGRES_USER` as a superuser, so the first
+run of these tests failed sixteen assertions at once.
+
+`assert_row_level_security_enforced()` now checks this before the isolation suites run and fails with
+one sentence naming the cause:
+
+```bash
+uv run python -c "
+import os
+from accessforge_persistence import assert_row_level_security_enforced
+assert_row_level_security_enforced(os.environ['TEST_DATABASE_URL'])
+"
+```
+
 ## Database migrations
 
 ```bash
@@ -54,6 +71,7 @@ leaves neither a half-applied schema nor a false record of success. The integrat
 | Unit | `uv run pytest tests/unit -q` | Validation, fail-closed configuration, redaction, fixture-variant integrity, outcome precedence, reducers, authority, property tests |
 | Contract | `uv run pytest tests/contract -q` | Schema validation, RFC8785 canonicalization, and Python/TypeScript digest agreement |
 | Binding drift | `uv run python scripts/generate_contract_bindings.py --check` | Generated bindings still match the authoritative schemas |
+| RLS precondition | `assert_row_level_security_enforced(TEST_DATABASE_URL)` | The test role cannot bypass row-level security, so the isolation suite means something |
 | Integration | `uv run pytest tests/integration -q` | Real PostgreSQL: journey, durability, readiness, row-level tenant isolation, session/CSRF/enrollment boundaries |
 | Node types | `pnpm -r --if-present typecheck` | TypeScript strict mode |
 | Node build | `pnpm -r --if-present build` | Both TS packages compile |

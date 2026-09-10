@@ -23,13 +23,52 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 __all__ = [
     "MIGRATIONS_DIR",
+    "RowLevelSecurityNotEnforced",
     "applied_migrations",
+    "assert_row_level_security_enforced",
     "connect",
     "migrate",
     "unscoped_connection",
     "user_connection",
     "workspace_connection",
 ]
+
+
+class RowLevelSecurityNotEnforced(RuntimeError):
+    """The connected role bypasses row-level security, so isolation is not in effect."""
+
+
+def assert_row_level_security_enforced(database_url: str) -> None:
+    """Fail loudly if the connected role can bypass row-level security.
+
+    A PostgreSQL superuser — and any role with BYPASSRLS — ignores every policy, including `FORCE`.
+    The official postgres container creates `POSTGRES_USER` as a superuser, so a CI job that simply
+    uses it runs the entire isolation suite against no isolation at all.
+
+    CI discovered this the hard way: sixteen isolation tests failed at once, which is the right
+    outcome but a terrible diagnosis. This check turns that into one sentence naming the cause.
+
+    It also guards the more dangerous direction. These tests currently fail when RLS is absent, but a
+    future test that asserted isolation through application code rather than raw SQL would *pass*
+    against a bypassing role — green, and proving nothing.
+    """
+    with connect(database_url) as conn:
+        row = conn.execute(
+            "SELECT current_user AS role, rolsuper, rolbypassrls "
+            "FROM pg_roles WHERE rolname = current_user"
+        ).fetchone()
+
+    if row is None:  # pragma: no cover - a connected role always has a pg_roles entry
+        raise RowLevelSecurityNotEnforced("cannot determine the privileges of the connected role")
+
+    if row["rolsuper"] or row["rolbypassrls"]:
+        reason = "a superuser" if row["rolsuper"] else "granted BYPASSRLS"
+        raise RowLevelSecurityNotEnforced(
+            f"the connected role {row['role']!r} is {reason}, so row-level security is not "
+            "enforced and every tenant-isolation assertion in this suite is meaningless. "
+            "Point the connection at a role created with NOSUPERUSER NOBYPASSRLS. Note that the "
+            "official postgres image creates POSTGRES_USER as a superuser."
+        )
 
 
 def connect(database_url: str) -> psycopg.Connection[dict[str, Any]]:

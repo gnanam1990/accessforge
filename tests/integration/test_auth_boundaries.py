@@ -36,7 +36,12 @@ from accessforge_api.auth import (
 )
 from accessforge_api.auth.membership import assert_route_matches_body
 from accessforge_domain.authorization import AuthorizationError, Permission, Role
-from accessforge_persistence import migrate, unscoped_connection, workspace_connection
+from accessforge_persistence import (
+    assert_row_level_security_enforced,
+    migrate,
+    unscoped_connection,
+    workspace_connection,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -50,6 +55,9 @@ NOW = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
 
 @pytest.fixture()
 def db(test_database_url: str) -> Iterator[str]:
+    # Checked before anything else: if the role bypasses RLS, every assertion below is
+    # meaningless and should say so in one sentence rather than sixteen.
+    assert_row_level_security_enforced(test_database_url)
     migrate(test_database_url)
     with unscoped_connection(test_database_url) as conn:
         conn.execute("TRUNCATE workspace, app_user, audit_event RESTART IDENTITY CASCADE")

@@ -17,6 +17,7 @@ import psycopg
 import pytest
 
 from accessforge_persistence import (
+    assert_row_level_security_enforced,
     migrate,
     unscoped_connection,
     workspace_connection,
@@ -38,6 +39,9 @@ def seeded(test_database_url: str) -> Iterator[str]:
     workspace other than the current one — and the tests below prove that path is unusable for
     reading across tenants.
     """
+    # Checked before anything else: if the role bypasses RLS, every assertion below is
+    # meaningless and should say so in one sentence rather than sixteen.
+    assert_row_level_security_enforced(test_database_url)
     migrate(test_database_url)
 
     # Each step gets its own closed transaction. Nesting a scoped connection inside the truncating
