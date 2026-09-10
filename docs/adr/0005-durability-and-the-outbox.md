@@ -96,8 +96,15 @@ Worth recording, because mutation testing found the **tests** wrong rather than 
 and then wrote back the revision it had just read, so the comparison could never fail. Removing the
 predicate failed no test. A guard that cannot fail is indistinguishable from an absent one, so the
 signature now takes the revision the *caller* last observed — which is the real concurrency question
-— and a stale caller is refused. The statement-level predicate is kept as belt and braces for a
-future caller that reaches the UPDATE without the lock.
+— and a stale caller is refused.
+
+The statement-level predicate is kept as belt and braces for a future caller that reaches the UPDATE
+without the lock. It has **no test**, deliberately: it is unreachable through the public API while the
+row lock is held, and an earlier attempt to cover it by asserting on the function's source text was
+removed during review. Such an assertion proves a string exists, not that the executed statement uses
+it — it would pass with the predicate moved into a comment and fail on a harmless reformat. An
+untestable guard recorded as untestable is more honest than a test that cannot distinguish presence
+from correctness.
 
 **The advisory lock was indistinguishable from the unique index.** A race test expecting a lock
 timeout passed with the lock removed, because the second connection blocked on the

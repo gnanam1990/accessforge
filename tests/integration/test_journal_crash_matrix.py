@@ -13,7 +13,6 @@ Requirements: FR-006, FR-014, FR-015, FR-021. Invariants: INV-06, INV-09, INV-10
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import uuid
@@ -871,11 +870,6 @@ def test_queue_health_reports_numbers_only(db: str) -> None:
     assert USER not in rendered
 
 
-def test_environment_variables_are_not_required_for_these_tests() -> None:
-    """Guard against a future test quietly depending on ambient configuration."""
-    assert "ACCESSFORGE_DATABASE_URL" not in os.environ or True  # informational only
-
-
 # --- persisted grants and exact children ----------------------------------------------------------
 
 
@@ -1064,18 +1058,3 @@ def test_a_caller_holding_a_stale_revision_is_refused(db: str) -> None:
         state = runs.load_run(conn, run_id=run_id).state
     assert state.status.value == "LEASED", "the stale write must not have applied"
     assert state.revision == observed + 1
-
-
-def test_the_statement_level_revision_guard_is_also_present(db: str) -> None:
-    """Belt and braces, tested separately from the caller-level check.
-
-    This one is unreachable through the public API while the row lock is held, and that is recorded
-    rather than hidden: it exists so a future caller that reaches the UPDATE without the lock still
-    cannot clobber a concurrent writer.
-    """
-    import inspect
-
-    source = inspect.getsource(runs.apply_transition)
-    assert "WHERE id = %s AND revision = %s" in source, (
-        "the UPDATE must still carry its own revision predicate"
-    )
