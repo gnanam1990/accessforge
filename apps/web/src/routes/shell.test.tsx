@@ -225,10 +225,16 @@ describe('the workspace shell', () => {
     const server = createFakeServer(MEMBER)
     renderApp(server, ['/not/a/page'])
 
-    await screen.findByRole('heading', { name: 'This page does not exist' })
+    await screen.findByRole('heading', { level: 1, name: 'This page does not exist' })
     // Distinct from "not available": this one is about the address, and says nothing about whether
     // any workspace or resource exists.
     expect(screen.getByText(/tells you nothing about whether a workspace/)).toBeInTheDocument()
+    // And it is not a dead end. This route is reached most often by a truncated link, and leaving a
+    // person with only the back button is a poor answer to a mistake they may not have made.
+    expect(screen.getByRole('link', { name: 'Go to your workspaces' })).toHaveAttribute(
+      'href',
+      '/workspaces',
+    )
   })
 })
 
@@ -282,6 +288,19 @@ describe('focus management', () => {
 
     const heading = await screen.findByRole('heading', { level: 1, name: 'Overview' })
     expect(heading).toHaveFocus()
+  })
+
+  it('names the page in the document title, not just the product', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    renderApp(server, ['/w/ws-alder/overview'])
+    await screen.findByRole('heading', { level: 1, name: 'Overview' })
+    // Eleven routes under one unchanging title give a reader eleven identical history entries.
+    expect(document.title).toBe('Overview · AccessForge')
+
+    await user.click(screen.getByRole('link', { name: 'Runners' }))
+    await screen.findByRole('heading', { level: 1, name: 'Runners' })
+    expect(document.title).toBe('Runners · AccessForge')
   })
 
   it('does not leave the heading in the tab order', async () => {

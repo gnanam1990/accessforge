@@ -27,6 +27,12 @@
  *
  * Background events never move focus. That is enforced by this being the only thing in the
  * application that calls `focus()` on a heading.
+ *
+ * **It also sets the document title**, because in a single-page application nothing else does. The
+ * title is what a screen reader announces on load, what a browser puts in the tab and the history
+ * entry, and what a person sees when they alt-tab back. A shell that renders eleven routes under one
+ * unchanging title gives a reader eleven identical history entries and no way to tell where they
+ * are. The heading and the title come from the same string here so they cannot drift.
  */
 
 import { createContext, useContext, useEffect, useMemo, useRef } from 'react'
@@ -78,6 +84,13 @@ export const RouteHeading = ({ children }: { readonly children: ReactNode }): JS
     if (!api.claimFocusForPath(pathname)) return
     heading.current?.focus()
   }, [api, pathname])
+
+  useEffect(() => {
+    // The product name comes second. A reader hearing a truncated title, or looking at a narrow
+    // browser tab, gets the part that distinguishes this page from the other ten.
+    const text = heading.current?.textContent ?? ''
+    document.title = text.length > 0 ? `${text} · AccessForge` : 'AccessForge'
+  }, [children])
 
   return (
     // Programmatically focusable only. A heading in the tab order is an extra stop for everyone, on

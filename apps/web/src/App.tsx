@@ -22,10 +22,10 @@
 
 import type { JSX } from 'react'
 
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Link, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AnnouncerProvider } from './a11y/Announcer'
-import { RouteFocusProvider } from './a11y/RouteHeading'
+import { RouteFocusProvider, RouteHeading } from './a11y/RouteHeading'
 import { ThemeProvider } from './a11y/ThemeProvider'
 import { LoadingState, OfflineState } from './components/states'
 import { Notice } from './components/Notice'
@@ -77,11 +77,19 @@ const WorkspacesShell = (): JSX.Element => {
  * existence, and it says nothing about whether any workspace or resource exists.
  */
 const UnknownRoute = (): JSX.Element => (
-  <main style={{ padding: 'var(--af-space-8)' }}>
+  <main style={{ padding: 'var(--af-space-8)' }} className="af-stack">
+    <RouteHeading>This page does not exist</RouteHeading>
     <Notice tone="warning" heading="This page does not exist" headingLevel={2}>
       <p>
         The address does not match any page in this application. This is about the address alone and
         tells you nothing about whether a workspace or a resource exists.
+      </p>
+      {/* A way out. A dead-end page with no navigation leaves a person with the back button and a
+          guess, and this route is reached most often by a mistyped or truncated link. */}
+      <p>
+        <Link className="af-link" to="/workspaces">
+          Go to your workspaces
+        </Link>
       </p>
     </Notice>
   </main>

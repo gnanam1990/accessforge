@@ -137,7 +137,8 @@ samp,
 }
 
 .af-nav-list a {
-  display: block;
+  display: flex;
+  align-items: center;
   padding: var(--af-space-2) var(--af-space-3);
   border-radius: var(--af-radius-sm);
   color: var(--af-foreground);
@@ -145,8 +146,6 @@ samp,
   /* Comfortable target size without a fixed height, so a larger text preference grows the target
      rather than clipping the label. */
   min-height: 44px;
-  display: flex;
-  align-items: center;
 }
 
 .af-nav-list a:hover {
