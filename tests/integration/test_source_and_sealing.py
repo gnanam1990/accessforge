@@ -80,6 +80,14 @@ def db(test_database_url: str) -> Iterator[tuple[str, str]]:
             conn.execute("INSERT INTO workspace (id, name) VALUES (%s, %s)", (ws, name))
         conn.execute("INSERT INTO app_user (id, email) VALUES (%s, %s)", (OWNER, "o@example.test"))
     with workspace_connection(test_database_url, WS) as conn:
+        # The authorizing user must hold a live membership here. This fixture previously recorded an
+        # account with no membership, which the database accepted because the column only references
+        # `app_user` -- so the authorization named somebody this workspace could not name.
+        conn.execute(
+            "INSERT INTO workspace_membership (workspace_id, user_id, role) "
+            "VALUES (%s, %s, 'OWNER')",
+            (WS, OWNER),
+        )
         project_id = projects.create_project(
             conn,
             workspace_id=WS,

@@ -19,7 +19,7 @@
 
 import type { JSX } from 'react'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 
 import { Button } from '../components/Button'
 import { ErrorSummary } from '../components/ErrorSummary'
@@ -36,7 +36,7 @@ export const SignInScreen = (): JSX.Element => {
   const [error, setError] = useState<string | null>(null)
   const [submissionId, setSubmissionId] = useState(0)
   const [busy, setBusy] = useState(false)
-  const fieldId = useRef<string | null>(null)
+  const fieldId = useId()
 
   useEffect(() => {
     if (state.status === 'authenticated') setError(null)
@@ -83,37 +83,31 @@ export const SignInScreen = (): JSX.Element => {
 
       <ErrorSummary
         submissionId={submissionId}
-        errors={
-          error === null || fieldId.current === null
-            ? []
-            : [{ fieldId: fieldId.current, message: error }]
-        }
+        errors={error === null ? [] : [{ fieldId, message: error }]}
       />
 
       <form onSubmit={(event) => void submit(event)} noValidate className="af-panel">
         <FormField
+          id={fieldId}
           label="Email address"
           hint="The address your workspace owner used to invite you."
           {...(error === null ? {} : { error })}
           required
         >
-          {({ id, describedBy, invalid }) => {
-            fieldId.current = id
-            return (
-              <input
-                id={id}
-                name="email"
-                type="email"
-                autoComplete="username"
-                value={email}
-                aria-describedby={describedBy}
-                aria-invalid={invalid || undefined}
-                // Validated on submission, never on blur. Validating on blur and moving focus makes
-                // a form impossible to complete with a keyboard.
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            )
-          }}
+          {({ id, describedBy, invalid }) => (
+            <input
+              id={id}
+              name="email"
+              type="email"
+              autoComplete="username"
+              value={email}
+              aria-describedby={describedBy}
+              aria-invalid={invalid || undefined}
+              // Validated on submission, never on blur. Validating on blur and moving focus makes a
+              // form impossible to complete with a keyboard.
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          )}
         </FormField>
 
         <Button type="submit" variant="primary" busy={busy}>

@@ -67,6 +67,38 @@ def create_project(
         raise ProjectError(
             "a repository requires an explicit authorizing user; reachability is not consent"
         )
+    if repository_authorized_by is not None:
+        # Checked here rather than left to the column's type, because an unparseable value reached
+        # the database as a raw string and came back as an unhandled driver error -- a 500 with a
+        # stack trace in the log and nothing useful for the caller. The authorizing user must also
+        # be a live member of this workspace: "somebody authorized it" is only meaningful if the
+        # somebody is a person this workspace can actually name.
+        try:
+            uuid.UUID(repository_authorized_by)
+        except ValueError as exc:
+            raise ProjectError(
+                "the authorizing user must be identified by their user id, not by their name. "
+                "A name is not a record of who granted permission."
+            ) from exc
+        # Joined to `app_user` and requiring `disabled_at IS NULL`, because a live membership row
+        # survives the account being disabled. The member listing already excludes disabled
+        # accounts, so without this join the API would refuse to *offer* a person it would then
+        # happily accept.
+        member = conn.execute(
+            """
+            SELECT 1
+            FROM workspace_membership m
+            JOIN app_user u ON u.id = m.user_id
+            WHERE m.workspace_id = %s AND m.user_id = %s AND m.revoked_at IS NULL
+              AND u.disabled_at IS NULL
+            """,
+            (workspace_id, repository_authorized_by),
+        ).fetchone()
+        if member is None:
+            raise ProjectError(
+                "the authorizing user is not an active member of this workspace; an authorization "
+                "recorded against someone who cannot be named here is not auditable"
+            )
     project_id = str(uuid.uuid4())
     conn.execute(
         """

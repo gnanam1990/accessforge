@@ -16,8 +16,9 @@
  * * `authenticated` → the shell and the routes.
  *
  * The routes are generated from `WORKSPACE_ROUTES`, so the router and the navigation cannot
- * disagree. Every screen body is `ScreenNotBuilt`: module 21 owns the shell, and inventing the
- * screens that modules 22–24 own is precisely what the acceptance gate forbids.
+ * disagree, and each entry says whether its screen exists. The ones that do not render
+ * `ScreenNotBuilt`, which names the owning module and requests nothing — inventing a screen that a
+ * later module owns is precisely what module 21's acceptance gate forbids.
  */
 
 import type { JSX } from 'react'
@@ -31,12 +32,32 @@ import { LoadingState, OfflineState } from './components/states'
 import { Notice } from './components/Notice'
 import { ChooseWorkspaceScreen } from './routes/ChooseWorkspaceScreen'
 import { ScreenNotBuilt } from './routes/ScreenNotBuilt'
+import { JourneyScreen } from './screens/JourneyScreen'
+import { OverviewScreen } from './screens/OverviewScreen'
+import { ProjectScreen } from './screens/ProjectScreen'
+import { ProjectsScreen } from './screens/ProjectsScreen'
+import { RunnersScreen } from './screens/RunnersScreen'
 import { SignInScreen } from './routes/SignInScreen'
 import { WorkspaceRoute } from './routes/WorkspaceRoute'
 import { WORKSPACE_ROUTES } from './routes/routeMap'
 import { AppShell } from './shell/AppShell'
 import { SessionProvider, useSession } from './session/SessionProvider'
 import type { ApiClient } from './api/client'
+
+/**
+ * The screens that exist, by route pattern.
+ *
+ * Keyed by the same string the route table uses, so a screen cannot be wired to a path the
+ * navigation does not know about. A route marked built with no entry here would render nothing at
+ * all, which the test suite asserts cannot happen.
+ */
+const SCREENS: Readonly<Record<string, JSX.Element>> = {
+  overview: <OverviewScreen />,
+  projects: <ProjectsScreen />,
+  'projects/:projectId': <ProjectScreen />,
+  'projects/:projectId/journeys/:journeyId': <JourneyScreen />,
+  runners: <RunnersScreen />,
+}
 
 const AuthenticatedRoutes = (): JSX.Element => (
   <Routes>
@@ -45,7 +66,11 @@ const AuthenticatedRoutes = (): JSX.Element => (
     <Route path="/w/:workspaceId" element={<WorkspaceRoute />}>
       <Route index element={<Navigate to="overview" replace />} />
       {WORKSPACE_ROUTES.map((route) => (
-        <Route key={route.path} path={route.path} element={<ScreenNotBuilt route={route} />} />
+        <Route
+          key={route.path}
+          path={route.path}
+          element={route.built ? SCREENS[route.path] : <ScreenNotBuilt route={route} />}
+        />
       ))}
     </Route>
     <Route path="*" element={<UnknownRoute />} />
