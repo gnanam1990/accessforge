@@ -1,0 +1,75 @@
+# The versions this release was actually built and tested against.
+#
+# Declared here rather than inferred at runtime, because "what we tested" and "what happens to be
+# installed" are different facts and only the first belongs in a release record. `scripts/doctor.py`
+# compares an installed toolchain against this file; `tests/unit/test_version_matrix.py` compares
+# this file against the repository's own pins, so a lockfile bump that forgets this table fails.
+#
+# Ranges are deliberate where a range was tested and exact where only one version was. Widening any
+# of these requires running the suite on the wider range, not editing the number.
+
+[toolchain.python]
+# pyproject.toml requires-python
+min = "3.13"
+below = "3.14"
+observed = "3.13.14"
+probe = ["python3", "-V"]
+
+[toolchain.uv]
+# The version CI installs (.github/workflows/ci.yml, astral-sh/setup-uv)
+exact = "0.11.28"
+probe = ["uv", "--version"]
+
+[toolchain.node]
+# package.json engines.node, and CI's NODE_VERSION
+min = "22"
+below = "23"
+observed = "22.23.1"
+probe = ["node", "-v"]
+
+[toolchain.pnpm]
+# package.json packageManager
+exact = "11.10.0"
+probe = ["pnpm", "-v"]
+
+[service.postgresql]
+# CI runs postgres:17. Row-level security with FORCE, and the `pg_dump` behaviour the restore drill
+# depends on, are the features that make the major version load-bearing.
+min = "17"
+probe = ["psql", "--version"]
+
+[service.pg_dump]
+# Must match the server's major version or newer. An older pg_dump against a newer server refuses
+# outright, which is the good case; the bad case is a *newer* server feature silently absent from
+# an older dump, so the drill asserts the version rather than assuming it.
+min = "17"
+probe = ["pg_dump", "--version"]
+
+# ------------------------------------------------------------------------------------------------
+# Platform capabilities that no version number can establish.
+#
+# These are listed so that a doctor run states them rather than leaving an operator to discover
+# them at the moment a run is requested. Each says what is missing and what would supply it. None
+# of them can be satisfied by installing a package.
+# ------------------------------------------------------------------------------------------------
+
+[capability.voiceover]
+platform = "darwin"
+status = "BLOCKED"
+needs = """macOS with VoiceOver enabled, plus Accessibility and Automation permission granted to \
+the runner process in System Settings > Privacy & Security. A Linux container cannot provide this \
+and no emulation of it produces evidence about a real screen reader."""
+
+[capability.nvda]
+platform = "win32"
+status = "BLOCKED"
+needs = """A Windows host with NVDA installed and its controller client available. Not obtainable \
+from macOS or Linux, including under virtualization that does not present a real interactive \
+desktop session."""
+
+[capability.bedrock]
+platform = "any"
+status = "BLOCKED"
+needs = """AWS credentials with Bedrock model access in a region where the pinned model is \
+available. Invoking a model is billable, so it additionally requires explicit approval separate \
+from the credentials being present."""

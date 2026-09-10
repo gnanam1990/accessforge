@@ -22,6 +22,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+
+from accessforge_domain.canonical import digest
 from accessforge_evidence import (
     CheckOutcome,
     KeyProvenance,
@@ -31,8 +33,6 @@ from accessforge_evidence import (
     verify_archive,
     write_archive,
 )
-
-from accessforge_domain.canonical import digest
 from accessforge_persistence import (
     assert_row_level_security_enforced,
     evidence,

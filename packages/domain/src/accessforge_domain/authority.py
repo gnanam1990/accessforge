@@ -112,12 +112,29 @@ class ExecutionGrant:
     revision: int
     revoked: bool = False
 
+    revalidation_required: bool = False
+    """Set by reconciliation after a database restore, and cleared only by a person.
+
+    Distinct from `revoked`, and the distinction is the whole point: revoked is a decision somebody
+    made about this grant, and this is the *absence* of a decision. A grant revoked an hour after
+    the snapshot is live in the backup and revoked in the world, and nothing in the restored data
+    can tell the two apart -- so every restored grant is treated as unverified rather than as
+    valid, which is the only answer the data supports.
+    """
+
     def __post_init__(self) -> None:
         parse_rfc3339_utc(self.expires_at, field="ExecutionGrant.expires_at")
 
     def check_usable(self, *, now: str, expected_revision: int | None = None) -> None:
         if self.revoked:
             raise AuthorityError(f"execution grant {self.grant_id} has been revoked")
+        if self.revalidation_required:
+            raise AuthorityError(
+                f"execution grant {self.grant_id} was restored from a backup and has not been "
+                "revalidated. A grant revoked after the snapshot is live in this data and revoked "
+                "in the world; nothing here can tell the difference, so it is unusable until a "
+                "person confirms it."
+            )
         if is_expired(now=now, expires_at=self.expires_at):
             raise AuthorityError(
                 f"execution grant {self.grant_id} expired at {self.expires_at} (now {now})"

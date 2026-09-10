@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import psycopg
+
+from accessforge_domain.evaluation.verdict import PASS_SCOPE_STATEMENT
 from accessforge_evidence.bundle import (
     BUNDLE_SCHEMA_VERSION,
     CANONICALIZATION_VERSION,
@@ -26,8 +28,6 @@ from accessforge_evidence.bundle import (
     ProducerEntry,
     ReviewEntry,
 )
-
-from accessforge_domain.evaluation.verdict import PASS_SCOPE_STATEMENT
 
 from .objectstore import ArtifactStore, ArtifactStoreError
 
