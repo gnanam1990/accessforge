@@ -142,6 +142,38 @@ def progress(state: RunState, *, expected_revision: int | None = None) -> RunSta
     return _advance(state, status=next_status, execution_began=began)
 
 
+def admit_to_desktop(
+    state: RunState, *, epoch: int, expected_revision: int | None = None
+) -> RunState:
+    """Advance QUEUED -> LEASED and record which desktop session epoch admitted this run.
+
+    This exists because `lease_epoch` was on `RunState` and on the `run` row from module 04, was
+    written by every transition, and was never *set* by anything: no reducer took an epoch. The
+    consequence was quiet rather than loud -- a run's epoch stayed 0 for its whole life, so
+    `acknowledge_stop`, which refuses an acknowledgement whose epoch does not match the current one,
+    would have refused every acknowledgement there could ever be. A stop could never be proved, and
+    the run could never reach terminal CANCELLED.
+
+    The epoch must strictly advance. A lease is granted at a higher epoch than any before it, so an
+    equal or lower one means either a reused epoch or a stale caller, and both would let a
+    superseded supervisor's acknowledgement satisfy the current session.
+    """
+    _require_expected_revision(state, expected_revision)
+    _require_nonterminal(state)
+    if state.cancellation_requested:
+        raise TransitionError("cancellation has been requested; no desktop may be admitted")
+    if state.status is not RunStatus.QUEUED:
+        raise TransitionError(
+            f"a desktop is admitted to a QUEUED run, not to one that is {state.status}"
+        )
+    if epoch <= state.lease_epoch:
+        raise TransitionError(
+            f"lease epoch {epoch} does not advance on {state.lease_epoch}; epochs are monotonic "
+            "and a reused one would revive a superseded supervisor"
+        )
+    return _advance(state, status=RunStatus.LEASED, lease_epoch=epoch)
+
+
 def admit_action(state: RunState, *, expected_revision: int | None = None) -> RunState:
     """Record that an action has been dispatched to the operating system.
 
