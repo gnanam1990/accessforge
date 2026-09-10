@@ -230,6 +230,7 @@ def test_a_contiguous_chain_does_not_establish_completeness(
         _admit(conn, run_id, attempt_id, producer=OBSERVER, seq=1, event_type="EFFECT_RECEIPT")
         sequencer.close_producer_stream(
             conn,
+            workspace_id=WS,
             run_id=run_id,
             attempt_id=attempt_id,
             producer_id=SUPERVISOR,
@@ -245,6 +246,7 @@ def test_a_contiguous_chain_does_not_establish_completeness(
     with workspace_connection(url, WS) as conn:
         sequencer.close_producer_stream(
             conn,
+            workspace_id=WS,
             run_id=run_id,
             attempt_id=attempt_id,
             producer_id=OBSERVER,
@@ -270,6 +272,7 @@ def test_a_required_producer_that_never_spoke_counts_as_not_closed(
         _admit(conn, run_id, attempt_id, producer=SUPERVISOR, seq=1)
         sequencer.close_producer_stream(
             conn,
+            workspace_id=WS,
             run_id=run_id,
             attempt_id=attempt_id,
             producer_id=SUPERVISOR,
@@ -298,6 +301,7 @@ def test_a_watermark_beyond_what_was_admitted_is_refused(
     ):
         sequencer.close_producer_stream(
             conn,
+            workspace_id=WS,
             run_id=run_id,
             attempt_id=attempt_id,
             producer_id=SUPERVISOR,
@@ -312,6 +316,7 @@ def test_a_record_after_the_watermark_is_refused(attempt: tuple[str, str, str]) 
         _admit(conn, run_id, attempt_id, producer=SUPERVISOR, seq=1)
         sequencer.close_producer_stream(
             conn,
+            workspace_id=WS,
             run_id=run_id,
             attempt_id=attempt_id,
             producer_id=SUPERVISOR,
@@ -330,6 +335,7 @@ def test_re_closing_at_the_same_sequence_is_idempotent(attempt: tuple[str, str, 
         _admit(conn, run_id, attempt_id, producer=SUPERVISOR, seq=1)
         sequencer.close_producer_stream(
             conn,
+            workspace_id=WS,
             run_id=run_id,
             attempt_id=attempt_id,
             producer_id=SUPERVISOR,
@@ -338,6 +344,7 @@ def test_re_closing_at_the_same_sequence_is_idempotent(attempt: tuple[str, str, 
         # A redelivered watermark must not be an error; delivery is at-least-once.
         sequencer.close_producer_stream(
             conn,
+            workspace_id=WS,
             run_id=run_id,
             attempt_id=attempt_id,
             producer_id=SUPERVISOR,
@@ -502,3 +509,155 @@ def test_distinct_attempts_take_distinct_locks(attempt: tuple[str, str, str]) ->
     key_a = int.from_bytes(hashlib.sha256(attempt_id.encode()).digest()[:8], "big", signed=True)
     key_b = int.from_bytes(hashlib.sha256(other_attempt.encode()).digest()[:8], "big", signed=True)
     assert key_a != key_b
+
+
+# --- independent review findings ---------------------------------------------------------------
+
+
+def test_a_replay_reports_its_own_position_not_a_twin_with_the_same_payload(
+    attempt: tuple[str, str, str],
+) -> None:
+    """Regression: the replay lookup keyed on content instead of provenance.
+
+    Two identical reader observations are entirely ordinary — a reader saying "Loading" twice
+    produces two distinct source records with the same payload. The replay query searched
+    canonical_event by payload_digest and returned the FIRST match, so redelivering the second
+    record reported the first record's canonical position and event id.
+
+    CONTRACTS section 7 keys replay on producer plus source record id. Content is how a replay is
+    distinguished from a conflict; it is not an identity.
+    """
+    url, run_id, attempt_id = attempt
+    same = {"spoke": "Loading"}
+
+    with workspace_connection(url, WS) as conn:
+        first = _admit(conn, run_id, attempt_id, seq=1, record_id="A", payload=same)
+        second = _admit(conn, run_id, attempt_id, seq=2, record_id="B", payload=same)
+
+    assert (first.sequence, second.sequence) == (1, 2)
+    assert first.event_id != second.event_id
+
+    with workspace_connection(url, WS) as conn:
+        replay_a = _admit(conn, run_id, attempt_id, seq=1, record_id="A", payload=same)
+        replay_b = _admit(conn, run_id, attempt_id, seq=2, record_id="B", payload=same)
+
+    assert replay_a.is_replay and replay_b.is_replay
+    assert replay_a.sequence == 1 and replay_a.event_id == first.event_id
+    assert replay_b.sequence == 2, (
+        "a replay must report its own canonical position, not that of a twin with the same payload"
+    )
+    assert replay_b.event_id == second.event_id
+    assert replay_b.previous_event_hash == second.previous_event_hash
+
+
+def test_a_session_cannot_sequence_onto_another_workspaces_attempt(
+    attempt: tuple[str, str, str],
+) -> None:
+    """Regression: a cross-tenant denial of service.
+
+    `admit_record` trusted the caller's `workspace_id` and never checked it against the workspace
+    that owns the run and attempt. Referential-integrity checks bypass row-level security, so a
+    session scoped to workspace A could insert a row labelled A while chained onto workspace B's
+    (run, attempt) sequence space.
+
+    The consequence was worse than pollution. B could not see the injected row — its policy filters
+    on workspace — but the row occupied canonical position 1, so B's own first record failed with a
+    bare UniqueViolation on a chain that looked empty to it. Unexplainable from inside B.
+    """
+    url, _, _ = attempt
+    with workspace_connection(url, WS_OTHER) as conn:
+        victim_run = runs.create_run(conn, workspace_id=WS_OTHER, manifest_digest=MANIFEST)
+        victim_attempt = runs.start_attempt(
+            conn, run_id=victim_run, workspace_id=WS_OTHER, lease_epoch=0
+        )
+
+    with workspace_connection(url, WS) as conn, pytest.raises(sequencer.SequencerError):
+        sequencer.admit_record(
+            conn,
+            workspace_id=WS,  # the attacker's own workspace label
+            run_id=victim_run,  # but another workspace's run
+            attempt_id=victim_attempt,
+            lease_epoch=0,
+            producer_id="attacker",
+            source_record_id="x1",
+            producer_sequence=1,
+            event_type="READER_OBSERVATION",
+            manifest_digest=MANIFEST,
+            payload={"spoke": "injected"},
+            source_time=SOURCE_TIME,
+        )
+
+    # The victim can still sequence its own evidence from position 1.
+    with workspace_connection(url, WS_OTHER) as conn:
+        legit = sequencer.admit_record(
+            conn,
+            workspace_id=WS_OTHER,
+            run_id=victim_run,
+            attempt_id=victim_attempt,
+            lease_epoch=0,
+            producer_id=SUPERVISOR,
+            source_record_id="legit-1",
+            producer_sequence=1,
+            event_type="READER_OBSERVATION",
+            manifest_digest=MANIFEST,
+            payload={"spoke": "its own evidence"},
+            source_time=SOURCE_TIME,
+        )
+    assert legit.sequence == 1
+
+
+def test_closing_a_stream_also_refuses_a_foreign_attempt(attempt: tuple[str, str, str]) -> None:
+    url, _, _ = attempt
+    with workspace_connection(url, WS_OTHER) as conn:
+        victim_run = runs.create_run(conn, workspace_id=WS_OTHER, manifest_digest=MANIFEST)
+        victim_attempt = runs.start_attempt(
+            conn, run_id=victim_run, workspace_id=WS_OTHER, lease_epoch=0
+        )
+    with workspace_connection(url, WS) as conn, pytest.raises(sequencer.SequencerError):
+        sequencer.close_producer_stream(
+            conn,
+            workspace_id=WS,
+            run_id=victim_run,
+            attempt_id=victim_attempt,
+            producer_id=SUPERVISOR,
+            final_producer_sequence=1,
+        )
+
+
+def test_the_database_refuses_a_workspace_run_mismatch_even_without_the_application_check(
+    attempt: tuple[str, str, str],
+) -> None:
+    """Defence in depth: composite foreign keys, so raw SQL cannot do it either.
+
+    The application check is the clear error message. The constraint is what holds when a future
+    caller, migration or report reaches the table directly.
+    """
+    import psycopg
+
+    url, _, _ = attempt
+    with workspace_connection(url, WS_OTHER) as conn:
+        victim_run = runs.create_run(conn, workspace_id=WS_OTHER, manifest_digest=MANIFEST)
+        victim_attempt = runs.start_attempt(
+            conn, run_id=victim_run, workspace_id=WS_OTHER, lease_epoch=0
+        )
+
+    with pytest.raises((psycopg.errors.ForeignKeyViolation, psycopg.errors.InsufficientPrivilege)):
+        with workspace_connection(url, WS) as conn:
+            conn.execute(
+                """
+                INSERT INTO canonical_event
+                    (workspace_id, run_id, attempt_id, sequence, event_id, event_type, lease_epoch,
+                     source_time, manifest_digest, previous_event_hash, payload_digest, payload)
+                VALUES (%s,%s,%s,1,%s,'READER_OBSERVATION',0,%s,%s,%s,%s,'{}')
+                """,
+                (
+                    WS,
+                    victim_run,
+                    victim_attempt,
+                    str(uuid.uuid4()),
+                    SOURCE_TIME,
+                    MANIFEST,
+                    sequencer.GENESIS_HASH,
+                    MANIFEST,
+                ),
+            )

@@ -51,6 +51,42 @@ class AdmittedEvent:
     is_replay: bool
 
 
+def _assert_attempt_belongs_to_workspace(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    workspace_id: str,
+    run_id: str,
+    attempt_id: str,
+) -> None:
+    """Refuse a workspace/run/attempt combination that does not actually belong together.
+
+    The caller supplies all three, and trusting them was a cross-tenant denial of service.
+    Referential-integrity checks bypass row-level security, so a session scoped to workspace A could
+    insert a row labelled A while chained onto workspace B's (run, attempt) sequence space. B could
+    not see the injected row — its policy filters on workspace — but the row occupied canonical
+    position 1, so B's own first record failed with a bare UniqueViolation on a chain that looked
+    empty from inside B.
+
+    The lookup runs under the caller's row-level security, so an attempt in another workspace is
+    simply invisible and the mismatch is reported rather than silently written. Composite foreign
+    keys enforce the same rule below the application.
+    """
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM run_attempt a
+        JOIN run r ON r.id = a.run_id AND r.workspace_id = a.workspace_id
+        WHERE a.id = %s AND a.run_id = %s AND a.workspace_id = %s
+        """,
+        (attempt_id, run_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise SequencerError(
+            f"attempt {attempt_id} does not belong to run {run_id} in this workspace; "
+            "a record may only be sequenced onto an attempt the caller actually owns"
+        )
+
+
 def _lock_attempt(conn: psycopg.Connection[dict[str, Any]], attempt_id: str) -> None:
     """Serialize all sequencing for one attempt.
 
@@ -120,11 +156,14 @@ def admit_record(
     moment = now or datetime.now(UTC)
     payload_digest = digest(payload)
 
+    _assert_attempt_belongs_to_workspace(
+        conn, workspace_id=workspace_id, run_id=run_id, attempt_id=attempt_id
+    )
     _lock_attempt(conn, attempt_id)
 
     existing = conn.execute(
         """
-        SELECT source_record_digest, producer_sequence
+        SELECT source_record_digest, producer_sequence, canonical_sequence, event_id
         FROM producer_source_record
         WHERE run_id = %s AND attempt_id = %s AND producer_id = %s AND source_record_id = %s
         """,
@@ -138,16 +177,21 @@ def admit_record(
                 "different content; one of the two submissions is wrong and the chain will not "
                 "guess which"
             )
-        # A genuine replay: return the position already assigned rather than appending a duplicate.
+        # A genuine replay. The position is read from the source record itself, not searched for by
+        # payload: two identical reader observations are two distinct records with the same content,
+        # and a digest search returned whichever came first.
+        if existing["canonical_sequence"] is None:
+            raise SequencerError(
+                f"source record {source_record_id!r} is recorded without a canonical position, so "
+                "its place in the chain cannot be confirmed"
+            )
         row = conn.execute(
             """
-            SELECT e.event_id, e.sequence, e.previous_event_hash
-            FROM canonical_event e
-            WHERE e.run_id = %s AND e.attempt_id = %s AND e.payload_digest = %s
-            ORDER BY e.sequence
-            LIMIT 1
+            SELECT event_id, sequence, previous_event_hash
+            FROM canonical_event
+            WHERE run_id = %s AND attempt_id = %s AND sequence = %s
             """,
-            (run_id, attempt_id, payload_digest),
+            (run_id, attempt_id, int(existing["canonical_sequence"])),
         ).fetchone()
         if row is None:  # pragma: no cover - source record without its event would be a bug
             raise SequencerError(
@@ -227,8 +271,8 @@ def admit_record(
         """
         INSERT INTO producer_source_record
             (workspace_id, run_id, attempt_id, producer_id, source_record_id,
-             source_record_digest, producer_sequence, received_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+             source_record_digest, producer_sequence, received_at, canonical_sequence, event_id)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (
             workspace_id,
@@ -239,6 +283,8 @@ def admit_record(
             payload_digest,
             producer_sequence,
             moment,
+            sequence,
+            event_id,
         ),
     )
     conn.execute(
@@ -260,6 +306,7 @@ def admit_record(
 def close_producer_stream(
     conn: psycopg.Connection[dict[str, Any]],
     *,
+    workspace_id: str,
     run_id: str,
     attempt_id: str,
     producer_id: str,
@@ -272,6 +319,9 @@ def close_producer_stream(
     sequence beyond its admitted tail is claiming records the sequencer never saw, which is exactly
     the missing-tail case that must prevent verified completion (INV-06).
     """
+    _assert_attempt_belongs_to_workspace(
+        conn, workspace_id=workspace_id, run_id=run_id, attempt_id=attempt_id
+    )
     _lock_attempt(conn, attempt_id)
     row = conn.execute(
         """
