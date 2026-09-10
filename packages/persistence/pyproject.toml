@@ -3,10 +3,16 @@ name = "accessforge-persistence"
 version = "0.0.0"
 description = "Migrations and repositories. PostgreSQL is authoritative for business state."
 requires-python = ">=3.13,<3.14"
-dependencies = ["psycopg[binary]>=3.2", "accessforge-domain", "boto3>=1.35"]
+dependencies = [
+  "psycopg[binary]>=3.2",
+  "accessforge-domain",
+  "accessforge-evidence",
+  "boto3>=1.35",
+]
 
 [tool.uv.sources]
 accessforge-domain = { workspace = true }
+accessforge-evidence = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

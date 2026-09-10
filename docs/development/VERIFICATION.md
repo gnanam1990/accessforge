@@ -91,6 +91,22 @@ rather than procedural: a stand-in passes every assertion about size limits and 
 proving none of what only a real store does — most importantly that an object can be swapped
 underneath a row that still records the old digest, which is the reason `promote` re-reads the bytes.
 
+## Verifying an evidence bundle offline
+
+```bash
+uv run accessforge-verify path/to/bundle.zip --trust-root path/to/trust.json
+```
+
+The trust root is a JSON file with `keyId`, `issuer` and `publicKey`, **obtained from the issuer
+independently of the bundle**. Without it the signature is reported as unchecked rather than skipped:
+a verifier silent about an unchecked signature prints a clean report for an unsigned bundle.
+
+Supplying a key that travelled inside the bundle is possible and is reported as what it is — a
+self-consistent signature attributing the bundle to nobody, because a forger signs with their own key
+and embeds it. The command needs no account, no network and no database.
+
+Exit status is 0 when every applicable check passed and 1 when any integrity check failed.
+
 ## Database migrations
 
 ```bash
