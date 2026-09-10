@@ -95,7 +95,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 24,
     heading: 'Proposed repair',
-    built: false,
+    built: true,
   },
   {
     path: 'reviews/:reviewId',
@@ -103,7 +103,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 24,
     heading: 'Human review',
-    built: false,
+    built: true,
   },
   {
     path: 'exports/:exportId',
@@ -111,7 +111,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 23,
     heading: 'Evidence export',
-    built: false,
+    built: true,
   },
   {
     path: 'settings',

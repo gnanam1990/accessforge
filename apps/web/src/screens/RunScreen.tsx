@@ -27,6 +27,8 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 
+import { Link } from 'react-router-dom'
+
 import { RouteHeading } from '../a11y/RouteHeading'
 import { useAnnouncer } from '../a11y/Announcer'
 import { Button } from '../components/Button'
@@ -41,6 +43,7 @@ import {
   readCompleteness,
   readTimeline,
   requestCancellation,
+  requestExport,
 } from '../api/resources'
 import type { Run } from '../api/resources'
 import { useResource } from '../api/useResource'
@@ -50,6 +53,100 @@ import { useWorkspaceId } from './useWorkspaceId'
 import { useRunId } from './useRunId'
 
 const NON_TERMINAL = new Set(['QUEUED', 'RUNNING', 'FINALIZING'])
+
+/**
+ * Requesting a private evidence bundle for one attempt.
+ *
+ * Private, and the notice says so before the link appears. An export is the artefact most likely to
+ * be read by somebody who was not present, and the failure mode is a bundle that reads as proof of
+ * accessibility — so nothing here shares it, publishes it, or produces a link anyone else can
+ * follow.
+ *
+ * The idempotency key is generated once per attempt: building a bundle twice from one request
+ * produces two records of the same evidence, and the second is indistinguishable from a second
+ * disclosure.
+ */
+const ExportSection = ({
+  workspaceId,
+  runId,
+  attemptId,
+}: {
+  readonly workspaceId: string
+  readonly runId: string
+  readonly attemptId: string
+}): JSX.Element => {
+  const { client } = useSession()
+  const { announce } = useAnnouncer()
+  const [busy, setBusy] = useState(false)
+  const [exportId, setExportId] = useState<string | null>(null)
+  const [refusal, setRefusal] = useState<string | null>(null)
+  const [key] = useState(() => crypto.randomUUID())
+
+  const request = async (): Promise<void> => {
+    setBusy(true)
+    setRefusal(null)
+    const outcome = await requestExport(
+      client,
+      workspaceId,
+      { runId, attemptId, includeArtifactBytes: true },
+      key,
+    )
+    setBusy(false)
+    switch (outcome.kind) {
+      case 'ok':
+      case 'accepted': {
+        const id = outcome.value['exportId']
+        setExportId(typeof id === 'string' ? id : null)
+        announce('Export prepared. It is private and nothing has been published.')
+        break
+      }
+      case 'problem':
+        setRefusal(outcome.problem.detail)
+        break
+      case 'offline':
+        setRefusal(
+          'The server did not answer, so whether a bundle was built is unknown. Read this run ' +
+            'again before requesting a second one.',
+        )
+        break
+      case 'cancelled':
+      case 'stale':
+      case 'unauthenticated':
+        break
+    }
+  }
+
+  return (
+    <section className="af-stack">
+      <h2>Export this attempt's evidence</h2>
+      <p className="af-secondary">
+        Produces a private bundle built from stored records. Nothing is published, and no link is
+        created that anyone else can follow.
+      </p>
+
+      {refusal !== null && (
+        <Notice tone="problem" heading="The export was not prepared" headingLevel={3} live>
+          <p>{refusal}</p>
+        </Notice>
+      )}
+
+      {exportId !== null && (
+        <Notice tone="information" heading="Export prepared" headingLevel={3} live>
+          <p>
+            <Link className="af-link" to={`/w/${workspaceId}/exports/${exportId}`}>
+              Open this export
+            </Link>{' '}
+            to see what it contains, what it does not establish, and how to check it.
+          </p>
+        </Notice>
+      )}
+
+      <Button busy={busy} onClick={() => void request()}>
+        Prepare a private export
+      </Button>
+    </section>
+  )
+}
 
 const CompletenessSection = ({
   workspaceId,
@@ -400,6 +497,12 @@ export const RunScreen = (): JSX.Element => {
                               Previous walks back through positions belonging to the old one. */}
                           <TimelineSection
                             key={chosen}
+                            workspaceId={workspaceId}
+                            runId={runId}
+                            attemptId={chosen}
+                          />
+                          <ExportSection
+                            key={`export-${chosen}`}
                             workspaceId={workspaceId}
                             runId={runId}
                             attemptId={chosen}

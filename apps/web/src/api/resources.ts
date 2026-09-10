@@ -167,6 +167,56 @@ export interface Finding {
   readonly createdAt: string
 }
 
+export interface ReviewRequest {
+  readonly reviewRequestId: string
+  readonly patchDigest: string
+  readonly verificationDigest: string
+  readonly journeyVersionId: string
+  readonly environmentDigest: string
+  readonly requestedBy: string
+  readonly requestedOf: string | null
+  readonly requestedAt: string
+  /** Zero means somebody was asked and nothing about whether they looked. */
+  readonly reviewCount: number
+}
+
+export interface Review {
+  readonly reviewId: string
+  readonly reviewRequestId: string | null
+  readonly reviewerId: string
+  readonly reviewerRole: string
+  readonly verdict: string
+  readonly observations: string
+  readonly limitations: string
+  readonly usedAssistiveTechnology: boolean
+  readonly assistiveTechnologyDetail: string | null
+  readonly boundTo: {
+    readonly patchDigest: string
+    readonly verificationDigest: string
+    readonly journeyVersionId: string
+    readonly environmentDigest: string
+  }
+  readonly supersedes: string | null
+  readonly supersededBy: string | null
+  readonly submittedAt: string
+  /** Served by the server so a client cannot compose a shorter list. */
+  readonly meansNothingAbout: readonly string[]
+}
+
+export interface ExportRecord {
+  readonly exportId: string
+  readonly runId: string
+  readonly attemptId: string
+  readonly bundleDigest: string
+  readonly trustLevel: string
+  readonly signingKeyId: string
+  readonly retentionAtExport: unknown
+  readonly createdAt: string
+  readonly expiresAt: string
+  readonly verifyWith: string
+  readonly limitations: readonly string[]
+}
+
 export interface JourneyCapabilities {
   readonly allowedActions: readonly string[]
   readonly allowedKeyChordsByPlatform: Readonly<Record<string, readonly string[]>>
@@ -568,6 +618,78 @@ export const getFinding = (
   client.request<FindingDetail>(`${base(workspaceId)}/findings/${encodeURIComponent(findingId)}`, {
     signal,
   })
+
+/**
+ * Every review that has been asked for, across pages.
+ *
+ * `meaning` comes from the first page and is carried through, for the same reason
+ * `readinessMeaning` is: it is the server's statement about how to read the list, and dropping it
+ * while combining pages would take the sentence off the screen that needs it.
+ */
+export const listReviewRequests = async (
+  client: ApiClient,
+  workspaceId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<DrainedPage<ReviewRequest> & { readonly meaning: string }>> => {
+  let meaning = ''
+  const drained = await drain<ReviewRequest>(async (cursor) => {
+    const outcome = await client.request<Page<ReviewRequest> & { meaning: string }>(
+      `${base(workspaceId)}/review-requests` +
+        (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    )
+    if (outcome.kind === 'ok' && meaning === '') meaning = outcome.value.meaning
+    return outcome
+  })
+  if (drained.kind === 'ok') {
+    return { kind: 'ok', value: { ...drained.value, meaning }, status: 200 }
+  }
+  return drained.kind === 'accepted'
+    ? {
+        kind: 'problem',
+        problem: {
+          code: 'UNRECOGNISED',
+          title: 'Unexpected response',
+          detail: 'The server accepted this read for later processing. A read has no later.',
+          status: 202,
+          requestId: null,
+        },
+      }
+    : drained
+}
+
+export const getReview = (
+  client: ApiClient,
+  workspaceId: string,
+  reviewId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<Review>> =>
+  client.request<Review>(`${base(workspaceId)}/reviews/${encodeURIComponent(reviewId)}`, { signal })
+
+export const submitReview = (
+  client: ApiClient,
+  workspaceId: string,
+  body: Record<string, unknown>,
+): Promise<ApiOutcome<{ readonly reviewId: string; readonly verdict: string }>> =>
+  client.request(`${base(workspaceId)}/reviews`, { method: 'POST', body })
+
+export const getExport = (
+  client: ApiClient,
+  workspaceId: string,
+  exportId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<ExportRecord>> =>
+  client.request<ExportRecord>(`${base(workspaceId)}/exports/${encodeURIComponent(exportId)}`, {
+    signal,
+  })
+
+export const requestExport = (
+  client: ApiClient,
+  workspaceId: string,
+  body: { readonly runId: string; readonly attemptId: string; readonly includeArtifactBytes: boolean },
+  idempotencyKey: string,
+): Promise<ApiOutcome<Record<string, unknown>>> =>
+  client.request(`${base(workspaceId)}/exports`, { method: 'POST', body, idempotencyKey })
 
 export const requestCancellation = (
   client: ApiClient,
