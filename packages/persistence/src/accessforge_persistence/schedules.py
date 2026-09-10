@@ -40,6 +40,14 @@ class ScheduleError(Exception):
     """A schedule operation was refused."""
 
 
+class StaleScheduleRevision(ScheduleError):
+    """The caller's revision is not the current one.
+
+    A distinct type because it maps to a different status than every other schedule refusal: 409,
+    meaning re-read and decide again, rather than 400, meaning send a different body.
+    """
+
+
 class GrantMoved(ScheduleError):
     """The standing authorization changed since this schedule was approved."""
 
@@ -124,11 +132,34 @@ def create_schedule(
     return schedule_id
 
 
+def _lock_at_revision(
+    conn: psycopg.Connection[dict[str, Any]], *, schedule_id: str, expected_revision: int
+) -> None:
+    """Take the row lock and confirm the revision while holding it.
+
+    Every mutation below goes through this. Checking `If-Match` in the route and then updating is a
+    check and a use with a gap between them, and the gap is exactly wide enough for somebody else's
+    pause: theirs lands, this one does not notice, and the `paused_at = NULL` in a re-approval
+    reverses a deliberate stop that nobody saw.
+    """
+    row = conn.execute(
+        "SELECT revision FROM schedule WHERE id = %s FOR UPDATE", (schedule_id,)
+    ).fetchone()
+    if row is None:
+        raise ScheduleError("no such schedule in this workspace")
+    if int(row["revision"]) != expected_revision:
+        raise StaleScheduleRevision(
+            f"this schedule is at revision {row['revision']} and you supplied {expected_revision}; "
+            "it changed while this request was in flight"
+        )
+
+
 def pause(
     conn: psycopg.Connection[dict[str, Any]],
     *,
     schedule_id: str,
     actor_id: str,
+    expected_revision: int,
     now: str | None = None,
 ) -> None:
     """Stop admitting occurrences, keeping the schedule and who stopped it.
@@ -136,6 +167,7 @@ def pause(
     Paused rather than deleted: deleting loses the record that the schedule existed and that
     somebody turned it off, which is what an operator asking "why did this stop" needs.
     """
+    _lock_at_revision(conn, schedule_id=schedule_id, expected_revision=expected_revision)
     conn.execute(
         "UPDATE schedule SET paused_at = %s, paused_by = %s, revision = revision + 1 "
         "WHERE id = %s AND paused_at IS NULL",
@@ -143,7 +175,15 @@ def pause(
     )
 
 
-def resume(conn: psycopg.Connection[dict[str, Any]], *, schedule_id: str) -> None:
+def resume(
+    conn: psycopg.Connection[dict[str, Any]], *, schedule_id: str, expected_revision: int
+) -> None:
+    """Start admitting occurrences again — which is not the same as making them run.
+
+    Resuming does not revalidate the grant. The next occurrence is rechecked as every occurrence is,
+    so a schedule resumed under a revoked or unrevalidated grant still skips, with a reason.
+    """
+    _lock_at_revision(conn, schedule_id=schedule_id, expected_revision=expected_revision)
     conn.execute(
         "UPDATE schedule SET paused_at = NULL, paused_by = NULL, revision = revision + 1 "
         "WHERE id = %s",
@@ -324,3 +364,169 @@ def occurrences(
             (schedule_id, limit),
         ).fetchall()
     ]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredSchedule:
+    """A schedule row as a reader sees it, including why it is not currently firing."""
+
+    schedule_id: str
+    name: str
+    grant_id: str
+    grant_revision: int
+    journey_version_id: str
+    source_ref: str
+    cron_expression: str
+    timezone: str
+    expires_at: str
+    paused_at: str | None
+    paused_by: str | None
+    revision: int
+    created_by: str
+    created_at: str
+    reapproved_at: str | None = None
+    reapproved_by: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scheduleId": self.schedule_id,
+            "name": self.name,
+            "grantId": self.grant_id,
+            # The revision the schedule was approved against, not the grant's current one. A
+            # schedule whose grant has since been revised stops firing, and this is the field that
+            # explains why rather than leaving an operator comparing two numbers by hand.
+            "grantRevisionAtApproval": self.grant_revision,
+            "journeyVersionId": self.journey_version_id,
+            "sourceRef": self.source_ref,
+            "cronExpression": self.cron_expression,
+            "timezone": self.timezone,
+            "expiresAt": self.expires_at,
+            "pausedAt": self.paused_at,
+            "pausedBy": self.paused_by,
+            "revision": self.revision,
+            "createdBy": self.created_by,
+            "createdAt": self.created_at,
+            # Separate from createdBy on purpose. The person who set this up and the person who
+            # decided it should resume after an incident are usually not the same one.
+            "reapprovedAt": self.reapproved_at,
+            "reapprovedBy": self.reapproved_by,
+            "meaning": (
+                "A schedule requests runs; it does not run anything. Every occurrence is rechecked "
+                "against the grant as it stands at that moment, so a revoked, revised, narrowed or "
+                "restored grant stops this schedule without anyone editing it."
+            ),
+        }
+
+
+def _row_to_schedule(row: dict[str, Any]) -> StoredSchedule:
+    return StoredSchedule(
+        schedule_id=str(row["id"]),
+        name=str(row["name"]),
+        grant_id=str(row["execution_grant_id"]),
+        grant_revision=int(row["grant_revision"]),
+        journey_version_id=str(row["journey_version_id"]),
+        source_ref=str(row["source_ref"]),
+        cron_expression=str(row["cron_expression"]),
+        timezone=str(row["timezone"]),
+        expires_at=to_rfc3339_utc(row["expires_at"]),
+        paused_at=to_rfc3339_utc(row["paused_at"]) if row["paused_at"] else None,
+        paused_by=str(row["paused_by"]) if row["paused_by"] else None,
+        revision=int(row["revision"]),
+        created_by=str(row["created_by"]),
+        created_at=to_rfc3339_utc(row["created_at"]),
+        reapproved_at=to_rfc3339_utc(row["reapproved_at"]) if row["reapproved_at"] else None,
+        reapproved_by=str(row["reapproved_by"]) if row["reapproved_by"] else None,
+    )
+
+
+_SCHEDULE_COLUMNS = (
+    "id, workspace_id, name, execution_grant_id, grant_revision, journey_version_id, source_ref, "
+    "cron_expression, timezone, paused_at, paused_by, expires_at, revision, created_by, "
+    "created_at, reapproved_at, reapproved_by"
+)
+
+
+def load_schedule(conn: psycopg.Connection[dict[str, Any]], *, schedule_id: str) -> StoredSchedule:
+    row = conn.execute(
+        f"SELECT {_SCHEDULE_COLUMNS} FROM schedule WHERE id = %s",  # noqa: S608 - module constant
+        (schedule_id,),
+    ).fetchone()
+    if row is None:
+        raise ScheduleError("no such schedule in this workspace")
+    return _row_to_schedule(row)
+
+
+def list_schedules(
+    conn: psycopg.Connection[dict[str, Any]], *, workspace_id: str, limit: int = 50
+) -> list[StoredSchedule]:
+    """Every schedule, paused ones included.
+
+    Paused schedules are listed for the same reason revoked grants are: "why did this stop firing"
+    is the question, and a listing that hid them would make a paused schedule look deleted.
+    """
+    rows = conn.execute(
+        f"SELECT {_SCHEDULE_COLUMNS} FROM schedule "  # noqa: S608 - module constant
+        "WHERE workspace_id = %s ORDER BY created_at DESC, id LIMIT %s",
+        (workspace_id, limit),
+    ).fetchall()
+    return [_row_to_schedule(r) for r in rows]
+
+
+def rebind_to_grant(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    schedule_id: str,
+    grant: ExecutionGrant,
+    actor_id: str,
+    expected_revision: int,
+    now: str | None = None,
+) -> None:
+    """Re-approve a schedule against the grant as it now stands.
+
+    A schedule records the grant revision it was approved against, and every occurrence is rechecked
+    against it — so a grant that has moved stops the schedule. That is the design: an authorization
+    that changed underneath a schedule is one nobody approved in its new form.
+
+    It also means a restore leaves schedules stopped even after their grant is revalidated, because
+    both reconciliation and revalidation move the revision. Without this function that is a dead
+    end: the schedule can never fire again and nothing says why in a way anyone can act on. This is
+    the counterpart to `grants.revalidate_grant` — a person, looking at the grant as it is now, and
+    saying the schedule is still what they want.
+
+    It is not automatic and it is not part of revalidating the grant. Confirming that a standing
+    authorization is still valid and confirming that a particular recurring job should resume under
+    it are two decisions, and a system that made the second follow from the first would restart work
+    nobody asked it to restart.
+    """
+    moment = _now(now)
+    grant.check_usable(now=moment)
+
+    _lock_at_revision(conn, schedule_id=schedule_id, expected_revision=expected_revision)
+    row = conn.execute(
+        "SELECT execution_grant_id, journey_version_id, expires_at FROM schedule WHERE id = %s",
+        (schedule_id,),
+    ).fetchone()
+    if row is None:  # pragma: no cover - the lock above already established it exists
+        raise ScheduleError("no such schedule in this workspace")
+    if str(row["execution_grant_id"]) != grant.grant_id:
+        raise ScheduleError("the supplied grant is not the one this schedule was created against")
+
+    # The same two checks creation makes, because the grant may have been narrowed since. A rebind
+    # that skipped them would be the one path by which a schedule outlives the scope of its grant.
+    if str(row["journey_version_id"]) not in grant.allowed_journey_version_ids:
+        raise ScheduleError(
+            "the grant no longer allows this schedule's journey version; it was narrowed. "
+            "Re-approving would restore a schedule the current authorization does not cover."
+        )
+    if row["expires_at"] > parse_rfc3339_utc(grant.expires_at, field="grant.expires_at"):
+        raise ScheduleError(
+            "this schedule outlives the grant as it now stands; it would keep firing under an "
+            "authorization that had expired"
+        )
+
+    conn.execute(
+        "UPDATE schedule SET grant_revision = %s, revision = revision + 1, "
+        "    paused_at = NULL, paused_by = NULL, reapproved_at = %s, reapproved_by = %s "
+        "WHERE id = %s",
+        (grant.revision, moment, actor_id, schedule_id),
+    )

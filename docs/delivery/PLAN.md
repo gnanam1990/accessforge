@@ -34,7 +34,7 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 15 | Matched candidate verification | 11, 14 | FR-002, 007, 010, 011 | not started | pending | local | E0 |
 | 16 | Human review and finding lifecycle | 03, 15 | FR-009, 011, 012, 014 | implemented | passed (no human reviewer) | merged | E0 |
 | 17 | Redacted export and offline verifier | 10, 11, 16 | FR-006, 007, 012, 013, 020 | implemented | passed (synthetic bundles only) | merged | E0 |
-| 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | partial (18 of ~28 routes) | passed | merged | E0 |
+| 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | partial (45 `/v1` paths; no builds, patches, verifications, SSE, clients or CLI) | passed | merged | E0 |
 | 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | implemented | passed (no SSE route, no real runner) | merged | E0 |
 | 20 | Opt-in GitHub checks and publication | 15, 16, 18 | FR-001, 010–012, 014, 018 | not started | pending | local | R1 |
 | 21 | Accessible modern UI foundation | 18 | FR-014, 016, 019 | implemented (shell only; screens are 22–24) | passed (no actual screen reader) | merged | E0 |

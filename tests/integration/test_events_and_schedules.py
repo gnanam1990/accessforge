@@ -516,7 +516,7 @@ def test_a_paused_schedule_admits_nothing(db: str) -> None:
     journey = _journey(db)
     schedule_id = _schedule(db, journey)
     with workspace_connection(db, WS) as conn:
-        schedules.pause(conn, schedule_id=schedule_id, actor_id=ACTOR)
+        schedules.pause(conn, schedule_id=schedule_id, actor_id=ACTOR, expected_revision=1)
     outcome = _admit(db, schedule_id, journey)
     assert not outcome.admitted
     assert outcome.reason == "the schedule is paused"
@@ -527,7 +527,7 @@ def test_pausing_keeps_the_schedule_and_who_paused_it(db: str) -> None:
     journey = _journey(db)
     schedule_id = _schedule(db, journey)
     with workspace_connection(db, WS) as conn:
-        schedules.pause(conn, schedule_id=schedule_id, actor_id=ACTOR)
+        schedules.pause(conn, schedule_id=schedule_id, actor_id=ACTOR, expected_revision=1)
         row = conn.execute(
             "SELECT paused_at, paused_by FROM schedule WHERE id = %s", (schedule_id,)
         ).fetchone()
@@ -540,8 +540,10 @@ def test_a_resumed_schedule_admits_again(db: str) -> None:
     journey = _journey(db)
     schedule_id = _schedule(db, journey)
     with workspace_connection(db, WS) as conn:
-        schedules.pause(conn, schedule_id=schedule_id, actor_id=ACTOR)
-        schedules.resume(conn, schedule_id=schedule_id)
+        schedules.pause(conn, schedule_id=schedule_id, actor_id=ACTOR, expected_revision=1)
+        # Revision 2 after the pause: every schedule mutation now confirms the revision while
+        # holding the row lock, so a caller has to say which state it is acting on.
+        schedules.resume(conn, schedule_id=schedule_id, expected_revision=2)
     assert _admit(db, schedule_id, journey).admitted
 
 

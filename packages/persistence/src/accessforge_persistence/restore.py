@@ -246,8 +246,12 @@ def reconcile(
     grants = [
         str(r["id"])
         for r in conn.execute(
+            # The revision moves too. Without that, an operator holding a read from *before* the
+            # restore could confirm the grant without re-reading it -- and "I have looked at this
+            # and it is still authorized" is the entire content of a revalidation. A test caught
+            # this by supplying the pre-restore revision and being accepted.
             "UPDATE execution_grant SET revalidation_required = true, "
-            "    revalidated_at = NULL, revalidated_by = NULL "
+            "    revalidated_at = NULL, revalidated_by = NULL, revision = revision + 1 "
             " WHERE revoked_at IS NULL "
             " RETURNING id"
         ).fetchall()
