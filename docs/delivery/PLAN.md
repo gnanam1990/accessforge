@@ -32,7 +32,7 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 13 | Evidence-grounded diagnosis and findings | 11, 12 | FR-009, 012, 023 | not started | **blocked** | local | E0 |
 | 14 | Constrained patch proposal and sandbox | 05, 13 | FR-002, 010, 014, 015 | not started | **blocked** | local | E0 |
 | 15 | Matched candidate verification | 11, 14 | FR-002, 007, 010, 011 | not started | pending | local | E0 |
-| 16 | Human review and finding lifecycle | 03, 15 | FR-009, 011, 012, 014 | not started | pending | local | E0 |
+| 16 | Human review and finding lifecycle | 03, 15 | FR-009, 011, 012, 014 | implemented | passed (no human reviewer) | open | E0 |
 | 17 | Redacted export and offline verifier | 10, 11, 16 | FR-006, 007, 012, 013, 020 | not started | pending | local | E0 |
 | 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | not started | pending | local | E0 |
 | 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | not started | pending | local | E0 |

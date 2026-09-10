@@ -64,6 +64,11 @@ real reference-application database, and the scope statement attached to every v
 screen-reader trace has been evaluated** — that acceptance criterion is unmet until module 08 is
 unblocked — but the completion observer is proved end-to-end: it reads a real database and correctly
 reports FALSE for a submission that did not happen.
+Module 16: **implemented and locally verified**, delivery open. Review requests separate from
+submissions, three verdicts including UNABLE_TO_ASSESS, independence on canonical identity, staleness
+bound to a second source, append-only corrections, and the finding lifecycle gated on an accepting
+review. **No human review has occurred and no reviewer has used assistive technology** — nobody could,
+because module 08 is blocked. Missing human participation stays a release-proof blocker.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
