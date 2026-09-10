@@ -2370,6 +2370,249 @@
           "runs"
         ]
       }
+    },
+    "/v1/workspaces/{workspace_id}/settings/entitlement": {
+      "get": {
+        "operationId": "read_entitlement_v1_workspaces__workspace_id__settings_entitlement_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Entitlement V1 Workspaces  Workspace Id  Settings Entitlement Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Entitlement",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "description": "Append a new entitlement revision.\n\n`If-Match` carries the revision the caller last read, and it is required. Without it a caller\nis replacing a limit they may not have seen \u2014 and the only reason to change a limit is a\ndecision about the one currently in force.\n\nThere is no route that *lowers* usage, and none that grants an exception to a single run. An\nexception granted per run would be a limit with a bypass, and the bypass is the thing an\nattacker looks for.",
+        "operationId": "configure_entitlement_v1_workspaces__workspace_id__settings_entitlement_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Configure Entitlement V1 Workspaces  Workspace Id  Settings Entitlement Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Configure Entitlement",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/settings/retention": {
+      "get": {
+        "description": "The retention class table, with what deleting under each class costs.\n\n`invalidatesCompleteness` is on every row because it is the consequence nobody expects:\ndeleting evidence does not merely free space, it makes any completeness claim that depended on\nthat evidence untrue \u2014 and an export already downloaded still contains what was deleted.",
+        "operationId": "read_retention_v1_workspaces__workspace_id__settings_retention_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Retention V1 Workspaces  Workspace Id  Settings Retention Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Retention",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "configure_retention_v1_workspaces__workspace_id__settings_retention_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Configure Retention V1 Workspaces  Workspace Id  Settings Retention Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Configure Retention",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/usage": {
+      "get": {
+        "description": "Measured consumption against the configured limit.\n\nEvery number is read from `usage_event`. `measured`, `estimated` and `unavailableEvents` are\nreported separately because they are different kinds of claim: something this system counted,\nsomething a provider reported about itself, and something that could not be obtained. A single\ntotal would make the third look like zero.",
+        "operationId": "read_usage_v1_workspaces__workspace_id__usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Usage V1 Workspaces  Workspace Id  Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Usage",
+        "tags": [
+          "settings"
+        ]
+      }
     }
   }
 }

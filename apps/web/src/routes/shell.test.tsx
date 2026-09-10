@@ -242,15 +242,15 @@ describe('the workspace shell', () => {
     expect(trail.textContent).toContain('Run')
   })
 
-  it('states which module owns a screen it has not built, and requests nothing', async () => {
+  it('serves nothing for a path that is not in the route map', async () => {
     const server = createFakeServer(MEMBER)
-    renderApp(server, ['/w/ws-alder/settings'])
+    // Every route in the map now has a screen, so this asserts the *mechanism* on a pattern that
+    // is not in the map at all. A test that needed an unbuilt route would have to be deleted the
+    // day the last one was built, taking the guard with it.
+    renderApp(server, ['/w/ws-alder/nothing-here'])
 
-    await screen.findByRole('heading', { level: 1, name: 'Workspace settings' })
-    expect(
-      screen.getByRole('heading', { name: 'Workspace settings is not built yet' }),
-    ).toBeInTheDocument()
-    expect(screen.getByText(/belongs to module 26/)).toBeInTheDocument()
+    await screen.findByRole('heading', { level: 1, name: 'This page does not exist' })
+    expect(screen.getByText(/tells you nothing about whether a workspace/)).toBeInTheDocument()
     // The only call made is the session read. A screen that requested data it cannot render would
     // produce exactly the half-built behaviour the acceptance gate forbids.
     expect(server.calls.filter((call) => !call.endsWith('/v1/session'))).toEqual([])

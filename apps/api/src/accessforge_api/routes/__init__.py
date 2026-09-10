@@ -17,6 +17,7 @@ from .projects import router as projects_router
 from .runners import router as runners_router
 from .runs import router as runs_router
 from .session import router as session_router
+from .settings import router as settings_router
 
 __all__ = [
     "exports_router",
@@ -25,5 +26,6 @@ __all__ = [
     "projects_router",
     "runners_router",
     "runs_router",
+    "settings_router",
     "session_router",
 ]
