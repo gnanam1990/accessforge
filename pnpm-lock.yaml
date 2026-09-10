@@ -27,6 +27,24 @@ importers:
         specifier: 5.7.3
         version: 5.7.3
 
+  packages/at-adapters/nvda:
+    devDependencies:
+      '@types/node':
+        specifier: 22.10.5
+        version: 22.10.5
+      typescript:
+        specifier: 5.7.3
+        version: 5.7.3
+
+  packages/at-adapters/voiceover:
+    devDependencies:
+      '@types/node':
+        specifier: 22.10.5
+        version: 22.10.5
+      typescript:
+        specifier: 5.7.3
+        version: 5.7.3
+
   packages/contracts/ts:
     devDependencies:
       '@types/node':
