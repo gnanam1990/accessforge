@@ -1,0 +1,490 @@
+/*
+ * Element defaults and the shared component styles.
+ *
+ * Two rules here are load-bearing rather than cosmetic.
+ *
+ * The focus ring is a 3px outline with an offset, declared once on `:focus-visible` and never
+ * removed anywhere else in the product. `outline: none` does not appear in this file or any other,
+ * because the most common way a keyboard user loses their place is a designer removing the ring and
+ * a developer never noticing, and the only reliable defence is that the removal is not written.
+ *
+ * Motion is disabled wholesale under `prefers-reduced-motion`, and nothing in the application waits
+ * for a transition to complete before it is correct. A dialog that only became operable after its
+ * animation finished would become permanently inoperable the moment the duration was set to zero.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* No fixed pixel root size: a browser text-size preference must scale the whole interface. */
+  font-family: var(--af-font-sans);
+}
+
+body {
+  margin: 0;
+  background: var(--af-background);
+  color: var(--af-foreground);
+  font-size: var(--af-text-body);
+  line-height: var(--af-leading-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 3px solid var(--af-focus-ring);
+  outline-offset: 2px;
+  /* A second ring in the opposing colour, so the focus indicator stays visible against a control
+     whose own background happens to match the ring. */
+  box-shadow: 0 0 0 5px var(--af-focus-ring-contrast);
+  border-radius: var(--af-radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+code,
+kbd,
+samp,
+.af-mono {
+  font-family: var(--af-font-mono);
+  /* Long identifiers wrap; ordinary words are left alone. `anywhere` rather than `break-all`, which
+     would break prose mid-syllable. */
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Skip link
+   --------------------------------------------------------------------------------------------- */
+
+.af-skip-link {
+  position: absolute;
+  left: var(--af-space-2);
+  top: var(--af-space-2);
+  z-index: 100;
+  padding: var(--af-space-2) var(--af-space-4);
+  background: var(--af-surface);
+  color: var(--af-foreground);
+  border: 2px solid var(--af-border-strong);
+  border-radius: var(--af-radius-sm);
+  /* Moved off-screen rather than hidden: `display: none` and `visibility: hidden` remove it from
+     the tab order, which is the one thing a skip link must never lose. */
+  transform: translateY(-200%);
+  transition: transform var(--af-motion-duration) var(--af-motion-easing);
+}
+
+.af-skip-link:focus {
+  transform: translateY(0);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Layout
+   --------------------------------------------------------------------------------------------- */
+
+.af-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.af-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--af-space-4);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--af-space-3) var(--af-space-4);
+  background: var(--af-surface);
+  border-bottom: 1px solid var(--af-border);
+}
+
+.af-body {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  gap: var(--af-space-6);
+  padding: var(--af-space-6) var(--af-space-4);
+  align-items: start;
+}
+
+/* 320 CSS pixels and 200% zoom both land here. The navigation becomes a labelled disclosure above
+   the content rather than disappearing behind an unlabelled icon. */
+@media (max-width: 767px) {
+  .af-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--af-space-4);
+  }
+}
+
+.af-main {
+  min-width: 0;
+}
+
+.af-nav-list,
+.af-breadcrumbs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.af-nav-list a {
+  display: flex;
+  align-items: center;
+  padding: var(--af-space-2) var(--af-space-3);
+  border-radius: var(--af-radius-sm);
+  color: var(--af-foreground);
+  text-decoration: none;
+  /* Comfortable target size without a fixed height, so a larger text preference grows the target
+     rather than clipping the label. */
+  min-height: 44px;
+}
+
+.af-nav-list a:hover {
+  background: var(--af-surface-sunken);
+  text-decoration: underline;
+}
+
+.af-nav-list a[aria-current='page'] {
+  background: var(--af-surface-sunken);
+  font-weight: 600;
+  /* A shape as well as a weight: current-ness is not conveyed by colour alone. */
+  box-shadow: inset 3px 0 0 var(--af-primary);
+}
+
+.af-breadcrumbs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--af-space-2);
+  font-size: var(--af-text-secondary-size);
+}
+
+.af-breadcrumbs-list li::after {
+  content: '/';
+  margin-left: var(--af-space-2);
+  color: var(--af-foreground-secondary);
+}
+
+.af-breadcrumbs-list li:last-child::after {
+  content: '';
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Controls
+   --------------------------------------------------------------------------------------------- */
+
+.af-button {
+  font: inherit;
+  min-height: 44px;
+  padding: var(--af-space-2) var(--af-space-4);
+  border-radius: var(--af-radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--af-space-2);
+  transition: background-color var(--af-motion-duration) var(--af-motion-easing);
+}
+
+.af-button--primary {
+  background: var(--af-primary);
+  color: var(--af-primary-foreground);
+}
+
+.af-button--primary:hover:not(:disabled) {
+  background: var(--af-primary-hover);
+}
+
+.af-button--secondary {
+  background: var(--af-surface);
+  color: var(--af-foreground);
+  border-color: var(--af-border-strong);
+}
+
+.af-button--secondary:hover:not(:disabled) {
+  background: var(--af-surface-sunken);
+}
+
+.af-button--destructive {
+  background: var(--af-destructive);
+  color: var(--af-destructive-foreground);
+}
+
+.af-button--destructive:hover:not(:disabled) {
+  background: var(--af-destructive-hover);
+}
+
+.af-button:disabled {
+  cursor: not-allowed;
+  /* Not an opacity fade. Reducing opacity reduces contrast, and a disabled control still has to be
+     readable — otherwise a person cannot tell what it is they are unable to do. */
+  background: var(--af-surface-sunken);
+  color: var(--af-foreground-secondary);
+  border-color: var(--af-border);
+}
+
+.af-button[aria-busy='true'] {
+  cursor: progress;
+}
+
+a {
+  color: var(--af-primary);
+}
+
+/* Links inside prose keep their underline. Removing it leaves colour as the only signal, which is
+   exactly what WCAG 1.4.1 forbids. */
+.af-prose a,
+.af-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Surfaces, states and status
+   --------------------------------------------------------------------------------------------- */
+
+.af-panel {
+  background: var(--af-surface);
+  border: 1px solid var(--af-border);
+  border-radius: var(--af-radius-md);
+  padding: var(--af-space-6);
+}
+
+.af-notice {
+  display: grid;
+  gap: var(--af-space-2);
+  padding: var(--af-space-4);
+  border-radius: var(--af-radius-md);
+  border: 1px solid var(--af-border-strong);
+  border-left-width: 6px;
+  background: var(--af-surface);
+}
+
+.af-notice--problem {
+  border-color: var(--af-destructive);
+}
+
+.af-notice--warning {
+  border-color: var(--af-status-inconclusive);
+}
+
+.af-notice--information {
+  border-color: var(--af-status-progress);
+}
+
+.af-notice__heading {
+  margin: 0;
+  font-size: var(--af-text-body);
+  font-weight: 600;
+}
+
+.af-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--af-space-2);
+  padding: var(--af-space-1) var(--af-space-3);
+  border-radius: 999px;
+  border: 1px solid currentcolor;
+  font-size: var(--af-text-secondary-size);
+  font-weight: 600;
+}
+
+/* The glyph is decorative reinforcement of the adjacent text, never the message itself; it is
+   hidden from the accessibility tree by the component. */
+.af-status__mark {
+  font-family: var(--af-font-mono);
+}
+
+.af-status--neutral {
+  color: var(--af-status-neutral);
+}
+.af-status--progress {
+  color: var(--af-status-progress);
+}
+.af-status--pass {
+  color: var(--af-status-pass);
+}
+.af-status--fail {
+  color: var(--af-status-fail);
+}
+.af-status--inconclusive {
+  color: var(--af-status-inconclusive);
+}
+.af-status--interrupted {
+  color: var(--af-status-interrupted);
+}
+
+.af-secondary {
+  color: var(--af-foreground-secondary);
+  font-size: var(--af-text-secondary-size);
+  line-height: var(--af-leading-secondary);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Forms
+   --------------------------------------------------------------------------------------------- */
+
+.af-field {
+  display: grid;
+  gap: var(--af-space-1);
+  margin-bottom: var(--af-space-4);
+}
+
+.af-field label {
+  font-weight: 600;
+}
+
+.af-field input,
+.af-field select,
+.af-field textarea {
+  font: inherit;
+  min-height: 44px;
+  padding: var(--af-space-2) var(--af-space-3);
+  border: 1px solid var(--af-border-strong);
+  border-radius: var(--af-radius-sm);
+  background: var(--af-surface);
+  color: var(--af-foreground);
+}
+
+.af-field input[aria-invalid='true'],
+.af-field select[aria-invalid='true'],
+.af-field textarea[aria-invalid='true'] {
+  border-color: var(--af-destructive);
+  /* Two signals, not one: the border colour changes and the border thickens. */
+  border-width: 2px;
+}
+
+.af-field__error {
+  color: var(--af-destructive);
+  font-weight: 600;
+}
+
+.af-error-summary {
+  border: 2px solid var(--af-destructive);
+  border-radius: var(--af-radius-md);
+  padding: var(--af-space-4);
+  margin-bottom: var(--af-space-6);
+  background: var(--af-surface);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Tables
+   --------------------------------------------------------------------------------------------- */
+
+.af-table-scroll {
+  overflow-x: auto;
+}
+
+.af-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.af-table caption {
+  text-align: left;
+  padding-bottom: var(--af-space-2);
+  color: var(--af-foreground-secondary);
+  font-size: var(--af-text-secondary-size);
+}
+
+.af-table th,
+.af-table td {
+  text-align: left;
+  padding: var(--af-space-2) var(--af-space-3);
+  border-bottom: 1px solid var(--af-border);
+  vertical-align: top;
+}
+
+.af-table th[scope='col'] {
+  border-bottom: 2px solid var(--af-border-strong);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Dialog
+   --------------------------------------------------------------------------------------------- */
+
+.af-dialog {
+  border: 1px solid var(--af-border-strong);
+  border-radius: var(--af-radius-md);
+  padding: var(--af-space-6);
+  background: var(--af-surface);
+  color: var(--af-foreground);
+  box-shadow: var(--af-elevation-overlay);
+  max-width: min(40rem, calc(100vw - 2rem));
+}
+
+.af-dialog::backdrop {
+  background: rgb(15 23 42 / 55%);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Tabs
+   --------------------------------------------------------------------------------------------- */
+
+.af-tabs__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--af-space-1);
+  border-bottom: 1px solid var(--af-border);
+}
+
+.af-tabs__tab {
+  font: inherit;
+  min-height: 44px;
+  padding: var(--af-space-2) var(--af-space-4);
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--af-radius-sm) var(--af-radius-sm) 0 0;
+  cursor: pointer;
+  color: var(--af-foreground);
+}
+
+.af-tabs__tab[aria-selected='true'] {
+  background: var(--af-surface);
+  border-color: var(--af-border);
+  font-weight: 600;
+  box-shadow: inset 0 3px 0 var(--af-primary);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Notifications
+   ---------------------------------------------------------------------------------------------
+   There is no floating toast stack here, and no styles for one. Notices are laid out in the page,
+   above the content they concern, and stay until dismissed — UI-UX section 2 is explicit that
+   toasts are supplementary and that important errors remain on the page. Styles for a component
+   that does not exist are how one gets built later without anyone deciding to build it. */
+
+/* Visually hidden but present for assistive technology. Not `display: none`, which removes it from
+   the accessibility tree along with the screen. */
+.af-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.af-stack {
+  display: grid;
+  gap: var(--af-space-4);
+}
+
+.af-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--af-space-3);
+  align-items: center;
+}
