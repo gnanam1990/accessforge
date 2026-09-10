@@ -1267,6 +1267,83 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/review-requests": {
+      "get": {
+        "description": "Reviews that have been asked for, and whether anyone has answered.\n\nA request and an assessment are different events, and this listing keeps them that way: an\nentry with `reviewCount: 0` records that somebody was asked, and nothing more. Treating an\nassignment as a review is how a process reports completed review that never happened.\n\n`currentPatchDigest` and `currentVerificationDigest` are what the request was bound to. They are\nreported under those names because a review form has to send both what the reviewer looked at\nand what the system holds now, and a form that read one value and sent it twice would make the\nstaleness check agree with itself.\n\n**There is no route that creates one.** A request binds a patch digest and a verification\ndigest, and nothing in this system produces either: modules 14 and 15 do not exist. A create\nroute would have to accept digests invented by its caller.",
+        "operationId": "list_review_requests_v1_workspaces__workspace_id__review_requests_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Review Requests V1 Workspaces  Workspace Id  Review Requests Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Review Requests",
+        "tags": [
+          "findings"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/reviews": {
       "post": {
         "description": "Record one person's assessment of exact material.\n\nBoth the digests the reviewer looked at and the digests the system currently holds are required\nin the body. That looks redundant and is not: comparing a stored record to itself always agrees,\nso a route that read the current digests for both sides would make the staleness check pass\nunconditionally while appearing to protect something.",
@@ -1319,6 +1396,60 @@
           }
         },
         "summary": "Submit Review",
+        "tags": [
+          "findings"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/reviews/{review_id}": {
+      "get": {
+        "description": "One recorded assessment, with what it was bound to and what it does not authorize.\n\n`meansNothingAbout` is served rather than written into the interface, because the limits of a\nreview are a property of the record and travel with it: a client that rendered its own list\nwould be free to shorten it.",
+        "operationId": "get_review_v1_workspaces__workspace_id__reviews__review_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "title": "Review Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Review V1 Workspaces  Workspace Id  Reviews  Review Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Review",
         "tags": [
           "findings"
         ]

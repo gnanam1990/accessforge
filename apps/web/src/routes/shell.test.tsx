@@ -244,13 +244,13 @@ describe('the workspace shell', () => {
 
   it('states which module owns a screen it has not built, and requests nothing', async () => {
     const server = createFakeServer(MEMBER)
-    renderApp(server, ['/w/ws-alder/patches/p-9'])
+    renderApp(server, ['/w/ws-alder/settings'])
 
-    await screen.findByRole('heading', { level: 1, name: 'Proposed repair' })
+    await screen.findByRole('heading', { level: 1, name: 'Workspace settings' })
     expect(
-      screen.getByRole('heading', { name: 'Proposed repair is not built yet' }),
+      screen.getByRole('heading', { name: 'Workspace settings is not built yet' }),
     ).toBeInTheDocument()
-    expect(screen.getByText(/belongs to module 24/)).toBeInTheDocument()
+    expect(screen.getByText(/belongs to module 26/)).toBeInTheDocument()
     // The only call made is the session read. A screen that requested data it cannot render would
     // produce exactly the half-built behaviour the acceptance gate forbids.
     expect(server.calls.filter((call) => !call.endsWith('/v1/session'))).toEqual([])

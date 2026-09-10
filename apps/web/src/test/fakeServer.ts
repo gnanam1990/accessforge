@@ -51,6 +51,9 @@ export interface WorkspaceData {
   timeline: Record<string, unknown>
   completeness: Record<string, unknown>
   findings: Record<string, unknown>
+  reviewRequests: Record<string, unknown>[]
+  review: Record<string, unknown>
+  exportRecord: Record<string, unknown>
 }
 
 export interface FakeServer {
@@ -84,6 +87,8 @@ export interface FakeServer {
    * bound is made to reveal that it has one.
    */
   setRunnerPaging: (mode: 'single' | 'paged' | 'endless') => void
+  /** The same, for the review queue. */
+  setReviewPaging: (mode: 'single' | 'endless') => void
   readonly calls: readonly string[]
 }
 
@@ -103,6 +108,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
   let signInOutcome: 'succeeds' | 'refused' | 'no-provider' = 'succeeds'
   let signOutFails = false
   let runnerPaging: 'single' | 'paged' | 'endless' = 'single'
+  let reviewPaging: 'single' | 'endless' = 'single'
   const data: WorkspaceData = {
     projects: [],
     environments: [],
@@ -127,6 +133,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       meaning: 'This describes the evidence, not the run.',
     },
     findings: {},
+    reviewRequests: [],
+    review: {},
+    exportRecord: {},
   }
   const refusals = new Map<string, { status: number; code: string; detail: string }>()
   const bodies: {
@@ -177,6 +186,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     },
     setRunnerPaging: (mode) => {
       runnerPaging = mode
+    },
+    setReviewPaging: (mode) => {
+      reviewPaging = mode
     },
     fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input.toString()
@@ -280,6 +292,27 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         })
       }
 
+      if (url.includes('/review-requests') && method === 'GET') {
+        return json({
+          items: data.reviewRequests,
+          nextCursor: reviewPaging === 'endless' ? 'more' : null,
+          meaning:
+            'Asking for a review is an event; an assessment is a different event. An entry with ' +
+            'no reviews records that somebody was asked and nothing about whether they looked.',
+        })
+      }
+      if (url.includes('/reviews/') && method === 'GET') {
+        return json(data.review)
+      }
+      if (url.includes('/reviews') && method === 'POST') {
+        return json({ reviewId: 'review-1', verdict: 'ACCEPT' }, 201)
+      }
+      if (url.includes('/exports/') && method === 'GET') {
+        return json(data.exportRecord)
+      }
+      if (url.includes('/exports') && method === 'POST') {
+        return json({ exportId: 'export-1', bundleDigest: 'f'.repeat(64) }, 201)
+      }
       if (url.includes('/cancel') && method === 'POST') {
         return json(
           {

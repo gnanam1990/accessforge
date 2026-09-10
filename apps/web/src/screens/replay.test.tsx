@@ -219,6 +219,39 @@ describe('the run screen', () => {
     expect(screen.getByText(/a retry never resumes one/)).toBeVisible()
   })
 
+  it('prepares a private export and says nothing was published', async () => {
+    const user = userEvent.setup()
+    const server = serverWithRun()
+    renderRun(server)
+
+    await user.click(await screen.findByRole('button', { name: 'Prepare a private export' }))
+    const notice = await screen.findByRole('status', { name: 'Export prepared' })
+    expect(notice).toHaveTextContent(/Open this export/)
+    // No share link, no publication: an export is private and publication is module 20's
+    // separately authorized workflow.
+    expect(screen.getByText(/no link is created that anyone else can follow/)).toBeVisible()
+  })
+
+  it('sends one idempotency key so a bundle is not built twice from one request', async () => {
+    const user = userEvent.setup()
+    const server = serverWithRun()
+    renderRun(server)
+
+    const button = await screen.findByRole('button', { name: 'Prepare a private export' })
+    await user.click(button)
+    await screen.findByRole('status', { name: 'Export prepared' })
+    await user.click(button)
+
+    const keys = server.bodies
+      .filter((entry) => entry.url.endsWith('/exports'))
+      .map((entry) => entry.idempotencyKey)
+    // Two requests, one key. Two records of the same evidence are indistinguishable from a second
+    // disclosure, and a fresh key on the second press is exactly how that happens.
+    expect(keys).toHaveLength(2)
+    expect(keys[0]).toBe(keys[1])
+    expect(keys[0]).not.toBeUndefined()
+  })
+
   it('distinguishes a run with no attempt from an attempt that recorded nothing', async () => {
     const server = createFakeServer(MEMBER)
     server.data.runs.push(RUN)

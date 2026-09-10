@@ -391,6 +391,12 @@ def test_the_most_recent_preflight_is_the_one_that_counts(db: str) -> None:
 
     The row is written directly so the runner is not also quarantined: the question under test is
     which preflight the dispatch check reads, and a quarantine would answer a different one.
+
+    ``recorded_at`` is derived from the row it must supersede rather than written as a literal. It
+    used to be a fixed ``2026-09-10T12:01:00Z`` while the successful preflight took the column's
+    ``now()`` default — so the test asserted the right thing only while the wall clock was before
+    12:01 UTC on that date, and became a permanent failure at 12:01. It passed for months and then
+    did not, for a reason that had nothing to do with the code under test.
     """
     runner_id, lease_id, run_id, epoch = _leased(db)
     with workspace_connection(db, WS) as conn:
@@ -400,7 +406,10 @@ def test_the_most_recent_preflight_is_the_one_that_counts(db: str) -> None:
                 (id, workspace_id, runner_id, lease_epoch, runner_profile_digest,
                  environment_config_digest, manifest_digest, successful, refusal_summary, checks,
                  observed, observed_at, recorded_at)
-            VALUES (%s, %s, %s, 0, %s, %s, %s, false, %s, '{}', '{}', %s, %s)
+            SELECT %s, %s, %s, 0, %s, %s, %s, false, %s, '{}', '{}',
+                   max(recorded_at) + interval '1 minute',
+                   max(recorded_at) + interval '1 minute'
+            FROM runner_preflight WHERE runner_id = %s
             """,
             (
                 str(uuid.uuid4()),
@@ -410,8 +419,7 @@ def test_the_most_recent_preflight_is_the_one_that_counts(db: str) -> None:
                 ENVIRONMENT,
                 MANIFEST,
                 "failed: SCREEN_UNLOCKED",
-                LATER,
-                LATER,
+                runner_id,
             ),
         )
     with pytest.raises(runners.DispatchRefused, match="did not establish readiness"):
