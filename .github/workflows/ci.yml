@@ -58,6 +58,8 @@ jobs:
       OBJECT_STORE_ACCESS_KEY: accessforge
       OBJECT_STORE_SECRET_KEY: accessforge-minio-ci
       OBJECT_STORE_BUCKET: accessforge-evidence
+      # The application under test lives in its own database. See the step that creates it.
+      REFAPP_DATABASE_URL: postgresql://accessforge_app:accessforge-app-ci@localhost:5432/accessforge_refapp
 
     steps:
       - uses: actions/checkout@v4
@@ -141,6 +143,20 @@ jobs:
           $$;
           GRANT ALL ON SCHEMA public TO accessforge_app;
           SQL
+
+      - name: Give the application under test its own database
+        # Separate from the product's, and the separation is load-bearing rather than tidy. The
+        # completion observer's whole value is that it reads the *application's* durable state rather
+        # than what the product recorded about it, and those are only different sources if they are
+        # different databases. Sharing one would make the independence assertion in
+        # tests/integration/test_completion_observer.py vacuous -- it would be comparing a URL to
+        # itself -- and it is also the arrangement that produced module 06's silent table collision,
+        # where the product's `fixture_instance` was the name the application already used.
+        run: |
+          psql "$SUPERUSER_URL" -v ON_ERROR_STOP=1 -c \
+            "CREATE DATABASE accessforge_refapp OWNER accessforge_app"
+          psql "postgresql://accessforge:accessforge-ci@localhost:5432/accessforge_refapp" \
+            -v ON_ERROR_STOP=1 -c "GRANT ALL ON SCHEMA public TO accessforge_app"
 
       - name: Confirm the test role cannot bypass row-level security
         # One clear sentence instead of sixteen assertion failures if this regresses.
