@@ -29,6 +29,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from accessforge_domain.canonical import digest
+from accessforge_domain.timestamps import to_rfc3339_utc
 
 # A fixed, documented genesis hash. Sequence 1 chains from this, so a chain cannot be silently
 # re-rooted by inventing a different first previousEventHash.
@@ -123,7 +124,7 @@ def _chain_tail(
         {
             "sequence": int(row["sequence"]),
             "eventType": str(row["event_type"]),
-            "sourceTime": row["source_time"].isoformat().replace("+00:00", "Z"),
+            "sourceTime": to_rfc3339_utc(row["source_time"]),
             "payloadDigest": str(row["payload_digest"]),
             "previousEventHash": str(row["previous_event_hash"]),
         }

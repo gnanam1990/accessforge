@@ -59,6 +59,19 @@ def parse_rfc3339_utc(value: str, *, field: str = "timestamp") -> datetime:
     return parsed
 
 
+def to_rfc3339_utc(value: datetime) -> str:
+    """Format an aware datetime as an RFC3339 UTC string.
+
+    PostgreSQL returns ``timestamptz`` as an aware datetime in the **session** timezone, not
+    necessarily UTC. The obvious shortcut — ``isoformat().replace("+00:00", "Z")`` — therefore
+    produces ``2026-09-11T05:00:00-07:00`` on a machine in Los Angeles, which every parser here
+    correctly refuses. Converting first is the whole fix, and it belongs in one place.
+    """
+    if value.tzinfo is None:
+        raise TimestampError("a naive datetime has no unambiguous UTC representation")
+    return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
 def is_expired(*, now: str, expires_at: str) -> bool:
     """Whether ``expires_at`` has been reached at ``now``.
 
