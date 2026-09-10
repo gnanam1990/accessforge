@@ -47,7 +47,7 @@ reuses an existing database.
 | Integration | `uv run pytest tests/integration -q` | Real PostgreSQL: journey, identity boundaries, durability, readiness |
 | Node types | `pnpm -r --if-present typecheck` | TypeScript strict mode |
 | Node build | `pnpm -r --if-present build` | Both TS packages compile |
-| Node tests | `pnpm -r --if-present test` | Runner reports non-implementation rather than false success; TypeScript canonicalization matches the shared vectors |
+| Node tests | `pnpm -r --if-present test` | Runner reports non-implementation rather than false success; TypeScript canonicalization matches the shared vectors. Builds first, since the tests import from `dist/` |
 | Everything | `uv run pytest tests -q && pnpm -r --if-present test` | Full local suite |
 
 `tests/integration` **fails** rather than skips when `TEST_DATABASE_URL` is absent
@@ -112,7 +112,8 @@ pnpm --filter @accessforge/contracts build
 uv run pytest tests/contract -q
 ```
 
-It fails rather than skips when that build output is missing.
+It fails rather than skips when that build output is missing. The Node test scripts build
+themselves, so `pnpm -r test` works from a clean checkout without a separate build step.
 
 ## Mutation checks for high-risk guards
 

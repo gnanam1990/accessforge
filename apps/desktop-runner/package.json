@@ -3,11 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "bin": { "accessforge-runner": "./dist/main.js" },
+  "bin": {
+    "accessforge-runner": "./dist/main.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test test/*.test.js"
+    "test": "pnpm run build && node --test test/*.test.js"
   },
-  "devDependencies": { "@types/node": "22.10.5", "typescript": "5.7.3" }
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "typescript": "5.7.3"
+  }
 }
