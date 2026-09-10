@@ -19,6 +19,14 @@ Four things go in, and the fourth is the one that gets forgotten:
 The manifest states, in the file itself, what the backup omits and what a restore therefore cannot
 re-establish. A restore procedure that discovers its gaps at restore time discovers them during an
 outage.
+
+**Known limitation: this builds the archive in memory.** Every evidence object is read into a dict
+and the tar is assembled in a `BytesIO` before sealing, so peak memory is roughly the size of the
+uncompressed evidence corpus. That is fine for the development corpus this was measured against
+(1095 objects, a few megabytes) and it will not do for a real store. `MAX_UNSEALED_BYTES` makes the
+limit a refusal with a sentence rather than an out-of-memory kill on a backup host at 3am, which is
+the difference between a known limitation and an unreliable backup. Streaming the tar directly into
+the envelope is the fix and it is not done here.
 """
 
 from __future__ import annotations
@@ -42,6 +50,11 @@ from urllib.parse import urlsplit
 from accessforge_evidence.envelope import KEY_BYTES, generate_key, seal
 from accessforge_persistence import connect, expected_migrations
 from accessforge_persistence.evidence.objectstore import S3ArtifactStore, S3Settings
+
+#: The largest archive this in-memory implementation will attempt. See the module docstring: the
+#: whole tar is assembled before sealing, so exceeding this is an out-of-memory kill rather than an
+#: error, and a backup host that dies silently is worse than one that refuses loudly.
+MAX_UNSEALED_BYTES = 2 * 1024 * 1024 * 1024
 
 #: What a restore cannot bring back, stated in the backup rather than discovered during one.
 KNOWN_OMISSIONS = [
@@ -251,8 +264,19 @@ def main(argv: list[str] | None = None) -> int:
                     bucket=os.environ["ACCESSFORGE_EVIDENCE_BUCKET"],
                 )
             )
+            accumulated = 0
             for object_key in store.iter_keys():
-                members[f"evidence/{object_key}"] = store.get(key=object_key)
+                payload = store.get(key=object_key)
+                accumulated += len(payload)
+                if accumulated > MAX_UNSEALED_BYTES:
+                    raise SystemExit(
+                        f"the evidence store exceeds {MAX_UNSEALED_BYTES} bytes, which this "
+                        "implementation assembles in memory before sealing. Refusing rather than "
+                        "being killed part-way: an out-of-memory death during a backup leaves no "
+                        "backup and no clear reason. Streaming the archive is the fix and is not "
+                        "implemented; --skip-evidence takes the database alone in the meantime."
+                    )
+                members[f"evidence/{object_key}"] = payload
                 object_keys.append(object_key)
 
         with connect(args.database_url) as conn:
@@ -274,6 +298,13 @@ def main(argv: list[str] | None = None) -> int:
             "treeExpects": list(expected_migrations()),
             "evidenceObjects": len(object_keys),
             "evidenceIncluded": not args.skip_evidence,
+            # Recorded so a restore can refuse to write these objects back into the bucket they
+            # came from. Restoring into the live store overwrites current evidence with a snapshot
+            # and undoes every retention deletion made since -- and without this field a restore
+            # has no way to notice it is about to.
+            "evidenceBucket": (
+                None if args.skip_evidence else os.environ.get("ACCESSFORGE_EVIDENCE_BUCKET")
+            ),
             "members": {
                 name: {
                     "bytes": len(payload),
@@ -301,9 +332,24 @@ def main(argv: list[str] | None = None) -> int:
 
         tar_buffer.seek(0)
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("wb") as out:
-            header = seal(tar_buffer, out, key=key, key_id=args.key_id)
-        args.output.chmod(0o600)
+
+        # Sealed into a sibling temporary file and renamed only once it is complete and on disk.
+        # `open("wb")` on the destination truncates it first, so a full disk, a sealing error or a
+        # SIGKILL half-way through would replace last night's good backup with a partial one --
+        # destroying the thing being protected in the act of protecting it. `os.replace` is atomic
+        # within a filesystem, so an interrupted run leaves the previous backup exactly as it was
+        # and a stray temporary file that this cleans up.
+        staging_output = args.output.with_name(args.output.name + f".partial-{os.getpid()}")
+        try:
+            with staging_output.open("wb") as out:
+                header = seal(tar_buffer, out, key=key, key_id=args.key_id)
+                out.flush()
+                os.fsync(out.fileno())
+            staging_output.chmod(0o600)
+            os.replace(staging_output, args.output)
+        except BaseException:
+            staging_output.unlink(missing_ok=True)
+            raise
 
     size = args.output.stat().st_size
     print(f"wrote {args.output} ({size} bytes), sealed with key id {header.key_id}")

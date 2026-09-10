@@ -26,6 +26,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import pytest
 
+from accessforge_domain.authority import AuthorityError
 from accessforge_domain.canonical import digest
 from accessforge_persistence import (
     MIGRATIONS_DIR,
@@ -414,29 +415,54 @@ def test_a_claimed_job_is_released_rather_than_deleted(
 def test_every_restored_grant_requires_revalidation(restored: str, restored_admin_url: str) -> None:
     """Fail closed, because the data cannot answer the question.
 
-    A grant revoked after the snapshot is revoked in the world and live in the backup. Nothing in
-    the restored data distinguishes it from one that was never revoked.
+    A grant revoked after the snapshot is live in the backup and revoked in the world. Nothing in
+    the restored data distinguishes the two, so every restored grant is marked unusable until a
+    person clears it.
+
+    The flag is the point. An earlier version of `reconcile` only *listed* the grants and returned
+    the count, which is a report rather than a control: the grants stayed usable and the "requires
+    revalidation" statement lived in a runbook nobody reads during an incident.
     """
+    grant_id = str(uuid.uuid4())
     with workspace_connection(restored, WS) as conn:
+        project_id = conn.execute("SELECT id FROM project LIMIT 1").fetchone()
+
+    with connect(restored_admin_url) as conn:
         conn.execute(
             """
             INSERT INTO execution_grant
                 (id, workspace_id, project_id, environment, allowed_journey_versions,
-                 allowed_policy_versions, permitted_effects, action_budget,
-                 wall_time_budget_seconds, expires_at)
-            VALUES (%s, %s, %s, 'local', ARRAY['j-1'], ARRAY['p-1'],
-                    ARRAY['FIXTURE_SUBMIT'], 10, 60, %s)
+                 allowed_policy_versions, action_budget, wall_time_budget_seconds, expires_at)
+            VALUES (%s, %s, %s, 'staging', ARRAY['j1'], ARRAY['p1'], 10, 600,
+                    now() + interval '1 day')
             """,
-            (str(uuid.uuid4()), WS, str(uuid.uuid4()), datetime.now(UTC) + timedelta(days=1)),
+            (grant_id, WS, project_id["id"] if project_id else WS),
         )
+        conn.commit()
+
     with connect(restored_admin_url) as conn:
+        before = conn.execute(
+            "SELECT revalidation_required FROM execution_grant WHERE id = %s", (grant_id,)
+        ).fetchone()
+        assert before is not None and before["revalidation_required"] is False
+
         report = restore.reconcile(conn, operator="drill")
-    assert len(report.grants_requiring_revalidation) == 1
+        conn.commit()
 
+    assert grant_id in report.grants_requiring_revalidation
 
-# --------------------------------------------------------------------------------------------------
-# Reconciliation: what it must not touch
-# --------------------------------------------------------------------------------------------------
+    with connect(restored_admin_url) as conn:
+        after = conn.execute(
+            "SELECT revalidation_required, revalidated_at, revalidated_by "
+            "  FROM execution_grant WHERE id = %s",
+            (grant_id,),
+        ).fetchone()
+    assert after is not None
+    assert after["revalidation_required"] is True
+    # Cleared, not merely overwritten: a stale "revalidated by Alice last year" beside a fresh
+    # requirement would read as though somebody had already looked.
+    assert after["revalidated_at"] is None
+    assert after["revalidated_by"] is None
 
 
 def test_reconciliation_changes_no_terminal_run(restored: str, restored_admin_url: str) -> None:
@@ -518,17 +544,28 @@ def test_a_restored_database_reports_the_schema_it_was_written_by(restored: str)
     assert "matches the current tree exactly" in detail
 
 
-def test_a_database_written_by_an_older_release_is_migrated_forward(restored: str) -> None:
-    with unscoped_connection(restored) as conn:
-        conn.execute(
-            "DELETE FROM schema_migration WHERE name = %s",
-            ("0013_entitlements_usage_and_retention.sql",),
-        )
+def test_the_compatibility_helper_counts_a_gap_in_the_ledger(restored: str) -> None:
+    """A ledger-level test, and it says so.
+
+    An earlier version of this was called "an older release is migrated forward" and it was not
+    that test: deleting one ledger row leaves every schema change applied, including the newest, so
+    it exercised the helper's arithmetic and nothing else. The real forward-migration drill builds a
+    database at the previous migration and runs the migrator against it --
+    `tests/integration/test_forward_migration_and_interruption.py`.
+
+    What this *does* cover is the case that drill cannot reach: a gap in the middle of the ledger,
+    which is what a hand-repaired database looks like. The helper must count it as behind rather
+    than as compatible, because the migrator will try to apply it.
+    """
     expected = tuple(sorted(path.name for path in MIGRATIONS_DIR.glob("*.sql")))
+    gap = expected[len(expected) // 2]
+    with unscoped_connection(restored) as conn:
+        conn.execute("DELETE FROM schema_migration WHERE name = %s", (gap,))
     with unscoped_connection(restored) as conn:
         compatible, detail = restore.restore_is_forward_compatible(conn, expected=expected)
     assert compatible
     assert "1 migration(s) behind" in detail
+    assert gap in detail
 
 
 def test_a_database_written_by_a_newer_release_is_refused(restored: str) -> None:
@@ -546,3 +583,84 @@ def test_a_database_written_by_a_newer_release_is_refused(restored: str) -> None
     assert not compatible
     assert "written by a newer release" in detail
     assert "bring the code forward" in detail
+
+
+def test_a_previous_reconciliation_in_the_backup_does_not_block_the_next_restore(
+    restored: str, restored_admin_url: str
+) -> None:
+    """The trap that springs years later, during the incident it would make worse.
+
+    Reconcile production once and that audit row is in every backup taken afterwards. A check for
+    "has this database ever been reconciled" therefore refuses the *next* real restore -- leaving
+    the target holding live sessions, granted leases and unredeemed enrollment tokens, which is the
+    exact state reconciliation exists to eliminate.
+
+    So the guarantee is scoped to a restore, not to a database. This simulates the row a previous
+    restore left behind and then reconciles a genuinely new one.
+    """
+    with connect(restored_admin_url) as conn:
+        conn.execute(
+            """
+            INSERT INTO global_audit_event
+                (actor_user, actor_service, action, target_kind, outcome, detail)
+            VALUES (NULL, 'an-earlier-operator', %s, 'database', 'ALLOWED',
+                    %s::jsonb)
+            """,
+            (restore.RECONCILIATION_MARKER, '{"restoreId": "a-restore-from-two-years-ago"}'),
+        )
+        conn.commit()
+
+    with connect(restored_admin_url) as conn:
+        report = restore.reconcile(conn, operator="drill", restore_id="todays-archive")
+        conn.commit()
+    assert report.sessions_revoked >= 1
+
+    # And the same restore, twice, is still refused: that is the property being preserved.
+    with connect(restored_admin_url) as conn:
+        with pytest.raises(restore.RestoreError, match="todays-archive"):
+            restore.reconcile(conn, operator="drill", restore_id="todays-archive")
+
+
+def test_a_restored_grant_cannot_run_a_schedule_until_a_person_clears_it(
+    restored: str, restored_admin_url: str
+) -> None:
+    """The control, exercised where dispatch actually happens.
+
+    `schedules.admit_occurrence` reads `revalidation_required` from the row rather than from the
+    grant object it is handed, which is what makes this enforcement rather than documentation: a
+    caller holding a grant built before the restore would present `revalidation_required=False` no
+    matter what the database says.
+    """
+    from accessforge_domain.authority import ExecutionGrant
+
+    grant = ExecutionGrant(
+        grant_id=str(uuid.uuid4()),
+        workspace_id=WS,
+        project_id=str(uuid.uuid4()),
+        environment="staging",
+        allowed_journey_version_ids=frozenset({"j1"}),
+        allowed_policy_version_ids=frozenset({"p1"}),
+        permitted_effects=frozenset(),
+        action_budget=10,
+        wall_time_budget_seconds=600,
+        expires_at="2027-01-01T00:00:00Z",
+        revision=1,
+    )
+    grant.check_usable(now="2026-09-10T00:00:00Z")
+
+    restored_grant = ExecutionGrant(
+        grant_id=grant.grant_id,
+        workspace_id=grant.workspace_id,
+        project_id=grant.project_id,
+        environment=grant.environment,
+        allowed_journey_version_ids=grant.allowed_journey_version_ids,
+        allowed_policy_version_ids=grant.allowed_policy_version_ids,
+        permitted_effects=grant.permitted_effects,
+        action_budget=grant.action_budget,
+        wall_time_budget_seconds=grant.wall_time_budget_seconds,
+        expires_at=grant.expires_at,
+        revision=grant.revision,
+        revalidation_required=True,
+    )
+    with pytest.raises(AuthorityError, match="restored from a backup"):
+        restored_grant.check_usable(now="2026-09-10T00:00:00Z")

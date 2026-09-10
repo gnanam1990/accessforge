@@ -8,6 +8,7 @@ specific way that a naive chunked scheme would accept.
 from __future__ import annotations
 
 import io
+import json
 import struct
 
 import pytest
@@ -184,3 +185,64 @@ def test_two_archives_do_not_reuse_a_nonce_prefix_by_construction() -> None:
     key = generate_key()
     prefixes = {read_header(io.BytesIO(_sealed(b"x", key))).nonce_prefix for _ in range(16)}
     assert len(prefixes) > 1
+
+
+def test_a_hostile_header_cannot_choose_the_chunk_size_bound() -> None:
+    """The header is plaintext and read before any tag is checked.
+
+    The per-chunk length check compares against `chunkBytes` *from the header*, so without an
+    independent bound the attacker picks the threshold: a header declaring a 4 GiB chunk size makes
+    "reject an implausible chunk length" accept a 4 GiB allocation.
+    """
+    key = generate_key()
+    blob = bytearray(_sealed(b"payload", key))
+    (header_length,) = struct.unpack(">I", blob[len(MAGIC) : len(MAGIC) + 4])
+    start = len(MAGIC) + 4
+    header = json.loads(bytes(blob[start : start + header_length]))
+    header["chunkBytes"] = 4 * 1024 * 1024 * 1024
+    replacement = json.dumps(header, sort_keys=True).encode()
+    forged = (
+        bytes(blob[: len(MAGIC)])
+        + struct.pack(">I", len(replacement))
+        + replacement
+        + bytes(blob[start + header_length :])
+    )
+
+    with pytest.raises(EnvelopeError, match="chunk size"):
+        _opened(forged, key)
+
+
+def test_a_header_declaring_the_wrong_nonce_width_is_refused() -> None:
+    """A v1-shaped header reaching v2 code would derive the wrong nonce for every chunk and be
+    reported as tampered -- a true statement about the wrong question. This says the real one."""
+    key = generate_key()
+    blob = bytearray(_sealed(b"payload", key))
+    (header_length,) = struct.unpack(">I", blob[len(MAGIC) : len(MAGIC) + 4])
+    start = len(MAGIC) + 4
+    header = json.loads(bytes(blob[start : start + header_length]))
+    header["noncePrefix"] = header["noncePrefix"][:8]  # four bytes, as version 1 wrote
+    replacement = json.dumps(header, sort_keys=True).encode()
+    forged = (
+        bytes(blob[: len(MAGIC)])
+        + struct.pack(">I", len(replacement))
+        + replacement
+        + bytes(blob[start + header_length :])
+    )
+
+    with pytest.raises(EnvelopeError, match="nonce prefix"):
+        _opened(forged, key)
+
+
+def test_the_nonce_prefix_is_wide_enough_to_survive_years_of_backups() -> None:
+    """Eight bytes, not four.
+
+    Four collides with probability 1/2 after roughly 65,000 archives under one key. Hourly backups
+    across a handful of deployments sharing a key reach that inside a decade, and the consequence of
+    a repeat is not a detectable error -- it is GCM nonce reuse, which breaks confidentiality and
+    permits forgery before any tag is checked.
+    """
+    from accessforge_evidence.envelope import NONCE_PREFIX_BYTES
+
+    assert NONCE_PREFIX_BYTES >= 8
+    header = read_header(io.BytesIO(_sealed(b"x", generate_key())))
+    assert len(bytes.fromhex(header.nonce_prefix)) == NONCE_PREFIX_BYTES

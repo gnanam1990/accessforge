@@ -232,7 +232,11 @@ def test_the_separate_example_files_carry_no_variable_the_api_would_reject() -> 
             for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.strip().startswith("#") and "=" in line
         }
-        assert names, f"{path.name} declares no variables"
+        # Only ACCESSFORGE_ names count. Without this filter an unrelated assignment -- an
+        # AWS_PROFILE, a PGHOST -- satisfies `names - declared`, and the test would pass while every
+        # ACCESSFORGE_ variable in the file belonged back in .env.example.
+        names = {name for name in names if name.startswith("ACCESSFORGE_")}
+        assert names, f"{path.name} declares no ACCESSFORGE_ variables"
         assert names - declared, (
             f"{path.name} contains only variables the API accepts, so it is a fragment of "
             ".env.example rather than a separate component's configuration"

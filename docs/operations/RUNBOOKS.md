@@ -46,7 +46,7 @@ expiry is the mechanism the table has, and adding a second one would give the re
 conditions to check and one to forget.
 
 **If a token may have leaked:** expire it immediately by setting `expires_at` to now, then treat every
-runner enrolled since it was issued as untrusted (§4).
+runner enrolled since it was issued as untrusted (§8).
 
 ### Evidence signing key
 

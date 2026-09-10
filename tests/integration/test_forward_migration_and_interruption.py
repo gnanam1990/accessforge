@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0014_restore_reconciliation.sql"
+NEWEST = "0015_grants_require_revalidation_after_restore.sql"
 
 
 def _with_database(url: str, name: str) -> str:
@@ -129,23 +129,50 @@ def test_data_written_under_the_previous_rules_survives_the_migration(disposable
     assert row is not None and row["release_reason"] == "OPERATOR_RESET"
 
 
-def test_the_new_release_reason_is_refused_before_the_migration_and_accepted_after(
+def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     disposable: str,
 ) -> None:
-    """The migration's actual effect, in both directions.
+    """The newest migration's actual effect, in both directions.
 
-    Asserting only that the new value works after would pass against a database where the
-    constraint had been dropped entirely, and a dropped constraint is a much worse outcome than a
-    missing value.
+    Asserting only that the new thing works afterwards would pass against a database where the
+    constraint had been dropped entirely, or the column had always been there -- and "the guard is
+    gone" is a much worse outcome than "the feature is missing".
     """
     _apply_through(disposable, _previous())
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _seed_released_lease(disposable, reason="RESTORED_DATABASE")
+    with connect(disposable) as conn:
+        before = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            " WHERE table_name = 'execution_grant' AND column_name = 'revalidation_required'"
+        ).fetchone()
+    assert before is None
 
     migrate(disposable)
-    assert _seed_released_lease(disposable, reason="RESTORED_DATABASE")
 
-    # And the constraint still refuses nonsense, rather than having been widened to anything.
+    with connect(disposable) as conn:
+        after = conn.execute(
+            "SELECT column_default, is_nullable FROM information_schema.columns "
+            " WHERE table_name = 'execution_grant' AND column_name = 'revalidation_required'"
+        ).fetchone()
+    assert after is not None
+    # NOT NULL DEFAULT false: an existing grant keeps working, because "a restore brought you back
+    # and nobody has confirmed you" is not true of a grant that has been live all along.
+    assert after["is_nullable"] == "NO"
+    assert "false" in str(after["column_default"])
+
+
+def test_an_older_release_reason_survives_and_a_nonsense_one_is_still_refused(
+    disposable: str,
+) -> None:
+    """Migration 0014's widening, kept as its own case now that it is no longer the newest.
+
+    A migration test that only ever covered the tip would stop exercising every earlier change the
+    moment another one landed, which is precisely when a regression in one of them would ship.
+    """
+    migrate(disposable)
+    assert _seed_released_lease(disposable, reason="RESTORED_DATABASE")
+    assert _seed_released_lease(disposable, reason="OPERATOR_RESET")
+
+    # Widened to a named set, not to anything.
     with pytest.raises(psycopg.errors.CheckViolation):
         _seed_released_lease(disposable, reason="TIDIED_UP")
 

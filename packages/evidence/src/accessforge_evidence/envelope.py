@@ -18,9 +18,17 @@ same key. Binding the index into the AAD stops the swap; binding a per-archive r
 stops the splice, because a chunk from another archive authenticates under a different AAD.
 
 **Nonce reuse.** Reusing a (key, nonce) pair under GCM is catastrophic -- it leaks the XOR of two
-plaintexts and, worse, allows forgery. The nonce is a random 4-byte stream prefix followed by an
-8-byte counter, so two chunks of one archive can never collide, and two archives collide only if the
-random prefix repeats, which the header records so it is checkable rather than assumed.
+plaintexts and, worse, allows forgery. The nonce is a random 8-byte stream prefix followed by a
+4-byte chunk counter, so two chunks of one archive can never collide, and two archives collide only
+if the random prefix repeats.
+
+The prefix was 4 bytes in the first version of this format, and that was wrong. A 4-byte random
+value collides with probability 1/2 after about 65,000 archives under one key -- which sounds
+distant until you count hourly backups across several deployments sharing a key over the years a
+backup is retained. `stream_id` in the AAD does not help: it makes a *splice* detectable, and nonce
+reuse is a confidentiality and forgery failure that happens before any tag is checked. Eight bytes
+moves the collision point to about 2^32 archives. The counter loses four bytes in the trade and
+still addresses far more chunks than `MAX_CHUNKS` permits.
 
 The key never appears in this module's output, in an exception message, or in the header. What the
 header does record is the key *identifier*, because a restore two years from now needs to know which
@@ -38,19 +46,31 @@ from typing import BinaryIO
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-MAGIC = b"AFBK1\n"
+MAGIC = b"AFBK2\n"
 """Format marker and version. A reader that finds anything else refuses rather than guessing:
 a backup file is exactly the kind of thing that gets renamed, and a decryptor that tried its best
-on an unrecognised file would produce plausible garbage."""
+on an unrecognised file would produce plausible garbage.
+
+Version 2 widens the nonce prefix from 4 bytes to 8. The version is in the marker rather than in the
+JSON header because the nonce *layout* changed: a reader that parsed a v1 header with v2 rules would
+derive the wrong nonce for every chunk and report the archive as tampered, which is a true statement
+about the wrong question. AFBK1 archives are not readable by this code, and none was ever released.
+"""
 
 KEY_BYTES = 32
 CHUNK_BYTES = 1024 * 1024
-NONCE_PREFIX_BYTES = 4
+NONCE_PREFIX_BYTES = 8
 TAG_BYTES = 16
 
 #: A hard ceiling on the number of chunks, so a corrupt length prefix cannot make a reader loop
 #: forever. One million chunks is a terabyte, well beyond anything this format is meant to carry.
 MAX_CHUNKS = 1_000_000
+
+#: The largest `chunkBytes` a reader will honour from a header it has not yet authenticated. The
+#: header is plaintext and comes from the file, so a hostile one can declare any chunk size it
+#: likes -- and the per-chunk length check is written against that declared size. Without this
+#: bound, "reject an implausible chunk length" is a check whose threshold the attacker chooses.
+MAX_DECLARED_CHUNK_BYTES = 16 * 1024 * 1024
 
 
 class EnvelopeError(Exception):
@@ -124,7 +144,7 @@ def seal(source: BinaryIO, destination: BinaryIO, *, key: bytes, key_id: str) ->
         # An empty source still writes one chunk, marked final. Zero chunks would be
         # indistinguishable from a file truncated to its header, and "empty backup" and "destroyed
         # backup" must not look alike.
-        nonce = prefix + struct.pack(">Q", index)
+        nonce = prefix + struct.pack(">I", index)
         sealed = aesgcm.encrypt(nonce, pending, _aad(header_bytes, index, final=final))
         destination.write(struct.pack(">I", len(sealed)))
         destination.write(sealed)
@@ -156,7 +176,7 @@ def read_header(source: BinaryIO) -> EnvelopeHeader:
         raise EnvelopeError("truncated inside the header")
     try:
         parsed = json.loads(header_bytes)
-        return EnvelopeHeader(
+        header = EnvelopeHeader(
             key_id=str(parsed["keyId"]),
             stream_id=str(parsed["streamId"]),
             nonce_prefix=str(parsed["noncePrefix"]),
@@ -164,6 +184,22 @@ def read_header(source: BinaryIO) -> EnvelopeHeader:
         )
     except (ValueError, KeyError, TypeError) as exc:
         raise EnvelopeError("the header is not a readable AccessForge backup header") from exc
+
+    # Everything below is checked because the header is plaintext and unauthenticated. It is read
+    # before a single tag is verified, so every value in it is attacker-chosen until proven
+    # otherwise -- including the one the per-chunk length check compares against.
+    if not 1 <= header.chunk_bytes <= MAX_DECLARED_CHUNK_BYTES:
+        raise EnvelopeError(
+            f"the header declares a chunk size of {header.chunk_bytes} bytes, outside the "
+            f"1..{MAX_DECLARED_CHUNK_BYTES} this format permits. A reader that honoured it would "
+            "allocate whatever the file asked for."
+        )
+    if len(bytes.fromhex(header.nonce_prefix)) != NONCE_PREFIX_BYTES:
+        raise EnvelopeError(
+            f"the header declares a {len(header.nonce_prefix) // 2}-byte nonce prefix; this format "
+            f"uses {NONCE_PREFIX_BYTES}"
+        )
+    return header
 
 
 def open_sealed(source: BinaryIO, destination: BinaryIO, *, key: bytes) -> EnvelopeHeader:
@@ -200,7 +236,7 @@ def open_sealed(source: BinaryIO, destination: BinaryIO, *, key: bytes) -> Envel
         for final in (False, True):
             try:
                 plain = aesgcm.decrypt(
-                    prefix + struct.pack(">Q", index),
+                    prefix + struct.pack(">I", index),
                     sealed,
                     _aad(header_bytes, index, final=final),
                 )

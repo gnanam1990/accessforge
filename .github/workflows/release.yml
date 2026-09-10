@@ -43,20 +43,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - name: Refuse a tag that is not on main
-        # A tag can point at any commit, including one that never passed review. This is the check
-        # that makes "we released the tag" and "we released reviewed code" the same statement.
-        if: github.event_name == 'push'
+      - name: Refuse a ref that is not on main
+        # A tag can point at any commit, including one that never passed review -- and so can a
+        # manual run: `workflow_dispatch` takes a ref, so "only tags need checking" was wrong. The
+        # check now applies to every trigger, which is what makes "we released this" and "we
+        # released reviewed code" the same statement.
         run: |
           set -euo pipefail
           git fetch --no-tags origin main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
-            echo "::error::this tag is not an ancestor of main; it points at unreviewed code"
+            echo "::error::${{ github.ref }} is not an ancestor of main; it points at unreviewed code"
             exit 1
           fi
-          echo "tag is on main"
+          echo "${{ github.ref }} is on main"
 
       - name: Record the exact inputs
         run: |
@@ -88,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Write the honest summary
         # Every release carries this. The point is that the limitations travel with the artifact

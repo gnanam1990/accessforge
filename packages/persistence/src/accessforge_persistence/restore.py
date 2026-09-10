@@ -97,21 +97,43 @@ class Reconciliation:
 
 RECONCILIATION_MARKER = "restore-reconciliation"
 
+UNIDENTIFIED_RESTORE = "unidentified"
+"""The restore identifier used when a caller supplies none.
 
-def assert_not_reconciled(conn: psycopg.Connection[dict[str, Any]]) -> None:
-    """Refuse to reconcile twice.
+Callers that pass nothing get once-only behaviour scoped to this name, which is the conservative
+reading: two restores that both decline to identify themselves are refused rather than silently
+treated as different. `scripts/restore.py` always passes the archive's own stream id.
+"""
 
-    Running it again is not harmless: the second pass would fence leases that were legitimately
-    granted *after* the first, and quarantine runners an operator had just reset. Once is a recovery
-    step; twice is an outage.
+
+def assert_not_reconciled(
+    conn: psycopg.Connection[dict[str, Any]], *, restore_id: str = UNIDENTIFIED_RESTORE
+) -> None:
+    """Refuse to reconcile *this* restore twice.
+
+    Running it again on the same restore is not harmless: the second pass would fence leases that
+    were legitimately granted after the first, and quarantine runners an operator had just reset.
+    Once is a recovery step; twice is an outage.
+
+    Scoped to the restore rather than to the database, and the difference is not academic. The first
+    version of this checked for *any* `restore-reconciliation` row, which is a trap that springs
+    much later: reconcile production once, and that audit row is in every backup taken afterwards --
+    so the next real restore, possibly years on during an actual incident, would refuse to reconcile
+    and leave the target holding live sessions and granted leases. The check has to distinguish "we
+    already did this restore" from "this database has been restored before at some point", and only
+    the first is a reason to stop.
     """
     row = conn.execute(
-        "SELECT 1 FROM global_audit_event WHERE action = %s LIMIT 1", (RECONCILIATION_MARKER,)
+        "SELECT 1 FROM global_audit_event "
+        " WHERE action = %s AND detail ->> 'restoreId' = %s LIMIT 1",
+        (RECONCILIATION_MARKER, restore_id),
     ).fetchone()
     if row is not None:
         raise RestoreError(
-            "this database has already been reconciled after a restore. Running it again would "
-            "fence leases granted since, and quarantine runners somebody has already reset."
+            f"this database has already been reconciled for restore {restore_id!r}. Running it "
+            "again would fence leases granted since, and quarantine runners somebody has already "
+            "reset. A different restore of a different archive carries a different identifier and "
+            "is not blocked by this."
         )
 
 
@@ -119,6 +141,7 @@ def reconcile(
     conn: psycopg.Connection[dict[str, Any]],
     *,
     operator: str,
+    restore_id: str = UNIDENTIFIED_RESTORE,
     now: datetime | None = None,
 ) -> Reconciliation:
     """Make a restored database safe to serve from.
@@ -129,10 +152,15 @@ def reconcile(
     same elevated credential the restore itself needed, so this asks for nothing new.
 
     `assert_can_reconcile` refuses anything weaker rather than running and changing nothing.
+
+    `restore_id` identifies *this* restore -- `scripts/restore.py` passes the archive's own stream
+    id. It scopes the once-only guarantee to the restore rather than to the database, because the
+    audit row this writes travels in every subsequent backup, and a database-wide check would make
+    the second real restore refuse to reconcile during an incident.
     """
     moment = now or datetime.now(UTC)
     assert_can_reconcile(conn)
-    assert_not_reconciled(conn)
+    assert_not_reconciled(conn, restore_id=restore_id)
 
     # 1. Every session. A token minted before the snapshot is a token somebody may have revoked
     #    after it, and the revocation is not in this data.
@@ -209,14 +237,22 @@ def reconcile(
         "UPDATE outbox_message SET published_at = %s WHERE published_at IS NULL", (moment,)
     ).rowcount
 
-    # 8. Execution grants: listed, never trusted. A grant revoked after the snapshot is live in the
-    #    backup and revoked in the world, and this data cannot tell the difference.
+    # 8. Execution grants: marked unusable, not merely listed. An earlier version of this function
+    #    returned the list and left the grants working, which is a report rather than a control --
+    #    and a grant revoked an hour after the snapshot is live in this data and revoked in the
+    #    world. The flag is what makes "requires revalidation" a thing a person has to clear rather
+    #    than a line in a runbook, and `schedules.admit_occurrence` reads it from the row rather
+    #    than from whatever object a caller hands it.
     grants = [
         str(r["id"])
         for r in conn.execute(
-            "SELECT id FROM execution_grant WHERE revoked_at IS NULL ORDER BY id"
+            "UPDATE execution_grant SET revalidation_required = true, "
+            "    revalidated_at = NULL, revalidated_by = NULL "
+            " WHERE revoked_at IS NULL "
+            " RETURNING id"
         ).fetchall()
     ]
+    grants.sort()
 
     conn.execute(
         """
@@ -231,6 +267,7 @@ def reconcile(
             moment,
             json.dumps(
                 {
+                    "restoreId": restore_id,
                     "sessionsRevoked": sessions,
                     "enrollmentTokensExpired": tokens,
                     "leasesFenced": leases,
