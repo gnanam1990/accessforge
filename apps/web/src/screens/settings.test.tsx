@@ -89,6 +89,16 @@ describe('who may change what', () => {
     expect(screen.getByText('3')).toBeVisible()
   })
 
+  it('gives a maintainer no form either, matching the server’s matrix', async () => {
+    const server = createFakeServer(asRole('MAINTAINER'))
+    renderSettings(server)
+    await screen.findByRole('table', { name: /Consumption in the current window/ })
+    // `WORKSPACE_CONFIGURE` is owner-only in module 03's matrix, and maintainer is the role most
+    // likely to be added to a client-side copy by mistake. The server refuses either way; the copy
+    // being wrong would mean showing somebody a form whose submission always fails.
+    expect(screen.queryByRole('button', { name: 'Save allowance' })).not.toBeInTheDocument()
+  })
+
   it('gives an owner the form', async () => {
     const server = createFakeServer(asRole('OWNER'))
     renderSettings(server)

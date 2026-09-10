@@ -117,7 +117,14 @@ def request_run(
         # of an admission already granted must not be charged twice, and a retry is exactly what an
         # idempotency key identifies. Without one the request is its own operation and gets its own
         # event key.
-        event_key = context.idempotency_key or f"run-request:{uuid.uuid4()}"
+        # Namespaced by route. The caller chooses their own idempotency key, and two routes sharing
+        # one key space would let a key reused elsewhere read as a retry of this admission — so the
+        # second request is admitted for free. Without a key the request is its own operation.
+        event_key = (
+            f"POST /runs:{context.idempotency_key}"
+            if context.idempotency_key is not None
+            else f"POST /runs:anonymous:{uuid.uuid4()}"
+        )
         try:
             budgets.admit_within_budget(
                 conn,
@@ -130,6 +137,13 @@ def request_run(
             raise ProblemDetail(
                 ProblemCode.DEPENDENCY_UNAVAILABLE,
                 f"{exc} An administrator configures it before any run can be requested.",
+                request_id=context.request_id,
+            ) from exc
+        except budgets.ConcurrencyExhausted as exc:
+            raise ProblemDetail(
+                ProblemCode.QUOTA_EXHAUSTED,
+                str(exc),
+                extra={"kind": "CONCURRENT_RUNS", "limit": exc.limit, "used": exc.used},
                 request_id=context.request_id,
             ) from exc
         except budgets.BudgetExhausted as exc:

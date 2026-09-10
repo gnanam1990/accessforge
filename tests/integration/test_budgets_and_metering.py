@@ -21,13 +21,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from accessforge_domain.canonical import digest
 from accessforge_persistence import (
     assert_row_level_security_enforced,
     budgets,
     migrate,
+    runs,
     unscoped_connection,
     workspace_connection,
 )
+
+MANIFEST = digest({"manifest": "budget"})
 
 pytestmark = pytest.mark.integration
 
@@ -350,6 +354,59 @@ def test_a_refused_admission_records_no_usage(db: str) -> None:
         }
     # A refusal that charged anyway would make the limit tighten every time somebody hit it.
     assert totals["ACTION_DISPATCHED"].measured == 1
+
+
+def test_concurrent_runs_are_limited_separately_from_the_daily_allowance(db: str) -> None:
+    """Two limits with two remedies.
+
+    A daily allowance is raised by an administrator; a concurrency limit clears on its own as runs
+    finish. Reporting both as "quota exhausted" would send an operator to change a number that is
+    not the problem — so they are different exceptions carrying different sentences.
+    """
+    _entitle(db, max_runs_per_day=100, max_concurrent_runs=2)
+    with workspace_connection(db, WS) as conn:
+        for index in range(2):
+            budgets.admit_within_budget(
+                conn,
+                workspace_id=WS,
+                kind="RUN_ADMITTED",
+                quantity=1,
+                event_key=f"c{index}",
+            )
+            runs.create_run(conn, workspace_id=WS, manifest_digest=MANIFEST)
+
+        with pytest.raises(budgets.ConcurrencyExhausted) as raised:
+            budgets.admit_within_budget(
+                conn, workspace_id=WS, kind="RUN_ADMITTED", quantity=1, event_key="c2"
+            )
+    assert raised.value.limit == 2
+    assert raised.value.used == 2
+    assert "clears as runs finish" in str(raised.value)
+    # And it is not the daily-allowance exception, which would send somebody to raise a limit that
+    # is nowhere near exhausted.
+    assert not isinstance(raised.value, budgets.BudgetExhausted)
+
+
+def test_a_finished_run_frees_its_concurrency_slot(db: str) -> None:
+    _entitle(db, max_runs_per_day=100, max_concurrent_runs=1)
+    with workspace_connection(db, WS) as conn:
+        budgets.admit_within_budget(
+            conn, workspace_id=WS, kind="RUN_ADMITTED", quantity=1, event_key="first"
+        )
+        run_id = runs.create_run(conn, workspace_id=WS, manifest_digest=MANIFEST)
+        with pytest.raises(budgets.ConcurrencyExhausted):
+            budgets.admit_within_budget(
+                conn, workspace_id=WS, kind="RUN_ADMITTED", quantity=1, event_key="second"
+            )
+        # Counted from the run table rather than from a maintained counter: a counter drifts the
+        # first time a process dies between decrementing and committing, and the drift is silent.
+        conn.execute(
+            "UPDATE run SET status = 'COMPLETED', outcome = 'INCONCLUSIVE' WHERE id = %s",
+            (run_id,),
+        )
+        budgets.admit_within_budget(
+            conn, workspace_id=WS, kind="RUN_ADMITTED", quantity=1, event_key="second"
+        )
 
 
 def test_each_kind_has_its_own_limit(db: str) -> None:

@@ -53,6 +53,23 @@ class NoEntitlement(BudgetError):
     """
 
 
+class ConcurrencyExhausted(BudgetError):
+    """Too many runs are already occupying capacity.
+
+    Separate from a daily allowance because the remedy is different: a daily limit is raised by an
+    administrator, and this one clears on its own as runs finish. Reporting both as "quota
+    exhausted" would send an operator to change a number that is not the problem.
+    """
+
+    def __init__(self, limit: int, used: int) -> None:
+        self.limit = limit
+        self.used = used
+        super().__init__(
+            f"this workspace permits {limit} runs in progress at once and has {used}. This is not "
+            "a daily allowance and clears as runs finish; nothing needs to be reconfigured."
+        )
+
+
 class BudgetExhausted(BudgetError):
     """The request would exceed a configured limit. Carries which one, and by how much."""
 
@@ -334,6 +351,14 @@ def admit_within_budget(
         # A redelivery of an admission already granted. Refusing it here would turn a retry into a
         # rejection, and admitting it again would charge twice for one decision.
         return
+
+    # Concurrency before the daily allowance, because it is the cheaper refusal and the one that
+    # resolves without anybody doing anything. Counted from the run table inside the same locked
+    # transaction, so two requests cannot both see room for the last slot.
+    if kind == "RUN_ADMITTED":
+        in_progress = concurrent_runs(conn, workspace_id=workspace_id)
+        if in_progress + quantity > entitlement.max_concurrent_runs:
+            raise ConcurrencyExhausted(limit=entitlement.max_concurrent_runs, used=in_progress)
 
     totals = {
         t.kind: t

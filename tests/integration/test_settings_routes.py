@@ -122,9 +122,12 @@ def test_requesting_runs_consumes_the_allowance_and_is_then_refused(
     client: TestClient, db: str
 ) -> None:
     headers = _sign_in(db, client)
+    # Concurrency deliberately generous: this test is about the daily allowance, and a low
+    # concurrency limit would refuse the third run for the other reason and prove nothing about
+    # this one.
     client.put(
         f"/v1/workspaces/{WS}/settings/entitlement",
-        json=_entitlement_body(maxRunsPerDay=2),
+        json=_entitlement_body(maxRunsPerDay=2, maxConcurrentRuns=50),
         headers={**headers, "If-Match": "0"},
     )
 
@@ -155,7 +158,7 @@ def test_an_idempotent_retry_is_not_charged_twice(client: TestClient, db: str) -
     headers = _sign_in(db, client)
     client.put(
         f"/v1/workspaces/{WS}/settings/entitlement",
-        json=_entitlement_body(maxRunsPerDay=1),
+        json=_entitlement_body(maxRunsPerDay=1, maxConcurrentRuns=50),
         headers={**headers, "If-Match": "0"},
     )
     body = {"manifestDigest": MANIFEST}
@@ -354,6 +357,65 @@ def test_there_is_no_value_meaning_unlimited(client: TestClient, db: str) -> Non
             headers={**headers, "If-Match": "0"},
         )
         assert response.status_code == 400, value
+
+
+def test_a_run_request_key_cannot_be_reused_to_admit_a_second_run_for_free(
+    client: TestClient, db: str
+) -> None:
+    """The usage event key is namespaced by route.
+
+    A caller chooses their own idempotency key. If two routes shared one key space, a key already
+    used elsewhere would read as a retry of this admission, and the run would be created without
+    being charged.
+    """
+    headers = _sign_in(db, client)
+    client.put(
+        f"/v1/workspaces/{WS}/settings/entitlement",
+        json=_entitlement_body(maxRunsPerDay=1, maxConcurrentRuns=5),
+        headers={**headers, "If-Match": "0"},
+    )
+    with workspace_connection(db, WS) as conn:
+        # A usage event recorded under the bare key an idempotency header would carry.
+        budgets.record_usage(
+            conn, workspace_id=WS, event_key="shared-key", kind="RUN_ADMITTED", quantity=1
+        )
+
+    response = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": MANIFEST},
+        headers={**headers, "Idempotency-Key": "shared-key"},
+    )
+    # Refused, because the allowance of one is already spent and this key is not the key that spent
+    # it. Sharing the key space would have admitted this run for free.
+    assert response.status_code == 429, response.text
+    assert response.json()["code"] == "QUOTA_EXHAUSTED"
+
+
+def test_concurrency_is_refused_with_its_own_explanation(client: TestClient, db: str) -> None:
+    headers = _sign_in(db, client)
+    client.put(
+        f"/v1/workspaces/{WS}/settings/entitlement",
+        json=_entitlement_body(maxRunsPerDay=100, maxConcurrentRuns=1),
+        headers={**headers, "If-Match": "0"},
+    )
+    first = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": MANIFEST},
+        headers={**headers, "Idempotency-Key": "one"},
+    )
+    assert first.status_code == 202
+
+    second = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": MANIFEST},
+        headers={**headers, "Idempotency-Key": "two"},
+    )
+    assert second.status_code == 429
+    problem = second.json()
+    assert problem["kind"] == "CONCURRENT_RUNS"
+    # A different remedy from a daily allowance: this clears as runs finish, and telling somebody to
+    # raise a limit that is nowhere near exhausted wastes their time.
+    assert "clears as runs finish" in problem["detail"]
 
 
 def test_a_viewer_cannot_change_a_limit(client: TestClient, db: str) -> None:
