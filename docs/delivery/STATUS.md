@@ -69,6 +69,11 @@ submissions, three verdicts including UNABLE_TO_ASSESS, independence on canonica
 bound to a second source, append-only corrections, and the finding lifecycle gated on an accepting
 review. **No human review has occurred and no reviewer has used assistive technology** — nobody could,
 because module 08 is blocked. Missing human participation stays a release-proof blocker.
+Module 17: **implemented and locally verified**, delivery open. Versioned bundles, Ed25519 service
+attestation reported as attribution rather than validity, a hostile-archive reader, and an offline
+verifier driven end to end with no account, network or database. **No bundle has ever carried a real
+screen-reader trace, a human assessment or a baseline/candidate comparison** — modules 08, 09 and 15
+are the reasons, and the verifier reports each absence as such rather than as a failure.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
