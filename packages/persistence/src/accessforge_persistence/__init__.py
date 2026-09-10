@@ -2,7 +2,10 @@
 
 Submodules: ``runs`` (reducer-backed run persistence), ``idempotency``, ``outbox`` (transactional
 outbox and durable jobs), ``sequencer`` (the single trusted evidence sequencer), ``recovery``,
-``transport`` and ``metrics``.
+``transport``, ``metrics``, ``projects``, ``fixtures``, ``runners`` (desktop leases and the action
+journal), ``reviews`` (human review and the finding lifecycle), ``events`` (workspace event streams
+with durable cursors), ``schedules`` (bounded recurring authorization) and ``evidence`` (artifact
+intake, finalization, the completion observer and export).
 
 PostgreSQL is authoritative for business state (CONTRACTS section 2). This package owns schema
 migration and the connection discipline that makes row-level security actually apply; repositories

@@ -23,19 +23,19 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 04 | Authoritative journal and transactional outbox | 02, 03 | FR-006, 014, 015, 021 | implemented | passed | merged | E0 |
 | 05 | Authorized projects and immutable builds | 03, 04 | FR-001, 002, 010, 014 | implemented | passed | merged | E0 |
 | 06 | Versioned journey DSL, fixtures, assertions | 02, 05 | FR-003, 005, 007, 023 | implemented | passed | merged | E0 |
-| 07 | Runner enrollment, admission, desktop leases | 04, 06 | FR-004, 005, 014, 015, 021 | implemented | passed | open | E0 |
-| 08 | Actual macOS VoiceOver execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no real reader** | open | E0 |
-| 09 | Actual Windows NVDA execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no Windows host** | open | R1 |
-| 10 | Provenance-bound evidence ingestion | 04, 07, 08 | FR-006, 014, 015, 020 | implemented | passed (contract, not end-to-end) | open | E0 |
-| 11 | Independent deterministic outcome verifier | 06, 10 | FR-006, 007, 011, 023 | implemented | passed (no real reader trace) | open | E0 |
+| 07 | Runner enrollment, admission, desktop leases | 04, 06 | FR-004, 005, 014, 015, 021 | implemented | passed | merged | E0 |
+| 08 | Actual macOS VoiceOver execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no real reader** | merged | E0 |
+| 09 | Actual Windows NVDA execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no Windows host** | merged | R1 |
+| 10 | Provenance-bound evidence ingestion | 04, 07, 08 | FR-006, 014, 015, 020 | implemented | passed (contract, not end-to-end) | merged | E0 |
+| 11 | Independent deterministic outcome verifier | 06, 10 | FR-006, 007, 011, 023 | implemented | passed (no real reader trace) | merged | E0 |
 | 12 | Real Strands navigator and bounded tools | 07, 08, 11 | FR-005, 008, 015, 021 | not started | **blocked** | local | E0 |
 | 13 | Evidence-grounded diagnosis and findings | 11, 12 | FR-009, 012, 023 | not started | **blocked** | local | E0 |
 | 14 | Constrained patch proposal and sandbox | 05, 13 | FR-002, 010, 014, 015 | not started | **blocked** | local | E0 |
 | 15 | Matched candidate verification | 11, 14 | FR-002, 007, 010, 011 | not started | pending | local | E0 |
-| 16 | Human review and finding lifecycle | 03, 15 | FR-009, 011, 012, 014 | implemented | passed (no human reviewer) | open | E0 |
-| 17 | Redacted export and offline verifier | 10, 11, 16 | FR-006, 007, 012, 013, 020 | implemented | passed (synthetic bundles only) | open | E0 |
-| 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | partial (18 of ~28 routes) | passed | open | E0 |
-| 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | not started | pending | local | E0 |
+| 16 | Human review and finding lifecycle | 03, 15 | FR-009, 011, 012, 014 | implemented | passed (no human reviewer) | merged | E0 |
+| 17 | Redacted export and offline verifier | 10, 11, 16 | FR-006, 007, 012, 013, 020 | implemented | passed (synthetic bundles only) | merged | E0 |
+| 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | partial (18 of ~28 routes) | passed | merged | E0 |
+| 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | implemented | passed (no SSE route, no real runner) | open | E0 |
 | 20 | Opt-in GitHub checks and publication | 15, 16, 18 | FR-001, 010–012, 014, 018 | not started | pending | local | R1 |
 | 21 | Accessible modern UI foundation | 18 | FR-014, 016, 019 | not started | pending | local | E0 |
 | 22 | Projects, journeys and runner UI | 19, 21 | FR-001–005, 015, 017, 019 | not started | pending | local | E0 |
