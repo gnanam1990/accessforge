@@ -1,0 +1,23 @@
+[project]
+name = "accessforge-client"
+version = "0.0.0"
+description = "Python client and operator CLI for the AccessForge API."
+requires-python = ">=3.13,<3.14"
+dependencies = ["httpx>=0.28", "accessforge-evidence"]
+
+[tool.uv.sources]
+# `export verify` delegates to module 17's offline verifier rather than reimplementing it. The
+# point of that verifier is that a reader can check a bundle with no access to this system, and a
+# CLI that verified by calling the API would destroy that property while appearing to keep it.
+accessforge-evidence = { workspace = true }
+
+[project.scripts]
+# Mirrors lifecycle operations and cannot bypass server policy: every check happens on the server.
+accessforge = "accessforge_client.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/accessforge_client"]

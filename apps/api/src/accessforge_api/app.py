@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 
 from .config import ApiSettings
 from .health import (
@@ -30,6 +31,7 @@ from .routes import (
     schedules_router,
     session_router,
     settings_router,
+    stream_router,
 )
 
 _log = logging.getLogger("accessforge.api")
@@ -172,9 +174,28 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
     return schema
 
 
+def _operation_id(route: APIRoute) -> str:
+    """Name an operation after its handler, not after its URL.
+
+    FastAPI's default builds an id from the path, producing
+    `revalidate_execution_grant_v1_workspaces__workspace_id__execution_grants__grant_id__revalidations_post`
+    — which a generated client then uses as a method name. Worse, it changes whenever the *path*
+    changes, so moving a route renames the operation and silently breaks every consumer keyed on it.
+
+    The handler name is stable, readable, and already unique across these routers; a collision
+    raises here rather than producing two operations that quietly share an id.
+    """
+    return route.name
+
+
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
     config = settings or ApiSettings()  # type: ignore[call-arg]
-    app = FastAPI(title="AccessForge API", version="0.0.0", lifespan=_lifespan)
+    app = FastAPI(
+        title="AccessForge API",
+        version="0.0.0",
+        lifespan=_lifespan,
+        generate_unique_id_function=_operation_id,
+    )
     app.state.config = config
 
     @app.exception_handler(ProblemDetail)
@@ -212,6 +233,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         settings_router,
         findings_router,
         exports_router,
+        stream_router,
     ):
         app.include_router(router)
 
@@ -250,4 +272,30 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     def diagnostics() -> dict[str, Any]:
         return {"config": config.redacted()}
 
+    # After every route, including the ones defined in this function. Running it earlier checked a
+    # partial catalog: a later route colliding with one of these would have passed the guard and
+    # then quietly shadowed the other in every generated client.
+    _assert_operation_ids_are_unique(app)
     return app
+
+
+def _assert_operation_ids_are_unique(app: FastAPI) -> None:
+    """Two operations sharing an id is a generated client with one of them missing.
+
+    Checked at startup rather than left to the generator, because the generator runs in CI and this
+    runs everywhere — and the failure it prevents is silent: the second definition overwrites the
+    first in a dict keyed by operation id, and the route simply becomes uncallable from every
+    generated client while continuing to work perfectly in a browser.
+    """
+    seen: dict[str, str] = {}
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        identifier = _operation_id(route)
+        if identifier in seen:
+            raise RuntimeError(
+                f"two routes generate the operation id {identifier!r}: {seen[identifier]} and "
+                f"{route.path}. Rename one handler; a generated client keyed on this id would "
+                "silently lose one of them."
+            )
+        seen[identifier] = route.path
