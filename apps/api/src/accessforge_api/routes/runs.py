@@ -11,11 +11,12 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from accessforge_api.dependencies import clamp_page_size, require_if_match, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
-from accessforge_api.routes._common import as_body, authorize, workspace_scope
+from accessforge_api.routes._common import as_body, as_identifier, authorize, workspace_scope
 from accessforge_domain import reducers
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import evidence, runners, runs
+from accessforge_persistence.evidence import artifacts as artifacts_module
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runs"])
 
@@ -49,6 +50,29 @@ def _run_view(row: dict[str, Any]) -> dict[str, Any]:
         "quarantined": bool(row["quarantined"]),
         "retryOf": None if row["retry_of"] is None else str(row["retry_of"]),
     }
+
+
+def _bound_attempt(conn: psycopg.Connection[Any], *, run_id: str, attempt_id: str) -> str:
+    """Confirm this attempt belongs to this run, or refuse.
+
+    Row-level security keeps another tenant's attempt invisible, and that is not enough here: an
+    attempt id from a *different run in the same workspace* is perfectly visible and passes a UUID
+    check. Reading evidence for the mismatched pair returned a plausible empty timeline for one
+    route and another attempt's producer streams for the other — the second is the serious one,
+    because it attributes one run's evidence to a different run's screen.
+
+    404 rather than 400: the pair does not identify anything available, and saying which half was
+    wrong would tell a caller that the other half exists.
+    """
+    as_identifier(run_id, what="the run")
+    as_identifier(attempt_id, what="the attempt")
+    row = conn.execute(
+        "SELECT id FROM run_attempt WHERE id = %s AND run_id = %s",
+        (attempt_id, run_id),
+    ).fetchone()
+    if row is None:
+        raise not_found()
+    return attempt_id
 
 
 _RUN_COLUMNS = (
@@ -217,6 +241,7 @@ def replay_events(
     early whenever the total is a multiple of the page size.
     """
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _bound_attempt(conn, run_id=run_id, attempt_id=attempt_id)
     size = clamp_page_size(limit)
     try:
         page = evidence.replay(
@@ -251,4 +276,228 @@ def evidence_summary(
     summary is a step towards an object key in a log.
     """
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _bound_attempt(conn, run_id=run_id, attempt_id=attempt_id)
     return evidence.evidence_summary(conn, run_id=run_id, attempt_id=attempt_id)
+
+
+@router.get("/runs/{run_id}/attempts")
+def list_attempts(workspace_id: str, run_id: str, request: Request, conn: Conn) -> dict[str, Any]:
+    """The attempts made on one run, newest epoch first.
+
+    Every other evidence route is scoped to an attempt, and until now a caller had to already know
+    an attempt id to use them. A run can have more than one attempt only in the sense that a lease
+    was granted more than once; each has its own canonical chain, and mixing two attempts' events
+    into one timeline would produce a sequence that never happened.
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    as_identifier(run_id, what="the run")
+    exists = conn.execute("SELECT 1 FROM run WHERE id = %s", (run_id,)).fetchone()
+    if exists is None:
+        raise not_found()
+    rows = conn.execute(
+        """
+        SELECT id, lease_epoch, started_at, ended_at
+        FROM run_attempt WHERE run_id = %s ORDER BY lease_epoch DESC
+        """,
+        (run_id,),
+    ).fetchall()
+    return {
+        "items": [
+            {
+                "attemptId": str(r["id"]),
+                "leaseEpoch": int(r["lease_epoch"]),
+                "startedAt": str(r["started_at"]),
+                # Null means the attempt has no recorded end. Not "still running": an attempt whose
+                # runner vanished also has no end, and the two are told apart by the run's status
+                # and its ambiguity reason, not by this field.
+                "endedAt": None if r["ended_at"] is None else str(r["ended_at"]),
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.get("/runs/{run_id}/timeline")
+def replay_timeline(
+    workspace_id: str,
+    run_id: str,
+    attempt_id: str,
+    request: Request,
+    conn: Conn,
+    after_sequence: int = 0,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """The canonical chain with provenance, for a reader rather than a verifier.
+
+    Separate from `/events`, which serves digests only. A person inspecting a run needs to know
+    *who* said each thing and *what they said*, and the two questions have different safety
+    properties — so they have different routes and this one carries the extra care.
+
+    Three rules hold here.
+
+    **Ordering is the sequencer's, never a clock.** `sequence` is assigned by the trusted sequencer
+    inside the transaction that admits a record. Producers submit source times from their own
+    machines, and those disagree; sorting by them would reorder an attempt according to whose clock
+    was fast.
+
+    **Provenance travels with every event.** `producerId` says which identity submitted it and
+    `producerSequence` says where that producer thought it sat. A supervisor's receipt is not
+    independent observer proof, and a timeline that rendered both as "evidence" would erase the
+    distinction the whole outcome depends on.
+
+    The producer's *role* is not a stored column — module 10 records a producer identifier and
+    nothing typed alongside it — so this route reports the identifier and the screen says that the
+    role is a convention rather than a field. Making it a field is a schema change to a module this
+    one does not own, and inventing a role here by parsing the identifier would be exactly the kind
+    of derived authority this product refuses everywhere else.
+
+    **The payload is the recorded one.** Not a summary, not a narration. Where a payload carries
+    fixture input it was already redacted at ingestion; nothing is redacted here, because a
+    redaction applied at read time is one that can be forgotten at the next read.
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _bound_attempt(conn, run_id=run_id, attempt_id=attempt_id)
+    size = clamp_page_size(limit)
+    rows = conn.execute(
+        """
+        SELECT e.sequence, e.event_id, e.event_type, e.source_time, e.received_time,
+               e.lease_epoch, e.payload_digest, e.payload, e.previous_event_hash,
+               r.producer_id, r.producer_sequence, r.source_record_digest
+          FROM canonical_event e
+          LEFT JOIN producer_source_record r
+                 ON r.canonical_sequence = e.sequence AND r.attempt_id = e.attempt_id
+         WHERE e.run_id = %s AND e.attempt_id = %s AND e.sequence > %s
+         ORDER BY e.sequence
+         LIMIT %s
+        """,
+        (run_id, attempt_id, after_sequence, size + 1),
+    ).fetchall()
+
+    events = [
+        {
+            "sequence": int(r["sequence"]),
+            "eventId": str(r["event_id"]),
+            "eventType": str(r["event_type"]),
+            "leaseEpoch": int(r["lease_epoch"]),
+            # Kept as context, and never used for ordering. Two producers' clocks disagree, and a
+            # reader is entitled to see that they do.
+            "sourceTime": str(r["source_time"]),
+            "receivedTime": str(r["received_time"]),
+            "payloadDigest": str(r["payload_digest"]),
+            "previousEventHash": str(r["previous_event_hash"]),
+            "payload": r["payload"],
+            "producerId": None if r["producer_id"] is None else str(r["producer_id"]),
+            "producerSequence": (
+                None if r["producer_sequence"] is None else int(r["producer_sequence"])
+            ),
+            "sourceRecordDigest": (
+                None if r["source_record_digest"] is None else str(r["source_record_digest"])
+            ),
+        }
+        for r in rows[:size]
+    ]
+    return {
+        "events": events,
+        "nextAfterSequence": events[-1]["sequence"] if events else after_sequence,
+        # True only for a short page. A full page cannot tell "this is all of them" from "this is
+        # all of them so far", and claiming exhaustion on a full page stops a reader one page early
+        # whenever the total is a multiple of the page size.
+        "exhausted": len(rows) <= size,
+        "orderingMeaning": (
+            "Ordered by the sequence the trusted sequencer assigned, not by any clock. Source "
+            "times come from the producers' own machines and disagree with each other."
+        ),
+    }
+
+
+@router.get("/runs/{run_id}/completeness")
+def evidence_completeness(
+    workspace_id: str, run_id: str, attempt_id: str, request: Request, conn: Conn
+) -> dict[str, Any]:
+    """What is missing from this attempt's evidence, and nothing about what it means.
+
+    There is deliberately no outcome in this response. Completeness is an input to a verdict, not a
+    verdict: a complete evidence set can still describe a failure, and an incomplete one does not
+    become a pass by being tidy. The reasons are the product.
+
+    `contiguous` and `producersClosed` are separate fields because they are separate properties.
+    A contiguous chain proves no record is missing from the *middle*; it says nothing about a
+    producer that stopped halfway and left a perfect chain covering half the attempt (INV-06).
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _bound_attempt(conn, run_id=run_id, attempt_id=attempt_id)
+    from accessforge_persistence import sequencer
+
+    contiguous = sequencer.chain_is_contiguous(conn, run_id=run_id, attempt_id=attempt_id)
+    streams = conn.execute(
+        """
+        -- `run_id` as well as `attempt_id`. `_bound_attempt` above already refuses a mismatched
+        -- pair, so through this route the extra predicate can never change the answer: it is
+        -- defence in depth, and a mutation check confirms no test reaches it. It stays because it
+        -- makes the query correct on its own terms rather than correct because of what a caller
+        -- did first, and this is the read that previously attributed one run's producer streams to
+        -- another run's screen.
+        SELECT producer_id, admitted_through, closed_at_sequence
+        FROM producer_stream WHERE attempt_id = %s AND run_id = %s ORDER BY producer_id
+        """,
+        (attempt_id, run_id),
+    ).fetchall()
+    unclosed = [str(r["producer_id"]) for r in streams if r["closed_at_sequence"] is None]
+    missing = artifacts_module.missing_required_artifacts(
+        conn, run_id=run_id, attempt_id=attempt_id
+    )
+    lifecycle = conn.execute(
+        """
+        SELECT
+          bool_or(event_type = 'RUN_STARTED')  AS started,
+          bool_or(event_type = 'RUN_FINISHED') AS finished
+        FROM canonical_event WHERE run_id = %s AND attempt_id = %s
+        """,
+        (run_id, attempt_id),
+    ).fetchone()
+    bounded = bool(lifecycle and lifecycle["started"] and lifecycle["finished"])
+
+    reasons: list[str] = []
+    if not contiguous:
+        reasons.append(
+            "the canonical event chain has gaps: records were admitted at non-consecutive "
+            "positions, so events are missing from the middle of this attempt"
+        )
+    if unclosed:
+        reasons.append(
+            f"required producers have not closed their streams: {', '.join(unclosed)}. A "
+            "contiguous chain does not cover this — a producer that stopped halfway leaves a "
+            "perfect chain and half the evidence."
+        )
+    if missing:
+        reasons.append(
+            "required artifacts are missing: "
+            + ", ".join(f"{m['kind']} from {m['producer']} ({m['reason']})" for m in missing)
+        )
+    if not bounded:
+        reasons.append(
+            "the attempt has no RUN_STARTED and RUN_FINISHED pair, so its extent is undefined and "
+            "nothing establishes that the evidence covers the whole of it"
+        )
+
+    return {
+        "reasons": reasons,
+        "contiguous": contiguous,
+        "producersClosed": not unclosed,
+        "artifactsPresent": not missing,
+        "lifecycleBounded": bounded,
+        "producers": [
+            {
+                "producerId": str(r["producer_id"]),
+                "admittedThrough": int(r["admitted_through"]),
+                "closedAt": (
+                    None if r["closed_at_sequence"] is None else int(r["closed_at_sequence"])
+                ),
+            }
+            for r in streams
+        ],
+        "meaning": (
+            "This describes the evidence, not the run. A complete evidence set can still describe "
+            "a failure, and an incomplete one does not become a pass by being tidy."
+        ),
+    }
