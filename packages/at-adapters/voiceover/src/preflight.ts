@@ -20,7 +20,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { BLOCKED_REASON, TARGET_MATRIX } from './profile.js';
+import { BLOCKED_REASON, TARGET_MACOS_VERSION, TARGET_MATRIX } from './profile.js';
 
 /** Mirrors `accessforge_domain.states.Condition`. UNKNOWN is a value, not an error. */
 export type Condition = 'TRUE' | 'FALSE' | 'UNKNOWN';
@@ -150,9 +150,12 @@ export function probeReaderVersion(env: ProbeEnvironment): ProbeResult {
   if (build === undefined) {
     return unknown('the macOS version could not be read, so the reader version is undetermined');
   }
-  if (!TARGET_MATRIX.macos.startsWith(build)) {
+  // Exact equality, not a prefix match. `'26.6 (build …)'.startsWith('26')` is true, so the prefix
+  // version of this check accepted macOS 26 as macOS 26.6 -- a whole release apart, with different
+  // VoiceOver announcements, reported as the pinned profile.
+  if (build !== TARGET_MACOS_VERSION) {
     return no(
-      `this host reports macOS ${build} and the pinned profile is ${TARGET_MATRIX.macos}. ` +
+      `this host reports macOS ${build} and the pinned profile is ${TARGET_MACOS_VERSION}. ` +
         'VoiceOver announces differently between releases, so a run here is not a run on the ' +
         'pinned profile.',
     );

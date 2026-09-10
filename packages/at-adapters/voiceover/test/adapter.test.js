@@ -21,6 +21,7 @@ import {
   dispatch,
   probePermission,
   probeReaderActive,
+  probeReaderVersion,
   probeScreenUnlocked,
   projectForNavigator,
   runPreflight,
@@ -371,4 +372,25 @@ test('the pinned matrix records what was targeted, not what was proved', () => {
   for (const [key, value] of Object.entries(TARGET_MATRIX)) {
     assert.ok(String(value).trim().length > 0, `${key} is empty`);
   }
+});
+
+// --- from a hand review of green CI --------------------------------------------------------------
+
+test('the macOS version comparison is exact, not a prefix match', async () => {
+  // `'26.6 (build 25G72)'.startsWith('26')` is true, so the prefix version of this check accepted
+  // macOS 26 as macOS 26.6 -- a whole release apart, with different VoiceOver announcements,
+  // reported as the pinned profile.
+  const { probeReaderVersion } = await import('../dist/index.js');
+  const at = (version) =>
+    probeReaderVersion(bareEnvironment({ readPreference: () => version })).condition;
+
+  assert.equal(at('26.6'), 'TRUE');
+  assert.equal(at('26'), 'FALSE', 'a major version is not the pinned point release');
+  assert.equal(at('26.61'), 'FALSE', 'a longer version that shares a prefix is a different release');
+  assert.equal(at('27.0'), 'FALSE');
+});
+
+test('an unreadable macOS version is UNKNOWN rather than a mismatch', () => {
+  // "I could not read the version" and "the version is wrong" send an operator to different places.
+  assert.equal(probeReaderVersion(bareEnvironment()).condition, 'UNKNOWN');
 });
