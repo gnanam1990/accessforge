@@ -8,6 +8,7 @@ dependencies = [
   "accessforge-reference-app",
   "accessforge-domain",
   "accessforge-contracts",
+  "accessforge-persistence",
 ]
 
 [tool.uv.sources]
@@ -15,9 +16,16 @@ accessforge-api = { workspace = true }
 accessforge-reference-app = { workspace = true }
 accessforge-domain = { workspace = true }
 accessforge-contracts = { workspace = true }
+accessforge-persistence = { workspace = true }
 
 [tool.uv.workspace]
-members = ["apps/api", "fixtures/reference-app", "packages/domain", "packages/contracts/python"]
+members = [
+  "apps/api",
+  "fixtures/reference-app",
+  "packages/domain",
+  "packages/contracts/python",
+  "packages/persistence",
+]
 
 [tool.uv]
 package = false
@@ -30,6 +38,7 @@ dev = [
   "ruff>=0.8",
   "mypy>=1.13",
   "hypothesis>=6.122",
+  "pytest-timeout>=2.3",
   "types-jsonschema>=4.23",
   "pyyaml>=6.0",
   "types-pyyaml>=6.0",
@@ -38,7 +47,14 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["apps/api/src", "fixtures/reference-app/src", "packages/domain/src", "packages/contracts/python/src", "tests"]
+src = [
+  "apps/api/src",
+  "fixtures/reference-app/src",
+  "packages/domain/src",
+  "packages/contracts/python/src",
+  "packages/persistence/src",
+  "tests",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S", "TID"]
@@ -57,7 +73,7 @@ ignore = ["S101"]  # assert is how pytest expresses expectations
 [tool.mypy]
 python_version = "3.13"
 strict = true
-mypy_path = "apps/api/src:fixtures/reference-app/src:packages/domain/src:packages/contracts/python/src"
+mypy_path = "apps/api/src:fixtures/reference-app/src:packages/domain/src:packages/contracts/python/src:packages/persistence/src"
 namespace_packages = true
 explicit_package_bases = true
 
@@ -67,4 +83,7 @@ markers = [
   "integration: requires a real PostgreSQL server",
   "fake: uses a labelled in-process fake, never actual-AT or real-service evidence",
 ]
+# A global timeout so a database deadlock fails loudly instead of hanging CI until the job limit.
+# A fixture that nested a scoped connection inside a TRUNCATE transaction did exactly that.
+timeout = 60
 addopts = "-ra --strict-markers"

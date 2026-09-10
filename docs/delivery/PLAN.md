@@ -18,8 +18,8 @@ Status is tracked in four independent fields, because a merged foundation is not
 |---|---|---|---|---|---|---|---|
 | 00 | Repository and runtime capability gate | — | FR-004, 008, 022, 024 | implemented | passed | merged | E0 |
 | 01 | Workspace foundation, pinned runtimes, first CI | 00 | FR-016, 022, 024 | implemented | passed | merged | E0 |
-| 02 | Canonical schemas and deterministic reducers | 01 | FR-002, 003, 007, 015, 016 | implemented | passed | open | E0 |
-| 03 | Human, tenant and service identities | 02 | FR-001, 014, 020 | not started | pending | local | E0 |
+| 02 | Canonical schemas and deterministic reducers | 01 | FR-002, 003, 007, 015, 016 | implemented | passed | merged | E0 |
+| 03 | Human, tenant and service identities | 02 | FR-001, 014, 020 | partial | passed | open | E0 |
 | 04 | Authoritative journal and transactional outbox | 02, 03 | FR-006, 014, 015, 021 | not started | pending | local | E0 |
 | 05 | Authorized projects and immutable builds | 03, 04 | FR-001, 002, 010, 014 | not started | pending | local | E0 |
 | 06 | Versioned journey DSL, fixtures, assertions | 02, 05 | FR-003, 005, 007, 023 | not started | pending | local | E0 |
@@ -48,6 +48,11 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 29 | Independent adversarial final review | 28 | FR-001–025 | not started | pending | local | R1 |
 
 ## Owned paths
+
+Module 03 owns `packages/domain/src/accessforge_domain/authorization/`, `packages/persistence/`,
+`apps/api/src/accessforge_api/auth/` and `docs/adr/0004-*`. Its implementation status is **partial**
+by design: the authorization primitives are complete and tested, but no HTTP surface exposes them
+because module 18 owns the API.
 
 Module 00 owns `docs/capabilities.md`, `docs/adr/0001-implementation-environment.md`,
 `docs/handoffs/00.md`. Module 01 owns the workspace manifests and lockfiles, `apps/api`,
