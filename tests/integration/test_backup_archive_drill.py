@@ -28,7 +28,7 @@ from urllib.parse import urlsplit, urlunsplit
 import pytest
 
 from accessforge_evidence.envelope import read_header
-from accessforge_persistence import connect, migrate
+from accessforge_persistence import connect, expected_migrations, migrate
 
 pytestmark = pytest.mark.integration
 
@@ -160,7 +160,9 @@ def test_inspect_reads_the_manifest_without_touching_a_database(
         "--inspect",
     )
     assert result.returncode == 0, result.stderr
-    assert "0014_restore_reconciliation.sql" in result.stdout
+    # The newest migration by name, read from the tree rather than written here: hard-coding it
+    # made this test fail the day the next migration landed, for no reason connected to --inspect.
+    assert expected_migrations()[-1] in result.stdout
     assert "omits:" in result.stdout
     assert "Private signing key material" in result.stdout
 

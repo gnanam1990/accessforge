@@ -247,6 +247,12 @@ def _check_postgres(database_url: str) -> list[Check]:
         checks.append(
             Check("postgresql role", Verdict.OK, f"{role['role']} is subject to row-level security")
         )
+        # The role being subject to RLS is only half of it. A table with RLS disabled -- or enabled
+        # but not FORCEd, which does nothing for the owner, and the application role *is* the owner
+        # -- has no isolation at all, and the role check above says OK regardless. A restore taken
+        # or replayed with the wrong flags produces exactly that: every policy present, none in
+        # effect.
+        checks.append(_check_forced_row_level_security(database_url))
 
     try:
         from accessforge_persistence import applied_migrations, expected_migrations
@@ -280,6 +286,73 @@ def _check_postgres(database_url: str) -> list[Check]:
         checks.append(Check("schema", Verdict.UNREACHABLE, type(exc).__name__))
 
     return checks
+
+
+#: The smallest number of workspace-scoped tables a migrated database can plausibly have. The check
+#: below derives its table list from the schema, and a derived list has one failure mode: returning
+#: nothing and reporting success. This is the floor that turns a vacuous pass into a failure.
+MINIMUM_TENANT_TABLES = 20
+
+
+def _check_forced_row_level_security(database_url: str) -> Check:
+    """Whether the tenant tables actually enforce their policies against their owner.
+
+    `ENABLE ROW LEVEL SECURITY` does nothing for a table's owner; only `FORCE` applies to them. The
+    application role owns these tables, so an enabled-but-not-forced table has policies that are
+    present, visible in `\\d`, and completely inert for the only role that matters. The role check
+    above cannot see this: the role is subject to RLS, and the table simply has none in effect.
+
+    The table list is derived from the schema -- every table carrying a `workspace_id` -- rather
+    than hard-coded. The first version of this function named ten tables and two of the names were
+    wrong, which the derived query found immediately; a hand-maintained list of tenant tables drifts
+    the moment somebody adds one, and drifts silently in the direction of checking less.
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+
+    try:
+        with psycopg.connect(database_url, connect_timeout=5, row_factory=dict_row) as conn:
+            rows = conn.execute(
+                """
+                SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
+                  FROM pg_class c
+                  JOIN pg_attribute a ON a.attrelid = c.oid
+                  JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relkind = 'r'
+                   AND n.nspname = 'public'
+                   AND a.attname = 'workspace_id'
+                   AND NOT a.attisdropped
+                 ORDER BY c.relname
+                """
+            ).fetchall()
+    except psycopg.Error as exc:
+        return Check("row-level security", Verdict.UNREACHABLE, type(exc).__name__)
+
+    if len(rows) < MINIMUM_TENANT_TABLES:
+        return Check(
+            "row-level security",
+            Verdict.OUT_OF_DATE,
+            f"only {len(rows)} workspace-scoped table(s) found",
+            "this database is not fully migrated, so there is nothing meaningful to check yet: "
+            "uv run python scripts/migrate.py",
+        )
+
+    unprotected = sorted(
+        str(r["relname"])
+        for r in rows
+        if not (bool(r["relrowsecurity"]) and bool(r["relforcerowsecurity"]))
+    )
+    if unprotected:
+        return Check(
+            "row-level security",
+            Verdict.MISCONFIGURED,
+            f"enabled-and-FORCEd is missing on: {', '.join(unprotected)}",
+            "ENABLE does nothing for a table's owner and the application role owns these tables, "
+            "so those policies are present and inert. ALTER TABLE ... FORCE ROW LEVEL SECURITY.",
+        )
+    return Check(
+        "row-level security", Verdict.OK, f"enabled and FORCEd on all {len(rows)} tenant tables"
+    )
 
 
 def _check_object_store(endpoint: str) -> Check:
@@ -351,8 +424,16 @@ def main(argv: list[str] | None = None) -> int:
             stripped = line.strip()
             if not stripped or stripped.startswith("#") or "=" not in stripped:
                 continue
+            stripped = stripped.removeprefix("export ").lstrip()
             key, _, value = stripped.partition("=")
-            env[key.strip()] = value.strip()
+            value = value.strip()
+            # Quotes are stripped because pydantic-settings strips them, and a doctor that read
+            # `"postgresql://..."` literally would fail to connect to a database the application
+            # starts against perfectly well -- reporting a problem that does not exist, which is the
+            # one thing a diagnostic must not do.
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            env[key.strip()] = value
     env.update(os.environ)
 
     sections: list[tuple[str, list[Check]]] = []

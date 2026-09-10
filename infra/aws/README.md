@@ -61,9 +61,21 @@ the same as approving spend. See `docs/operations/RESOURCES-AND-COST-DRIVERS.md`
 | `iam/backup-operator.json` | The backup role. Bypasses nothing in AWS, but is the identity that holds the backup key. |
 | `iam/ci-read-only.json` | What CI would be allowed, if it were ever given an identity. It currently has none. |
 
-Every policy is written least-privilege and each statement carries a comment saying what breaks
+Every policy is written least-privilege and each statement carries a `"//"` note saying what breaks
 without it, because a policy nobody can explain is a policy that gets widened during an incident and
 never narrowed afterwards.
+
+**Those notes are JSON data, not comments, and IAM rejects them.** The annotated file is the source;
+`scripts/render_iam_policy.py` strips the annotations and checks what is left:
+
+```bash
+uv run python scripts/render_iam_policy.py --check infra/aws/iam/*.json   # CI runs this
+uv run python scripts/render_iam_policy.py --out-dir /tmp/iam infra/aws/iam/*.json
+```
+
+Structure only — every statement has an Effect, an Action and a Resource, Sids are unique, and no
+unrecognised member survives. Nothing is validated against AWS, because there are no credentials
+here and a check that implied otherwise would be the unearned claim this product exists to refuse.
 
 ## To provision this
 

@@ -31,6 +31,13 @@
       "Resource": "arn:aws:s3:::${backup_bucket}/*"
     },
     {
+      "Sid": "ReadThroughTheEvidenceKey",
+      "//": "SSE-KMS means every GetObject is also a KMS Decrypt. Without this the bucket policy succeeds and every read fails part-way through the backup -- and the failure arrives object by object rather than up front. Decrypt only: this identity reads evidence, it never writes it.",
+      "Effect": "Allow",
+      "Action": ["kms:Decrypt"],
+      "Resource": "${evidence_kms_key_arn}"
+    },
+    {
       "Sid": "UseTheBackupKey",
       "//": "Encrypt only. This identity seals archives; opening one is a restore, performed by a person during an incident under a different role. See scripts/restore.py.",
       "Effect": "Allow",

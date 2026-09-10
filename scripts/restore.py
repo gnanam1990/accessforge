@@ -34,9 +34,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from accessforge_evidence.envelope import KEY_BYTES, EnvelopeError, open_sealed, read_header
-from accessforge_persistence import connect
+from accessforge_persistence import connect, expected_migrations, migrate
 from accessforge_persistence.evidence.objectstore import S3ArtifactStore, S3Settings
-from accessforge_persistence.restore import reconcile
+from accessforge_persistence.restore import reconcile, restore_is_forward_compatible
 
 #: Members a backup may contain. Everything else is refused rather than ignored -- an archive is
 #: untrusted input even when you took it yourself, because "you took it yourself" is exactly what
@@ -183,7 +183,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--key-file", type=Path, default=os.environ.get("ACCESSFORGE_BACKUP_KEY_FILE")
     )
-    parser.add_argument("--target-bucket", default=os.environ.get("ACCESSFORGE_EVIDENCE_BUCKET"))
+    parser.add_argument(
+        "--target-bucket",
+        help="an isolated bucket for the restored evidence. Deliberately has no default: it used "
+        "to fall back to ACCESSFORGE_EVIDENCE_BUCKET, which points at the live store, and "
+        "restoring into it resurrects objects that retention deleted after the snapshot.",
+    )
+    parser.add_argument(
+        "--allow-restoring-into-the-source-bucket",
+        action="store_true",
+        help="permit --target-bucket to be the bucket the backup was taken from. This overwrites "
+        "live evidence with a snapshot and undoes retention deletions; it exists so the override "
+        "is explicit and appears in shell history rather than being a silent default.",
+    )
     parser.add_argument(
         "--operator", default=os.environ.get("USER", "unknown"), help="recorded in the audit row"
     )
@@ -246,13 +258,36 @@ def main(argv: list[str] | None = None) -> int:
 
     if not _target_is_empty(args.target_database_url):
         return 2
-    _restore_postgres(members["postgres.dump"], args.target_database_url)
-    print(f"\nrestored PostgreSQL into {urlsplit(args.target_database_url).path.lstrip('/')}")
-
+    # Evidence first, and the object store validated before PostgreSQL is touched at all.
+    #
+    # The order matters for what a failure leaves behind. Restoring the database first and then
+    # failing on a missing bucket leaves a populated database, and the next attempt is refused by
+    # `_target_is_empty` -- so a transient object-store problem turns into a manual cleanup during
+    # an incident. Doing the store first means a failure there leaves the database untouched and the
+    # command simply re-runnable.
     object_members = {n: p for n, p in members.items() if n.startswith("evidence/")}
     if object_members:
         if not args.target_bucket:
-            print("evidence objects present but no --target-bucket given", file=sys.stderr)
+            print(
+                f"this archive carries {len(object_members)} evidence object(s) and no "
+                "--target-bucket was given. There is no default: restoring evidence into the live "
+                "bucket resurrects objects that retention deleted after the snapshot.",
+                file=sys.stderr,
+            )
+            return 2
+        source_bucket = manifest.get("evidenceBucket")
+        if (
+            source_bucket
+            and args.target_bucket == source_bucket
+            and not args.allow_restoring_into_the_source_bucket
+        ):
+            print(
+                f"--target-bucket is {args.target_bucket!r}, the bucket this backup was taken "
+                "from. Restoring into it overwrites live evidence with a snapshot and undoes every "
+                "retention deletion made since. Pass "
+                "--allow-restoring-into-the-source-bucket if that is genuinely what you want.",
+                file=sys.stderr,
+            )
             return 2
         store = S3ArtifactStore(
             S3Settings(
@@ -271,6 +306,25 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(f"restored {len(object_members)} evidence object(s) into {args.target_bucket}")
 
+    _restore_postgres(members["postgres.dump"], args.target_database_url)
+    print(f"restored PostgreSQL into {urlsplit(args.target_database_url).path.lstrip('/')}")
+
+    # The restored schema is checked and brought forward before anything reconciles against it.
+    # Without this, a backup taken before migration 0014 restores cleanly and then fails inside
+    # reconciliation on a CHECK constraint that does not yet allow 'RESTORED_DATABASE' -- after the
+    # database and every evidence object have already landed. A schema *ahead* of this build is
+    # refused outright: old code reads unknown columns as absent, which is indistinguishable from a
+    # column being empty.
+    with connect(args.target_database_url) as conn:
+        compatible, detail = restore_is_forward_compatible(conn, expected=expected_migrations())
+    print(f"schema: {detail}")
+    if not compatible:
+        print("\n" + detail, file=sys.stderr)
+        return 2
+    applied = migrate(args.target_database_url)
+    if applied:
+        print(f"migrated the restored database forward: {', '.join(applied)}")
+
     if args.no_reconcile:
         print(
             "\nNOT RECONCILED. This database currently contains live sessions, granted desktop "
@@ -283,7 +337,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     with connect(args.target_database_url) as conn:
-        report = reconcile(conn, operator=args.operator)
+        # The archive's own stream id identifies this restore. Scoping the once-only guarantee to
+        # the restore rather than to the database is what stops the audit row -- which travels in
+        # every backup taken afterwards -- from blocking the next real restore years later.
+        report = reconcile(conn, operator=args.operator, restore_id=envelope.stream_id)
         conn.commit()
     print("\nreconciled: " + report.summary)
     if report.grants_requiring_revalidation:

@@ -220,6 +220,27 @@ def admit_occurrence(
     # been revoked, revised or expired, and each of those means nobody currently authorizes this.
     if str(row["execution_grant_id"]) != grant.grant_id:
         raise ScheduleError("the supplied grant is not the one this schedule was created against")
+
+    # Read from the row rather than from the object the caller handed us. `grant` is constructed by
+    # the caller, so a caller holding one built before a restore would present a grant whose
+    # `revalidation_required` is False no matter what the database says -- and the whole property is
+    # that a restored grant is unusable until a person clears it in the database.
+    restored = conn.execute(
+        "SELECT revalidation_required FROM execution_grant WHERE id = %s",
+        (grant.grant_id,),
+    ).fetchone()
+    # A missing row is left alone deliberately. `schedule.execution_grant_id` has no foreign key to
+    # `execution_grant`, so a schedule can reference a grant that was never persisted -- which
+    # several existing tests do. Refusing here would be a stricter rule than module 19 wrote, and
+    # tightening somebody else's contract as a side effect of a restore control is how a change
+    # nobody asked for lands in a release. What this check owns is narrow: a grant row that exists
+    # and says it needs revalidation is unusable.
+    if restored is not None and bool(restored["revalidation_required"]):
+        return _skip(
+            "the standing authorization was restored from a backup and has not been revalidated. "
+            "A grant revoked after the snapshot is live in that data and revoked in the world, and "
+            "nothing in it can tell the difference, so it is unusable until a person confirms it."
+        )
     try:
         grant.check_usable(now=moment, expected_revision=int(row["grant_revision"]))
     except AuthorityError as exc:

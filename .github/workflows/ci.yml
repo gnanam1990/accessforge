@@ -80,6 +80,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The checkout action persists its token in .git/config by default, and later steps in
+          # this workflow execute pull-request-controlled code -- a test, a build script, a
+          # dependency's own code. Any of those can read the token out of the working tree. Nothing
+          # here needs to push, so nothing here keeps a credential.
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -294,6 +300,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -322,6 +330,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           # Full history: the specification-pack guard compares against the merge base with main.
           # With the default shallow fetch there is no origin/main ref at all, and the comparison
           # silently degrades to "nothing changed".
@@ -376,6 +385,16 @@ jobs:
           fi
           echo "specification pack unmodified"
 
+      - name: The proposed IAM policies render to valid documents
+        # The files in infra/aws/iam/ carry `"//"` annotations, which JSON treats as data and IAM
+        # rejects. This checks that stripping them leaves a structurally valid policy, so the
+        # explanations cannot quietly turn the proposal into something that cannot be attached.
+        #
+        # Structure only. Nothing here is validated against AWS: there are no credentials, and a
+        # check that implied otherwise would be the unearned claim this product exists to refuse.
+        run: |
+          python3 scripts/render_iam_policy.py --check infra/aws/iam/*.json
+
       - name: No secrets or local paths committed
         run: |
           if grep -rEn 'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' \
@@ -391,6 +410,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The checkout action persists its token in .git/config by default, and later steps in
+          # this workflow execute pull-request-controlled code -- a test, a build script, a
+          # dependency's own code. Any of those can read the token out of the working tree. Nothing
+          # here needs to push, so nothing here keeps a credential.
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -486,6 +511,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: State what this pipeline cannot exercise
         # A job that says so out loud, because the alternative is a green pipeline that a reader
