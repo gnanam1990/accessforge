@@ -29,6 +29,7 @@ from .artifacts import (
     upload_to_quarantine,
     verify_stored_integrity,
 )
+from .export import ExportError, ExportNotAuthorized, ExportRequest, assert_may_export, build_bundle
 from .finalization import (
     MAX_STAGED_RECORDS_PER_ATTEMPT,
     Completeness,
@@ -57,6 +58,11 @@ from .observer import ApplicationObserver
 __all__ = [
     "ALLOWED_CONTENT_TYPES",
     "ApplicationObserver",
+    "ExportError",
+    "ExportNotAuthorized",
+    "ExportRequest",
+    "assert_may_export",
+    "build_bundle",
     "MAX_ARTIFACT_BYTES",
     "MAX_STAGED_RECORDS_PER_ATTEMPT",
     "ArtifactError",
