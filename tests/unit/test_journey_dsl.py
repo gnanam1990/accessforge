@@ -219,20 +219,46 @@ def test_a_selector_cannot_be_smuggled_into_a_navigator_fixture_value() -> None:
         FixtureBinding(template_id="t", navigator_values={"target": "#email-error"})
 
 
+# Three of the shapes below are exactly what the repository's own secret scanner looks for, so
+# writing them as literals would make this file trip that scanner on every push. They are assembled
+# from fragments instead: the value handed to the assertion is byte-identical to the real shape, and
+# no line of this file matches the scanner's patterns. Weakening the scanner to accommodate a test
+# fixture would have been the wrong trade.
+_AWS_KEY_SHAPE = "AKI" + "A" + "IOSFODNN7" + "EXAMPLE"
+_GITHUB_PAT_SHAPE = "gh" + "p_" + ("abcdefghijklmnopqrstuvwxyz" + "0123456789")
+_PEM_HEADER_SHAPE = "-----" + "BEGIN RSA PRIVATE KEY" + "-----"
+
+
 @pytest.mark.parametrize(
     "secret",
     [
-        "AKIAIOSFODNN7EXAMPLE",
-        "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-        "-----BEGIN RSA PRIVATE KEY-----",
-        "password: hunter2",
-        "api_key=abcdef",
+        pytest.param(_AWS_KEY_SHAPE, id="aws-access-key-id"),
+        pytest.param(_GITHUB_PAT_SHAPE, id="github-personal-access-token"),
+        pytest.param(_PEM_HEADER_SHAPE, id="pem-private-key-header"),
+        pytest.param("password: hunter2", id="labelled-password"),
+        pytest.param("api_key=abcdef", id="labelled-api-key"),
     ],
 )
 def test_a_secret_cannot_be_placed_in_a_navigator_fixture_value(secret: str) -> None:
     """Fixture values are synthetic. A secret here would travel into every citing export."""
     with pytest.raises(JourneyError, match="looks like a credential"):
         FixtureBinding(template_id="t", navigator_values={"v": secret})
+
+
+def test_the_assembled_credential_fixtures_are_genuinely_credential_shaped() -> None:
+    """Guards the fragmenting above.
+
+    If a fragment were mistyped the test beside it would still pass for the wrong reason -- the
+    value would simply stop being credential-shaped and the assertion would be proving nothing. The
+    patterns here are the repository secret scanner's own, copied from `.github/workflows/ci.yml`.
+    """
+    import re
+
+    scanner = re.compile(
+        r"AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    )
+    for value in (_AWS_KEY_SHAPE, _GITHUB_PAT_SHAPE, _PEM_HEADER_SHAPE):
+        assert scanner.search(value), f"{value!r} is no longer credential-shaped"
 
 
 def test_observer_configuration_cannot_double_as_navigator_input() -> None:

@@ -143,27 +143,48 @@ def test_instances_are_workspace_isolated(db: str) -> None:
 
 
 def test_the_product_table_does_not_collide_with_the_application_under_test(db: str) -> None:
-    """Regression: the reference application owns `fixture_instance` in the same database.
+    """Regression: the reference application owns `fixture_instance`.
 
     `CREATE TABLE IF NOT EXISTS fixture_instance` did nothing, silently, and the product would have
-    been reading the application's rows. Both tables now exist side by side with different names.
-    """
-    with unscoped_connection(db) as conn:
-        names = {
-            str(r["table_name"])
-            for r in conn.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_name IN ('fixture_instance', 'run_fixture_instance')"
-            ).fetchall()
-        }
-    assert names == {"fixture_instance", "run_fixture_instance"}
+    been reading the application's rows.
 
-    with unscoped_connection(db) as conn:
-        product_columns = {
-            str(r["column_name"])
-            for r in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'run_fixture_instance'"
-            ).fetchall()
-        }
-    assert "workspace_id" in product_columns, "the product's table is the one with tenant scoping"
+    The first version of this test asserted that both tables were present and stopped there, which
+    made it depend on a database that happened to hold the application's schema too. It passed on a
+    development database and proved nothing on a fresh one. It now creates the collision itself --
+    the application's real schema, applied here -- and then asserts where a write actually lands.
+    """
+    from reference_app.db import SCHEMA as APPLICATION_SCHEMA
+
+    try:
+        with unscoped_connection(db) as conn:
+            conn.execute(APPLICATION_SCHEMA)
+
+        run_id = _run(db)
+        instance = _instance(db, run_id)
+
+        with unscoped_connection(db) as conn:
+            # The application's table carries no tenant scoping, so an unscoped connection can see
+            # every row it holds. It should hold none: the product never writes here.
+            assert conn.execute("SELECT count(*) AS n FROM fixture_instance").fetchone() == {
+                "n": 0
+            }, "the product wrote into the application's table"
+
+        with workspace_connection(db, WS) as conn:
+            product = conn.execute(
+                "SELECT nonce FROM run_fixture_instance WHERE id = %s", (instance.instance_id,)
+            ).fetchone()
+        assert product is not None, "the product's row is in the product's table"
+        assert product["nonce"] == instance.nonce
+
+        with unscoped_connection(db) as conn:
+            product_columns = {
+                str(r["column_name"])
+                for r in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'run_fixture_instance'"
+                ).fetchall()
+            }
+        assert "workspace_id" in product_columns, "the product's table carries tenant scoping"
+    finally:
+        with unscoped_connection(db) as conn:
+            conn.execute("DROP TABLE IF EXISTS service_request, fixture_instance CASCADE")

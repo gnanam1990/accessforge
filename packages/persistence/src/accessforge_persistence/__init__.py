@@ -27,6 +27,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 __all__ = [
     "MIGRATIONS_DIR",
+    "MigrationSeriesError",
     "RowLevelSecurityNotEnforced",
     "applied_migrations",
     "assert_row_level_security_enforced",
@@ -36,6 +37,50 @@ __all__ = [
     "user_connection",
     "workspace_connection",
 ]
+
+
+class MigrationSeriesError(RuntimeError):
+    """The migrations in this tree are not a coherent series, or do not match this database."""
+
+
+def _migration_paths() -> list[Path]:
+    """The migration series, checked for gaps before a single statement is sent.
+
+    Every migration is numbered, and the numbers have to be consecutive from 0001. A branch that
+    carries `0007` without the `0005` it depends on is not a migration series, it is a broken one,
+    and the failure it produces otherwise is `relation "project" does not exist` raised from deep
+    inside an unrelated fixture. This turns that into one sentence naming the missing number.
+    """
+    paths = sorted(MIGRATIONS_DIR.glob("*.sql"))
+    if not paths:  # pragma: no cover - the package always ships migrations
+        raise MigrationSeriesError(f"no migrations found in {MIGRATIONS_DIR}")
+
+    numbers: dict[int, str] = {}
+    for path in paths:
+        prefix = path.name.split("_", 1)[0]
+        if not prefix.isdigit():
+            raise MigrationSeriesError(
+                f"migration {path.name!r} does not begin with a number, so its place in the "
+                "series is undefined"
+            )
+        number = int(prefix)
+        if number in numbers:
+            raise MigrationSeriesError(
+                f"migrations {numbers[number]!r} and {path.name!r} share the number {number:04d}; "
+                "their relative order would depend on the rest of the filename"
+            )
+        numbers[number] = path.name
+
+    expected = range(1, max(numbers) + 1)
+    missing = sorted(set(expected) - set(numbers))
+    if missing:
+        gap = ", ".join(f"{n:04d}" for n in missing)
+        raise MigrationSeriesError(
+            f"the migration series has gaps at {gap}. A later migration almost certainly depends "
+            "on what the missing one creates. If this branch was cut before those migrations "
+            "landed, rebase it onto a base that contains them."
+        )
+    return paths
 
 
 class RowLevelSecurityNotEnforced(RuntimeError):
@@ -102,14 +147,32 @@ def migrate(database_url: str) -> list[str]:
 
     Each migration runs in its own transaction and is recorded in the same transaction, so a
     failure leaves neither a half-applied schema nor a false record of success.
+
+    Two preconditions are checked before anything is applied: the series on disk has no gaps, and
+    the database records nothing this tree does not contain. Either condition, left unchecked,
+    produces a confident green run against a schema nobody described.
     """
+    paths = _migration_paths()
     pending: list[str] = []
     with connect(database_url) as conn:
         _ensure_migration_table(conn)
         done = {
             str(r["name"]) for r in conn.execute("SELECT name FROM schema_migration").fetchall()
         }
-    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+
+    # A name recorded here but absent from the tree means this database was migrated by a different
+    # tree. Continuing would apply the remaining migrations on top of a schema this code has never
+    # described, and `CREATE TABLE IF NOT EXISTS` would make the result look like success. A
+    # development database carried across branches hid exactly this for one module.
+    stale = sorted(done - {p.name for p in paths})
+    if stale:
+        raise MigrationSeriesError(
+            f"this database records migrations that are not in this tree: {', '.join(stale)}. Its "
+            "schema was built by a different branch, so nothing applied on top of it can be "
+            "trusted. Use a fresh database, or check out a tree that contains them."
+        )
+
+    for path in paths:
         if path.name in done:
             continue
         sql = path.read_text(encoding="utf-8")
