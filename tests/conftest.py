@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_dotenv() -> None:
-    for name in (".env", ".env.refapp", ".env.test"):
+    for name in (".env", ".env.refapp", ".env.test", ".env.objectstore"):
         _load_file(ROOT / name)
 
 
