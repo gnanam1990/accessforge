@@ -101,6 +101,28 @@ describe('the review queue', () => {
     expect(screen.getByText(/nothing about whether they looked/)).toBeVisible()
   })
 
+  it('says so when it stopped following the cursor before the server ran out', async () => {
+    const server = createFakeServer(MEMBER)
+    server.data.reviewRequests.push(REQUEST)
+    server.setReviewPaging('endless')
+    renderAt(server, '/w/ws-1/reviews/new')
+
+    // A prefix rendered under this heading would leave a request that nobody can see still waiting
+    // for somebody.
+    expect(
+      await screen.findByRole('heading', { name: 'This list is not complete' }),
+    ).toBeVisible()
+  })
+
+  it('asks for no record when the route is the queue rather than a review', async () => {
+    const server = createFakeServer(MEMBER)
+    renderAt(server, '/w/ws-1/reviews/new')
+    await screen.findByRole('heading', { level: 1, name: 'Reviews' })
+    // `new` is not an identifier; requesting it would send something the server can only refuse and
+    // put a 400 in the log for a page that is working correctly.
+    expect(server.calls.filter((call) => call.includes('/reviews/new'))).toEqual([])
+  })
+
   it('says why there is nothing to review rather than showing an empty table', async () => {
     const server = createFakeServer(MEMBER)
     renderAt(server, '/w/ws-1/reviews/new')

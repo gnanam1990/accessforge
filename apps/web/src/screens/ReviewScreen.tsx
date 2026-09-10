@@ -327,6 +327,14 @@ const ReviewQueue = ({ workspaceId }: { readonly workspaceId: string }): JSX.Ele
             <Notice tone="information" heading="How to read this list" headingLevel={3}>
               <p>{page.meaning}</p>
             </Notice>
+            {!page.complete && (
+              <Notice tone="warning" heading="This list is not complete" headingLevel={3}>
+                <p>
+                  There are more requests than this screen read. What is below is a prefix, and a
+                  request that is not shown is still waiting for somebody.
+                </p>
+              </Notice>
+            )}
             <DataTable<ReviewRequest>
               caption="Reviews that have been asked for, and how many assessments each has received"
               rows={page.items}
@@ -406,8 +414,13 @@ export const ReviewScreen = (): JSX.Element => {
   const workspaceId = useWorkspaceId()
   const reviewId = useReviewId()
   const { client } = useSession()
+  // `new` is not an identifier, so no record is asked for. Reading it anyway would send a request
+  // the server can only refuse, and put a 400 in the log for a page that is working correctly.
   const review = useResource(
-    (signal) => getReview(client, workspaceId, reviewId, signal),
+    (signal) =>
+      reviewId === 'new'
+        ? Promise.resolve({ kind: 'cancelled' as const })
+        : getReview(client, workspaceId, reviewId, signal),
     [client, workspaceId, reviewId],
   )
 

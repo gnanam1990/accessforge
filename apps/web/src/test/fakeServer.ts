@@ -87,6 +87,8 @@ export interface FakeServer {
    * bound is made to reveal that it has one.
    */
   setRunnerPaging: (mode: 'single' | 'paged' | 'endless') => void
+  /** The same, for the review queue. */
+  setReviewPaging: (mode: 'single' | 'endless') => void
   readonly calls: readonly string[]
 }
 
@@ -106,6 +108,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
   let signInOutcome: 'succeeds' | 'refused' | 'no-provider' = 'succeeds'
   let signOutFails = false
   let runnerPaging: 'single' | 'paged' | 'endless' = 'single'
+  let reviewPaging: 'single' | 'endless' = 'single'
   const data: WorkspaceData = {
     projects: [],
     environments: [],
@@ -183,6 +186,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     },
     setRunnerPaging: (mode) => {
       runnerPaging = mode
+    },
+    setReviewPaging: (mode) => {
+      reviewPaging = mode
     },
     fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input.toString()
@@ -289,6 +295,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       if (url.includes('/review-requests') && method === 'GET') {
         return json({
           items: data.reviewRequests,
+          nextCursor: reviewPaging === 'endless' ? 'more' : null,
           meaning:
             'Asking for a review is an event; an assessment is a different event. An entry with ' +
             'no reviews records that somebody was asked and nothing about whether they looked.',

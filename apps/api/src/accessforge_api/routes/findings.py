@@ -138,7 +138,11 @@ def transition_finding(
 
 @router.get("/review-requests")
 def list_review_requests(
-    workspace_id: str, request: Request, conn: Conn, limit: int | None = None
+    workspace_id: str,
+    request: Request,
+    conn: Conn,
+    after: str | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     """Reviews that have been asked for, and whether anyone has answered.
 
@@ -156,6 +160,8 @@ def list_review_requests(
     route would have to accept digests invented by its caller.
     """
     authorize(conn, request, workspace_id, Permission.PATCH_REVIEW)
+    if after is not None:
+        as_identifier(after, what="the page cursor")
     size = clamp_page_size(limit)
     rows = conn.execute(
         """
@@ -163,26 +169,32 @@ def list_review_requests(
                rq.environment_digest, rq.requested_by, rq.requested_of, rq.requested_at,
                (SELECT count(*) FROM review rv WHERE rv.request_id = rq.id) AS review_count
         FROM review_request rq
-        ORDER BY rq.requested_at DESC, rq.id
+        WHERE (%s::uuid IS NULL OR rq.id > %s::uuid)
+        ORDER BY rq.id
         LIMIT %s
         """,
-        (size,),
+        (after, after, size + 1),
     ).fetchall()
+    items = [
+        {
+            "reviewRequestId": str(r["id"]),
+            "patchDigest": str(r["patch_digest"]),
+            "verificationDigest": str(r["verification_digest"]),
+            "journeyVersionId": str(r["journey_version_id"]),
+            "environmentDigest": str(r["environment_digest"]),
+            "requestedBy": str(r["requested_by"]),
+            "requestedOf": None if r["requested_of"] is None else str(r["requested_of"]),
+            "requestedAt": str(r["requested_at"]),
+            "reviewCount": int(r["review_count"]),
+        }
+        for r in rows[:size]
+    ]
     return {
-        "items": [
-            {
-                "reviewRequestId": str(r["id"]),
-                "patchDigest": str(r["patch_digest"]),
-                "verificationDigest": str(r["verification_digest"]),
-                "journeyVersionId": str(r["journey_version_id"]),
-                "environmentDigest": str(r["environment_digest"]),
-                "requestedBy": str(r["requested_by"]),
-                "requestedOf": None if r["requested_of"] is None else str(r["requested_of"]),
-                "requestedAt": str(r["requested_at"]),
-                "reviewCount": int(r["review_count"]),
-            }
-            for r in rows
-        ],
+        "items": items,
+        # Keyset, like every other listing here. An earlier version took the first page with no
+        # cursor and no indication that it had stopped -- the same shape a review found in module
+        # 22's environment listing, written again from memory a day later.
+        "nextCursor": items[-1]["reviewRequestId"] if len(rows) > size else None,
         "meaning": (
             "Asking for a review is an event; an assessment is a different event. An entry with no "
             "reviews records that somebody was asked and nothing about whether they looked."

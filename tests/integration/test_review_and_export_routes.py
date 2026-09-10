@@ -230,6 +230,36 @@ def test_the_count_moves_only_when_an_assessment_is_recorded(client: TestClient,
     assert entry["reviewCount"] == 1
 
 
+def test_the_queue_pages_rather_than_truncating(client: TestClient, db: str) -> None:
+    """The shape a review found in module 22's environment listing, written again from memory.
+
+    A first page with no cursor and no indication that it had stopped presents a prefix as the
+    queue, and a request nobody can see is still waiting for somebody.
+    """
+    journey_version_id = _journey(db)
+    for _ in range(3):
+        _request(db, journey_version_id)
+    _sign_in(db, client, REVIEWER)
+
+    first = client.get(f"/v1/workspaces/{WS}/review-requests?limit=2").json()
+    assert len(first["items"]) == 2
+    assert first["nextCursor"] is not None
+
+    second = client.get(
+        f"/v1/workspaces/{WS}/review-requests?limit=2&after={first['nextCursor']}"
+    ).json()
+    assert len(second["items"]) == 1
+    assert second["nextCursor"] is None
+    ids = {item["reviewRequestId"] for item in first["items"] + second["items"]}
+    assert len(ids) == 3
+
+
+def test_a_malformed_queue_cursor_is_refused(client: TestClient, db: str) -> None:
+    _journey(db)
+    _sign_in(db, client, REVIEWER)
+    assert client.get(f"/v1/workspaces/{WS}/review-requests?after=not-a-uuid").status_code == 400
+
+
 def test_a_viewer_cannot_read_the_review_queue(client: TestClient, db: str) -> None:
     _journey(db)
     _sign_in(db, client, VIEWER)

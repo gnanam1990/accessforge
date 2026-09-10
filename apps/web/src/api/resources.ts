@@ -619,13 +619,44 @@ export const getFinding = (
     signal,
   })
 
-export const listReviewRequests = (
+/**
+ * Every review that has been asked for, across pages.
+ *
+ * `meaning` comes from the first page and is carried through, for the same reason
+ * `readinessMeaning` is: it is the server's statement about how to read the list, and dropping it
+ * while combining pages would take the sentence off the screen that needs it.
+ */
+export const listReviewRequests = async (
   client: ApiClient,
   workspaceId: string,
   signal: AbortSignal,
-): Promise<
-  ApiOutcome<{ readonly items: readonly ReviewRequest[]; readonly meaning: string }>
-> => client.request(`${base(workspaceId)}/review-requests`, { signal })
+): Promise<ApiOutcome<DrainedPage<ReviewRequest> & { readonly meaning: string }>> => {
+  let meaning = ''
+  const drained = await drain<ReviewRequest>(async (cursor) => {
+    const outcome = await client.request<Page<ReviewRequest> & { meaning: string }>(
+      `${base(workspaceId)}/review-requests` +
+        (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    )
+    if (outcome.kind === 'ok' && meaning === '') meaning = outcome.value.meaning
+    return outcome
+  })
+  if (drained.kind === 'ok') {
+    return { kind: 'ok', value: { ...drained.value, meaning }, status: 200 }
+  }
+  return drained.kind === 'accepted'
+    ? {
+        kind: 'problem',
+        problem: {
+          code: 'UNRECOGNISED',
+          title: 'Unexpected response',
+          detail: 'The server accepted this read for later processing. A read has no later.',
+          status: 202,
+          requestId: null,
+        },
+      }
+    : drained
+}
 
 export const getReview = (
   client: ApiClient,
