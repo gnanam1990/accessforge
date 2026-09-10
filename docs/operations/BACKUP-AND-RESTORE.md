@@ -73,8 +73,9 @@ forced it would make rotation a reason not to rotate.
 ## 3. Taking a backup
 
 ```bash
-# Once, ever. Store a copy somewhere this machine is not.
-uv run python scripts/backup.py --write-new-key --key-file /secure/backup.key --output /dev/null
+# Once, ever. Store a copy somewhere this machine is not. Needs no database: creating a key
+# is not taking a backup.
+uv run python scripts/backup.py --write-new-key --key-file /secure/backup.key
 ```
 
 ```bash
