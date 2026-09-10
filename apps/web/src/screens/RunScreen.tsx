@@ -394,7 +394,12 @@ export const RunScreen = (): JSX.Element => {
                             runId={runId}
                             attemptId={chosen}
                           />
+                          {/* Keyed by the attempt. Without it React keeps `TimelineSection`
+                              mounted across a change of attempt, so its page cursor and its cursor
+                              trail carry over: the new attempt's timeline starts partway in, and
+                              Previous walks back through positions belonging to the old one. */}
                           <TimelineSection
+                            key={chosen}
                             workspaceId={workspaceId}
                             runId={runId}
                             attemptId={chosen}

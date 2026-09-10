@@ -8,7 +8,7 @@
  */
 
 import { MemoryRouter } from 'react-router-dom'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
@@ -366,6 +366,52 @@ describe('the evidence timeline', () => {
     expect(await screen.findByText('supervisor-1')).toBeVisible()
     expect(screen.getByText('observer-1')).toBeVisible()
     expect(screen.getAllByText(/producers’ clocks disagree/).length).toBeGreaterThan(0)
+  })
+
+  it('shows the producer’s own source-record digest, not the payload digest', async () => {
+    renderRun(withTimeline())
+    await screen.findByRole('heading', { name: 'Evidence timeline' })
+    // They identify different values. Substituting one for the other would let a reader believe
+    // they had checked a record against the chain when they had checked something else.
+    expect(await screen.findByText('c'.repeat(64))).toBeVisible()
+    expect(screen.getByText('e'.repeat(64))).toBeVisible()
+  })
+
+  it('starts a newly chosen attempt at the beginning of its own chain', async () => {
+    const user = userEvent.setup()
+    const server = serverWithRun()
+    server.data.attempts.push({
+      attemptId: 'attempt-2',
+      leaseEpoch: 2,
+      startedAt: '2026-09-10T13:00:00Z',
+      endedAt: null,
+    })
+    server.data.timeline = {
+      events: EVENTS,
+      nextAfterSequence: 2,
+      exhausted: false,
+      orderingMeaning: 'Ordered by the sequence the trusted sequencer assigned.',
+    }
+    renderRun(server)
+    await screen.findByRole('heading', { name: 'Evidence timeline' })
+
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    await waitFor(() => {
+      expect(
+        server.calls.filter((call) => call.includes('after_sequence=2')).length,
+      ).toBeGreaterThan(0)
+    })
+
+    await user.click(screen.getByRole('button', { name: /Epoch 2/ }))
+    // The cursor belongs to the attempt, not to the screen. Carrying it over starts the new
+    // attempt's timeline partway in, and Previous walks back through the old attempt's positions.
+    await waitFor(() => {
+      expect(
+        server.calls.some(
+          (call) => call.includes('attempt-2') && call.includes('after_sequence=0'),
+        ),
+      ).toBe(true)
+    })
   })
 
   it('keeps the recorded payload behind a keyboard-operable disclosure', async () => {

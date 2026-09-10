@@ -143,6 +143,19 @@ export const EvidenceTimeline = ({
                 <dd>
                   <time dateTime={event.receivedTime}>{event.receivedTime}</time>
                 </dd>
+                <dt>Source record digest</dt>
+                <dd>
+                  {/* The producer's own record, not the canonical payload. They identify different
+                      values, and substituting one for the other would make a reader think they had
+                      checked something they had not. */}
+                  {event.sourceRecordDigest === null ? (
+                    <span className="af-secondary">
+                      no source record is linked to this position
+                    </span>
+                  ) : (
+                    <code>{event.sourceRecordDigest}</code>
+                  )}
+                </dd>
               </dl>
 
               <Button

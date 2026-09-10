@@ -52,6 +52,29 @@ def _run_view(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _bound_attempt(conn: psycopg.Connection[Any], *, run_id: str, attempt_id: str) -> str:
+    """Confirm this attempt belongs to this run, or refuse.
+
+    Row-level security keeps another tenant's attempt invisible, and that is not enough here: an
+    attempt id from a *different run in the same workspace* is perfectly visible and passes a UUID
+    check. Reading evidence for the mismatched pair returned a plausible empty timeline for one
+    route and another attempt's producer streams for the other — the second is the serious one,
+    because it attributes one run's evidence to a different run's screen.
+
+    404 rather than 400: the pair does not identify anything available, and saying which half was
+    wrong would tell a caller that the other half exists.
+    """
+    as_identifier(run_id, what="the run")
+    as_identifier(attempt_id, what="the attempt")
+    row = conn.execute(
+        "SELECT id FROM run_attempt WHERE id = %s AND run_id = %s",
+        (attempt_id, run_id),
+    ).fetchone()
+    if row is None:
+        raise not_found()
+    return attempt_id
+
+
 _RUN_COLUMNS = (
     "id, status, outcome, revision, lease_epoch, manifest_digest, cancel_requested_at, "
     "stop_acknowledged_at, ambiguity_reason, quarantined, retry_of"
@@ -218,6 +241,7 @@ def replay_events(
     early whenever the total is a multiple of the page size.
     """
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _bound_attempt(conn, run_id=run_id, attempt_id=attempt_id)
     size = clamp_page_size(limit)
     try:
         page = evidence.replay(
@@ -252,6 +276,7 @@ def evidence_summary(
     summary is a step towards an object key in a log.
     """
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _bound_attempt(conn, run_id=run_id, attempt_id=attempt_id)
     return evidence.evidence_summary(conn, run_id=run_id, attempt_id=attempt_id)
 
 
@@ -331,8 +356,7 @@ def replay_timeline(
     redaction applied at read time is one that can be forgotten at the next read.
     """
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
-    as_identifier(run_id, what="the run")
-    as_identifier(attempt_id, what="the attempt")
+    _bound_attempt(conn, run_id=run_id, attempt_id=attempt_id)
     size = clamp_page_size(limit)
     rows = conn.execute(
         """
@@ -401,17 +425,22 @@ def evidence_completeness(
     producer that stopped halfway and left a perfect chain covering half the attempt (INV-06).
     """
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
-    as_identifier(run_id, what="the run")
-    as_identifier(attempt_id, what="the attempt")
+    _bound_attempt(conn, run_id=run_id, attempt_id=attempt_id)
     from accessforge_persistence import sequencer
 
     contiguous = sequencer.chain_is_contiguous(conn, run_id=run_id, attempt_id=attempt_id)
     streams = conn.execute(
         """
+        -- `run_id` as well as `attempt_id`. `_bound_attempt` above already refuses a mismatched
+        -- pair, so through this route the extra predicate can never change the answer: it is
+        -- defence in depth, and a mutation check confirms no test reaches it. It stays because it
+        -- makes the query correct on its own terms rather than correct because of what a caller
+        -- did first, and this is the read that previously attributed one run's producer streams to
+        -- another run's screen.
         SELECT producer_id, admitted_through, closed_at_sequence
-        FROM producer_stream WHERE attempt_id = %s ORDER BY producer_id
+        FROM producer_stream WHERE attempt_id = %s AND run_id = %s ORDER BY producer_id
         """,
-        (attempt_id,),
+        (attempt_id, run_id),
     ).fetchall()
     unclosed = [str(r["producer_id"]) for r in streams if r["closed_at_sequence"] is None]
     missing = artifacts_module.missing_required_artifacts(

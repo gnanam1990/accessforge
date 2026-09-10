@@ -297,7 +297,7 @@ def test_an_attempt_with_no_events_is_an_empty_timeline_not_an_error(
     assert body["exhausted"] is True
 
 
-def test_another_workspaces_attempt_yields_nothing(
+def test_another_workspaces_attempt_is_not_available(
     client: TestClient, db: str, attempt: tuple[str, str]
 ) -> None:
     run_id, _ = attempt
@@ -306,12 +306,42 @@ def test_another_workspaces_attempt_yields_nothing(
         other_attempt = runs.start_attempt(
             conn, run_id=other_run, workspace_id=WS_OTHER, lease_epoch=0
         )
-    _admit_other = None
-    body = client.get(
-        f"/v1/workspaces/{WS}/runs/{run_id}/timeline?attempt_id={other_attempt}"
-    ).json()
-    assert body["events"] == []
-    assert _admit_other is None
+    response = client.get(f"/v1/workspaces/{WS}/runs/{run_id}/timeline?attempt_id={other_attempt}")
+    assert response.status_code == 404
+
+
+def test_an_attempt_from_a_different_run_here_is_refused_rather_than_answered(
+    client: TestClient, db: str, attempt: tuple[str, str]
+) -> None:
+    """The case row-level security does not cover.
+
+    An attempt belonging to a *different run in the same workspace* is perfectly visible, and a
+    UUID check passes it. Reading the mismatched pair returned a plausible empty timeline from one
+    route and the other attempt's producer streams from the other — and the second attributes one
+    run's evidence to a different run's screen.
+    """
+    run_id, _ = attempt
+    with workspace_connection(db, WS) as conn:
+        sibling_run = runs.create_run(conn, workspace_id=WS, manifest_digest=digest({"m": "other"}))
+        sibling_attempt = runs.start_attempt(
+            conn, run_id=sibling_run, workspace_id=WS, lease_epoch=0
+        )
+    _admit(
+        db, sibling_run, sibling_attempt, producer=OBSERVER, seq=1, event_type="OBSERVER_RECEIPT"
+    )
+
+    timeline = client.get(
+        f"/v1/workspaces/{WS}/runs/{run_id}/timeline?attempt_id={sibling_attempt}"
+    )
+    assert timeline.status_code == 404
+
+    completeness = client.get(
+        f"/v1/workspaces/{WS}/runs/{run_id}/completeness?attempt_id={sibling_attempt}"
+    )
+    assert completeness.status_code == 404
+    # The producer stream that would have been reported belongs to the sibling run, and naming it
+    # here would have been this run's screen showing another run's evidence.
+    assert OBSERVER not in completeness.text
 
 
 # --------------------------------------------------------------------------------------------------
