@@ -1,19 +1,25 @@
 /**
  * Desktop runner entrypoint.
  *
- * Module 01 establishes this as a real build and packaging target. It deliberately does NOT
- * implement runner enrollment, desktop leases, action admission, or screen-reader control —
- * those belong to modules 07 and 08 and to packages/at-adapters.
+ * Module 07 implements the supervisor protocol: the local action gate, monotonic lease deadlines,
+ * the durable action journal and restart inspection. All of that is real, tested and exported from
+ * `./supervisor.js` and `./journal.js`.
  *
- * It exits non-zero and says so. A stub that reported success would be indistinguishable from a
- * working runner to anything downstream, which is exactly the failure this project treats as
- * unacceptable.
+ * What is still absent is the half that touches a screen reader. There is no VoiceOver adapter
+ * (module 08) and no NVDA adapter (module 09), so this binary has nothing to dispatch an admitted
+ * action *to*. It therefore refuses to start rather than running: a runner that came up and reported
+ * itself healthy would be enrollable, leasable, and incapable of producing a single reader
+ * observation — which is precisely the shape of failure this product exists to refuse.
+ *
+ * It exits 78 (EX_CONFIG): the capability is absent by configuration, not crashed.
  */
 
 export const NOT_IMPLEMENTED_MESSAGE =
-  'accessforge-runner: not implemented. Runner admission and screen-reader execution are owned ' +
-  'by modules 07 (control plane) and 08 (macOS VoiceOver). This binary exists so the workspace ' +
-  'has a real build target; it performs no assistive-technology work and reports no capability.';
+  'accessforge-runner: the supervisor protocol from module 07 is implemented (action gate, ' +
+  'monotonic lease deadlines, durable action journal, restart inspection) and is importable from ' +
+  'this package. No assistive-technology adapter exists yet: VoiceOver is owned by module 08 and ' +
+  'NVDA by module 09. With no adapter there is nothing to dispatch an admitted action to, so this ' +
+  'binary starts no runner and reports no screen-reader capability.';
 
 export function main(write: (line: string) => void = console.error): number {
   write(NOT_IMPLEMENTED_MESSAGE);

@@ -21,9 +21,9 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 02 | Canonical schemas and deterministic reducers | 01 | FR-002, 003, 007, 015, 016 | implemented | passed | merged | E0 |
 | 03 | Human, tenant and service identities | 02 | FR-001, 014, 020 | partial | passed | merged | E0 |
 | 04 | Authoritative journal and transactional outbox | 02, 03 | FR-006, 014, 015, 021 | implemented | passed | merged | E0 |
-| 05 | Authorized projects and immutable builds | 03, 04 | FR-001, 002, 010, 014 | implemented | passed | open | E0 |
-| 06 | Versioned journey DSL, fixtures, assertions | 02, 05 | FR-003, 005, 007, 023 | not started | pending | local | E0 |
-| 07 | Runner enrollment, admission, desktop leases | 04, 06 | FR-004, 005, 014, 015, 021 | not started | pending | local | E0 |
+| 05 | Authorized projects and immutable builds | 03, 04 | FR-001, 002, 010, 014 | implemented | passed | merged | E0 |
+| 06 | Versioned journey DSL, fixtures, assertions | 02, 05 | FR-003, 005, 007, 023 | implemented | passed | merged | E0 |
+| 07 | Runner enrollment, admission, desktop leases | 04, 06 | FR-004, 005, 014, 015, 021 | implemented | passed | open | E0 |
 | 08 | Actual macOS VoiceOver execution | 00, 07 | FR-004, 005, 006, 015 | not started | **blocked** | local | E0 |
 | 09 | Actual Windows NVDA execution | 00, 07 | FR-004, 005, 006, 015 | not started | **blocked** | local | R1 |
 | 10 | Provenance-bound evidence ingestion | 04, 07, 08 | FR-006, 014, 015, 020 | not started | pending | local | E0 |
