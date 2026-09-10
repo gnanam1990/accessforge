@@ -48,8 +48,8 @@ def assert_row_level_security_enforced(database_url: str) -> None:
     CI discovered this the hard way: sixteen isolation tests failed at once, which is the right
     outcome but a terrible diagnosis. This check turns that into one sentence naming the cause.
 
-    It also guards the more dangerous direction. These tests currently fail when RLS is absent, but a
-    future test that asserted isolation through application code rather than raw SQL would *pass*
+    It also guards the more dangerous direction. These tests fail when RLS is absent because they
+    issue raw SQL, but a future test asserting isolation through application code would *pass*
     against a bypassing role — green, and proving nothing.
     """
     with connect(database_url) as conn:
