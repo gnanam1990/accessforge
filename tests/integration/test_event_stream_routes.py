@@ -251,6 +251,72 @@ def test_last_event_id_takes_precedence_over_the_query_parameter(
     assert [f["event"] for f in _frames(body)] == ["run.started"]
 
 
+@pytest.mark.parametrize("cursor", ["2026-09-10T12:00:00Z", "12.5", "-1", "1e3", ""])
+def test_a_cursor_that_is_not_a_plain_integer_is_refused(
+    db: str, client: httpx.Client, cursor: str
+) -> None:
+    response = client.get(f"/v1/workspaces/{WS}/events/stream", headers={"Last-Event-ID": cursor})
+    assert response.status_code == 400, response.text
+    assert response.json()["code"] == "INVALID_INPUT"
+
+
+def test_a_unicode_digit_cursor_is_refused_rather_than_crashing(
+    db: str, client: httpx.Client, server: str
+) -> None:
+    """`str.isdigit()` is true for the whole Unicode digit category; `int()` rejects most of it.
+
+    `Last-Event-ID: \u00b2` passed an `isdigit()` guard and raised inside `int()`, so a caller got a
+    500 with no problem document rather than the 400 the route intends.
+
+    Sent over a raw socket, because httpx refuses to put a non-ASCII value in a header -- which is
+    exactly why a test through the client library reports this unreachable. HTTP header values are
+    latin-1 on the wire, Starlette decodes them as latin-1, and byte 0xB2 arrives in the handler as
+    a one-character string that `isdigit()` calls a digit. Reachable, and only visible to a test
+    that speaks the protocol rather than using a library that protects it from itself.
+    """
+    host, port = server.removeprefix("http://").split(":")
+    token = client.cookies.get(SESSION_COOKIE)
+    request = (
+        f"GET /v1/workspaces/{WS}/events/stream HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        f"Cookie: {SESSION_COOKIE}={token}\r\n"
+        "Last-Event-ID: \u00b2\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("latin-1")
+
+    with socket.create_connection((host, int(port)), timeout=15) as raw:
+        raw.sendall(request)
+        received = b""
+        while chunk := raw.recv(4096):
+            received += chunk
+
+    head, _, body = received.partition(b"\r\n\r\n")
+    assert b"400 Bad Request" in head, head[:200]
+    assert b"INVALID_INPUT" in body, body[:400]
+
+
+def test_the_snapshot_is_never_cached(db: str, client: httpx.Client) -> None:
+    """Authorized tenant state must not sit in a browser or proxy cache.
+
+    Nothing in this application sets a global directive, so a response without one is one a shared
+    machine can serve to whoever uses it next.
+    """
+    response = client.get(f"/v1/workspaces/{WS}/events/snapshot")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_the_contract_declares_the_stream_as_an_event_stream(server: str) -> None:
+    """FastAPI infers `application/json` from the return annotation.
+
+    A consumer generating a client from that contract would build a JSON parser for a stream of SSE
+    frames — and find out at runtime, against a live subscription.
+    """
+    published = httpx.get(f"{server}/openapi.json", timeout=10).json()
+    operation = published["paths"]["/v1/workspaces/{workspace_id}/events/stream"]["get"]
+    assert list(operation["responses"]["200"]["content"]) == ["text/event-stream"]
+
+
 def test_a_timestamp_shaped_cursor_is_refused(db: str, client: httpx.Client) -> None:
     """The cursor is an outbox row id, not a time.
 

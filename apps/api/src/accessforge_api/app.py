@@ -266,13 +266,16 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             },
         )
 
-    _assert_operation_ids_are_unique(app)
     app.openapi = lambda: _describe_contract(app)  # type: ignore[method-assign]
 
     @app.get("/diagnostics")
     def diagnostics() -> dict[str, Any]:
         return {"config": config.redacted()}
 
+    # After every route, including the ones defined in this function. Running it earlier checked a
+    # partial catalog: a later route colliding with one of these would have passed the guard and
+    # then quietly shadowed the other in every generated client.
+    _assert_operation_ids_are_unique(app)
     return app
 
 

@@ -69,19 +69,41 @@ def _load_session() -> Session | None:
 
 
 def _store_session(session: Session) -> None:
+    """Write the session so it is never, for any instant, readable by anyone else.
+
+    The obvious version writes the file and then chmods it to 600. Between those two calls the file
+    exists at whatever the umask allows — 644 on a default configuration — and a session token
+    world-readable for a millisecond on a shared machine is a session token world-readable. The
+    window is small and it is not zero, and a test that checks the mode afterwards cannot see it.
+
+    So: create with 0o600 in the `open` call, write, then rename over the target. `os.replace` is
+    atomic within a filesystem, which also means a crash part-way through leaves the previous
+    session intact rather than a truncated file that parses as no session at all.
+    """
     path = SESSION_PATH.expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "sessionToken": session.session_token,
-                "csrfToken": session.csrf_token,
-                "userId": session.user_id,
-            }
-        ),
-        encoding="utf-8",
+    # The directory too: a 600 file inside a 755 directory still lets anyone list the filename and,
+    # more to the point, replace it.
+    path.parent.chmod(0o700)
+
+    payload = json.dumps(
+        {
+            "sessionToken": session.session_token,
+            "csrfToken": session.csrf_token,
+            "userId": session.user_id,
+        }
     )
-    path.chmod(0o600)
+    staging = path.with_name(f".{path.name}.{os.getpid()}")
+    descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staging, path)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
 
 
 def _emit(value: Any) -> None:

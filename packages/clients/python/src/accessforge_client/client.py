@@ -28,7 +28,7 @@ forgotten CSRF header is a 403 in production and a puzzle in a log.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -100,8 +100,8 @@ class Requested:
     @property
     def identifier(self) -> str:
         """What the server called the thing it recorded, or "" if it named nothing."""
-        for field in _IDENTITY_FIELDS:
-            value = self.body.get(field)
+        for name in _IDENTITY_FIELDS:
+            value = self.body.get(name)
             if value:
                 return str(value)
         return ""
@@ -116,11 +116,17 @@ class Requested:
 
 @dataclass(frozen=True, slots=True)
 class Session:
-    """A signed-in session. The CSRF token travels with it, because it is useless apart from it."""
+    """A signed-in session. The CSRF token travels with it, because it is useless apart from it.
 
-    session_token: str
-    csrf_token: str
-    user_id: str
+    Both tokens are `repr=False`. A dataclass prints every field by default, so this object rendered
+    into a log line, a traceback, a debugger watch window or a bug report would carry a live
+    session. Nothing in this package prints one today, and "nothing prints it today" is a property
+    of this month's code rather than of the type.
+    """
+
+    session_token: str = field(repr=False)
+    csrf_token: str = field(repr=False)
+    user_id: str = ""
 
 
 class AccessForgeClient:

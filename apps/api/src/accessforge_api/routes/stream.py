@@ -50,7 +50,7 @@ import anyio
 # it cost an afternoon to find.
 import anyio.to_thread
 import psycopg
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 
 from accessforge_api.auth import (
@@ -98,7 +98,11 @@ def _cursor(request: Request, after: int | None) -> int:
     """
     header = request.headers.get("Last-Event-ID")
     if header is not None:
-        if not header.isdigit():
+        # `isascii()` as well as `isdigit()`. `str.isdigit()` is true for the whole Unicode digit
+        # category -- superscripts, Devanagari, circled numerals -- and `int()` rejects most of
+        # them. `Last-Event-ID: ²` passed this guard and raised inside `int()`, turning a
+        # well-formed refusal into a 500 with no problem document at all.
+        if not (header.isascii() and header.isdigit()):
             raise ProblemDetail(
                 ProblemCode.INVALID_INPUT,
                 "Last-Event-ID must be an integer event id. The cursor is an outbox row id, not a "
@@ -115,7 +119,9 @@ def _cursor(request: Request, after: int | None) -> int:
 
 
 @router.get("/events/snapshot")
-def read_snapshot(workspace_id: str, request: Request, conn: Conn) -> dict[str, Any]:
+def read_snapshot(
+    workspace_id: str, request: Request, conn: Conn, response: Response
+) -> dict[str, Any]:
     """Authoritative current state, and the cursor it was taken at.
 
     The cursor is the point. A client applies this and then resumes the stream from
@@ -124,6 +130,10 @@ def read_snapshot(workspace_id: str, request: Request, conn: Conn) -> dict[str, 
     `reset` instruction sends a client to.
     """
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    # Authorized tenant state, so it must not be written to any cache between here and the reader.
+    # Nothing in this application sets a global directive, and a browser or proxy that kept this
+    # would serve one workspace's runs to whoever used that machine next.
+    response.headers["Cache-Control"] = "no-store"
     taken = events.snapshot(conn, workspace_id=workspace_id)
     return {
         "asOfEventId": taken.as_of_event_id,
@@ -137,7 +147,22 @@ def read_snapshot(workspace_id: str, request: Request, conn: Conn) -> dict[str, 
     }
 
 
-@router.get("/events/stream")
+@router.get(
+    "/events/stream",
+    response_class=StreamingResponse,
+    # Declared, because FastAPI infers `application/json` from the return annotation and a consumer
+    # generating a client from that contract would build a JSON parser for a stream of SSE frames.
+    responses={
+        200: {
+            "description": (
+                "A server-sent event stream. Frames carry `id:` (the durable outbox cursor), "
+                "`event:` and a JSON `data:` payload. A `reset` frame means the cursor fell below "
+                "the retention floor: discard local state and resynchronise from /events/snapshot."
+            ),
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
+)
 def stream_events(
     workspace_id: str, request: Request, after: int | None = None
 ) -> StreamingResponse:
