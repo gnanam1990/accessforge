@@ -14,6 +14,7 @@ from .problems import ProblemCode, ProblemDetail
 from .routes import (
     exports_router,
     findings_router,
+    journeys_router,
     projects_router,
     runners_router,
     runs_router,
@@ -53,6 +54,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     for router in (
         session_router,
         projects_router,
+        journeys_router,
         runners_router,
         runs_router,
         findings_router,
