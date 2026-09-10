@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0015_grants_require_revalidation_after_restore.sql"
+NEWEST = "0016_schedule_reapproval.sql"
 
 
 def _with_database(url: str, name: str) -> str:
@@ -141,23 +141,45 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     _apply_through(disposable, _previous())
     with connect(disposable) as conn:
         before = conn.execute(
-            "SELECT 1 FROM information_schema.columns "
-            " WHERE table_name = 'execution_grant' AND column_name = 'revalidation_required'"
+            "SELECT count(*) AS n FROM information_schema.columns "
+            " WHERE table_name = 'schedule' AND column_name IN ('reapproved_at','reapproved_by')"
         ).fetchone()
-    assert before is None
+    assert before is not None and int(before["n"]) == 0
 
     migrate(disposable)
 
     with connect(disposable) as conn:
         after = conn.execute(
+            "SELECT count(*) AS n FROM information_schema.columns "
+            " WHERE table_name = 'schedule' AND column_name IN ('reapproved_at','reapproved_by')"
+        ).fetchone()
+        # The pairing constraint, not just the columns. Half a re-approval record -- a timestamp
+        # with nobody attached -- is the thing the constraint exists to make impossible, and
+        # asserting only that the columns arrived would pass without it.
+        constraint = conn.execute(
+            "SELECT 1 FROM pg_constraint WHERE conname = 'reapproval_is_attributable'"
+        ).fetchone()
+    assert after is not None and int(after["n"]) == 2
+    assert constraint is not None
+
+
+def test_the_grant_revalidation_column_from_an_earlier_migration_is_still_correct(
+    disposable: str,
+) -> None:
+    """Migration 0015's effect, kept as its own case now that it is no longer the newest.
+
+    NOT NULL DEFAULT false: an existing grant keeps working, because "a restore brought you back and
+    nobody has confirmed you" is not true of a grant that has been live all along.
+    """
+    migrate(disposable)
+    with connect(disposable) as conn:
+        column = conn.execute(
             "SELECT column_default, is_nullable FROM information_schema.columns "
             " WHERE table_name = 'execution_grant' AND column_name = 'revalidation_required'"
         ).fetchone()
-    assert after is not None
-    # NOT NULL DEFAULT false: an existing grant keeps working, because "a restore brought you back
-    # and nobody has confirmed you" is not true of a grant that has been live all along.
-    assert after["is_nullable"] == "NO"
-    assert "false" in str(after["column_default"])
+    assert column is not None
+    assert column["is_nullable"] == "NO"
+    assert "false" in str(column["column_default"])
 
 
 def test_an_older_release_reason_survives_and_a_nonsense_one_is_still_refused(
