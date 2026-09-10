@@ -23,6 +23,9 @@ import { useId } from 'react'
 import type { ReactNode } from 'react'
 
 export interface FormFieldProps {
+  /** Supply one when the caller needs to know it before rendering — an error summary linking to
+   * this control, for instance. Omitted, the field generates its own. */
+  readonly id?: string
   readonly label: string
   readonly hint?: string
   readonly error?: string
@@ -37,13 +40,18 @@ export interface FormFieldProps {
 }
 
 export const FormField = ({
+  id: suppliedId,
   label,
   hint,
   error,
   required = false,
   children,
 }: FormFieldProps): JSX.Element => {
-  const id = useId()
+  // Generated unconditionally — hooks cannot be called conditionally — and used only when the
+  // caller supplied nothing. A caller that needs the id before render (to link an error summary to
+  // it) passes its own, rather than reading one back out during render.
+  const generated = useId()
+  const id = suppliedId ?? generated
   const hintId = `${id}-hint`
   const errorId = `${id}-error`
   const describedBy =

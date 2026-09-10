@@ -192,8 +192,14 @@ describe('the workspace shell', () => {
 
   it('marks only the exact page as current, not every page beneath it', async () => {
     const server = createFakeServer(MEMBER)
+    server.data.projects.push({
+      projectId: 'p-1',
+      name: 'Reference app',
+      repositoryUrl: null,
+      createdAt: '2026-09-10T00:00:00Z',
+    })
     renderApp(server, ['/w/ws-alder/projects/p-1'])
-    await screen.findByRole('heading', { level: 1, name: 'Project' })
+    await screen.findByRole('heading', { level: 1, name: 'Reference app' })
 
     const nav = screen.getByRole('navigation', { name: 'Workspace sections' })
     // `aria-current` is how a screen-reader user establishes where they are. Marking Projects while
@@ -207,6 +213,12 @@ describe('the workspace shell', () => {
 
   it('shows breadcrumbs that end at the current page without linking to it', async () => {
     const server = createFakeServer(MEMBER)
+    server.data.projects.push({
+      projectId: 'p-1',
+      name: 'Reference app',
+      repositoryUrl: null,
+      createdAt: '2026-09-10T00:00:00Z',
+    })
     renderApp(server, ['/w/ws-alder/projects/p-1'])
 
     const trail = await screen.findByRole('navigation', { name: 'Breadcrumb' })

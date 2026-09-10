@@ -37,8 +37,8 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | partial (18 of ~28 routes) | passed | merged | E0 |
 | 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | implemented | passed (no SSE route, no real runner) | merged | E0 |
 | 20 | Opt-in GitHub checks and publication | 15, 16, 18 | FR-001, 010–012, 014, 018 | not started | pending | local | R1 |
-| 21 | Accessible modern UI foundation | 18 | FR-014, 016, 019 | implemented (shell only; screens are 22–24) | passed (no actual screen reader) | open | E0 |
-| 22 | Projects, journeys and runner UI | 19, 21 | FR-001–005, 015, 017, 019 | not started | pending | local | E0 |
+| 21 | Accessible modern UI foundation | 18 | FR-014, 016, 019 | implemented (shell only; screens are 22–24) | passed (no actual screen reader) | merged | E0 |
+| 22 | Projects, journeys and runner UI | 19, 21 | FR-001–005, 015, 017, 019 | implemented (5 screens; no events or schedules UI) | passed (run reaches QUEUED only) | open | E0 |
 | 23 | Run and evidence replay UI | 10, 11, 19, 21 | FR-006, 007, 009, 015, 017, 019 | not started | pending | local | E0 |
 | 24 | Patch, comparison and review UI | 15, 16, 17, 21 | FR-010–013, 019, 020 | not started | pending | local | E0 |
 | 25 | Fault laboratory and benchmarks | 12, 15, 22, 23, 24; 09 for R1 | FR-004–013, 015, 019, 023 | not started | pending | local | R1 |

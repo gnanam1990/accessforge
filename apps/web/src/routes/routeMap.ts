@@ -6,10 +6,10 @@
  * out three times they will, and the failure is a navigation entry that leads somewhere the router
  * does not recognise.
  *
- * Each entry records which module owns the *screen*. Module 21 owns the shell, the route map and the
- * chrome; the screens belong to 22, 23 and 24. A route whose owner has not been built renders an
- * explicit statement to that effect — never invented rows, and never an empty state, which would
- * claim the server had been asked.
+ * Each entry records which module owns the *screen* and whether that screen exists yet. Module 21
+ * owns the shell, the route map and the chrome; the screens belong to 22, 23 and 24. A route whose
+ * screen has not been built renders an explicit statement to that effect — never invented rows, and
+ * never an empty state, which would claim the server had been asked.
  *
  * **A URL is a location, never an authority.** Every one of these paths is a stable deep link, and
  * the server authorises every request that results from following one. Nothing here — no fixture
@@ -26,6 +26,8 @@ export interface RouteDefinition {
   readonly inPrimaryNavigation: boolean
   /** The module that owns this screen's content. */
   readonly ownedByModule: number
+  /** Whether that screen exists. False renders the explicit not-built statement. */
+  readonly built: boolean
   /** The page's `<h1>`. */
   readonly heading: string
 }
@@ -37,6 +39,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: true,
     ownedByModule: 22,
     heading: 'Overview',
+    built: true,
   },
   {
     path: 'projects',
@@ -44,6 +47,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: true,
     ownedByModule: 22,
     heading: 'Projects',
+    built: true,
   },
   {
     path: 'projects/:projectId',
@@ -51,6 +55,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 22,
     heading: 'Project',
+    built: true,
   },
   {
     path: 'projects/:projectId/journeys/:journeyId',
@@ -58,6 +63,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 22,
     heading: 'Journey',
+    built: true,
   },
   {
     path: 'runners',
@@ -65,6 +71,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: true,
     ownedByModule: 22,
     heading: 'Runners',
+    built: true,
   },
   {
     path: 'runs/:runId',
@@ -72,6 +79,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 23,
     heading: 'Run',
+    built: false,
   },
   {
     path: 'findings/:findingId',
@@ -79,6 +87,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 23,
     heading: 'Finding',
+    built: false,
   },
   {
     path: 'patches/:patchId',
@@ -86,6 +95,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 24,
     heading: 'Proposed repair',
+    built: false,
   },
   {
     path: 'reviews/:reviewId',
@@ -93,6 +103,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 24,
     heading: 'Human review',
+    built: false,
   },
   {
     path: 'exports/:exportId',
@@ -100,6 +111,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: false,
     ownedByModule: 23,
     heading: 'Evidence export',
+    built: false,
   },
   {
     path: 'settings',
@@ -107,6 +119,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: true,
     ownedByModule: 26,
     heading: 'Workspace settings',
+    built: false,
   },
 ]
 

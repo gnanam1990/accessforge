@@ -509,6 +509,108 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/journey-capabilities": {
+      "get": {
+        "description": "What a journey may ask for, from the domain's own allowlists.\n\nServed rather than duplicated in the client, because a client-side copy is a second definition\nof the policy and it will disagree the day the allowlist changes. An author offered a control\nthe server refuses is being invited to fail.",
+        "operationId": "journey_capabilities_v1_workspaces__workspace_id__journey_capabilities_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Journey Capabilities V1 Workspaces  Workspace Id  Journey Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Journey Capabilities",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/journeys": {
+      "post": {
+        "description": "Compile and seal a new immutable journey version.\n\n201, not 202: unlike a run, this finishes inside the request. The response carries the digests\nthat were actually sealed, so a caller can show a reviewer what freezing committed to rather\nthan a re-derivation of it.",
+        "operationId": "freeze_journey_version_v1_workspaces__workspace_id__journeys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Freeze Journey Version V1 Workspaces  Workspace Id  Journeys Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Freeze Journey Version",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/journeys/{journey_version_id}": {
       "get": {
         "operationId": "get_journey_version_v1_workspaces__workspace_id__journeys__journey_version_id__get",
@@ -557,6 +659,105 @@
           }
         },
         "summary": "Get Journey Version",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/journeys/{journey_version_id}/policy": {
+      "get": {
+        "description": "The navigator policy for a frozen version, exactly as sealed.\n\nServed so a reviewer can read what the navigator will be given. It contains no oracle material\nby construction \u2014 the compiler builds it that way \u2014 and showing it is how that claim becomes\ncheckable by a person rather than asserted in a document.",
+        "operationId": "journey_navigator_policy_v1_workspaces__workspace_id__journeys__journey_version_id__policy_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "journey_version_id",
+            "required": true,
+            "schema": {
+              "title": "Journey Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Journey Navigator Policy V1 Workspaces  Workspace Id  Journeys  Journey Version Id  Policy Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Journey Navigator Policy",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/members": {
+      "get": {
+        "description": "The people who hold an active membership in this workspace.\n\nNeeded because several records in this product name a person \u2014 who authorized a repository, who\nreviewed a finding \u2014 and a form that asked for a raw identifier would be a form nobody can fill\nin. Scoped to this workspace by row-level security, so it discloses nothing about anyone else.\n\nRevoked memberships are excluded rather than listed as inactive. A picker offering someone who\ncan no longer be named here is offering an authorization the server will refuse.",
+        "operationId": "list_members_v1_workspaces__workspace_id__members_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Members V1 Workspaces  Workspace Id  Members Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Members",
         "tags": [
           "projects"
         ]
@@ -745,6 +946,209 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/environments": {
+      "get": {
+        "description": "Environments for a project, with the reasons an unusable one is unusable.\n\n`usable` is reported alongside the specific cause rather than instead of it. \"Expired\",\n\"revoked\" and \"superseded\" send an operator to three different actions, and a single false\nwould send them to none of them.",
+        "operationId": "list_environments_v1_workspaces__workspace_id__projects__project_id__environments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Environments V1 Workspaces  Workspace Id  Projects  Project Id  Environments Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Environments",
+        "tags": [
+          "projects"
+        ]
+      },
+      "post": {
+        "description": "Authorize an environment for a project.\n\nThe refusals this can produce are the point of the route, and they come from the domain rather\nthan from here: an environment needs at least one explicitly permitted origin, and the observer\nand reset credentials must be different references. One identity that can both set up the answer\nand attest to it is not an independent observer, and every completion assertion in the product\ndepends on that separation being real.\n\nCredential *references* are stored and echoed; no credential value is accepted by this route at\nall, so there is no path by which one reaches the database, a digest or an export.",
+        "operationId": "register_environment_v1_workspaces__workspace_id__projects__project_id__environments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register Environment V1 Workspaces  Workspace Id  Projects  Project Id  Environments Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Environment",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/journeys": {
+      "get": {
+        "operationId": "list_journey_versions_v1_workspaces__workspace_id__projects__project_id__journeys_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Journey Versions V1 Workspaces  Workspace Id  Projects  Project Id  Journeys Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Journey Versions",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/reviews": {
       "post": {
         "description": "Record one person's assessment of exact material.\n\nBoth the digests the reviewer looked at and the digests the system currently holds are required\nin the body. That looks redundant and is not: comparing a stored record to itself always agrees,\nso a route that read the current digests for both sides would make the staleness check pass\nunconditionally while appearing to protect something.",
@@ -803,6 +1207,81 @@
       }
     },
     "/v1/workspaces/{workspace_id}/runners": {
+      "get": {
+        "description": "The runner inventory, with the evidence behind each status.\n\n`preflightPassedAt` is the field that matters, and it is separate from `status` on purpose. A\nrunner process being reachable is not proof that a screen reader is running on it, that the\nreader is the one enrolled, or that anything was ever read back from a real desktop. INV-02\nturns on that distinction: a missing reader capability must never resolve to a pass, and a UI\nthat inferred readiness from \"the row exists\" would be the first place that inference is made.\n\nThe reset counter is included because a desktop that keeps needing resets is a desktop nobody\nshould be scheduling work onto, and that pattern is invisible from a single status word.",
+        "operationId": "list_runners_v1_workspaces__workspace_id__runners_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Runners V1 Workspaces  Workspace Id  Runners Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Runners",
+        "tags": [
+          "runners"
+        ]
+      },
       "post": {
         "operationId": "enroll_runner_v1_workspaces__workspace_id__runners_post",
         "parameters": [

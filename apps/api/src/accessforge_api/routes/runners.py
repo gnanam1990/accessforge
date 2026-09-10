@@ -7,6 +7,7 @@ from typing import Annotated, Any
 import psycopg
 from fastapi import APIRouter, Depends, Request, status
 
+from accessforge_api.dependencies import clamp_page_size
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_api.routes._common import as_body, authorize, workspace_scope
 from accessforge_domain.authorization.roles import Permission
@@ -108,6 +109,80 @@ def enroll_runner(
         "runnerId": enrolled.runner_id,
         "status": str(enrolled.status),
         "profileDigest": enrolled.profile_digest,
+    }
+
+
+@router.get("/runners")
+def list_runners(
+    workspace_id: str,
+    request: Request,
+    conn: Conn,
+    after: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """The runner inventory, with the evidence behind each status.
+
+    `preflightPassedAt` is the field that matters, and it is separate from `status` on purpose. A
+    runner process being reachable is not proof that a screen reader is running on it, that the
+    reader is the one enrolled, or that anything was ever read back from a real desktop. INV-02
+    turns on that distinction: a missing reader capability must never resolve to a pass, and a UI
+    that inferred readiness from "the row exists" would be the first place that inference is made.
+
+    The reset counter is included because a desktop that keeps needing resets is a desktop nobody
+    should be scheduling work onto, and that pattern is invisible from a single status word.
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    size = clamp_page_size(limit)
+    rows = conn.execute(
+        """
+        SELECT r.id, r.name, r.status, r.platform, r.profile, r.lease_epoch,
+               r.quarantine_reason, r.revoked_at, r.created_at,
+               (SELECT max(p.recorded_at) FROM runner_preflight p
+                 WHERE p.runner_id = r.id AND p.successful) AS preflight_passed_at,
+               (SELECT count(*) FROM runner_reset x WHERE x.runner_id = r.id) AS reset_count,
+               (SELECT count(*) FROM desktop_lease l
+                 WHERE l.runner_id = r.id AND l.released_at IS NULL) AS active_leases
+          FROM runner r
+         WHERE (%s::uuid IS NULL OR r.id > %s::uuid)
+         ORDER BY r.id
+         LIMIT %s
+        """,
+        (after, after, size + 1),
+    ).fetchall()
+
+    items = [
+        {
+            "runnerId": str(r["id"]),
+            "name": str(r["name"]),
+            "status": str(r["status"]),
+            "platform": str(r["platform"]),
+            # The enrolled profile as recorded: reader name, reader version, browser, and whatever
+            # else enrollment captured. Reported verbatim rather than summarised, because a version
+            # difference is the whole reason a matched runner may still be the wrong one.
+            "profile": dict(r["profile"]),
+            "leaseEpoch": int(r["lease_epoch"]),
+            "quarantineReason": r["quarantine_reason"],
+            "revoked": r["revoked_at"] is not None,
+            # None means no preflight has ever passed on this runner. Not `false`, and not omitted:
+            # "never proved" and "proved a while ago" are different states and an operator acts on
+            # them differently.
+            "preflightPassedAt": (
+                None if r["preflight_passed_at"] is None else str(r["preflight_passed_at"])
+            ),
+            "resetCount": int(r["reset_count"]),
+            "hasActiveLease": int(r["active_leases"]) > 0,
+            "createdAt": str(r["created_at"]),
+        }
+        for r in rows[:size]
+    ]
+    return {
+        "items": items,
+        "nextCursor": items[-1]["runnerId"] if len(rows) > size else None,
+        "readinessMeaning": (
+            "READY means this runner passed a preflight that read something back from a real "
+            "desktop. It is not inferred from the runner process being reachable, and no status "
+            "here is evidence that a journey will pass."
+        ),
     }
 
 
