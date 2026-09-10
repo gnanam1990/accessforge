@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 
+import psycopg
 import pytest
 
 from accessforge_domain import reducers
@@ -386,7 +387,12 @@ def test_a_stale_revision_refuses_the_interruption(db: str) -> None:
 
 
 def test_a_terminal_run_cannot_be_interrupted_again(db: str) -> None:
-    """INV-11: terminal records are immutable, and corrections are append-only links."""
+    """INV-11: terminal records are immutable, and corrections are append-only links.
+
+    Both actions are journaled before the first terminalization, because the first one releases
+    the lease and a released lease refuses new journal entries -- a guard that caught the earlier
+    version of this test writing an action against a desktop nobody held.
+    """
     _, lease_id, run_id, epoch = _running_with_lease(db)
     with workspace_connection(db, WS) as conn:
         attempt = str(
@@ -405,17 +411,6 @@ def test_a_terminal_run_cannot_be_interrupted_again(db: str) -> None:
             action="NEXT",
             origin=ORIGIN,
         )
-        runners.mark_action_dispatched(conn, action_id=first)
-        _, _, revision = _state(db, run_id)
-        runners.terminalize_ambiguous_attempt(
-            conn,
-            run_id=run_id,
-            action_id=first,
-            reason=AmbiguityReason.ACTION_RESULT_NEVER_ARRIVED,
-            expected_revision=revision,
-        )
-
-    with workspace_connection(db, WS) as conn:
         second = runners.record_action_intent(
             conn,
             workspace_id=WS,
@@ -427,7 +422,20 @@ def test_a_terminal_run_cannot_be_interrupted_again(db: str) -> None:
             action="PREVIOUS",
             origin=ORIGIN,
         )
-        _, _, revision = _state(db, run_id)
+        runners.mark_action_dispatched(conn, action_id=first)
+        revision = runs.load_run(conn, run_id=run_id).state.revision
+        runners.terminalize_ambiguous_attempt(
+            conn,
+            run_id=run_id,
+            action_id=first,
+            reason=AmbiguityReason.ACTION_RESULT_NEVER_ARRIVED,
+            expected_revision=revision,
+        )
+
+    assert _state(db, run_id)[0] is RunStatus.INTERRUPTED
+
+    with workspace_connection(db, WS) as conn:
+        revision = runs.load_run(conn, run_id=run_id).state.revision
         with pytest.raises(runs.TerminalRun):
             runners.terminalize_ambiguous_attempt(
                 conn,
@@ -436,3 +444,94 @@ def test_a_terminal_run_cannot_be_interrupted_again(db: str) -> None:
                 reason=AmbiguityReason.ACTION_RESULT_NEVER_ARRIVED,
                 expected_revision=revision,
             )
+
+
+def test_an_action_cannot_be_journaled_against_a_released_lease(db: str) -> None:
+    """Found by the test above failing once the guard existed.
+
+    A released lease is not a desktop anyone holds, so an action recorded against it would be work
+    attributed to a session that had already ended.
+    """
+    _, lease_id, run_id, epoch = _running_with_lease(db)
+    with workspace_connection(db, WS) as conn:
+        attempt = str(
+            conn.execute(
+                "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
+            ).fetchone()["attempt_id"]
+        )
+        runners.fence_expired_leases(conn, now="2026-09-11T00:00:00.000000Z")
+        with pytest.raises(runners.RunnerError, match="was released"):
+            runners.record_action_intent(
+                conn,
+                workspace_id=WS,
+                lease_id=lease_id,
+                run_id=run_id,
+                attempt_id=attempt,
+                epoch=epoch,
+                action_sequence=1,
+                action="NEXT",
+                origin=ORIGIN,
+            )
+
+
+def test_an_action_cannot_claim_an_epoch_the_lease_is_not_at(db: str) -> None:
+    """Nothing in the schema could catch this: the foreign key binds the lease, not its epoch."""
+    _, lease_id, run_id, epoch = _running_with_lease(db)
+    with workspace_connection(db, WS) as conn:
+        attempt = str(
+            conn.execute(
+                "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
+            ).fetchone()["attempt_id"]
+        )
+        with pytest.raises(runners.RunnerError, match="claims epoch"):
+            runners.record_action_intent(
+                conn,
+                workspace_id=WS,
+                lease_id=lease_id,
+                run_id=run_id,
+                attempt_id=attempt,
+                epoch=epoch + 5,
+                action_sequence=1,
+                action="NEXT",
+                origin=ORIGIN,
+            )
+
+
+def test_an_ambiguous_status_without_a_reason_is_refused_by_the_database(db: str) -> None:
+    """The constraint was one-directional and allowed it.
+
+    That state is the worst of the three: it reads as a known-bad result in any query filtering on
+    status while telling an operator nothing about what is unknown, and it is exactly what a caller
+    reaches by writing the row directly instead of through `mark_action_ambiguous` -- which is also
+    the function that quarantines the desktop.
+    """
+    _, lease_id, run_id, epoch = _running_with_lease(db)
+    with workspace_connection(db, WS) as conn:
+        attempt = str(
+            conn.execute(
+                "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
+            ).fetchone()["attempt_id"]
+        )
+        action_id = runners.record_action_intent(
+            conn,
+            workspace_id=WS,
+            lease_id=lease_id,
+            run_id=run_id,
+            attempt_id=attempt,
+            epoch=epoch,
+            action_sequence=1,
+            action="NEXT",
+            origin=ORIGIN,
+        )
+    with workspace_connection(db, WS) as conn, pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "UPDATE runner_action SET result_at = now(), result_status = 'AMBIGUOUS' WHERE id = %s",
+            (action_id,),
+        )
+
+    with workspace_connection(db, WS) as conn, pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "UPDATE runner_action SET result_at = now(), result_status = 'SUCCEEDED', "
+            "ambiguity_reason = 'ACTION_RESULT_NEVER_ARRIVED' WHERE id = %s",
+            (action_id,),
+        )

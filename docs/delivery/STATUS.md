@@ -41,8 +41,8 @@ Module 04: **merged** at `9a1aef6`, verified on main.
 Module 05: **merged** at `3977e18`, CI green on the pull request.
 Module 06: **merged** at `85e5935`, with seven findings from the independent review fixed and
 mutation-proven.
-Module 07: **implemented and locally verified** (1013 Python tests on a database created from nothing,
-plus 82 Node tests, fourteen mutations), delivery **open**. Real PostgreSQL concurrency and a real
+Module 07: **implemented and locally verified** (1016 Python tests on a database created from nothing,
+plus 82 Node tests, seventeen mutations), delivery **open**. Real PostgreSQL concurrency and a real
 `fsync`ed action journal; **no screen reader, and no operating-system fencing demonstrated** — see
 `docs/handoffs/07.md` for the exact unverified boundaries.
 All other modules: not started.
@@ -64,6 +64,7 @@ at once — the correct outcome, but a poor diagnosis. CI now uses a NOSUPERUSER
 | module 06, pre-merge | `packages/persistence/src` — the package holding every tenancy decision — was absent from CI's strict `mypy` targets. It already passed; nothing had been checking. | added to the type-check step |
 | module 04, found during module 07 | `run.lease_epoch` was written by every transition and set by no reducer, so a run's epoch stayed 0 for life. `acknowledge_stop` refuses an acknowledgement whose epoch does not match the current one, so it would have refused **every acknowledgement that could ever exist** — no run holding a desktop could reach terminal CANCELLED. Module 04's tests passed because they acknowledged at epoch 0. | `admit_to_desktop` reducer added; `admit_lease` applies it in the transaction that grants the lease |
 | module 07, pre-merge | `revoke_runner` retired a registration while it still held a live lease, creating the only state in which two runner rows can name one desktop. Found because removing an advisory lock failed no tests, which prompted asking what the lock was for. | revocation refused while a lease is active; the advisory lock removed as indistinguishable from the unique index that is the actual guarantee |
+| module 07, pre-merge | The automated reviewer was rate limited, so the independent review was done by hand on green CI. It found two more: the ambiguity constraint was one-directional, permitting an AMBIGUOUS action with no reason — a known-bad result that tells an operator nothing, and the exact state a caller reaches by bypassing the function that also quarantines the desktop. And `record_action_intent` trusted the caller's epoch, which no schema constraint could catch because the foreign key binds the lease and not its epoch. | constraint made bidirectional; epoch read from the lease and compared, and a released lease refused outright |
 
 Caught by the clean-clone smoke rather than by CI, which is the point of running it: CI's step
 ordering made a broken standalone command look fine.
