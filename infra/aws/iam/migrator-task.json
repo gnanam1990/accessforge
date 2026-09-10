@@ -1,0 +1,20 @@
+{
+  "//": "PROPOSED. Never applied to any account. The run-once migrator task: database, and nothing else.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadTheDatabaseUrl",
+      "//": "Its only secret. A migrator that could read the object-store credentials would be a second identity holding them for no reason.",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": "${migrator_database_url_secret_arn}"
+    },
+    {
+      "Sid": "DenyEverythingElseInteresting",
+      "//": "A migration is DDL against one database. It has no reason to touch the evidence store, the queue or a model, and a migrator with those permissions is a highly-privileged task that runs unattended on every deploy.",
+      "Effect": "Deny",
+      "Action": ["s3:*", "sqs:*", "bedrock:*"],
+      "Resource": "*"
+    }
+  ]
+}

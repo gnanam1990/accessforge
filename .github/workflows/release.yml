@@ -1,0 +1,113 @@
+name: Release candidate
+
+# The TRUSTED workflow. Separated from ci.yml because the two have opposite threat models, and a
+# single workflow that tried to be both would end up with the trusted one's permissions and the
+# untrusted one's inputs.
+#
+# What makes this one trusted:
+#
+#   * It never runs on `pull_request`. A fork cannot cause it to run at all -- `workflow_dispatch`
+#     requires write access, and a tag push requires push access.
+#   * It runs against a tag on this repository, not against a contributor's branch.
+#   * It re-runs the full untrusted suite first. Being trusted is about what it may *do*, not about
+#     skipping what it must check.
+#
+# What it still does not do: create a cloud resource, deploy anywhere, or invoke a billable model.
+# Those need a person's explicit approval for a specific change, and a workflow that could do them
+# on a tag push is a workflow that will eventually do them by accident. See
+# docs/operations/DEPLOYMENT.md, which records the proposed changes and the fact that none of them
+# has been applied.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+# Still read-only. A release candidate is a set of artifacts and a record of what was verified;
+# publishing them is a separate decision made by a person, and this workflow does not need the
+# permission to make it.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  provenance:
+    name: What is being released, and from where
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Refuse a tag that is not on main
+        # A tag can point at any commit, including one that never passed review. This is the check
+        # that makes "we released the tag" and "we released reviewed code" the same statement.
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::this tag is not an ancestor of main; it points at unreviewed code"
+            exit 1
+          fi
+          echo "tag is on main"
+
+      - name: Record the exact inputs
+        run: |
+          {
+            echo "### Release candidate"
+            echo
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Ref | \`${{ github.ref }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Triggered by | ${{ github.event_name }} |"
+            echo
+            echo "Version matrix:"
+            echo '```toml'
+            cat infra/version-matrix.toml
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verified:
+    name: The full untrusted suite, re-run against the tag
+    needs: provenance
+    # Calls the same workflow rather than copying its steps. Two copies of a pipeline diverge, and
+    # the copy that diverges is always the one nobody looks at.
+    uses: ./.github/workflows/ci.yml
+
+  statement:
+    name: What this release is and is not verified for
+    needs: verified
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write the honest summary
+        # Every release carries this. The point is that the limitations travel with the artifact
+        # rather than living in a document somebody has to think to open.
+        run: |
+          {
+            echo "### Verified by this pipeline"
+            echo
+            echo "- Static analysis, strict type checking, and the published API contract"
+            echo "- Unit, contract and integration suites against a real PostgreSQL 17"
+            echo "- A real backup, restore into a disposable database, and reconciliation"
+            echo "- Forward migration from the previous schema"
+            echo "- The evidence verifier refusing a tampered bundle"
+            echo
+            echo "### NOT verified by this pipeline"
+            echo
+            echo "- Any behaviour of a real screen reader. VoiceOver and NVDA are BLOCKED."
+            echo "- Any model invocation. Bedrock access is BLOCKED."
+            echo "- Any hosted deployment. The AWS configuration is PREPARED and unapplied."
+            echo
+            echo "A claim about any of the second list requires evidence from somewhere other than"
+            echo "this pipeline. See docs/operations/DEPLOYMENT.md."
+          } >> "$GITHUB_STEP_SUMMARY"

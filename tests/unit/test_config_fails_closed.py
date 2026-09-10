@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -178,3 +179,61 @@ def test_local_development_is_unaffected_by_production_rules() -> None:
     s = ApiSettings(**API_VALID)  # environment defaults to "local"
     assert s.environment == "local"
     assert s.evidence_endpoint_url.startswith("http://")
+
+
+# --- the example files are the instructions, so they have to be followable ----------------------
+
+
+def test_every_accessforge_variable_in_the_example_is_one_the_api_accepts() -> None:
+    """Following `.env.example` must not make the API refuse to start.
+
+    `ApiSettings` uses `env_prefix="ACCESSFORGE_"` with `extra="forbid"`, so an
+    ACCESSFORGE_-prefixed name in `.env` that the API does not define is a startup failure -- and
+    the file an operator copies to `.env` is `.env.example`. Module 27 added backup variables there
+    and produced exactly that: two extra_forbidden errors from a file whose entire purpose is to be
+    copied.
+
+    The fix was to put the backup operator's variables in their own example file, because they
+    belong to a different person on a different machine. This test is what stops the next person
+    rediscovering it at startup.
+    """
+    example = Path(__file__).resolve().parents[2] / ".env.example"
+    declared = {f"ACCESSFORGE_{name.upper()}" for name in ApiSettings.model_fields}
+
+    for line in example.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name = stripped.split("=", 1)[0].strip()
+        if not name.startswith("ACCESSFORGE_"):
+            continue
+        assert name in declared, (
+            f"{name} is in .env.example but is not a field of ApiSettings. Copying this file to "
+            ".env makes the control plane refuse to start with extra_forbidden. If the variable "
+            "belongs to a different component, give it its own example file -- see "
+            ".env.backup.example and .env.objectstore.example."
+        )
+
+
+def test_the_separate_example_files_carry_no_variable_the_api_would_reject() -> None:
+    """The other half: a file that is *not* .env.example must not be copied into .env either.
+
+    Asserted by checking that each one carries at least one ACCESSFORGE_ name the API does not
+    define -- which is what makes it a separate file rather than a fragment of the main one. A file
+    that turned out to contain only API-accepted names should be merged back, and this catches that
+    drift too.
+    """
+    root = Path(__file__).resolve().parents[2]
+    declared = {f"ACCESSFORGE_{name.upper()}" for name in ApiSettings.model_fields}
+
+    for path in (root / ".env.backup.example",):
+        names = {
+            line.split("=", 1)[0].strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#") and "=" in line
+        }
+        assert names, f"{path.name} declares no variables"
+        assert names - declared, (
+            f"{path.name} contains only variables the API accepts, so it is a fragment of "
+            ".env.example rather than a separate component's configuration"
+        )

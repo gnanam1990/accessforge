@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -230,3 +231,22 @@ class S3ArtifactStore:
             return False
         except BotoCoreError as exc:
             raise ObjectStoreUnavailable(f"cannot reach the object store: {exc}") from exc
+
+    def iter_keys(self, *, prefix: str = "") -> Iterator[str]:
+        """Every object key in the bucket, paginated.
+
+        For backup, which is the one operation that must enumerate the store rather than address a
+        known key. Paginated rather than a single `list_objects_v2` call, because that call returns
+        at most 1000 keys and silently stops there -- a backup that copied the first thousand
+        artifacts and reported success is precisely the failure this product exists to argue
+        against.
+        """
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        try:
+            paginator = self._client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+                for item in page.get("Contents", []):
+                    yield str(item["Key"])
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStoreUnavailable(f"cannot list {self._bucket}: {exc}") from exc

@@ -1,5 +1,19 @@
 name: CI
 
+# The UNTRUSTED workflow. It runs code from pull requests, including forks, and is built on the
+# assumption that everything it checks out is hostile.
+#
+#   * `pull_request` (not `pull_request_target`) checks out the PR's own commit and gives a
+#     read-only token with no access to repository secrets from a fork. `pull_request_target` would
+#     run the fork's code with the base repository's permissions and secrets, which is the standard
+#     way this goes wrong.
+#   * No secret is referenced anywhere in this file. Every credential below belongs to a container
+#     that lives for one job and is reachable only from it.
+#   * Package lifecycle scripts are disabled during installs. A dependency's `postinstall` is
+#     arbitrary code from a transitive package, executing before any check has run.
+#   * Nothing here publishes, deploys, or writes to any account. Releasing is a separate,
+#     trusted workflow: .github/workflows/release.yml
+#
 # Runs on pull-request candidates, on main, and on merge-queue integration candidates. A merge
 # queue validates a commit that neither branch contains, so merge_group must be covered or the
 # thing actually being merged is never tested.
@@ -8,6 +22,9 @@ on:
   push:
     branches: [main]
   merge_group:
+  # Callable by the trusted release workflow, so a release re-runs this pipeline rather than a
+  # copy of it. Two copies diverge, and the one that diverges is always the one nobody reads.
+  workflow_call:
 
 # Least privilege: this workflow only ever reads the repository.
 permissions:
@@ -111,8 +128,13 @@ jobs:
 
       - name: Build the TypeScript contracts package
         # Required by the cross-language differential test below.
+        #
+        # --ignore-scripts: a dependency's install hooks are arbitrary code from a transitive
+        # package, running before a single check has. Nothing in this workspace needs them, so
+        # they are off; a dependency that stops working without them is a dependency to look at
+        # rather than a flag to remove.
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --ignore-scripts
           pnpm --filter @accessforge/contracts build
 
       - name: Formatter check
@@ -128,10 +150,13 @@ jobs:
         run: uv run python scripts/generate_openapi.py --check
 
       - name: Type check (strict)
+        # `scripts` is included: the operator scripts are the commands a runbook tells somebody to
+        # run during an incident, which makes them the code least likely to be exercised before it
+        # matters and the code where a TypeError is most expensive.
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
           packages/domain/src packages/contracts/python/src
-          packages/persistence/src
+          packages/persistence/src packages/evidence/src scripts
 
       - name: Create a non-superuser role for the tests
         # Row-level security is the isolation mechanism, so the tests must not run as a role that
@@ -204,6 +229,29 @@ jobs:
         # tests/integration/test_reference_app_journey.py::test_integration_suite_is_actually_configured
         run: uv run pytest tests/integration -q
 
+      - name: Evidence verifier — a bundle is checkable by someone with nothing else
+        # The verifier is the product's load-bearing claim: a reader with the bundle and a key
+        # obtained out of band can check it without access to this system. So it is exercised as a
+        # standalone command against files, not as a library call inside a test that already holds
+        # a database connection.
+        #
+        # `--check-tamper` is the half that matters. A verifier that only ever sees intact bundles
+        # is a verifier nobody has watched refuse anything.
+        run: uv run pytest tests/integration/test_evidence_export.py tests/contract -q
+
+      - name: Backup and restore drill — real pg_dump, real restore, real reconciliation
+        # Not a mocked filesystem. A backup that has never been restored is a hypothesis.
+        env:
+          # FORCE ROW LEVEL SECURITY applies to the table owner, so the application role cannot
+          # pg_dump its own rows. A backup needs the bypassing role, and the drill asserts that
+          # the application role's attempt fails rather than quietly producing an empty dump.
+          BACKUP_DATABASE_URL: postgresql://accessforge:accessforge-ci@localhost:5432/accessforge_test
+        run: |
+          uv run pytest tests/integration/test_restore_drill.py \
+                        tests/integration/test_backup_archive_drill.py \
+                        tests/integration/test_forward_migration_and_interruption.py \
+                        tests/integration/test_readiness_and_shutdown.py -q
+
       - name: Assert the integration suite actually executed
         # A suite that collected nothing must not be reported as a passing boundary.
         run: |
@@ -229,7 +277,7 @@ jobs:
           cache: pnpm
 
       - name: Install pinned dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Type check
         run: pnpm -r --if-present typecheck
@@ -309,3 +357,161 @@ jobs:
           if grep -rEn '/Users/[a-z]+/' --include='*.md' docs/ ; then
             echo "::error::local filesystem path committed to documentation"; exit 1
           fi
+
+  security:
+    name: Security — dependency review, adversarial suites, secret hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install pinned dependencies
+        run: |
+          uv sync --frozen
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Known vulnerabilities in the JavaScript dependency tree
+        # Reported at high and above and allowed to fail the job. An advisory that is genuinely not
+        # applicable is dismissed with a recorded reason in pnpm's own overrides, not by lowering
+        # this threshold: a threshold lowered once stays lowered.
+        run: pnpm audit --audit-level=high
+
+      - name: The authorization matrix and the boundary probes
+        # These are unit-level and need no database. They are the tests that fail when a permission
+        # check is removed, so they run in their own stage where a failure is unambiguous rather
+        # than one line in a suite of fourteen hundred.
+        run: uv run pytest tests/unit/test_authorization_matrix.py tests/unit/test_authority.py -q
+
+      - name: No path to an unearned PASS
+        # The single assertion the whole product rests on. Given its own stage for the same reason
+        # a smoke alarm is not wired through the doorbell.
+        run: uv run pytest tests/unit/test_no_path_to_unearned_pass.py -q
+
+      - name: Configuration fails closed
+        run: uv run pytest tests/unit/test_config_fails_closed.py -q
+
+      - name: The backup envelope refuses truncation, reordering and splicing
+        run: uv run pytest tests/unit/test_backup_envelope.py -q
+
+      - name: The untrusted workflow is structurally untrusted
+        # Two structural checks on the workflows themselves, and both look at what the file *does*
+        # rather than at its text.
+        #
+        # The distinction is not pedantry. The first version of these steps grepped the raw file
+        # and failed against its own explanatory comments -- a check that matched the prose warning
+        # about the thing it was checking for. A text search over a file that discusses its own
+        # threat model finds the discussion.
+        #
+        #   1. No `secrets.` expression outside a comment. The protection here is that a fork's code
+        #      never sees a credential; the way that protection is lost is one line added to make a
+        #      flaky step work.
+        #   2. No workflow triggers on `pull_request_target`, checked by parsing the trigger keys.
+        #      That trigger runs a fork's code with the base repository's permissions and secrets.
+        run: |
+          uv run python - <<'PY'
+          import re, sys, pathlib
+          import yaml
+
+          failures = []
+
+          ci = pathlib.Path(".github/workflows/ci.yml")
+          for number, line in enumerate(ci.read_text().splitlines(), start=1):
+              code = line.split("#", 1)[0]
+              for match in re.finditer(r"secrets\.([A-Za-z_][A-Za-z0-9_]*)", code):
+                  if match.group(1) != "GITHUB_TOKEN":
+                      failures.append(f"{ci}:{number}: references secrets.{match.group(1)}")
+
+          for path in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              document = yaml.safe_load(path.read_text())
+              # PyYAML resolves the bare key `on` to the boolean True.
+              triggers = document.get("on", document.get(True)) or {}
+              if isinstance(triggers, str):
+                  triggers = {triggers: None}
+              if isinstance(triggers, list):
+                  triggers = dict.fromkeys(triggers)
+              if "pull_request_target" in triggers:
+                  failures.append(f"{path}: triggers on pull_request_target")
+
+          for failure in failures:
+              print(f"::error::{failure}")
+          if failures:
+              sys.exit(1)
+          print("no repository secret is referenced; no workflow uses pull_request_target")
+          PY
+
+  platform-only:
+    name: Platform-only tests — reported, never marked passed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: State what this pipeline cannot exercise
+        # A job that says so out loud, because the alternative is a green pipeline that a reader
+        # takes as evidence about a real screen reader.
+        #
+        # It exits 0 deliberately: these are not failures, they are absences, and a red X here would
+        # train everyone to ignore a red X. What it must never do is let anything downstream treat
+        # "CI passed" as covering them. That is why the text is here, in the run log, rather than in
+        # a document somebody would have to go and find.
+        run: |
+          cat <<'NOTE'
+          ============================================================================
+          NOT RUN in this pipeline. No result below is evidence of anything.
+          ============================================================================
+
+          macOS VoiceOver actual-AT control
+              Needs a macOS host with VoiceOver enabled and Accessibility + Automation
+              permission granted to the runner process. A Linux container cannot provide
+              it and no emulation of it produces evidence about a real screen reader.
+              Status: BLOCKED. See infra/version-matrix.toml [capability.voiceover].
+
+          Windows NVDA actual-AT control
+              Needs a Windows host with NVDA and its controller client. Not obtainable
+              from Linux, including under virtualization that does not present a real
+              interactive desktop session.
+              Status: BLOCKED. See infra/version-matrix.toml [capability.nvda].
+
+          Bedrock model invocation
+              Needs AWS credentials with model access, and separately, approval to incur
+              charges. Credentials alone are not approval.
+              Status: BLOCKED. See infra/version-matrix.toml [capability.bedrock].
+
+          Hosted deployment
+              No cloud resource is created by any workflow in this repository. The AWS
+              configuration under infra/aws/ is PREPARED and unapplied.
+              See docs/operations/DEPLOYMENT.md.
+
+          ============================================================================
+          Any claim that this release has been verified against a real screen reader,
+          a real model, or a hosted deployment is false unless it cites evidence from
+          somewhere other than this pipeline.
+          ============================================================================
+          NOTE
+
+      - name: The capability matrix still declares these as blocked
+        # If somebody flips one of these to OK in the matrix, this job's text becomes a lie. The
+        # assertion lives in the test suite; this is the line that makes the job notice.
+        run: |
+          set -euo pipefail
+          for capability in voiceover nvda bedrock; do
+            if ! grep -A3 "\[capability.$capability\]" infra/version-matrix.toml \
+                 | grep -q 'status = "BLOCKED"'; then
+              echo "::error::[capability.$capability] is no longer BLOCKED but this job still says it is"
+              exit 1
+            fi
+          done
+          echo "the matrix and this job agree: three capabilities remain blocked"
