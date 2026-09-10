@@ -58,6 +58,12 @@ hashing, raw/redacted identities, retention that outlives the bytes, finalizatio
 and stale arrival handling, bounded ingest and keyset replay — all against **real MinIO**, with no
 filesystem fallback anywhere. **No real screen-reader output has passed through the pipeline**, because
 modules 08 and 09 are blocked: integration status is contract-verified, not end-to-end verified.
+Module 11: **implemented and locally verified**, delivery open. Identity revalidation before
+observations, provenance on every assertion value, the independent completion observer against the
+real reference-application database, and the scope statement attached to every verdict. **No real
+screen-reader trace has been evaluated** — that acceptance criterion is unmet until module 08 is
+unblocked — but the completion observer is proved end-to-end: it reads a real database and correctly
+reports FALSE for a submission that did not happen.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
