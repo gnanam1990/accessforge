@@ -51,11 +51,42 @@ assert_row_level_security_enforced(os.environ['TEST_DATABASE_URL'])
 "
 ```
 
+## Recreate the test database before the integration suite
+
+```bash
+dropdb --if-exists accessforge_test
+createdb accessforge_test --owner accessforge
+```
+
+**Do this before every integration run on a branch you have just changed or switched to.** A test
+database carried from one branch to another is not a neutral convenience; it is a source of false
+green. Module 06 was branched before module 05 landed and shipped a migration referencing a table
+module 05 creates. The local database still held that table and still recorded module 05's migrations
+as applied, so `migrate` skipped exactly the right files and every `CREATE TABLE IF NOT EXISTS`
+succeeded. The suite passed locally with 184 integration tests and failed in CI, on a fresh database,
+with `relation "project" does not exist` raised from the setup of an unrelated authentication test.
+
+The same carried-over state hid a second defect in the same module: a regression test that asserted
+two table names were present passed only because the database happened to hold the schema of the
+application under test.
+
+`migrate` now refuses both shapes up front rather than relying on anyone remembering this section —
+see below — but the refusal is a backstop. Recreating the database is the procedure.
+
 ## Database migrations
 
 ```bash
 uv run python -c "from accessforge_persistence import migrate; print(migrate('<database-url>'))"
 ```
+
+Two preconditions are checked before any statement is sent, and either one raises
+`MigrationSeriesError` naming what is wrong and how to recover:
+
+| Condition | Why it is fatal |
+|---|---|
+| The migration files on disk are not consecutively numbered from `0001` | A later migration almost certainly depends on what the missing one creates. Rebase onto a base that contains them. |
+| The database records a migration this tree does not contain | Its schema was built by a different branch, so nothing applied on top of it can be trusted. Use a fresh database. |
+| Two migrations share a number | Their relative order would depend on the rest of the filename. |
 
 Each migration runs in its own transaction and is recorded in the same transaction, so a failure
 leaves neither a half-applied schema nor a false record of success. The integration fixtures call
