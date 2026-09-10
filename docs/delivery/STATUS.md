@@ -39,7 +39,8 @@ primitives are complete, but no HTTP surface exposes them until module 18.
 Module 04: **merged** at `9a1aef6`, verified on main.
 Module 05: **merged** at `3977e18`, CI green on the pull request.
 Module 06: **implemented and locally verified** (821 Python tests on a database created from nothing,
-plus 54 Node tests), rebased onto module 05, delivery **open**.
+plus 54 Node tests), rebased onto module 05, with seven findings from the independent
+review fixed and mutation-proven, delivery **open**.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
@@ -83,6 +84,11 @@ ordering made a broken standalone command look fine.
 - `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
   `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
   else, and it is untouched rather than unknown.
+- `fixture_digest` is an unkeyed SHA-256 over fixture and observer values, several of which have low
+  entropy, so anyone holding an export can test offline guesses at what a run was checked against.
+  Raised by the module 06 independent review; a keyed commitment was refused because it would make
+  exports unverifiable offline, which CONTRACTS requires. The reasoning is in `docs/handoffs/06.md`
+  and the trade-off is open, not settled.
 - The silent table collision found in module 06 can no longer be reproduced: the two tables now have
   incompatible schemas, so a misdirected write fails loudly. The replacement test proves the product
   uses its own table; it does not reconstruct the silence. See `docs/handoffs/06.md`.

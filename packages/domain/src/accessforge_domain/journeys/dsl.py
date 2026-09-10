@@ -18,7 +18,9 @@ value in the wrong one is the defect this module exists to prevent:
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from .assertions import AssertionSet
 
@@ -54,9 +56,16 @@ MAX_WALL_TIME_SECONDS = 1800
 # forbids.
 _SELECTOR_SHAPES = (
     # An id or class selector anywhere in the text, not only at the start — the interesting case is
-    # "fix the thing at #email-error", buried mid-sentence. Requiring whitespace (or start) before
-    # the sigil keeps ordinary prose out: "example.test" and "e.g." have no preceding space.
-    re.compile(r"(?:^|\s)[#.][A-Za-z_][\w-]*"),
+    # "fix the thing at #email-error", buried mid-sentence.
+    #
+    # The condition is stated as "not preceded by a word character" rather than "preceded by
+    # whitespace or start". Requiring whitespace was the second wrong version of this rule: it kept
+    # ordinary prose out, but it also let a selector through whenever punctuation sat in front of
+    # it -- `(#email)`, `target:#email`, `"#email"`, `at:.email-error` -- which is how a selector
+    # would plausibly be written in the first place. A negative lookbehind covers every one of those
+    # and still excludes the prose the whitespace rule was protecting, because `example.test` and
+    # `e.g.` have the sigil preceded by a letter.
+    re.compile(r"(?<![\w-])[#.][A-Za-z_][\w-]*"),
     re.compile(r"\[[A-Za-z-]+\s*=\s*['\"]"),  # [data-testid="x"]
     re.compile(r"\b(?:div|span|input|button|form)\s*[>.#\[]"),  # css combinators
     re.compile(r"^\s*//|^\s*/html", re.IGNORECASE),  # xpath
@@ -143,13 +152,24 @@ class FixtureBinding:
     """
 
     template_id: str
-    navigator_values: dict[str, str] = field(default_factory=dict)
-    reset_values: dict[str, str] = field(default_factory=dict)
-    observer_config: dict[str, str] = field(default_factory=dict)
+    navigator_values: Mapping[str, str] = field(default_factory=dict)
+    reset_values: Mapping[str, str] = field(default_factory=dict)
+    observer_config: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.template_id.strip():
             raise JourneyError("a fixture binding needs a template identifier")
+
+        # Defensive immutable copies, taken before validation runs.
+        #
+        # `frozen=True` freezes the *fields*, not what they point at. Without this a caller keeps a
+        # reference to the dictionary it passed in and can mutate it afterwards -- inserting the
+        # credential or selector the checks below just rejected, or editing the oracle after the
+        # fixture digest has been taken. The copy is first so that everything validated below is the
+        # snapshot that is actually kept, and `MappingProxyType` over that copy means the stored
+        # mapping cannot be written through either.
+        for name in ("navigator_values", "reset_values", "observer_config"):
+            object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
         for key, value in self.navigator_values.items():
             for shape in _SECRET_SHAPES:
                 if shape.search(value):
@@ -173,7 +193,11 @@ class FixtureBinding:
             )
 
     def navigator_view(self) -> dict[str, str]:
-        """Exactly what the navigator receives. Nothing else is reachable from here."""
+        """Exactly what the navigator receives. Nothing else is reachable from here.
+
+        A fresh dict rather than the stored mapping: the caller owns what it gets back, and nothing
+        it does to that copy can reach the sealed binding.
+        """
         return dict(self.navigator_values)
 
 

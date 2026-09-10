@@ -21,8 +21,15 @@ CREATE TABLE IF NOT EXISTS journey_version (
     navigator_policy JSONB NOT NULL,
     reviewer_summary JSONB NOT NULL,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    supersedes    UUID REFERENCES journey_version (id),
-    FOREIGN KEY (project_id, workspace_id) REFERENCES project (id, workspace_id) ON DELETE CASCADE
+    supersedes    UUID,
+    FOREIGN KEY (project_id, workspace_id) REFERENCES project (id, workspace_id) ON DELETE CASCADE,
+    -- Composite, and the workspace column is the point. A foreign key on `id` alone is checked by
+    -- the system, which is exempt from row-level security, so it would happily accept another
+    -- tenant's journey version as a predecessor -- naming a row the citing workspace can never see
+    -- and quietly linking two tenants' lineage together. Every cross-row reference in this schema
+    -- carries the tenant for the same reason.
+    FOREIGN KEY (supersedes, workspace_id) REFERENCES journey_version (id, workspace_id),
+    UNIQUE (id, workspace_id)
 );
 
 COMMENT ON COLUMN journey_version.supersedes IS

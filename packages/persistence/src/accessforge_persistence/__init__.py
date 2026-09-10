@@ -51,25 +51,40 @@ def _migration_paths() -> list[Path]:
     and the failure it produces otherwise is `relation "project" does not exist` raised from deep
     inside an unrelated fixture. This turns that into one sentence naming the missing number.
     """
-    paths = sorted(MIGRATIONS_DIR.glob("*.sql"))
-    if not paths:  # pragma: no cover - the package always ships migrations
+    found = sorted(MIGRATIONS_DIR.glob("*.sql"))
+    if not found:  # pragma: no cover - the package always ships migrations
         raise MigrationSeriesError(f"no migrations found in {MIGRATIONS_DIR}")
 
-    numbers: dict[int, str] = {}
-    for path in paths:
+    numbers: dict[int, Path] = {}
+    for path in found:
         prefix = path.name.split("_", 1)[0]
         if not prefix.isdigit():
             raise MigrationSeriesError(
                 f"migration {path.name!r} does not begin with a number, so its place in the "
                 "series is undefined"
             )
+        # Four digits, zero padded. Lexical order and numeric order agree only while every prefix
+        # is the same width: `1_a.sql`, `2_b.sql`, `10_c.sql` is a consecutive series that sorts as
+        # 1, 10, 2, and applying a migration before its prerequisite is exactly the failure this
+        # function exists to prevent. Rather than sorting numerically and tolerating both
+        # conventions, the width is required, so the filenames on disk read in execution order.
+        if len(prefix) != 4:
+            raise MigrationSeriesError(
+                f"migration {path.name!r} has a {len(prefix)}-digit number; migrations use "
+                "exactly four digits so that lexical order and execution order agree"
+            )
         number = int(prefix)
+        if number < 1:
+            raise MigrationSeriesError(
+                f"migration {path.name!r} is numbered {number:04d}; the series starts at 0001, and "
+                "a migration below it would run outside the series the ledger records"
+            )
         if number in numbers:
             raise MigrationSeriesError(
-                f"migrations {numbers[number]!r} and {path.name!r} share the number {number:04d}; "
-                "their relative order would depend on the rest of the filename"
+                f"migrations {numbers[number].name!r} and {path.name!r} share the number "
+                f"{number:04d}; their relative order would depend on the rest of the filename"
             )
-        numbers[number] = path.name
+        numbers[number] = path
 
     expected = range(1, max(numbers) + 1)
     missing = sorted(set(expected) - set(numbers))
@@ -80,7 +95,11 @@ def _migration_paths() -> list[Path]:
             "on what the missing one creates. If this branch was cut before those migrations "
             "landed, rebase it onto a base that contains them."
         )
-    return paths
+
+    # Ordered by parsed number rather than by filename. With the width requirement above the two
+    # orders are identical, and returning the numeric one means a future change to that requirement
+    # cannot silently reintroduce out-of-order application.
+    return [numbers[n] for n in sorted(numbers)]
 
 
 class RowLevelSecurityNotEnforced(RuntimeError):

@@ -81,3 +81,58 @@ def test_the_guard_reads_the_directory_it_is_told_to(series: Path) -> None:
     """Without this, every test above could be passing against the real migrations directory."""
     assert accessforge_persistence.MIGRATIONS_DIR == series
     assert series != MIGRATIONS_DIR
+
+
+# --- findings from the module 06 independent review ---------------------------------------------
+
+
+def test_a_migration_numbered_zero_is_refused(series: Path) -> None:
+    """The gap check ran from 1 to max, so `0000_bootstrap.sql` slipped past it entirely.
+
+    A migration outside the declared series still executes SQL, and the ledger records it as
+    applied, so a tree that legitimately starts at 0001 would then be told it holds a foreign one.
+    """
+    _write(series, "0000_bootstrap.sql", "0001_a.sql", "0002_b.sql")
+    with pytest.raises(MigrationSeriesError, match="series starts at 0001"):
+        _migration_paths()
+
+
+def test_a_lone_migration_numbered_zero_is_refused(series: Path) -> None:
+    _write(series, "0000_bootstrap.sql")
+    with pytest.raises(MigrationSeriesError, match="series starts at 0001"):
+        _migration_paths()
+
+
+def test_a_narrow_numeric_prefix_is_refused(series: Path) -> None:
+    """`1_a.sql`, `2_b.sql`, `10_c.sql` is a consecutive series that sorts 1, 10, 2.
+
+    Under lexical ordering `10_c.sql` would have been applied before `2_b.sql` -- a dependent
+    migration ahead of its prerequisite, which is the failure the whole guard exists to prevent, and
+    it would have passed every check the guard had.
+    """
+    _write(series, "1_a.sql", "2_b.sql", "10_c.sql")
+    with pytest.raises(MigrationSeriesError, match=r"has a \d-digit number"):
+        _migration_paths()
+
+
+def test_a_wide_numeric_prefix_is_refused(series: Path) -> None:
+    _write(series, "00001_a.sql")
+    with pytest.raises(MigrationSeriesError, match="5-digit number"):
+        _migration_paths()
+
+
+def test_the_series_is_returned_in_numeric_order(series: Path) -> None:
+    """Asserted on the parsed numbers rather than on the filenames.
+
+    With four-digit padding the lexical and numeric orders agree, so a test comparing filenames
+    would pass against either implementation and prove nothing about which one is in use.
+    """
+    _write(series, "0003_c.sql", "0001_a.sql", "0002_b.sql")
+    assert [int(p.name.split("_", 1)[0]) for p in _migration_paths()] == [1, 2, 3]
+
+
+def test_the_shipped_migrations_all_use_four_digits() -> None:
+    """The real series, so the convention this guard enforces is not one only tests satisfy."""
+    for path in MIGRATIONS_DIR.glob("*.sql"):
+        prefix = path.name.split("_", 1)[0]
+        assert prefix.isdigit() and len(prefix) == 4, path.name
