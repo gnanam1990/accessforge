@@ -89,6 +89,22 @@ export const EnvironmentSection = ({
           'system discovered it could reach.',
       })
     }
+    // Both are required, and checked before the equality rule. Two blank references are equal, so
+    // the server refused them with the "not an independent observer" message — accurate about the
+    // comparison and misleading about the cause. One blank reference passed the domain entirely and
+    // was persisted empty.
+    if (observerRef.trim() === '') {
+      found.push({
+        fieldId: observerId,
+        message: 'Name the credential profile the independent observer reads with.',
+      })
+    }
+    if (resetRef.trim() === '') {
+      found.push({
+        fieldId: resetCredentialId,
+        message: 'Name the credential profile that resets fixture state.',
+      })
+    }
     if (observerRef.trim() !== '' && observerRef.trim() === resetRef.trim()) {
       found.push({
         fieldId: observerId,

@@ -80,9 +80,18 @@ def create_project(
                 "the authorizing user must be identified by their user id, not by their name. "
                 "A name is not a record of who granted permission."
             ) from exc
+        # Joined to `app_user` and requiring `disabled_at IS NULL`, because a live membership row
+        # survives the account being disabled. The member listing already excludes disabled
+        # accounts, so without this join the API would refuse to *offer* a person it would then
+        # happily accept.
         member = conn.execute(
-            "SELECT 1 FROM workspace_membership "
-            "WHERE workspace_id = %s AND user_id = %s AND revoked_at IS NULL",
+            """
+            SELECT 1
+            FROM workspace_membership m
+            JOIN app_user u ON u.id = m.user_id
+            WHERE m.workspace_id = %s AND m.user_id = %s AND m.revoked_at IS NULL
+              AND u.disabled_at IS NULL
+            """,
             (workspace_id, repository_authorized_by),
         ).fetchone()
         if member is None:

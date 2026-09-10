@@ -135,6 +135,20 @@ def _draft(project_id: str, **overrides: Any) -> dict[str, Any]:
     return body
 
 
+def _environment(**overrides: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "name": "Local",
+        "allowedOrigins": ["https://localhost:8443"],
+        "fixtureResetStrategy": "TRUNCATE_AND_SEED",
+        "observerCredentialRef": "vault://observer",
+        "resetCredentialRef": "vault://reset",
+        "permittedEffects": ["FIXTURE_SUBMIT", "FIXTURE_RESET"],
+        "expiresAt": "2027-01-01T00:00:00Z",
+    }
+    body.update(overrides)
+    return body
+
+
 # --------------------------------------------------------------------------------------------------
 # Freezing a journey version
 # --------------------------------------------------------------------------------------------------
@@ -189,17 +203,19 @@ def test_a_frozen_version_cannot_be_edited(client: TestClient, db: str) -> None:
 def test_a_successor_records_what_it_replaces(client: TestClient, db: str) -> None:
     headers = _signed_in(db, client)
     project_id = _project(client, headers)
-    first = client.post(
+    original = client.post(
         f"/v1/workspaces/{WS}/journeys", json=_draft(project_id), headers=headers
-    ).json()["journeyVersionId"]
+    ).json()
 
-    changed = _draft(project_id, supersedes=first)
+    changed = _draft(project_id, supersedes=original["journeyVersionId"])
     changed["budget"] = {"maxActions": 60, "wallTimeSeconds": 300}
     second = client.post(f"/v1/workspaces/{WS}/journeys", json=changed, headers=headers)
     assert second.status_code == 201, second.text
-    assert second.json()["supersedes"] == first
-    # And the digest changed, because the budget is part of what was sealed.
-    assert second.json()["journeyDigest"] != first
+    assert second.json()["supersedes"] == original["journeyVersionId"]
+    # The two *digests*, not a digest against an identifier. Comparing the digest to the version id
+    # was an assertion that could never fail, so it said nothing about whether the budget change
+    # actually changed the seal — which is the property it was written to check.
+    assert second.json()["journeyDigest"] != original["journeyDigest"]
 
 
 def test_a_listing_marks_a_version_that_has_been_superseded(client: TestClient, db: str) -> None:
@@ -336,6 +352,142 @@ def test_a_journey_with_no_completion_assertion_is_refused(client: TestClient, d
     assert response.json()["field"] == "assertions"
 
 
+def test_a_scalar_of_the_wrong_type_is_refused_rather_than_coerced(
+    client: TestClient, db: str
+) -> None:
+    """`str()`, `bool()` and `int()` all accepted values that changed meaning.
+
+    `null` became the string "None"; the string "false" became True; 1.9 became 1. A journey version
+    is immutable once frozen, so a coerced value is coerced forever, and its digest is the digest of
+    something the author never submitted.
+    """
+    headers = _signed_in(db, client)
+    project_id = _project(client, headers)
+
+    null_summary = _draft(project_id)
+    null_summary["intent"]["summary"] = None
+    assert (
+        client.post(f"/v1/workspaces/{WS}/journeys", json=null_summary, headers=headers).status_code
+        == 400
+    )
+
+    string_flag = _draft(project_id)
+    string_flag["assertions"][1]["required"] = "false"
+    response = client.post(f"/v1/workspaces/{WS}/journeys", json=string_flag, headers=headers)
+    assert response.status_code == 400
+    assert response.json()["field"] == "assertions[1]"
+
+    fractional_budget = _draft(project_id)
+    fractional_budget["budget"] = {"maxActions": 1.9, "wallTimeSeconds": 300}
+    response = client.post(f"/v1/workspaces/{WS}/journeys", json=fractional_budget, headers=headers)
+    assert response.status_code == 400
+    assert response.json()["field"] == "budget"
+
+
+def test_a_supersession_failure_names_the_supersedes_field(client: TestClient, db: str) -> None:
+    headers = _signed_in(db, client)
+    project_id = _project(client, headers)
+    body = _draft(project_id, supersedes=str(uuid.uuid4()))
+    response = client.post(f"/v1/workspaces/{WS}/journeys", json=body, headers=headers)
+    assert response.status_code == 400
+    # Not `projectId`. A message about the predecessor pointing at the project field sends the
+    # operator to the one control that is not the problem.
+    assert response.json()["field"] == "supersedes"
+
+
+def test_a_malformed_identifier_is_refused_before_it_reaches_the_database(
+    client: TestClient, db: str
+) -> None:
+    headers = _signed_in(db, client)
+    project_id = _project(client, headers)
+    body = _draft(project_id, supersedes="not-a-uuid")
+    response = client.post(f"/v1/workspaces/{WS}/journeys", json=body, headers=headers)
+    # PostgreSQL raises `invalid input syntax for type uuid` on this, which surfaces as an unhandled
+    # driver error and a 500. These identifiers arrive from a request body.
+    assert response.status_code == 400
+    assert response.json()["field"] == "supersedes"
+
+
+def test_a_malformed_page_cursor_is_refused_rather_than_erroring(
+    client: TestClient, db: str
+) -> None:
+    headers = _signed_in(db, client)
+    project_id = _project(client, headers)
+    response = client.get(
+        f"/v1/workspaces/{WS}/projects/{project_id}/journeys?after=not-a-uuid", headers=headers
+    )
+    assert response.status_code == 400
+
+
+def test_a_disabled_account_cannot_authorize_a_repository(client: TestClient, db: str) -> None:
+    """A membership row survives its account being disabled.
+
+    The member listing already excludes disabled accounts, so without the join the API refused to
+    *offer* a person it would then happily accept.
+    """
+    headers = _signed_in(db, client)
+    with unscoped_connection(db) as conn:
+        conn.execute("UPDATE app_user SET disabled_at = now() WHERE id = %s", (VIEWER,))
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects",
+        json={
+            "name": "Reference app",
+            "repositoryUrl": "https://github.test/acme/refapp",
+            "repositoryAuthorizedBy": VIEWER,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 400
+    assert "not an active member" in response.json()["detail"]
+
+
+def test_the_environment_listing_pages_rather_than_truncating(client: TestClient, db: str) -> None:
+    """An earlier version took the first 200 with no cursor and no indication that it had stopped.
+
+    A project with more than that lost the older ones silently, including ones still usable, and the
+    screen presented what remained as the complete inventory.
+    """
+    headers = _signed_in(db, client)
+    project_id = _project(client, headers)
+    for index in range(3):
+        created = client.post(
+            f"/v1/workspaces/{WS}/projects/{project_id}/environments",
+            json=_environment(name=f"env-{index}"),
+            headers=headers,
+        )
+        assert created.status_code == 201, created.text
+
+    first = client.get(
+        f"/v1/workspaces/{WS}/projects/{project_id}/environments?limit=2", headers=headers
+    ).json()
+    assert len(first["items"]) == 2
+    assert first["nextCursor"] is not None
+
+    second = client.get(
+        f"/v1/workspaces/{WS}/projects/{project_id}/environments"
+        f"?limit=2&after={first['nextCursor']}",
+        headers=headers,
+    ).json()
+    assert len(second["items"]) == 1
+    assert second["nextCursor"] is None
+    names = [item["name"] for item in first["items"] + second["items"]]
+    assert sorted(names) == ["env-0", "env-1", "env-2"]
+
+
+def test_a_project_with_no_sealed_manifest_lists_none(client: TestClient, db: str) -> None:
+    """The answer a run request has to respect.
+
+    A run is requested against a sealed manifest digest. With none sealed, the honest answer is an
+    empty list, and the screen that reads it must refuse to request a run rather than substitute a
+    journey digest — which names nothing the dispatcher can match.
+    """
+    headers = _signed_in(db, client)
+    project_id = _project(client, headers)
+    body = client.get(f"/v1/workspaces/{WS}/projects/{project_id}/manifests").json()
+    assert body["items"] == []
+    assert "a journey digest alone is not a manifest" in body["meaning"]
+
+
 def test_a_viewer_cannot_freeze_a_journey(client: TestClient, db: str) -> None:
     maintainer_headers = _signed_in(db, client)
     project_id = _project(client, maintainer_headers)
@@ -402,20 +554,6 @@ def test_the_navigator_policy_contains_no_oracle_material(client: TestClient, db
 # --------------------------------------------------------------------------------------------------
 # Environments
 # --------------------------------------------------------------------------------------------------
-
-
-def _environment(**overrides: Any) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "name": "Local",
-        "allowedOrigins": ["https://localhost:8443"],
-        "fixtureResetStrategy": "TRUNCATE_AND_SEED",
-        "observerCredentialRef": "vault://observer",
-        "resetCredentialRef": "vault://reset",
-        "permittedEffects": ["FIXTURE_SUBMIT", "FIXTURE_RESET"],
-        "expiresAt": "2027-01-01T00:00:00Z",
-    }
-    body.update(overrides)
-    return body
 
 
 def test_registering_an_environment_records_the_authorized_scope(

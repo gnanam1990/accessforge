@@ -11,19 +11,35 @@
  * self-consistent.
  */
 
+import type {
+  Environment,
+  JourneyVersion,
+  Project,
+  Run,
+  Runner,
+  SealedManifest,
+} from '../api/resources'
+
 export interface SessionResponse {
   readonly userId: string
   readonly email: string
   readonly workspaces: readonly { workspaceId: string; name: string; role: string }[]
 }
 
-/** What the workspace endpoints answer. Every field defaults to an empty, successful answer. */
+/**
+ * What the workspace endpoints answer. Every field defaults to an empty, successful answer.
+ *
+ * Typed against the resource contracts the screens consume, not `Record<string, unknown>`. A loose
+ * type here lets a test build a fixture that is missing a field the screen reads, which then fails
+ * for a reason that has nothing to do with what the test was about.
+ */
 export interface WorkspaceData {
-  projects: { projectId: string; name: string; repositoryUrl: string | null; createdAt: string }[]
-  environments: Record<string, unknown>[]
-  journeyVersions: Record<string, unknown>[]
-  runners: Record<string, unknown>[]
-  runs: Record<string, unknown>[]
+  projects: Project[]
+  environments: Environment[]
+  journeyVersions: JourneyVersion[]
+  runners: Runner[]
+  runs: Run[]
+  sealedManifests: SealedManifest[]
 }
 
 export interface FakeServer {
@@ -39,12 +55,24 @@ export interface FakeServer {
   readonly data: WorkspaceData
   /** Refuse the next write to this path fragment with the given status and code. */
   refuseWrite: (fragment: string, status: number, code: string, detail: string) => void
-  /** The parsed bodies of every write, keyed by "METHOD path". */
-  readonly bodies: { method: string; url: string; body: unknown }[]
+  /** The parsed bodies of every write, with the idempotency key each carried. */
+  readonly bodies: {
+    method: string
+    url: string
+    body: unknown
+    idempotencyKey: string | undefined
+  }[]
   /** What `POST /v1/sessions` answers. */
   setSignInOutcome: (outcome: 'succeeds' | 'refused' | 'no-provider') => void
   /** Make `DELETE /v1/session` fail without revoking anything, as an unreachable server would. */
   setSignOutFails: (fails: boolean) => void
+  /**
+   * Serve the runner inventory one row per page.
+   *
+   * `endless` never stops offering a cursor, which is how a client that follows them without a
+   * bound is made to reveal that it has one.
+   */
+  setRunnerPaging: (mode: 'single' | 'paged' | 'endless') => void
   readonly calls: readonly string[]
 }
 
@@ -63,15 +91,22 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
   let offline = false
   let signInOutcome: 'succeeds' | 'refused' | 'no-provider' = 'succeeds'
   let signOutFails = false
+  let runnerPaging: 'single' | 'paged' | 'endless' = 'single'
   const data: WorkspaceData = {
     projects: [],
     environments: [],
     journeyVersions: [],
     runners: [],
     runs: [],
+    sealedManifests: [],
   }
   const refusals = new Map<string, { status: number; code: string; detail: string }>()
-  const bodies: { method: string; url: string; body: unknown }[] = []
+  const bodies: {
+    method: string
+    url: string
+    body: unknown
+    idempotencyKey: string | undefined
+  }[] = []
   let gate: Promise<void> | null = null
   let open: (() => void) | null = null
   const calls: string[] = []
@@ -112,12 +147,21 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     setSignOutFails: (fails) => {
       signOutFails = fails
     },
+    setRunnerPaging: (mode) => {
+      runnerPaging = mode
+    },
     fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input.toString()
       const method = init?.method ?? 'GET'
       calls.push(`${method} ${url}`)
       if (init?.body !== undefined && init.body !== null) {
-        bodies.push({ method, url, body: JSON.parse(String(init.body)) as unknown })
+        const headers = new Headers(init.headers)
+        bodies.push({
+          method,
+          url,
+          body: JSON.parse(String(init.body)) as unknown,
+          idempotencyKey: headers.get('idempotency-key') ?? undefined,
+        })
       }
 
       if (offline) throw new TypeError('Failed to fetch')
@@ -186,7 +230,18 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         })
       }
 
-      if (url.endsWith('/runners') && method === 'GET') {
+      if (url.includes('/runners') && method === 'GET') {
+        if (runnerPaging !== 'single') {
+          const cursor = new URL(url, 'http://test.invalid').searchParams.get('after')
+          const at = cursor === null ? 0 : Number(cursor)
+          const item = data.runners[at]
+          const more = runnerPaging === 'endless' || at + 1 < data.runners.length
+          return json({
+            items: item === undefined ? [] : [item],
+            nextCursor: more ? String(at + 1) : null,
+            readinessMeaning: 'READY means this runner passed a preflight.',
+          })
+        }
         return json({
           items: data.runners,
           nextCursor: null,
@@ -197,7 +252,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         })
       }
 
-      if (url.endsWith('/runs') && method === 'GET') {
+      if (url.includes('/runs') && method === 'GET') {
         return json({ items: data.runs, nextCursor: null })
       }
 
@@ -219,13 +274,13 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         return json({ runId, status: 'QUEUED', outcome: 'NOT_EVALUATED' }, 202)
       }
 
-      if (url.endsWith('/members') && method === 'GET') {
+      if (url.includes('/members') && method === 'GET') {
         return json({
           items: [{ userId: 'u-1', email: 'engineer@example.test', role: 'MAINTAINER' }],
         })
       }
 
-      if (url.endsWith('/projects') && method === 'GET') {
+      if (url.includes('/projects') && method === 'GET' && !url.includes('/projects/')) {
         return json({ items: data.projects, nextCursor: null })
       }
 
@@ -242,13 +297,16 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       }
 
       if (url.includes('/environments') && method === 'GET') {
-        return json({ items: data.environments })
+        return json({ items: data.environments, nextCursor: null })
+      }
+      if (url.includes('/manifests') && method === 'GET') {
+        return json({ items: data.sealedManifests, nextCursor: null, meaning: 'A run is requested against one of these digests.' })
       }
       if (url.includes('/environments') && method === 'POST') {
         return json({ environmentId: 'env-1', configDigest: 'a'.repeat(64) }, 201)
       }
 
-      if (url.includes('/journeys') && method === 'GET' && url.includes('/projects/')) {
+      if (url.includes('/journeys') && method === 'GET' && url.includes('/projects/') && !url.includes('/journeys/')) {
         return json({ items: data.journeyVersions, nextCursor: null })
       }
       if (url.includes('/journeys/') && url.endsWith('/policy')) {

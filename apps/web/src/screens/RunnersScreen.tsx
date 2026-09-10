@@ -95,6 +95,15 @@ export const RunnersScreen = (): JSX.Element => {
               <p>{inventory.readinessMeaning}</p>
             </Notice>
 
+            {!inventory.complete && (
+              <Notice tone="warning" heading="This list is not complete" headingLevel={2}>
+                <p>
+                  There are more runners than this screen read. What is below is a prefix, not the
+                  inventory, and a runner that is not shown may still be holding a desktop.
+                </p>
+              </Notice>
+            )}
+
             {inventory.items.length === 0 ? (
               <EmptyState heading="No runner is enrolled" because="nothing-created-yet">
                 <p className="af-secondary">
@@ -132,7 +141,9 @@ export const RunnersScreen = (): JSX.Element => {
                         <div>{runner.platform}</div>
                         <div className="af-secondary">
                           {runner.profile.readerName ?? 'no reader recorded'}
-                          {runner.profile.readerVersion === undefined
+                          {/* Nullish, not `=== undefined`. A payload carrying `readerVersion: null`
+                              rendered the literal text " null" beside the reader's name. */}
+                          {runner.profile.readerVersion == null
                             ? ''
                             : ` ${runner.profile.readerVersion}`}
                         </div>

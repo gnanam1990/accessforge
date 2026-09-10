@@ -71,6 +71,46 @@ _JOURNEY_FIELDS = frozenset(
 )
 
 
+def _text(source: dict[str, Any], key: str, field: str, request_id: str) -> str:
+    """Read a string, refusing anything that is not one.
+
+    `str(value)` is what this replaced, and it silently changed the request: `null` became the
+    four-character string `"None"`, a number became its decimal form, and an object became its
+    Python repr. A journey version is immutable once frozen, so a coerced value is a coerced value
+    forever — and its digest is the digest of something the author never submitted.
+    """
+    value = source.get(key)
+    if not isinstance(value, str):
+        raise _field_error(field, f"{key} must be text", request_id)
+    return value
+
+
+def _flag(source: dict[str, Any], key: str, field: str, request_id: str, *, default: bool) -> bool:
+    """Read a boolean, refusing anything that is not one.
+
+    `bool(value)` accepted the string `"false"` as true, which is the single most common way a
+    "required" flag ends up meaning its opposite.
+    """
+    if key not in source:
+        return default
+    value = source[key]
+    if not isinstance(value, bool):
+        raise _field_error(field, f"{key} must be true or false", request_id)
+    return value
+
+
+def _whole_number(source: dict[str, Any], key: str, field: str, request_id: str) -> int:
+    """Read an integer, refusing a float, a numeric string, or a boolean.
+
+    `int(value)` truncated 1.9 to 1 — a budget quietly smaller than the one that was authorized —
+    and accepted `True` as 1. `bool` is excluded explicitly because it is a subclass of `int`.
+    """
+    value = source.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _field_error(field, f"{key} must be a whole number", request_id)
+    return value
+
+
 def _field_error(field: str, message: str, request_id: str) -> ProblemDetail:
     """A 400 that names the control it is about, so a form can link to it."""
     return ProblemDetail(
@@ -118,9 +158,9 @@ def _build_draft(body: dict[str, Any], request_id: str) -> JourneyDraft:
     intent_body = _mapping(body, "intent", request_id)
     try:
         intent = TaskIntent(
-            summary=str(intent_body.get("summary", "")),
-            start_url=str(intent_body.get("startUrl", "")),
-            success_condition=str(intent_body.get("successCondition", "")),
+            summary=_text(intent_body, "summary", "intent", request_id),
+            start_url=_text(intent_body, "startUrl", "intent", request_id),
+            success_condition=_text(intent_body, "successCondition", "intent", request_id),
         )
     except JourneyError as exc:
         # The message says which of the three it is; the field is the section, because that is the
@@ -137,15 +177,17 @@ def _build_draft(body: dict[str, Any], request_id: str) -> JourneyDraft:
                 f"assertions[{index}]", "each assertion must be an object", request_id
             )
         try:
+            field = f"assertions[{index}]"
+            reasons = entry.get("unknownReasons", [])
+            if not isinstance(reasons, list) or not all(isinstance(x, str) for x in reasons):
+                raise _field_error(field, "unknownReasons must be a list of strings", request_id)
             built.append(
                 Assertion(
-                    assertion_id=str(entry.get("assertionId", "")),
-                    kind=AssertionKind(str(entry.get("kind", ""))),
-                    description=str(entry.get("description", "")),
-                    required=bool(entry.get("required", True)),
-                    unknown_reasons=frozenset(
-                        UnknownReason(str(reason)) for reason in entry.get("unknownReasons", [])
-                    ),
+                    assertion_id=_text(entry, "assertionId", field, request_id),
+                    kind=AssertionKind(_text(entry, "kind", field, request_id)),
+                    description=_text(entry, "description", field, request_id),
+                    required=_flag(entry, "required", field, request_id, default=True),
+                    unknown_reasons=frozenset(UnknownReason(reason) for reason in reasons),
                 )
             )
         except ValueError as exc:
@@ -158,7 +200,7 @@ def _build_draft(body: dict[str, Any], request_id: str) -> JourneyDraft:
     fixture_body = _mapping(body, "fixture", request_id)
     try:
         fixture = FixtureBinding(
-            template_id=str(fixture_body.get("templateId", "")),
+            template_id=_text(fixture_body, "templateId", "fixture", request_id),
             navigator_values=_string_map(fixture_body, "navigatorValues", "fixture", request_id),
             reset_values=_string_map(fixture_body, "resetValues", "fixture", request_id),
             observer_config=_string_map(fixture_body, "observerConfig", "fixture", request_id),
@@ -169,10 +211,10 @@ def _build_draft(body: dict[str, Any], request_id: str) -> JourneyDraft:
     budget_body = _mapping(body, "budget", request_id)
     try:
         budget = ActionBudget(
-            max_actions=int(budget_body.get("maxActions", 0)),
-            wall_time_seconds=int(budget_body.get("wallTimeSeconds", 0)),
+            max_actions=_whole_number(budget_body, "maxActions", "budget", request_id),
+            wall_time_seconds=_whole_number(budget_body, "wallTimeSeconds", "budget", request_id),
         )
-    except (JourneyError, TypeError, ValueError) as exc:
+    except JourneyError as exc:
         raise _field_error("budget", str(exc), request_id) from exc
 
     return JourneyDraft(
@@ -235,10 +277,13 @@ def freeze_journey_version(
             ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
         ) from exc
     except journeys.JourneyPersistenceError as exc:
+        # The field comes from the exception. Hard-coding `projectId` here sent an operator to the
+        # wrong control for every supersession failure, which is the one case where the message and
+        # the highlighted field disagreed about what was wrong.
         raise ProblemDetail(
             ProblemCode.INVALID_INPUT,
             str(exc),
-            extra={"field": "projectId"},
+            extra={} if exc.field is None else {"field": exc.field},
             request_id=context.request_id,
         ) from exc
 
@@ -270,8 +315,15 @@ def list_journey_versions(
 ) -> dict[str, Any]:
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
     size = clamp_page_size(limit)
-    rows = journeys.list_versions(conn, project_id=project_id, after=after, limit=size + 1)
-    successors = journeys.superseded_by(conn, project_id=project_id)
+    try:
+        rows = journeys.list_versions(conn, project_id=project_id, after=after, limit=size + 1)
+        successors = journeys.superseded_by(conn, project_id=project_id)
+    except journeys.JourneyPersistenceError as exc:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            str(exc),
+            extra={} if exc.field is None else {"field": exc.field},
+        ) from exc
 
     items = [
         {

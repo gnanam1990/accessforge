@@ -36,6 +36,40 @@ const renderAt = (server: FakeServer, path: string): void => {
   )
 }
 
+const RUNNER = {
+  runnerId: 'r-1',
+  name: 'desk-1',
+  status: 'OFFLINE',
+  platform: 'darwin',
+  profile: { readerName: 'VoiceOver', readerVersion: 'macOS 26.6' },
+  leaseEpoch: 0,
+  quarantineReason: null,
+  revoked: false,
+  preflightPassedAt: null,
+  resetCount: 0,
+  hasActiveLease: false,
+  createdAt: '2026-09-10T00:00:00Z',
+}
+
+const MANIFEST = {
+  sealedManifestId: 'm-1',
+  manifestDigest: '9'.repeat(64),
+  journeyDigest: '1'.repeat(64),
+  assertionSetDigest: '2'.repeat(64),
+  fixtureDigest: '3'.repeat(64),
+  runnerProfileDigest: '5'.repeat(64),
+  navigatorPolicyDigest: '4'.repeat(64),
+  environmentConfigDigest: '6'.repeat(64),
+  environmentName: 'Local',
+  evaluatorVersion: 'evaluator-1',
+  modelConfigDigest: '7'.repeat(64),
+  sourceCommitSha: 'abc123',
+  sourceTreeDigest: '8'.repeat(64),
+  buildArtifactDigest: '0'.repeat(64),
+  runId: null,
+  createdAt: '2026-09-10T00:00:00Z',
+}
+
 const JOURNEY = {
   journeyVersionId: 'j-1',
   name: 'Recover from a form error',
@@ -149,6 +183,32 @@ describe('environments', () => {
     expect(summary).toHaveTextContent(/not an independent observer/)
   })
 
+  it('names each blank credential reference instead of reporting them as equal', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    server.data.projects.push({
+      projectId: 'p-1',
+      name: 'Reference app',
+      repositoryUrl: null,
+      createdAt: '2026-09-10T00:00:00Z',
+    })
+    renderAt(server, '/w/ws-1/projects/p-1')
+    await screen.findByRole('heading', { level: 1, name: 'Reference app' })
+
+    await user.type(screen.getByLabelText(/Environment name/), 'Local')
+    await user.type(screen.getByLabelText(/Permitted origins/), 'https://localhost:8443')
+    await user.type(screen.getByLabelText(/Authorization expires/), '2027-01-01T00:00')
+    await user.click(screen.getByRole('button', { name: 'Authorize environment' }))
+
+    const summary = await screen.findByRole('alert')
+    // Two blank references are equal, so the server refused them as "not an independent observer" —
+    // accurate about the comparison and wrong about the cause. One blank reference passed the
+    // domain entirely and was persisted empty.
+    expect(summary).toHaveTextContent(/the independent observer reads with/)
+    expect(summary).toHaveTextContent(/resets fixture state/)
+    expect(summary.textContent).not.toMatch(/not an independent observer/)
+  })
+
   it('states that authorizing is not a connection test', async () => {
     const server = createFakeServer(MEMBER)
     server.data.projects.push({
@@ -246,6 +306,27 @@ describe('journey authoring', () => {
     expect((sent?.body as { allowedKeyChords?: string[] }).allowedKeyChords).not.toContain(
       'CTRL+OPT+RIGHT',
     )
+  })
+
+  it('refuses a budget the browser would have sent as zero or null', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    await openProject(server)
+
+    await user.type(screen.getByLabelText(/Journey name/), 'Recover from a form error')
+    await user.type(screen.getByLabelText(/trying to do/), 'Submit the contact form')
+    await user.type(screen.getByLabelText(/Start address/), 'https://localhost:8443/contact')
+    await user.type(screen.getByLabelText(/count as having succeeded/), 'The form is received')
+    await user.type(screen.getByLabelText(/Fixture template/), 'contact-form')
+    await user.type(screen.getByLabelText(/Assertion 1 description/), 'One submission recorded')
+    await user.clear(screen.getByLabelText(/Maximum actions/))
+    await user.click(screen.getByRole('button', { name: 'Freeze version' }))
+
+    // The form is `noValidate`, so `min` and `max` block nothing. `Number('')` is 0, which the
+    // server then refuses with a message about a value the author could have corrected here.
+    const summary = await screen.findByRole('alert')
+    expect(summary).toHaveTextContent(/Maximum actions must be a whole number between 1 and 500/)
+    expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
   })
 
   it('links a failed submission to the fields it is about', async () => {
@@ -346,6 +427,45 @@ describe('the runner inventory', () => {
     expect(await screen.findByText('Never')).toBeVisible()
   })
 
+  it('does not render a missing reader version as the word null', async () => {
+    const server = createFakeServer(MEMBER)
+    server.data.runners.push({
+      ...RUNNER,
+      profile: { readerName: 'VoiceOver', readerVersion: null as unknown as string },
+    })
+    renderAt(server, '/w/ws-1/runners')
+
+    // Scoped to the inventory: the support matrix on the same screen also names VoiceOver.
+    const inventory = await screen.findByRole('table', { name: /Enrolled runners/ })
+    expect(within(inventory).getByText('VoiceOver')).toBeVisible()
+    // `=== undefined` is false for null, so the template interpolated the value and printed
+    // " null" beside the reader's name.
+    expect(inventory.textContent).not.toMatch(/VoiceOver null/)
+  })
+
+  it('follows the cursor rather than showing the first page as the inventory', async () => {
+    const server = createFakeServer(MEMBER)
+    server.data.runners.push(RUNNER, { ...RUNNER, runnerId: 'r-2', name: 'desk-2' })
+    server.setRunnerPaging('paged')
+    renderAt(server, '/w/ws-1/runners')
+
+    await screen.findByRole('heading', { level: 1, name: 'Runners' })
+    // One page rendered under the heading "Runners" is a claim that there are no more.
+    expect(await screen.findByText('desk-1')).toBeVisible()
+    expect(await screen.findByText('desk-2')).toBeVisible()
+  })
+
+  it('says so when it stopped following the cursor before the server ran out', async () => {
+    const server = createFakeServer(MEMBER)
+    server.data.runners.push(RUNNER)
+    server.setRunnerPaging('endless')
+    renderAt(server, '/w/ws-1/runners')
+
+    // A bound has to exist, or one screen becomes an unbounded number of requests. Reaching it must
+    // be visible: a runner that is not shown may still be holding a desktop.
+    expect(await screen.findByRole('heading', { name: 'This list is not complete' })).toBeVisible()
+  })
+
   it('repeats the server’s statement about what READY means', async () => {
     const server = createFakeServer(MEMBER)
     renderAt(server, '/w/ws-1/runners')
@@ -372,9 +492,75 @@ describe('the runner inventory', () => {
 describe('requesting a run', () => {
   const openJourney = async (server: FakeServer): Promise<void> => {
     server.data.journeyVersions.push(JOURNEY)
+    server.data.sealedManifests.push(MANIFEST)
     renderAt(server, '/w/ws-1/projects/p-1/journeys/j-1')
     await screen.findByRole('heading', { level: 1, name: 'Recover from a form error' })
   }
+
+  it('refuses to request a run when nothing has been sealed for this version', async () => {
+    const server = createFakeServer(MEMBER)
+    server.data.journeyVersions.push(JOURNEY)
+    renderAt(server, '/w/ws-1/projects/p-1/journeys/j-1')
+    await screen.findByRole('heading', { level: 1, name: 'Recover from a form error' })
+
+    // A run is requested against a sealed manifest. Sending the journey digest in that field queues
+    // a run whose identity matches nothing, and dispatch would refuse it later for naming a
+    // different sealed manifest — so the control is absent and the reason is on the page.
+    expect(
+      await screen.findByRole('heading', { name: 'This version cannot be run yet' }),
+    ).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Request a run…' })).not.toBeInTheDocument()
+    expect(screen.getByText(/Sealing needs a recorded source snapshot/)).toBeVisible()
+  })
+
+  it('sends the sealed manifest digest, not the journey digest', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    await openJourney(server)
+
+    await user.click(screen.getByRole('button', { name: 'Request a run…' }))
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Request a run' }),
+    )
+
+    const sent = server.bodies.find((entry) => entry.url.endsWith('/runs'))
+    expect((sent?.body as { manifestDigest?: string }).manifestDigest).toBe(MANIFEST.manifestDigest)
+    expect((sent?.body as { manifestDigest?: string }).manifestDigest).not.toBe(
+      JOURNEY.journeyDigest,
+    )
+  })
+
+  it('keeps the dialog and the key when the server did not answer', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    await openJourney(server)
+
+    await user.click(screen.getByRole('button', { name: 'Request a run…' }))
+    server.setOffline(true)
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Request a run' }),
+    )
+
+    const alert = await screen.findByRole('alert')
+    // It cannot say nothing was changed: the request may have arrived and the answer been lost.
+    expect(alert).toHaveTextContent(/may have received the request/)
+    // It must not claim the request had no effect, in any wording. Only the server knows.
+    expect(alert.textContent).not.toMatch(/nothing was (changed|created)/i)
+
+    server.setOffline(false)
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Request a run' }),
+    )
+    await screen.findByRole('status')
+
+    const keys = server.bodies
+      .filter((entry) => entry.url.endsWith('/runs'))
+      .map((entry) => entry.idempotencyKey)
+    // Two attempts, one key. A fresh key on the retry would turn one authorization into two runs.
+    expect(keys).toHaveLength(2)
+    expect(keys[0]).toBe(keys[1])
+    expect(keys[0]).not.toBeUndefined()
+  })
 
   it('shows the exact digests in the confirmation, in full', async () => {
     const user = userEvent.setup()
@@ -385,7 +571,7 @@ describe('requesting a run', () => {
     const dialog = await screen.findByRole('dialog', {
       name: 'Request a run of this journey version',
     })
-    expect(within(dialog).getByText('1'.repeat(64))).toBeVisible()
+    expect(within(dialog).getByText(MANIFEST.manifestDigest)).toBeVisible()
     expect(within(dialog).getByText('3'.repeat(64))).toBeVisible()
     expect(within(dialog).getByText(/does not approve a repair, merge anything/)).toBeVisible()
   })

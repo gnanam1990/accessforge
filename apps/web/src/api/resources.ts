@@ -18,6 +18,17 @@ export interface Page<T> {
   readonly nextCursor: string | null
 }
 
+/**
+ * A listing read across every page the server offered.
+ *
+ * `complete` is false when the page bound was reached before the cursor ran out. A screen showing a
+ * prefix of an inventory has to say so; silently rendering it under the heading "the runners" is a
+ * claim that there are no more.
+ */
+export interface DrainedPage<T> extends Page<T> {
+  readonly complete: boolean
+}
+
 export interface Member {
   readonly userId: string
   readonly email: string
@@ -134,14 +145,85 @@ export interface CancellationRequested {
   readonly meaning: string
 }
 
+export interface SealedManifest {
+  readonly sealedManifestId: string
+  readonly manifestDigest: string
+  readonly journeyDigest: string
+  readonly assertionSetDigest: string
+  readonly fixtureDigest: string
+  readonly runnerProfileDigest: string
+  readonly navigatorPolicyDigest: string
+  readonly environmentConfigDigest: string
+  readonly environmentName: string | null
+  readonly evaluatorVersion: string
+  readonly modelConfigDigest: string
+  readonly sourceCommitSha: string | null
+  readonly sourceTreeDigest: string | null
+  readonly buildArtifactDigest: string | null
+  readonly runId: string | null
+  readonly createdAt: string
+}
+
 const base = (workspaceId: string): string => `/v1/workspaces/${encodeURIComponent(workspaceId)}`
+
+/** How many pages a draining read will follow before it stops and says it stopped. */
+const MAX_PAGES = 20
+
+/**
+ * Follow `nextCursor` until the server runs out, and combine the items.
+ *
+ * Every listing on these screens is presented as an inventory — "the runners", "the versions" — and
+ * a single page rendered under that heading is a claim that there are no more. The bound exists so
+ * a pathological dataset cannot turn one screen into an unbounded number of requests; when it is
+ * reached, `complete` is false and the caller has to say so rather than quietly showing a prefix.
+ */
+const drain = async <T>(
+  read: (cursor: string | null) => Promise<ApiOutcome<Page<T>>>,
+): Promise<ApiOutcome<DrainedPage<T>>> => {
+  const items: T[] = []
+  let cursor: string | null = null
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const outcome: ApiOutcome<Page<T>> = await read(cursor)
+    switch (outcome.kind) {
+      case 'ok':
+        break
+      case 'accepted':
+        // A read answered with 202 is not the resource that was asked for, and there is no later
+        // for a read. Reported as a problem rather than combined into a page.
+        return {
+          kind: 'problem',
+          problem: {
+            code: 'UNRECOGNISED',
+            title: 'Unexpected response',
+            detail: 'The server accepted this read for later processing. A read has no later.',
+            status: 202,
+            requestId: null,
+          },
+        }
+      default:
+        return outcome
+    }
+    items.push(...outcome.value.items)
+    cursor = outcome.value.nextCursor
+    if (cursor === null) {
+      return { kind: 'ok', value: { items, nextCursor: null, complete: true }, status: 200 }
+    }
+  }
+  return { kind: 'ok', value: { items, nextCursor: cursor, complete: false }, status: 200 }
+}
 
 export const listProjects = (
   client: ApiClient,
   workspaceId: string,
   signal: AbortSignal,
-): Promise<ApiOutcome<Page<Project>>> =>
-  client.request<Page<Project>>(`${base(workspaceId)}/projects`, { signal })
+): Promise<ApiOutcome<DrainedPage<Project>>> =>
+  drain((cursor) =>
+    client.request<Page<Project>>(
+      `${base(workspaceId)}/projects` +
+        (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    ),
+  )
 
 export const createProject = (
   client: ApiClient,
@@ -172,10 +254,13 @@ export const listEnvironments = (
   workspaceId: string,
   projectId: string,
   signal: AbortSignal,
-): Promise<ApiOutcome<{ readonly items: readonly Environment[] }>> =>
-  client.request(
-    `${base(workspaceId)}/projects/${encodeURIComponent(projectId)}/environments`,
-    { signal },
+): Promise<ApiOutcome<DrainedPage<Environment>>> =>
+  drain((cursor) =>
+    client.request<Page<Environment>>(
+      `${base(workspaceId)}/projects/${encodeURIComponent(projectId)}/environments` +
+        (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    ),
   )
 
 export const registerEnvironment = (
@@ -194,10 +279,28 @@ export const listJourneyVersions = (
   workspaceId: string,
   projectId: string,
   signal: AbortSignal,
-): Promise<ApiOutcome<Page<JourneyVersion>>> =>
-  client.request(`${base(workspaceId)}/projects/${encodeURIComponent(projectId)}/journeys`, {
-    signal,
-  })
+): Promise<ApiOutcome<DrainedPage<JourneyVersion>>> =>
+  drain((cursor) =>
+    client.request<Page<JourneyVersion>>(
+      `${base(workspaceId)}/projects/${encodeURIComponent(projectId)}/journeys` +
+        (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    ),
+  )
+
+export const listSealedManifests = (
+  client: ApiClient,
+  workspaceId: string,
+  projectId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<DrainedPage<SealedManifest>>> =>
+  drain((cursor) =>
+    client.request<Page<SealedManifest>>(
+      `${base(workspaceId)}/projects/${encodeURIComponent(projectId)}/manifests` +
+        (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    ),
+  )
 
 export const getJourneyVersion = (
   client: ApiClient,
@@ -238,19 +341,57 @@ export const freezeJourneyVersion = (
 ): Promise<ApiOutcome<FrozenVersion>> =>
   client.request(`${base(workspaceId)}/journeys`, { method: 'POST', body })
 
-export const listRunners = (
+/**
+ * The runner inventory, drained across pages.
+ *
+ * `readinessMeaning` comes from the first page and is carried through — it is the server's statement
+ * about what a status means, and dropping it while combining pages would take the sentence off the
+ * screen that most needs it.
+ */
+export const listRunners = async (
   client: ApiClient,
   workspaceId: string,
   signal: AbortSignal,
-): Promise<ApiOutcome<RunnerInventory>> =>
-  client.request<RunnerInventory>(`${base(workspaceId)}/runners`, { signal })
+): Promise<ApiOutcome<RunnerInventory & DrainedPage<Runner>>> => {
+  let meaning = ''
+  const drained = await drain<Runner>(async (cursor) => {
+    const outcome = await client.request<RunnerInventory>(
+      `${base(workspaceId)}/runners` + (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    )
+    if (outcome.kind === 'ok' && meaning === '') meaning = outcome.value.readinessMeaning
+    return outcome
+  })
+  if (drained.kind === 'ok') {
+    return { kind: 'ok', value: { ...drained.value, readinessMeaning: meaning }, status: 200 }
+  }
+  // `drain` never answers `accepted` — it converts a 202 into a problem — but the union still
+  // carries the case, and narrowing it here keeps that fact checked rather than asserted.
+  return drained.kind === 'accepted'
+    ? {
+        kind: 'problem',
+        problem: {
+          code: 'UNRECOGNISED',
+          title: 'Unexpected response',
+          detail: 'The server accepted this read for later processing. A read has no later.',
+          status: 202,
+          requestId: null,
+        },
+      }
+    : drained
+}
 
 export const listRuns = (
   client: ApiClient,
   workspaceId: string,
   signal: AbortSignal,
-): Promise<ApiOutcome<Page<Run>>> =>
-  client.request<Page<Run>>(`${base(workspaceId)}/runs`, { signal })
+): Promise<ApiOutcome<DrainedPage<Run>>> =>
+  drain((cursor) =>
+    client.request<Page<Run>>(
+      `${base(workspaceId)}/runs` + (cursor === null ? '' : `?after=${encodeURIComponent(cursor)}`),
+      { signal },
+    ),
+  )
 
 export const requestRun = (
   client: ApiClient,

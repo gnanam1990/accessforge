@@ -948,7 +948,7 @@
     },
     "/v1/workspaces/{workspace_id}/projects/{project_id}/environments": {
       "get": {
-        "description": "Environments for a project, with the reasons an unusable one is unusable.\n\n`usable` is reported alongside the specific cause rather than instead of it. \"Expired\",\n\"revoked\" and \"superseded\" send an operator to three different actions, and a single false\nwould send them to none of them.",
+        "description": "Environments for a project, with the reasons an unusable one is unusable.\n\n`usable` is reported alongside the specific cause rather than instead of it. \"Expired\",\n\"revoked\" and \"superseded\" send an operator to three different actions, and a single false\nwould send them to none of them.\n\nPaginated by keyset like every other listing here. An earlier version took the first 200 with no\ncursor and no indication that it had stopped \u2014 so a project with more environments than that\nlost the older ones silently, including ones still usable, and the screen presented what\nremained as the complete inventory.",
         "operationId": "list_environments_v1_workspaces__workspace_id__projects__project_id__environments_get",
         "parameters": [
           {
@@ -967,6 +967,38 @@
             "schema": {
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           }
         ],
@@ -1146,6 +1178,92 @@
         "summary": "List Journey Versions",
         "tags": [
           "journeys"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/manifests": {
+      "get": {
+        "description": "The manifests this project has sealed, and what each one was sealed against.\n\nA run is requested against a **sealed manifest digest**, not against a journey digest. The\nmanifest covers the source commit, the built artifact, the environment configuration, the\njourney, its assertions, its fixture, the runner profile, the evaluator version and the model\nconfiguration \u2014 all of it, together. A run queued with a journey digest in that field carries an\nidentity that matches nothing, and dispatch would later refuse it for naming a different sealed\nmanifest.\n\nThis listing exists so the interface can offer a real one rather than assemble a plausible\nvalue. Where a project has sealed none, the honest answer is an empty list, and the screen that\nreads it must refuse to request a run rather than invent a digest.",
+        "operationId": "list_sealed_manifests_v1_workspaces__workspace_id__projects__project_id__manifests_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Sealed Manifests V1 Workspaces  Workspace Id  Projects  Project Id  Manifests Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sealed Manifests",
+        "tags": [
+          "projects"
         ]
       }
     },

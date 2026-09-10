@@ -30,7 +30,30 @@ from accessforge_domain.journeys import CompiledJourney, JourneyDraft, compile_j
 
 
 class JourneyPersistenceError(RuntimeError):
-    """A journey version could not be stored."""
+    """A journey version could not be stored.
+
+    ``field`` names the request field the refusal is about, where one applies, so a form can link
+    the message to a control. Without it every refusal from this module lands on the same field and
+    the operator is pointed at the wrong one.
+    """
+
+    def __init__(self, message: str, *, field: str | None = None) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+def _as_uuid(value: str, *, what: str, field: str | None = None) -> str:
+    """Refuse a value that is not a UUID, before it reaches a UUID comparison.
+
+    PostgreSQL raises `invalid input syntax for type uuid` on a malformed value, which surfaces as
+    an unhandled driver error and a 500. These identifiers come from a URL or a request body, so
+    every one of them is attacker-supplied by definition.
+    """
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise JourneyPersistenceError(f"{what} is not a valid identifier", field=field) from exc
+    return value
 
 
 def freeze_version(
@@ -54,20 +77,26 @@ def freeze_version(
     if project is None:
         # Row-level security means a project in another workspace is simply absent, so this one
         # message covers "does not exist" and "not yours" without the caller learning which.
-        raise JourneyPersistenceError("no such project is available in this workspace")
+        raise JourneyPersistenceError(
+            "no such project is available in this workspace", field="projectId"
+        )
 
     if supersedes is not None:
+        _as_uuid(supersedes, what="the version this supersedes", field="supersedes")
         predecessor = conn.execute(
             "SELECT project_id FROM journey_version WHERE id = %s", (supersedes,)
         ).fetchone()
         if predecessor is None:
-            raise JourneyPersistenceError("the version this supersedes is not available here")
+            raise JourneyPersistenceError(
+                "the version this supersedes is not available here", field="supersedes"
+            )
         if str(predecessor["project_id"]) != project_id:
             # The composite foreign key already prevents crossing a workspace. This prevents
             # crossing a project inside one, which would make a journey's history depend on a
             # project the reader may not be able to see.
             raise JourneyPersistenceError(
-                "a successor must belong to the same project as the version it supersedes"
+                "a successor must belong to the same project as the version it supersedes",
+                field="supersedes",
             )
 
     version_id = str(uuid.uuid4())
@@ -111,6 +140,9 @@ def list_versions(
     Keyset on `id` like every other listing in this codebase: an `OFFSET` skips and repeats rows as
     the table grows underneath a reader, and a journey list grows every time somebody edits.
     """
+    if after is not None:
+        _as_uuid(after, what="the page cursor", field="after")
+    _as_uuid(project_id, what="the project", field="projectId")
     return conn.execute(
         """
         SELECT id, name, platform, journey_digest, assertion_set_digest, fixture_digest,
@@ -131,6 +163,7 @@ def superseded_by(conn: psycopg.Connection[dict[str, Any]], *, project_id: str) 
     later page and a row that reported "no successor" for that reason would be wrong in the one
     direction that matters: a reader deciding a frozen version is still current.
     """
+    _as_uuid(project_id, what="the project", field="projectId")
     rows = conn.execute(
         "SELECT id, supersedes FROM journey_version "
         "WHERE project_id = %s AND supersedes IS NOT NULL",

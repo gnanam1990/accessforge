@@ -224,7 +224,12 @@ export const ProjectsScreen = (): JSX.Element => {
                 aria-invalid={invalid || undefined}
                 onChange={(event) => setAuthorizedBy(event.target.value)}
               >
-                <option value="">Nobody selected</option>
+                <option value="">
+                  {/* The empty option says why it is the only one. A picker with nothing in it and
+                      no explanation leaves a person unable to satisfy a rule the form insists on,
+                      with the error pointing at a control that has no options. */}
+                  {members.state.kind === 'ready' ? 'Nobody selected' : 'Members could not be read'}
+                </option>
                 {members.state.kind === 'ready' &&
                   members.state.value.items.map((member) => (
                     <option key={member.userId} value={member.userId}>
@@ -234,6 +239,16 @@ export const ProjectsScreen = (): JSX.Element => {
               </select>
             )}
           </FormField>
+
+          {members.state.kind !== 'ready' && members.state.kind !== 'loading' && (
+            <Notice tone="warning" heading="The member list could not be read" headingLevel={3} live>
+              <p>
+                A repository cannot be recorded without naming the person who authorized it, and
+                that name comes from this workspace's membership. Add the project without a
+                repository, or try again once the list loads.
+              </p>
+            </Notice>
+          )}
 
           <Button type="submit" variant="primary" busy={busy}>
             Add project

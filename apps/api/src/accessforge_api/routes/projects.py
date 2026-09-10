@@ -243,30 +243,41 @@ def register_environment(
 
 @router.get("/projects/{project_id}/environments")
 def list_environments(
-    workspace_id: str, project_id: str, request: Request, conn: Conn
+    workspace_id: str,
+    project_id: str,
+    request: Request,
+    conn: Conn,
+    after: str | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     """Environments for a project, with the reasons an unusable one is unusable.
 
     `usable` is reported alongside the specific cause rather than instead of it. "Expired",
     "revoked" and "superseded" send an operator to three different actions, and a single false
     would send them to none of them.
+
+    Paginated by keyset like every other listing here. An earlier version took the first 200 with no
+    cursor and no indication that it had stopped — so a project with more environments than that
+    lost the older ones silently, including ones still usable, and the screen presented what
+    remained as the complete inventory.
     """
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    size = clamp_page_size(limit)
     rows = conn.execute(
         """
         SELECT id, name, allowed_origins, fixture_reset_strategy, permitted_effects,
                config_digest, authorized_by, revoked_at, superseded_by, expires_at, created_at
         FROM environment_manifest
-        WHERE project_id = %s
-        ORDER BY created_at DESC, id
-        LIMIT 200
+        WHERE project_id = %s AND (%s::uuid IS NULL OR id > %s::uuid)
+        ORDER BY id
+        LIMIT %s
         """,
-        (project_id,),
+        (project_id, after, after, size + 1),
     ).fetchall()
 
     now = datetime.now(UTC)
     items = []
-    for r in rows:
+    for r in rows[:size]:
         expires_at = r["expires_at"]
         expired = expires_at is not None and expires_at <= now
         items.append(
@@ -287,7 +298,91 @@ def list_environments(
                 # profile performs it.
             }
         )
-    return {"items": items}
+    return {
+        "items": items,
+        "nextCursor": items[-1]["environmentId"] if len(rows) > size else None,
+    }
+
+
+@router.get("/projects/{project_id}/manifests")
+def list_sealed_manifests(
+    workspace_id: str,
+    project_id: str,
+    request: Request,
+    conn: Conn,
+    after: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """The manifests this project has sealed, and what each one was sealed against.
+
+    A run is requested against a **sealed manifest digest**, not against a journey digest. The
+    manifest covers the source commit, the built artifact, the environment configuration, the
+    journey, its assertions, its fixture, the runner profile, the evaluator version and the model
+    configuration — all of it, together. A run queued with a journey digest in that field carries an
+    identity that matches nothing, and dispatch would later refuse it for naming a different sealed
+    manifest.
+
+    This listing exists so the interface can offer a real one rather than assemble a plausible
+    value. Where a project has sealed none, the honest answer is an empty list, and the screen that
+    reads it must refuse to request a run rather than invent a digest.
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    size = clamp_page_size(limit)
+    rows = conn.execute(
+        """
+        SELECT m.id, m.manifest_digest, m.journey_digest, m.assertion_set_digest,
+               m.fixture_digest, m.runner_profile_digest, m.navigator_policy_digest,
+               m.environment_config_digest, m.evaluator_version, m.model_config_digest,
+               m.run_id, m.sealed_at,
+               s.commit_sha, s.tree_digest, b.artifact_digest, e.name AS environment_name
+          FROM sealed_manifest m
+          LEFT JOIN source_snapshot s ON s.id = m.source_snapshot_id
+          LEFT JOIN build_artifact b ON b.id = m.build_artifact_id
+          LEFT JOIN environment_manifest e ON e.id = m.environment_manifest_id
+         WHERE m.project_id = %s AND (%s::uuid IS NULL OR m.id > %s::uuid)
+         ORDER BY m.id
+         LIMIT %s
+        """,
+        (project_id, after, after, size + 1),
+    ).fetchall()
+
+    items = [
+        {
+            "sealedManifestId": str(r["id"]),
+            "manifestDigest": str(r["manifest_digest"]),
+            "journeyDigest": str(r["journey_digest"]),
+            "assertionSetDigest": str(r["assertion_set_digest"]),
+            "fixtureDigest": str(r["fixture_digest"]),
+            "runnerProfileDigest": str(r["runner_profile_digest"]),
+            "navigatorPolicyDigest": str(r["navigator_policy_digest"]),
+            "environmentConfigDigest": str(r["environment_config_digest"]),
+            "environmentName": None
+            if r["environment_name"] is None
+            else str(r["environment_name"]),
+            "evaluatorVersion": str(r["evaluator_version"]),
+            "modelConfigDigest": str(r["model_config_digest"]),
+            "sourceCommitSha": None if r["commit_sha"] is None else str(r["commit_sha"]),
+            "sourceTreeDigest": None if r["tree_digest"] is None else str(r["tree_digest"]),
+            "buildArtifactDigest": (
+                None if r["artifact_digest"] is None else str(r["artifact_digest"])
+            ),
+            # Set once a run has been sealed against it. A manifest already bound to a run is not a
+            # thing to request a second run against.
+            "runId": None if r["run_id"] is None else str(r["run_id"]),
+            "createdAt": str(r["sealed_at"]),
+        }
+        for r in rows[:size]
+    ]
+    return {
+        "items": items,
+        "nextCursor": items[-1]["sealedManifestId"] if len(rows) > size else None,
+        "meaning": (
+            "A run is requested against one of these digests. It covers the source, the build, the "
+            "environment, the journey, its assertions and fixture, the runner profile, the "
+            "evaluator and the model configuration together — a journey digest alone is not a "
+            "manifest and names nothing the dispatcher can match."
+        ),
+    }
 
 
 @router.get("/journeys/{journey_version_id}")

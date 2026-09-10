@@ -148,6 +148,13 @@ export const JourneyAuthoringSection = ({
     setUnsupported(null)
     setFrozen(null)
 
+    // The ceilings come from the server, which is also the only thing that can enforce them. The
+    // form is not rendered until they have been read, so this branch is unreachable in practice —
+    // and returning rather than defaulting keeps it that way, because a default here would be a
+    // second, quieter copy of the policy.
+    if (capabilities.state.kind !== 'ready') return
+    const limits = capabilities.state.value
+
     const found: { fieldId: string; message: string }[] = []
     if (name.trim() === '') found.push({ fieldId: nameId, message: 'A journey needs a name.' })
     if (summary.trim() === '') {
@@ -177,11 +184,40 @@ export const JourneyAuthoringSection = ({
       }
     })
 
+    // Checked here rather than left to `min` and `max`: the form is `noValidate`, so the browser
+    // enforces neither. `Number('')` is 0 and `Number('1e')` is NaN, which `JSON.stringify` writes
+    // as `null` — so an empty budget field became a request for zero actions, and a half-typed one
+    // became a request for none at all, both refused by the server with a message about a value
+    // the author could have corrected here.
+    const budgetNumber = (
+      raw: string,
+      fieldId: string,
+      label: string,
+      ceiling: number,
+    ): number | null => {
+      const value = Number(raw)
+      if (raw.trim() === '' || !Number.isInteger(value) || value < 1 || value > ceiling) {
+        found.push({
+          fieldId,
+          message: `${label} must be a whole number between 1 and ${ceiling}.`,
+        })
+        return null
+      }
+      return value
+    }
+    const actionCeiling = budgetNumber(maxActions, maxActionsId, 'Maximum actions', limits.maxActions)
+    const timeCeiling = budgetNumber(
+      wallTime,
+      wallTimeId,
+      'The wall-clock budget',
+      limits.maxWallTimeSeconds,
+    )
+
     const navigator = parsePairs(navigatorValues, navigatorValuesId, found)
     const observer = parsePairs(observerConfig, observerConfigId, found)
 
     setErrors(found)
-    if (found.length > 0) return
+    if (found.length > 0 || actionCeiling === null || timeCeiling === null) return
 
     setBusy(true)
     const outcome = await freezeJourneyVersion(client, workspaceId, {
@@ -206,7 +242,7 @@ export const JourneyAuthoringSection = ({
         resetValues: {},
         observerConfig: observer,
       },
-      budget: { maxActions: Number(maxActions), wallTimeSeconds: Number(wallTime) },
+      budget: { maxActions: actionCeiling, wallTimeSeconds: timeCeiling },
       allowedActions: actions,
       allowedKeyChords: chords,
       allowedEffects: effects,
