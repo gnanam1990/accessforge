@@ -74,6 +74,11 @@ attestation reported as attribution rather than validity, a hostile-archive read
 verifier driven end to end with no account, network or database. **No bundle has ever carried a real
 screen-reader trace, a human assessment or a baseline/candidate comparison** — modules 08, 09 and 15
 are the reasons, and the verifier reports each absence as such rather than as a failure.
+Module 18: **partial and locally verified**, delivery open. 18 of roughly 28 `/v1` routes — the
+subset whose domain exists — with RFC7807 problem documents, uniform 404 for cross-tenant and unknown,
+If-Match on revisioned mutations, idempotent replay that rechecks authority, keyset pagination, and a
+contract generated from the live app and diffed in CI. **No CLI and no generated clients**, and the
+acceptance gate is not met: a journey has no write route and an authorized run cannot execute.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.

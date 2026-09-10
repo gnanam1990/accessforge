@@ -48,6 +48,11 @@ class ApiSettings(BaseSettings):
     evidence_access_key: str = Field(min_length=1)
     evidence_secret_key: str = Field(min_length=1)
 
+    # The key id an export will be signed with. The key itself is never here: a verifier needs only
+    # the public half, and the private half belongs in a key management service. Recording the id on
+    # the export row is what tells a reader which key to obtain from the issuer.
+    signing_key_id: str = Field(default="af-unsigned-local", min_length=1)
+
     environment: Literal["local", "test", "staging", "production"] = "local"
     host: str = "127.0.0.1"
     port: int = Field(default=8080, ge=1024, le=65535)
@@ -101,6 +106,7 @@ class ApiSettings(BaseSettings):
             "database": f"{scheme}://<redacted>@{host_part}",
             "evidence_endpoint_url": self.evidence_endpoint_url,
             "evidence_bucket": self.evidence_bucket,
+            "signing_key_id": self.signing_key_id,
             "evidence_access_key": "<redacted>",
             "evidence_secret_key": "<redacted>",
         }
