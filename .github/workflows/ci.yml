@@ -90,6 +90,7 @@ jobs:
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
           packages/domain/src packages/contracts/python/src
+          packages/persistence/src
 
       - name: Create a non-superuser role for the tests
         # Row-level security is the isolation mechanism, so the tests must not run as a role that

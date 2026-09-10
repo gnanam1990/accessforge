@@ -1,6 +1,6 @@
 # Delivery status
 
-**Last refreshed:** 2026-09-10 (module 05 delivery)
+**Last refreshed:** 2026-09-10 (module 06 delivery)
 **Repository:** `github.com/gnanam1990/accessforge` (public)
 **Target branch:** `main`
 
@@ -10,7 +10,7 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 
 | Claim | Answer |
 |---|---|
-| Is code merged? | Modules 00 through 04 are merged. Module 05 (projects and manifests) is **open in a pull request**, not yet merged. |
+| Is code merged? | Modules 00 through 05 are merged. Module 06 (journey DSL and fixtures) is **open in a pull request**, not yet merged. |
 | Is a runtime verified? | **Partly.** The reference application and control-plane API were started and exercised over real HTTP against real PostgreSQL, including restart durability, and tenant isolation was proved by direct SQL. **No screen reader has ever run.** |
 | Is R1 release-ready? | **No**, and it cannot become ready on this host — module 09 requires Windows/NVDA. |
 | Did deployment or event submission occur? | **No.** Neither is authorized. |
@@ -24,7 +24,9 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 | Module 01 integration commit | `23fe6c8` — verified on main, CI green |
 | Module 02 integration commit | `dbca481`, plus follow-up fix `bb52c30` — verified on main |
 | Module 03 integration commit | `141e3de` — verified on main, CI green with RLS genuinely enforced |
-| Latest verified integration commit | `9a1aef6` |
+| Module 04 integration commit | `9a1aef6` — verified on main |
+| Module 05 integration commit | `3977e18` (merge of `a37da63`) — CI green on the pull request |
+| Latest verified integration commit | `3977e18` |
 | CI on main | **Passing** for `23fe6c8`. Three jobs: Python (real PostgreSQL), Node, documentation integrity. |
 
 ## Modules
@@ -35,8 +37,10 @@ Module 02: **merged** at `dbca481`, verified on main; a post-merge defect was fi
 Module 03: **merged** at `141e3de`, verified on main. Partial by design — the authorization
 primitives are complete, but no HTTP surface exposes them until module 18.
 Module 04: **merged** at `9a1aef6`, verified on main.
-Module 05: **implemented and locally verified** (745 Python tests, against a real git repository and
-real PostgreSQL), delivery **open**.
+Module 05: **merged** at `3977e18`, CI green on the pull request.
+Module 06: **implemented and locally verified** (821 Python tests on a database created from nothing,
+plus 54 Node tests), rebased onto module 05, with seven findings from the independent
+review fixed and mutation-proven, delivery **open**.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
@@ -52,6 +56,8 @@ at once — the correct outcome, but a poor diagnosis. CI now uses a NOSUPERUSER
 | Found at | Issue | Status |
 |---|---|---|
 | `dbca481` (module 02) | `pnpm -r test` failed from a clean clone: the Node test scripts import from `dist/` but did not build it. CI masked this by running `build` before `test`. | fixed in a follow-up PR |
+| module 06, pre-merge | Two defects passed locally and failed in CI solely because the local test database was carried over from module 05. A branch cut before module 05 shipped a migration referencing a table module 05 creates, and a regression test asserted two table names were present when only one of them was the product's. | both fixed; `migrate` now refuses a gapped series and a database recording migrations absent from the tree, and the verification procedure recreates the database |
+| module 06, pre-merge | `packages/persistence/src` — the package holding every tenancy decision — was absent from CI's strict `mypy` targets. It already passed; nothing had been checking. | added to the type-check step |
 
 Caught by the clean-clone smoke rather than by CI, which is the point of running it: CI's step
 ordering made a broken standalone command look fine.
@@ -75,3 +81,14 @@ ordering made a broken standalone command look fine.
   Owed by module 08.
 - Test-first ordering was not followed in module 01; guards were mutated afterwards to prove the
   tests are falsifiable. See `docs/handoffs/01.md`.
+- `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
+  `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
+  else, and it is untouched rather than unknown.
+- `fixture_digest` is an unkeyed SHA-256 over fixture and observer values, several of which have low
+  entropy, so anyone holding an export can test offline guesses at what a run was checked against.
+  Raised by the module 06 independent review; a keyed commitment was refused because it would make
+  exports unverifiable offline, which CONTRACTS requires. The reasoning is in `docs/handoffs/06.md`
+  and the trade-off is open, not settled.
+- The silent table collision found in module 06 can no longer be reproduced: the two tables now have
+  incompatible schemas, so a misdirected write fails loudly. The replacement test proves the product
+  uses its own table; it does not reconstruct the silence. See `docs/handoffs/06.md`.
