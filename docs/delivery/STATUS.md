@@ -53,6 +53,11 @@ from it, so a claim of support requires a code change in the same commit as a re
 Module 09: **contract work only**, delivery open. Windows-specific chord policy, the unusable-desktop
 taxonomy including disconnected RDP sessions, and the cross-reader comparison rule. **There is no
 Windows host on this machine**, so R1 is unreachable from here.
+Module 10: **implemented and locally verified**, delivery open. Artifact quarantine with server-side
+hashing, raw/redacted identities, retention that outlives the bytes, finalization prerequisites, late
+and stale arrival handling, bounded ingest and keyset replay — all against **real MinIO**, with no
+filesystem fallback anywhere. **No real screen-reader output has passed through the pipeline**, because
+modules 08 and 09 are blocked: integration status is contract-verified, not end-to-end verified.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
