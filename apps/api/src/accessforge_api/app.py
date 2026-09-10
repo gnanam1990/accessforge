@@ -22,10 +22,12 @@ from .problems import ProblemCode, ProblemDetail
 from .routes import (
     exports_router,
     findings_router,
+    grants_router,
     journeys_router,
     projects_router,
     runners_router,
     runs_router,
+    schedules_router,
     session_router,
     settings_router,
 )
@@ -97,6 +99,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         journeys_router,
         runners_router,
         runs_router,
+        grants_router,
+        schedules_router,
         settings_router,
         findings_router,
         exports_router,
