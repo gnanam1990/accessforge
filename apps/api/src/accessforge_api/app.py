@@ -17,6 +17,7 @@ from .routes import (
     projects_router,
     runners_router,
     runs_router,
+    session_router,
 )
 
 
@@ -50,6 +51,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         ).to_response()
 
     for router in (
+        session_router,
         projects_router,
         runners_router,
         runs_router,
