@@ -441,5 +441,69 @@ def test_audit_rows_are_workspace_isolated(db: str) -> None:
             actor_user=OWNER_ID,
         )
     with workspace_connection(db, WS_B) as conn:
-        rows = conn.execute("SELECT * FROM audit_event WHERE workspace_id IS NOT NULL").fetchall()
+        # No predicate. The earlier version of this test filtered on `workspace_id IS NOT NULL`,
+        # which quietly hid the NULL-workspace carve-out that made sign-in rows readable by every
+        # tenant. A test that avoids the failure it exists to catch is worse than no test.
+        rows = conn.execute("SELECT * FROM audit_event").fetchall()
     assert rows == [], "workspace B must not read workspace A's audit trail"
+
+
+def test_a_sign_in_is_recorded_where_no_tenant_can_read_it(db: str) -> None:
+    """Workspace-independent events go to the operator-only table.
+
+    Recording a sign-in into the workspace-scoped table was how an actor id and originating address
+    became readable by every tenant.
+    """
+    from accessforge_api.auth import record_global_audit_event
+
+    with unscoped_connection(db) as conn:
+        record_global_audit_event(
+            conn,
+            action="SIGN_IN",
+            target_kind="session",
+            target_id=None,
+            outcome="ALLOWED",
+            actor_user=OWNER_ID,
+            detail={"from": "198.51.100.7"},
+        )
+
+    for workspace in (WS_A, WS_B):
+        with workspace_connection(db, workspace) as conn:
+            assert conn.execute("SELECT * FROM global_audit_event").fetchall() == []
+            assert conn.execute("SELECT * FROM audit_event").fetchall() == []
+
+    with unscoped_connection(db) as conn:  # allowed-path control
+        rows = conn.execute("SELECT action, detail FROM global_audit_event").fetchall()
+    assert rows and rows[0]["action"] == "SIGN_IN"
+
+
+def test_the_global_audit_table_also_has_no_column_for_a_secret(db: str) -> None:
+    with unscoped_connection(db) as conn:
+        columns = {
+            str(r["column_name"])
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'global_audit_event'"
+            ).fetchall()
+        }
+    for forbidden in (
+        "password",
+        "token",
+        "secret",
+        "transcript",
+        "speech",
+        "gender",
+        "disability",
+    ):
+        assert not any(forbidden in c for c in columns), f"global_audit_event exposes {forbidden}"
+
+
+def test_a_workspace_scoped_audit_row_now_requires_a_workspace(db: str) -> None:
+    """The signature no longer permits the NULL that caused the leak."""
+    import inspect
+
+    from accessforge_api.auth import record_audit_event as scoped
+
+    param = inspect.signature(scoped).parameters["workspace_id"]
+    assert param.default is inspect.Parameter.empty, "workspace_id must be required"
+    assert param.annotation == "str", f"workspace_id must not be optional, got {param.annotation}"

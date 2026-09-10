@@ -27,6 +27,7 @@ __all__ = [
     "connect",
     "migrate",
     "unscoped_connection",
+    "user_connection",
     "workspace_connection",
 ]
 
@@ -99,15 +100,41 @@ def workspace_connection(
 
 
 @contextmanager
+def user_connection(
+    database_url: str, user_id: str
+) -> Iterator[psycopg.Connection[dict[str, Any]]]:
+    """A connection that identifies the acting user but no workspace.
+
+    This exists for exactly one job: letting a signed-in person enumerate **their own**
+    memberships, which is what a post-login workspace picker needs. Only the
+    `workspace_membership` policy consults the user scope, and only to match `user_id`; every other
+    workspace-scoped table stays invisible, so identifying a user is not a general-purpose bypass.
+
+    Writes still require a workspace scope. Reading your own memberships is safe; granting one is
+    not.
+    """
+    conn = connect(database_url)
+    try:
+        with conn, conn.transaction():
+            conn.execute("SELECT set_config('accessforge.user_id', %s, true)", (user_id,))
+            yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
 def unscoped_connection(
     database_url: str,
 ) -> Iterator[psycopg.Connection[dict[str, Any]]]:
-    """A connection with no workspace established.
+    """A connection with neither a workspace nor a user established.
 
     Row-level security makes this see **zero** rows of workspace-scoped data, which is the correct
-    default. It exists for genuinely workspace-independent work — migrations, sign-in by email,
-    looking up which workspaces a user belongs to — and its name is deliberately unattractive so
-    that reaching for it is a visible decision.
+    default. It is for genuinely workspace-independent work — migrations, resolving a session,
+    looking a user up by email, and reading or writing `global_audit_event` — and its name is
+    deliberately unattractive so that reaching for it is a visible decision.
+
+    It cannot enumerate a user's memberships; that needs `user_connection`. An earlier version of
+    this docstring claimed otherwise, which was wrong: the policy excluded every row.
     """
     conn = connect(database_url)
     try:

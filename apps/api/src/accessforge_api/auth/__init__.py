@@ -18,6 +18,7 @@ from .membership import (
     MembershipError,
     assert_route_matches_body,
     record_audit_event,
+    record_global_audit_event,
     require_permission,
     resolve_human_principal,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "device_may_be_admitted",
     "issue_session",
     "record_audit_event",
+    "record_global_audit_event",
     "redeem_enrollment",
     "require_permission",
     "resolve_human_principal",

@@ -201,6 +201,127 @@ def test_the_isolation_tests_would_notice_if_the_policy_were_dropped(seeded: str
     assert row is not None and row["relforcerowsecurity"]
 
 
+# --- audit isolation (independent review finding 1) -----------------------------------------
+
+
+def test_an_unpredicated_audit_query_cannot_cross_tenants(seeded: str) -> None:
+    """Regression: the audit policy had a NULL-workspace carve-out.
+
+    `workspace_id IS NULL OR workspace_id = current_workspace_id()` made every workspace-independent
+    row — a sign-in, carrying a user id and whatever the caller put in `detail` — readable by every
+    tenant. The original isolation test sidestepped this by adding `WHERE workspace_id IS NOT NULL`,
+    so the suite avoided the bug instead of catching it. This query deliberately has no predicate at
+    all, like every other table's isolation test.
+    """
+    with unscoped_connection(seeded) as conn:
+        conn.execute(
+            "INSERT INTO global_audit_event (actor_user, action, target_kind, outcome, detail) "
+            "VALUES (%s, 'SIGN_IN', 'session', 'ALLOWED', %s)",
+            (USER_A, '{"from": "198.51.100.7"}'),
+        )
+    with workspace_connection(seeded, WS_A) as conn:
+        conn.execute(
+            "INSERT INTO audit_event (workspace_id, actor_user, action, target_kind, outcome) "
+            "VALUES (%s, %s, 'EVIDENCE_READ', 'run', 'ALLOWED')",
+            (WS_A, USER_A),
+        )
+
+    with workspace_connection(seeded, WS_B) as conn:
+        scoped = conn.execute("SELECT * FROM audit_event").fetchall()
+        # A tenant connection must see no workspace-independent audit rows whatsoever.
+        global_rows = conn.execute("SELECT * FROM global_audit_event").fetchall()
+
+    assert scoped == [], "workspace B must not read workspace A's audit trail"
+    assert global_rows == [], "a tenant must not read workspace-independent audit rows"
+
+
+def test_workspace_independent_audit_rows_remain_readable_to_an_operator(seeded: str) -> None:
+    """Allowed-path control: the separate table is still usable for its actual purpose."""
+    with unscoped_connection(seeded) as conn:
+        conn.execute(
+            "INSERT INTO global_audit_event (actor_user, action, target_kind, outcome) "
+            "VALUES (%s, 'SIGN_IN', 'session', 'ALLOWED')",
+            (USER_A,),
+        )
+        rows = conn.execute("SELECT action FROM global_audit_event").fetchall()
+    assert [r["action"] for r in rows] == ["SIGN_IN"]
+
+
+def test_the_scoped_audit_table_cannot_hold_a_null_workspace(seeded: str) -> None:
+    """The carve-out is gone both structurally and by policy.
+
+    Two independent refusals now apply: the column is NOT NULL, and the policy's WITH CHECK
+    requires an exact workspace match. The policy fires first, so the error is
+    InsufficientPrivilege rather than NotNullViolation — either is a correct refusal, and the test
+    accepts both rather than pinning behaviour to whichever guard PostgreSQL evaluates first.
+    """
+    with pytest.raises((psycopg.errors.NotNullViolation, psycopg.errors.InsufficientPrivilege)):
+        with workspace_connection(seeded, WS_A) as conn:
+            conn.execute(
+                "INSERT INTO audit_event (workspace_id, action, target_kind, outcome) "
+                "VALUES (NULL, 'X', 'y', 'ALLOWED')"
+            )
+
+    # And the column constraint is genuinely there, not merely implied by the policy.
+    with unscoped_connection(seeded) as conn:
+        row = conn.execute(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'audit_event' AND column_name = 'workspace_id'"
+        ).fetchone()
+    assert row is not None and row["is_nullable"] == "NO"
+
+
+# --- listing a user's own workspaces (independent review finding 2) --------------------------
+
+
+def test_a_user_can_list_their_own_workspaces_without_a_workspace_scope(seeded: str) -> None:
+    """Regression: there was no primitive for this at all.
+
+    `unscoped_connection`'s docstring claimed it supported "looking up which workspaces a user
+    belongs to", but row-level security made that return zero rows — so a post-login workspace
+    picker was impossible, and module 18 would have been tempted to weaken the isolation model to
+    unblock itself.
+    """
+    from accessforge_persistence import user_connection
+
+    with workspace_connection(seeded, WS_B) as conn:
+        conn.execute(
+            "INSERT INTO workspace_membership (workspace_id, user_id, role) "
+            "VALUES (%s, %s, 'VIEWER')",
+            (WS_B, USER_A),
+        )
+
+    with user_connection(seeded, USER_A) as conn:
+        rows = conn.execute(
+            "SELECT workspace_id, role FROM workspace_membership ORDER BY workspace_id"
+        ).fetchall()
+    assert {str(r["workspace_id"]) for r in rows} == {WS_A, WS_B}
+
+
+def test_listing_own_workspaces_reveals_nobody_elses_membership(seeded: str) -> None:
+    """The widened policy must expose only the caller's own rows."""
+    from accessforge_persistence import user_connection
+
+    with user_connection(seeded, USER_A) as conn:
+        rows = conn.execute("SELECT user_id FROM workspace_membership").fetchall()
+    assert {str(r["user_id"]) for r in rows} == {USER_A}, "another user's membership became visible"
+
+
+def test_a_user_scope_does_not_unlock_other_workspace_scoped_tables(seeded: str) -> None:
+    """Identifying a user must not become a general-purpose bypass.
+
+    The widened policy applies to workspace_membership only; enrollment credentials, devices and
+    environment authorizations stay workspace-scoped.
+    """
+    from accessforge_persistence import user_connection
+
+    with user_connection(seeded, USER_A) as conn:
+        assert conn.execute("SELECT * FROM enrollment_credential").fetchall() == []
+        assert conn.execute("SELECT * FROM runner_device").fetchall() == []
+        assert conn.execute("SELECT * FROM environment_authorization").fetchall() == []
+        assert conn.execute("SELECT * FROM audit_event").fetchall() == []
+
+
 # --- membership revocation --------------------------------------------------------------------
 
 
