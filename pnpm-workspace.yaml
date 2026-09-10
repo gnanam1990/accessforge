@@ -3,3 +3,4 @@ packages:
   - "apps/desktop-runner"
   - "packages/contracts/ts"
   - "packages/at-adapters/voiceover"
+  - "packages/at-adapters/nvda"

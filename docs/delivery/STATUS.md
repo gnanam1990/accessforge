@@ -46,9 +46,14 @@ Module 07: **merged** at `0c88f49`, verified on main. 1016 Python tests and 82 N
 database created from nothing, seventeen mutation checks. Real PostgreSQL concurrency and a real
 `fsync`ed action journal; **no screen reader, and no operating-system fencing demonstrated** — see
 `docs/handoffs/07.md` for all seven unverified boundaries by name.
-All other modules: not started. **Module 07 is the last module buildable on this host** — 08 and 09
-require a real screen reader, and everything from 10 onwards depends on evidence only they can
-produce.
+Module 08: **contract work only**, delivery open. The pinned platform matrix, the fourteen preflight
+probes, the chord allowlist and the navigator projection exist and are tested. **No VoiceOver
+observation has ever been produced.** `VERIFIED_MATRICES` is empty and `PROFILE_STATUS` is derived
+from it, so a claim of support requires a code change in the same commit as a real trace.
+Module 09: **contract work only**, delivery open. Windows-specific chord policy, the unusable-desktop
+taxonomy including disconnected RDP sessions, and the cross-reader comparison rule. **There is no
+Windows host on this machine**, so R1 is unreachable from here.
+All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
 
@@ -80,7 +85,7 @@ ordering made a broken standalone command look fine.
 | No Windows host or virtualization software | Provide a Windows machine or VM with NVDA | 09, **full R1** |
 | No AWS credentials or Bedrock access | Configure credentials **and** approve billable model invocation separately | 12, 13, 14 real-model proof |
 | No authorized target application | Name an application you control or are authorized to test, with permitted effects | 05, 08, **all E0 acceptance** |
-| No object store running | Start Colima and run MinIO, or supply an S3-compatible endpoint | 10, 17 real-artifact proof |
+| ~~No object store running~~ | **Resolved 2026-09-10** — Colima started, MinIO running under it, credentials in a gitignored `.env.objectstore`. A real S3-compatible endpoint, not a filesystem fallback. | — |
 | Branch protection not configured | Owner configures protection rules; the agent does not change repository settings | guarded merge strength |
 
 ## Outstanding debts
