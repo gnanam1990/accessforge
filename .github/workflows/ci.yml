@@ -50,6 +50,14 @@ jobs:
       # bypassing role again.
       SUPERUSER_URL: postgresql://accessforge:accessforge-ci@localhost:5432/accessforge_test
       TEST_DATABASE_URL: postgresql://accessforge_app:accessforge-app-ci@localhost:5432/accessforge_test
+      # CI-only credentials for a container that exists for the length of one job and is reachable
+      # only from it. They are written here rather than in a secret because a secret implies these
+      # protect something, and treating a throwaway container credential as sensitive makes the
+      # genuinely sensitive ones harder to take seriously.
+      OBJECT_STORE_ENDPOINT: http://localhost:9000
+      OBJECT_STORE_ACCESS_KEY: accessforge
+      OBJECT_STORE_SECRET_KEY: accessforge-minio-ci
+      OBJECT_STORE_BUCKET: accessforge-evidence
 
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +67,31 @@ jobs:
         with:
           version: "0.11.28"
           enable-cache: true
+
+      - name: Start a real object store
+        # A step rather than a `services:` entry, because the MinIO image needs the `server /data`
+        # argument and a service container cannot be given a command.
+        #
+        # A real S3-compatible store, because the artifact suite has no filesystem fallback. A
+        # stand-in would pass every assertion about size limits and content types while proving none
+        # of what only a real store does -- most importantly that an object can be swapped underneath
+        # a row that still records the old digest, which is the reason `promote` re-reads the bytes.
+        run: |
+          set -euo pipefail
+          docker run -d --name accessforge-minio -p 9000:9000 \
+            -e MINIO_ROOT_USER="$OBJECT_STORE_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$OBJECT_STORE_SECRET_KEY" \
+            quay.io/minio/minio:latest server /data
+          for attempt in $(seq 1 30); do
+            if curl -sf "$OBJECT_STORE_ENDPOINT/minio/health/live" >/dev/null; then
+              echo "object store live after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::the object store never became live"
+          docker logs accessforge-minio || true
+          exit 1
 
       - name: Install pinned dependencies
         # --frozen fails if uv.lock does not match pyproject.toml, so a dependency change cannot
