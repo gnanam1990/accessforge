@@ -24,8 +24,8 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 05 | Authorized projects and immutable builds | 03, 04 | FR-001, 002, 010, 014 | implemented | passed | merged | E0 |
 | 06 | Versioned journey DSL, fixtures, assertions | 02, 05 | FR-003, 005, 007, 023 | implemented | passed | merged | E0 |
 | 07 | Runner enrollment, admission, desktop leases | 04, 06 | FR-004, 005, 014, 015, 021 | implemented | passed | open | E0 |
-| 08 | Actual macOS VoiceOver execution | 00, 07 | FR-004, 005, 006, 015 | not started | **blocked** | local | E0 |
-| 09 | Actual Windows NVDA execution | 00, 07 | FR-004, 005, 006, 015 | not started | **blocked** | local | R1 |
+| 08 | Actual macOS VoiceOver execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no real reader** | open | E0 |
+| 09 | Actual Windows NVDA execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no Windows host** | open | R1 |
 | 10 | Provenance-bound evidence ingestion | 04, 07, 08 | FR-006, 014, 015, 020 | not started | pending | local | E0 |
 | 11 | Independent deterministic outcome verifier | 06, 10 | FR-006, 007, 011, 023 | not started | pending | local | E0 |
 | 12 | Real Strands navigator and bounded tools | 07, 08, 11 | FR-005, 008, 015, 021 | not started | **blocked** | local | E0 |
