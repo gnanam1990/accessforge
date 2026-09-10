@@ -51,6 +51,9 @@ export interface WorkspaceData {
   timeline: Record<string, unknown>
   completeness: Record<string, unknown>
   findings: Record<string, unknown>
+  reviewRequests: Record<string, unknown>[]
+  review: Record<string, unknown>
+  exportRecord: Record<string, unknown>
 }
 
 export interface FakeServer {
@@ -127,6 +130,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       meaning: 'This describes the evidence, not the run.',
     },
     findings: {},
+    reviewRequests: [],
+    review: {},
+    exportRecord: {},
   }
   const refusals = new Map<string, { status: number; code: string; detail: string }>()
   const bodies: {
@@ -280,6 +286,26 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         })
       }
 
+      if (url.includes('/review-requests') && method === 'GET') {
+        return json({
+          items: data.reviewRequests,
+          meaning:
+            'Asking for a review is an event; an assessment is a different event. An entry with ' +
+            'no reviews records that somebody was asked and nothing about whether they looked.',
+        })
+      }
+      if (url.includes('/reviews/') && method === 'GET') {
+        return json(data.review)
+      }
+      if (url.includes('/reviews') && method === 'POST') {
+        return json({ reviewId: 'review-1', verdict: 'ACCEPT' }, 201)
+      }
+      if (url.includes('/exports/') && method === 'GET') {
+        return json(data.exportRecord)
+      }
+      if (url.includes('/exports') && method === 'POST') {
+        return json({ exportId: 'export-1', bundleDigest: 'f'.repeat(64) }, 201)
+      }
       if (url.includes('/cancel') && method === 'POST') {
         return json(
           {

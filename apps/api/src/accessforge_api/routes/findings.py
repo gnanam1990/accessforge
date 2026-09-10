@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from accessforge_api.dependencies import clamp_page_size, require_if_match
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
-from accessforge_api.routes._common import as_body, authorize, workspace_scope
+from accessforge_api.routes._common import as_body, as_identifier, authorize, workspace_scope
 from accessforge_domain.authorization.roles import Permission, Role
 from accessforge_domain.states import FindingStatus, ReviewVerdict
 from accessforge_persistence import reviews
@@ -134,6 +134,118 @@ def transition_finding(
         raise ProblemDetail(code, message, request_id=context.request_id) from exc
 
     return {"findingId": finding_id, "status": str(target)}
+
+
+@router.get("/review-requests")
+def list_review_requests(
+    workspace_id: str, request: Request, conn: Conn, limit: int | None = None
+) -> dict[str, Any]:
+    """Reviews that have been asked for, and whether anyone has answered.
+
+    A request and an assessment are different events, and this listing keeps them that way: an
+    entry with `reviewCount: 0` records that somebody was asked, and nothing more. Treating an
+    assignment as a review is how a process reports completed review that never happened.
+
+    `currentPatchDigest` and `currentVerificationDigest` are what the request was bound to. They are
+    reported under those names because a review form has to send both what the reviewer looked at
+    and what the system holds now, and a form that read one value and sent it twice would make the
+    staleness check agree with itself.
+
+    **There is no route that creates one.** A request binds a patch digest and a verification
+    digest, and nothing in this system produces either: modules 14 and 15 do not exist. A create
+    route would have to accept digests invented by its caller.
+    """
+    authorize(conn, request, workspace_id, Permission.PATCH_REVIEW)
+    size = clamp_page_size(limit)
+    rows = conn.execute(
+        """
+        SELECT rq.id, rq.patch_digest, rq.verification_digest, rq.journey_version_id,
+               rq.environment_digest, rq.requested_by, rq.requested_of, rq.requested_at,
+               (SELECT count(*) FROM review rv WHERE rv.request_id = rq.id) AS review_count
+        FROM review_request rq
+        ORDER BY rq.requested_at DESC, rq.id
+        LIMIT %s
+        """,
+        (size,),
+    ).fetchall()
+    return {
+        "items": [
+            {
+                "reviewRequestId": str(r["id"]),
+                "patchDigest": str(r["patch_digest"]),
+                "verificationDigest": str(r["verification_digest"]),
+                "journeyVersionId": str(r["journey_version_id"]),
+                "environmentDigest": str(r["environment_digest"]),
+                "requestedBy": str(r["requested_by"]),
+                "requestedOf": None if r["requested_of"] is None else str(r["requested_of"]),
+                "requestedAt": str(r["requested_at"]),
+                "reviewCount": int(r["review_count"]),
+            }
+            for r in rows
+        ],
+        "meaning": (
+            "Asking for a review is an event; an assessment is a different event. An entry with no "
+            "reviews records that somebody was asked and nothing about whether they looked."
+        ),
+    }
+
+
+@router.get("/reviews/{review_id}")
+def get_review(workspace_id: str, review_id: str, request: Request, conn: Conn) -> dict[str, Any]:
+    """One recorded assessment, with what it was bound to and what it does not authorize.
+
+    `meansNothingAbout` is served rather than written into the interface, because the limits of a
+    review are a property of the record and travel with it: a client that rendered its own list
+    would be free to shorten it.
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    as_identifier(review_id, what="the review")
+    row = conn.execute(
+        """
+        SELECT id, request_id, reviewer_id, reviewer_role, patch_digest, verification_digest,
+               journey_version_id, environment_digest, verdict, observations, limitations,
+               used_assistive_technology, assistive_technology_detail, supersedes, submitted_at
+        FROM review WHERE id = %s
+        """,
+        (review_id,),
+    ).fetchone()
+    if row is None:
+        raise not_found()
+
+    superseded_by = conn.execute(
+        "SELECT id FROM review WHERE supersedes = %s", (review_id,)
+    ).fetchone()
+
+    return {
+        "reviewId": str(row["id"]),
+        "reviewRequestId": None if row["request_id"] is None else str(row["request_id"]),
+        "reviewerId": str(row["reviewer_id"]),
+        "reviewerRole": str(row["reviewer_role"]),
+        "verdict": str(row["verdict"]),
+        "observations": str(row["observations"]),
+        "limitations": str(row["limitations"]),
+        # Never inferred. "A person accepted this" and "a person accepted this having driven it
+        # with a screen reader" are very different claims.
+        "usedAssistiveTechnology": bool(row["used_assistive_technology"]),
+        "assistiveTechnologyDetail": row["assistive_technology_detail"],
+        "boundTo": {
+            "patchDigest": str(row["patch_digest"]),
+            "verificationDigest": str(row["verification_digest"]),
+            "journeyVersionId": str(row["journey_version_id"]),
+            "environmentDigest": str(row["environment_digest"]),
+        },
+        "supersedes": None if row["supersedes"] is None else str(row["supersedes"]),
+        # Append-only: neither row is ever updated, so a correction reads as what was said and then
+        # what was said instead.
+        "supersededBy": None if superseded_by is None else str(superseded_by["id"]),
+        "submittedAt": str(row["submitted_at"]),
+        "meansNothingAbout": [
+            "Whether the application is usable by people with disabilities in general.",
+            "Whether any untested journey, reader, reader version or locale behaves the same way.",
+            "Permission to merge, deploy, publish or release anything.",
+            "The machine outcome, which this does not rewrite and cannot overturn.",
+        ],
+    }
 
 
 @router.post("/reviews", status_code=status.HTTP_201_CREATED)
