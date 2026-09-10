@@ -31,6 +31,16 @@ export interface PlatformMatrix {
 }
 
 /**
+ * The OS version and build as separate values.
+ *
+ * Separate because they are compared differently. `TARGET_MATRIX.macos` is prose for a human reading
+ * a handoff; the comparison in preflight needs the version alone, and doing it against the prose
+ * string is how a prefix match let macOS 26 pass as macOS 26.6.
+ */
+export const TARGET_MACOS_VERSION = '26.6';
+export const TARGET_MACOS_BUILD = '25G72';
+
+/**
  * The configuration the code targets.
  *
  * `voiceOver` says "bundled with macOS 26.6" rather than a number because VoiceOver does not ship a
@@ -38,7 +48,7 @@ export interface PlatformMatrix {
  * and be less true.
  */
 export const TARGET_MATRIX: PlatformMatrix = {
-  macos: '26.6 (build 25G72)',
+  macos: `${TARGET_MACOS_VERSION} (build ${TARGET_MACOS_BUILD})`,
   browser: 'Safari',
   browserVersion: '26.6',
   voiceOver: 'bundled with macOS 26.6',
