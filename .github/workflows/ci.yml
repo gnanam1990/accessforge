@@ -121,6 +121,12 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: The published contract matches the live application
+        # Generated from the same create_app a request goes through, then diffed against the
+        # committed file. A hand-maintained OpenAPI document describes what someone believed the API
+        # did; this one cannot drift without the diff showing it.
+        run: uv run python scripts/generate_openapi.py --check
+
       - name: Type check (strict)
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
