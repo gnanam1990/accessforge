@@ -1,0 +1,14 @@
+{
+  "//": "PROPOSED, and currently unused: CI has no AWS identity at all, which is the stronger position.",
+  "//why": "This document exists so that if somebody is ever asked to give CI credentials, there is a written answer to 'what would it need' that is smaller than 'an admin key'. The untrusted workflow (.github/workflows/ci.yml) references no repository secret and asserts that it does not.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "NothingAtAll",
+      "//": "CI runs code from pull requests, including forks. Any credential reachable from that pipeline is a credential a contributor can exfiltrate by adding a step. The only safe amount is none, and every service CI needs is a throwaway container inside the job.",
+      "Effect": "Deny",
+      "Action": "*",
+      "Resource": "*"
+    }
+  ]
+}

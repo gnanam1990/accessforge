@@ -55,7 +55,9 @@ src = [
   "fixtures/reference-app/src",
   "packages/domain/src",
   "packages/contracts/python/src",
+  "packages/evidence/src",
   "packages/persistence/src",
+  "scripts",
   "tests",
 ]
 
