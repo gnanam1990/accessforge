@@ -71,17 +71,16 @@ def key_file(tmp_path: Path) -> Path:
     path = tmp_path / "backup.key"
     result = _script(
         "backup.py",
-        "--output",
-        str(tmp_path / "unused.afbk"),
         "--key-file",
         str(path),
         "--write-new-key",
-        "--skip-evidence",
-        env={"ACCESSFORGE_BACKUP_DATABASE_URL": ""},
+        env={"ACCESSFORGE_BACKUP_DATABASE_URL": "", "ACCESSFORGE_DATABASE_URL": ""},
     )
-    # --write-new-key writes the key before it needs a database, so this succeeds at the key even
-    # when the run as a whole does not. Asserting on the file rather than the exit code keeps the
-    # fixture honest about which half it depends on.
+    # Creating a key is a standalone operation: it is what an operator does before they have
+    # anything to back up. An earlier version passed a throwaway --output and a comment claiming
+    # the key was written first; CI proved otherwise, because the database check ran before the
+    # key was written and the fixture got exit 2 and no file.
+    assert result.returncode == 0, result.stderr
     assert path.exists(), result.stderr
     return path
 
@@ -314,16 +313,14 @@ def test_a_truncated_archive_is_refused_rather_than_partially_restored(
 
 def test_the_wrong_key_restores_nothing(archive: Path, empty_target: str, tmp_path: Path) -> None:
     other = tmp_path / "other.key"
-    _script(
+    created = _script(
         "backup.py",
-        "--output",
-        str(tmp_path / "other.afbk"),
         "--key-file",
         str(other),
         "--write-new-key",
-        "--skip-evidence",
-        env={"ACCESSFORGE_BACKUP_DATABASE_URL": ""},
+        env={"ACCESSFORGE_BACKUP_DATABASE_URL": "", "ACCESSFORGE_DATABASE_URL": ""},
     )
+    assert created.returncode == 0, created.stderr
     assert other.exists()
 
     result = _script(
@@ -388,3 +385,33 @@ def test_the_backup_carries_key_metadata_but_no_private_key(archive: Path, key_f
 
     assert keys["privateKeyMaterialIncluded"] is False
     assert "verify" in keys["detail"]
+
+
+def test_creating_a_key_needs_no_database_and_refuses_to_overwrite_one(tmp_path: Path) -> None:
+    """Two properties of the operation an operator performs first, and gets one chance at.
+
+    No database, because generating a key is not taking a backup. No overwrite, because the key
+    that gets overwritten is the one every existing archive was sealed with, and there is no
+    recovery from that -- so it is a refusal rather than a prompt.
+    """
+    path = tmp_path / "first.key"
+    first = _script(
+        "backup.py",
+        "--key-file",
+        str(path),
+        "--write-new-key",
+        env={"ACCESSFORGE_BACKUP_DATABASE_URL": "", "ACCESSFORGE_DATABASE_URL": ""},
+    )
+    assert first.returncode == 0, first.stderr
+    original = path.read_bytes()
+
+    second = _script(
+        "backup.py",
+        "--key-file",
+        str(path),
+        "--write-new-key",
+        env={"ACCESSFORGE_BACKUP_DATABASE_URL": "", "ACCESSFORGE_DATABASE_URL": ""},
+    )
+    assert second.returncode == 2
+    assert "permanently unreadable" in second.stderr
+    assert path.read_bytes() == original

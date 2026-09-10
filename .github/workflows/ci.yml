@@ -158,6 +158,34 @@ jobs:
           packages/domain/src packages/contracts/python/src
           packages/persistence/src packages/evidence/src scripts
 
+      - name: Install a PostgreSQL 17 client
+        # The runner image ships pg_dump 16, and the service container is PostgreSQL 17. An older
+        # pg_dump refuses a newer server outright -- "aborting because of server version mismatch"
+        # -- which is the good failure; the bad one would be a dump silently missing a newer
+        # server's features. `infra/version-matrix.toml` already declared `pg_dump >= 17` for
+        # exactly this reason, and this step is what makes CI meet its own declaration.
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: The client matches the server it must dump
+        # Asserted rather than assumed. A PATH that still resolved to the older client would make
+        # every restore-drill test fail with a confusing error twenty minutes later.
+        run: |
+          set -euo pipefail
+          pg_dump --version
+          pg_restore --version
+          pg_dump --version | grep -qE ' 1[7-9]\.' \
+            || { echo "::error::pg_dump is older than the PostgreSQL 17 server"; exit 1; }
+
       - name: Create a non-superuser role for the tests
         # Row-level security is the isolation mechanism, so the tests must not run as a role that
         # ignores it. This role owns nothing yet; the migrations it runs will make it the table

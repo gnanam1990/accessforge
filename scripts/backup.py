@@ -160,7 +160,12 @@ def main(argv: list[str] | None = None) -> int:
             "and so cannot dump its own rows"
         ),
     )
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="where to write the sealed archive. Required unless --write-new-key is the only "
+        "thing being asked for.",
+    )
     parser.add_argument(
         "--key-file",
         type=Path,
@@ -174,9 +179,9 @@ def main(argv: list[str] | None = None) -> int:
         "--write-new-key",
         action="store_true",
         help=(
-            "generate a key into --key-file. Refuses to overwrite: overwriting the key makes "
-            "every previous backup permanently unreadable, and that is not something a flag "
-            "should do quietly."
+            "generate a key into --key-file and, if no backup was also asked for, stop there. "
+            "Refuses to overwrite: overwriting the key makes every previous backup permanently "
+            "unreadable, and that is not something a flag should do quietly."
         ),
     )
     parser.add_argument(
@@ -187,13 +192,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not args.database_url:
-        print("no database url; set ACCESSFORGE_BACKUP_DATABASE_URL", file=sys.stderr)
-        return 2
     if not args.key_file:
         print("no --key-file; set ACCESSFORGE_BACKUP_KEY_FILE", file=sys.stderr)
         return 2
 
+    # Generating a key is not taking a backup, and requiring a database URL for it was wrong.
+    # CI found this: a fixture asking only for a key got exit 2 and no key, because the database
+    # check ran first. The two operations are separable, so they are separated -- and creating the
+    # key is the step an operator performs *before* they have anything to back up.
     key_file = Path(args.key_file)
     if args.write_new_key:
         if key_file.exists():
@@ -218,6 +224,15 @@ def main(argv: list[str] | None = None) -> int:
         if len(key) != KEY_BYTES:
             print(f"{key_file} does not hold {KEY_BYTES} base64-encoded bytes", file=sys.stderr)
             return 2
+
+    if args.write_new_key and args.output is None:
+        return 0
+    if args.output is None:
+        print("no --output; pass a path for the sealed archive", file=sys.stderr)
+        return 2
+    if not args.database_url:
+        print("no database url; set ACCESSFORGE_BACKUP_DATABASE_URL", file=sys.stderr)
+        return 2
 
     taken_at = datetime.now(UTC)
     with tempfile.TemporaryDirectory() as staging_name:
