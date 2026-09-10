@@ -872,6 +872,27 @@ def record_action_intent(
     guess. Without the row, the same crash would look like nothing ever happened.
     """
     moment = _now(now)
+
+    # The epoch is checked against the lease rather than trusted from the caller. Nothing in the
+    # schema could catch a mismatch -- the foreign key binds the lease, not its epoch -- and an
+    # action journaled under the wrong epoch is an action nobody can attribute to a session, which
+    # is the whole purpose of recording the epoch at all.
+    lease = conn.execute(
+        "SELECT epoch, released_at, release_reason FROM desktop_lease WHERE id = %s",
+        (lease_id,),
+    ).fetchone()
+    if lease is None:
+        raise RunnerError("no such lease in this workspace")
+    if int(lease["epoch"]) != epoch:
+        raise RunnerError(
+            f"this action claims epoch {epoch} and the lease is at epoch {lease['epoch']}"
+        )
+    if lease["released_at"] is not None:
+        raise RunnerError(
+            f"this lease was released ({lease['release_reason']}); an action journaled against a "
+            "released lease would record work on a desktop nobody holds"
+        )
+
     action_id = str(uuid.uuid4())
     conn.execute(
         """

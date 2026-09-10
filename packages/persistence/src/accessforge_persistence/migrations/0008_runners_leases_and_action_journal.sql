@@ -215,8 +215,13 @@ CREATE TABLE IF NOT EXISTS runner_action (
     ambiguity_reason TEXT,
 
     CONSTRAINT result_is_complete CHECK ((result_at IS NULL) = (result_status IS NULL)),
+    -- Both directions. The one-way version of this check allowed an AMBIGUOUS action with no reason
+    -- recorded, which is the worst of the three states to be in: it reads as a known-bad result in
+    -- any query filtering on status while telling an operator nothing about what is unknown, and it
+    -- is the state a caller reaches by writing the row directly instead of through
+    -- mark_action_ambiguous, which is also what quarantines the desktop.
     CONSTRAINT ambiguity_is_a_result CHECK (
-        ambiguity_reason IS NULL OR result_status = 'AMBIGUOUS'
+        (ambiguity_reason IS NOT NULL) = (result_status = 'AMBIGUOUS')
     ),
     CONSTRAINT dispatch_follows_intent CHECK (dispatched_at IS NULL OR dispatched_at >= intent_at),
     FOREIGN KEY (lease_id, workspace_id) REFERENCES desktop_lease (id, workspace_id)
