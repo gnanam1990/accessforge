@@ -96,3 +96,33 @@ def test_pattern_valid_but_impossible_instants_raise_the_domain_error(value: str
     """The regex accepts shapes that are not real dates; those must not escape as ValueError."""
     with pytest.raises(TimestampError):
         parse_rfc3339_utc(value)
+
+
+def test_formatting_converts_to_utc_rather_than_assuming_it() -> None:
+    """Regression: the old formatter was `isoformat().replace("+00:00", "Z")`.
+
+    PostgreSQL returns `timestamptz` in the session timezone, so that shortcut produced
+    `2026-09-10T05:00:00-07:00` on a machine in Los Angeles — which `parse_rfc3339_utc` correctly
+    refuses. Converting first is the whole fix.
+    """
+    import datetime as dt
+
+    from accessforge_domain.timestamps import to_rfc3339_utc
+
+    pacific = dt.timezone(dt.timedelta(hours=-7))
+    value = dt.datetime(2026, 9, 10, 5, 0, 0, tzinfo=pacific)
+
+    formatted = to_rfc3339_utc(value)
+    assert formatted.endswith("Z")
+    assert formatted == "2026-09-10T12:00:00.000000Z"
+    # And the result round-trips through the parser that rejected the old output.
+    assert parse_rfc3339_utc(formatted) == value
+
+
+def test_a_naive_datetime_cannot_be_formatted() -> None:
+    import datetime as dt
+
+    from accessforge_domain.timestamps import to_rfc3339_utc
+
+    with pytest.raises(TimestampError, match="naive"):
+        to_rfc3339_utc(dt.datetime(2026, 9, 10, 12, 0, 0))
