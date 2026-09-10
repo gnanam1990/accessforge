@@ -191,7 +191,9 @@ def create_grant(
             "expiresAt is in the past; a grant that has already lapsed authorizes work "
             "nobody can do"
         )
-    if (expiry - moment).days > MAX_GRANT_DAYS:
+    # total_seconds(), not .days: `timedelta.days` truncates, so 365 days and 23 hours reads as 365
+    # and slips past a 365-day ceiling. A bound that can be exceeded by rounding is not a bound.
+    if (expiry - moment).total_seconds() > MAX_GRANT_DAYS * 86_400:
         raise GrantError(
             f"a grant may not run longer than {MAX_GRANT_DAYS} days. A standing authorization with "
             "a distant expiry is one nobody revisits, and revisiting it is the only thing that "

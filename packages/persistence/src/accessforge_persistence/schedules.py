@@ -40,6 +40,14 @@ class ScheduleError(Exception):
     """A schedule operation was refused."""
 
 
+class StaleScheduleRevision(ScheduleError):
+    """The caller's revision is not the current one.
+
+    A distinct type because it maps to a different status than every other schedule refusal: 409,
+    meaning re-read and decide again, rather than 400, meaning send a different body.
+    """
+
+
 class GrantMoved(ScheduleError):
     """The standing authorization changed since this schedule was approved."""
 
@@ -124,11 +132,34 @@ def create_schedule(
     return schedule_id
 
 
+def _lock_at_revision(
+    conn: psycopg.Connection[dict[str, Any]], *, schedule_id: str, expected_revision: int
+) -> None:
+    """Take the row lock and confirm the revision while holding it.
+
+    Every mutation below goes through this. Checking `If-Match` in the route and then updating is a
+    check and a use with a gap between them, and the gap is exactly wide enough for somebody else's
+    pause: theirs lands, this one does not notice, and the `paused_at = NULL` in a re-approval
+    reverses a deliberate stop that nobody saw.
+    """
+    row = conn.execute(
+        "SELECT revision FROM schedule WHERE id = %s FOR UPDATE", (schedule_id,)
+    ).fetchone()
+    if row is None:
+        raise ScheduleError("no such schedule in this workspace")
+    if int(row["revision"]) != expected_revision:
+        raise StaleScheduleRevision(
+            f"this schedule is at revision {row['revision']} and you supplied {expected_revision}; "
+            "it changed while this request was in flight"
+        )
+
+
 def pause(
     conn: psycopg.Connection[dict[str, Any]],
     *,
     schedule_id: str,
     actor_id: str,
+    expected_revision: int,
     now: str | None = None,
 ) -> None:
     """Stop admitting occurrences, keeping the schedule and who stopped it.
@@ -136,6 +167,7 @@ def pause(
     Paused rather than deleted: deleting loses the record that the schedule existed and that
     somebody turned it off, which is what an operator asking "why did this stop" needs.
     """
+    _lock_at_revision(conn, schedule_id=schedule_id, expected_revision=expected_revision)
     conn.execute(
         "UPDATE schedule SET paused_at = %s, paused_by = %s, revision = revision + 1 "
         "WHERE id = %s AND paused_at IS NULL",
@@ -143,7 +175,15 @@ def pause(
     )
 
 
-def resume(conn: psycopg.Connection[dict[str, Any]], *, schedule_id: str) -> None:
+def resume(
+    conn: psycopg.Connection[dict[str, Any]], *, schedule_id: str, expected_revision: int
+) -> None:
+    """Start admitting occurrences again — which is not the same as making them run.
+
+    Resuming does not revalidate the grant. The next occurrence is rechecked as every occurrence is,
+    so a schedule resumed under a revoked or unrevalidated grant still skips, with a reason.
+    """
+    _lock_at_revision(conn, schedule_id=schedule_id, expected_revision=expected_revision)
     conn.execute(
         "UPDATE schedule SET paused_at = NULL, paused_by = NULL, revision = revision + 1 "
         "WHERE id = %s",
@@ -438,6 +478,7 @@ def rebind_to_grant(
     schedule_id: str,
     grant: ExecutionGrant,
     actor_id: str,
+    expected_revision: int,
     now: str | None = None,
 ) -> None:
     """Re-approve a schedule against the grant as it now stands.
@@ -460,12 +501,12 @@ def rebind_to_grant(
     moment = _now(now)
     grant.check_usable(now=moment)
 
+    _lock_at_revision(conn, schedule_id=schedule_id, expected_revision=expected_revision)
     row = conn.execute(
-        "SELECT execution_grant_id, journey_version_id, expires_at FROM schedule "
-        "WHERE id = %s FOR UPDATE",
+        "SELECT execution_grant_id, journey_version_id, expires_at FROM schedule WHERE id = %s",
         (schedule_id,),
     ).fetchone()
-    if row is None:
+    if row is None:  # pragma: no cover - the lock above already established it exists
         raise ScheduleError("no such schedule in this workspace")
     if str(row["execution_grant_id"]) != grant.grant_id:
         raise ScheduleError("the supplied grant is not the one this schedule was created against")

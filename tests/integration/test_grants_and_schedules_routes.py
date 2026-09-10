@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -33,6 +34,7 @@ from accessforge_persistence import (
     unscoped_connection,
     workspace_connection,
 )
+from accessforge_persistence import grants as grant_store
 from accessforge_persistence import projects as project_store
 
 pytestmark = pytest.mark.integration
@@ -154,7 +156,9 @@ def _sign_in_again(db: str, client: TestClient) -> str:
     return issued.csrf_token
 
 
-def _create_grant(client: TestClient, csrf: str, project_id: str, **overrides: object) -> dict:
+def _create_grant(
+    client: TestClient, csrf: str, project_id: str, **overrides: object
+) -> httpx.Response:
     body = {
         "projectId": project_id,
         "environment": "staging",
@@ -595,14 +599,55 @@ def test_occurrences_report_a_skip_rather_than_an_absence(
     assert "indistinguishable from one that never existed" in body["meaning"]
 
 
-def test_a_grant_from_another_workspace_is_not_found(
-    db: str, client: TestClient, owner: tuple[str, str], project_id: str
-) -> None:
-    """The uniform 404: a caller must not learn that a grant exists elsewhere."""
-    _, csrf = owner
+def test_an_unknown_grant_id_is_not_found(client: TestClient, owner: tuple[str, str]) -> None:
     response = client.get(f"/v1/workspaces/{WS}/execution-grants/{uuid.uuid4()}")
     assert response.status_code == 404
     assert response.json()["code"] == "RESOURCE_NOT_FOUND"
+
+
+def test_a_grant_that_exists_in_another_workspace_is_not_found(
+    db: str, client: TestClient, owner: tuple[str, str]
+) -> None:
+    """The uniform 404, tested against a grant that genuinely exists.
+
+    A random UUID only proves that an unknown id is a 404, which is the easy half. The half that
+    matters is that a grant which *does* exist, in a workspace this caller cannot see, is
+    indistinguishable from one that does not — otherwise the response is an oracle for what other
+    tenants hold.
+    """
+    _, csrf = owner
+    other_ws = str(uuid.UUID(int=0x319))
+    with unscoped_connection(db) as conn:
+        conn.execute("INSERT INTO workspace (id, name) VALUES (%s, 'Elsewhere')", (other_ws,))
+    with workspace_connection(db, other_ws) as conn:
+        other_project = project_store.create_project(
+            conn, workspace_id=other_ws, name="Their project"
+        )
+        elsewhere = grant_store.create_grant(
+            conn,
+            workspace_id=other_ws,
+            project_id=other_project,
+            environment="staging",
+            allowed_journey_version_ids=[str(uuid.uuid4())],
+            allowed_policy_version_ids=["p1"],
+            permitted_effects=[],
+            action_budget=10,
+            wall_time_budget_seconds=60,
+            expires_at=_tomorrow(),
+        )
+
+    # It exists. Confirmed here so the assertion below is about visibility rather than existence.
+    with workspace_connection(db, other_ws) as conn:
+        assert grant_store.load_grant(conn, grant_id=elsewhere.grant.grant_id)
+
+    response = client.get(f"/v1/workspaces/{WS}/execution-grants/{elsewhere.grant.grant_id}")
+    assert response.status_code == 404
+    assert response.json()["code"] == "RESOURCE_NOT_FOUND"
+    assert elsewhere.grant.grant_id not in response.text
+
+    # And it is absent from the listing rather than shown as inaccessible.
+    listed = client.get(f"/v1/workspaces/{WS}/execution-grants").json()["items"]
+    assert elsewhere.grant.grant_id not in [g["grantId"] for g in listed]
 
 
 def test_a_restore_stops_a_schedule_and_only_two_deliberate_confirmations_restart_it(
@@ -719,3 +764,142 @@ def test_a_schedule_cannot_be_reapproved_while_its_grant_is_unusable(
     )
     assert response.status_code == 409
     assert "confirm the grant first" in response.json()["detail"]
+
+
+# --- shapes that would otherwise be accepted quietly ---------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["allowedJourneyVersionIds", "allowedPolicyVersionIds"])
+def test_a_bare_string_is_not_accepted_as_a_one_entry_scope(
+    client: TestClient, owner: tuple[str, str], project_id: str, field: str
+) -> None:
+    """A string is iterable, so `[str(v) for v in value]` turns "abc" into three entries.
+
+    Accepted, stored, and discovered only when a schedule matches none of them — a scope nobody
+    meant, made of the letters of something somebody typed.
+    """
+    _, csrf = owner
+    response = _create_grant(client, csrf, project_id, **{field: "not-a-list"})
+    assert response.status_code == 400
+    assert "must be an array" in response.json()["detail"]
+
+
+def test_a_malformed_journey_identifier_is_refused_rather_than_reaching_the_database(
+    client: TestClient, owner: tuple[str, str], project_id: str
+) -> None:
+    """A malformed UUID at a UUID comparison is a driver error and a 500."""
+    _, csrf = owner
+    response = _create_grant(client, csrf, project_id, allowedJourneyVersionIds=["not-a-uuid"])
+    assert response.status_code == 400
+    assert "not a valid identifier" in response.json()["detail"]
+
+
+def test_a_grant_of_365_days_and_23_hours_is_refused(
+    client: TestClient, owner: tuple[str, str], project_id: str
+) -> None:
+    """`timedelta.days` truncates, so this reads as exactly 365 and slips past the ceiling.
+
+    A bound that can be exceeded by rounding is not a bound.
+    """
+    _, csrf = owner
+    expiry = (datetime.now(UTC) + timedelta(days=365, hours=23)).isoformat().replace("+00:00", "Z")
+    response = _create_grant(client, csrf, project_id, expiresAt=expiry)
+    assert response.status_code == 400
+    assert "nobody revisits" in response.json()["detail"]
+
+
+def test_a_concurrent_pause_is_not_silently_undone_by_a_reapproval(
+    db: str,
+    client: TestClient,
+    owner: tuple[str, str],
+    project_id: str,
+    journey_version_id: str,
+) -> None:
+    """The check-then-use window between `If-Match` and the row lock.
+
+    The route validated the revision and the persistence function acquired the row afterwards.
+    A pause landing in that gap was accepted, unnoticed, and then reversed by the re-approval's
+    `paused_at = NULL` — somebody's deliberate stop undone by a request that never saw it. The
+    revision is now confirmed inside the transaction while the row is locked.
+
+    Simulated by sending a stale revision, which is exactly the state the loser of that race holds.
+    """
+    _, csrf = owner
+    grant = _create_grant(
+        client, csrf, project_id, allowedJourneyVersionIds=[journey_version_id]
+    ).json()
+    schedule = client.post(
+        f"/v1/workspaces/{WS}/schedules",
+        json={
+            "name": "nightly",
+            "grantId": grant["grantId"],
+            "journeyVersionId": journey_version_id,
+            "sourceRef": "main",
+            "cronExpression": "0 2 * * *",
+            "timezone": "UTC",
+            "expiresAt": grant["expiresAt"],
+        },
+        headers={CSRF_HEADER: csrf},
+    ).json()
+
+    paused = client.post(
+        f"/v1/workspaces/{WS}/schedules/{schedule['scheduleId']}/pause",
+        headers={CSRF_HEADER: csrf, "If-Match": str(schedule["revision"])},
+    ).json()
+    assert paused["pausedAt"] is not None
+
+    # A request holding the pre-pause revision, as the loser of the race would.
+    losing = client.post(
+        f"/v1/workspaces/{WS}/schedules/{schedule['scheduleId']}/reapprove",
+        headers={CSRF_HEADER: csrf, "If-Match": str(schedule["revision"])},
+    )
+    assert losing.status_code == 409
+    assert losing.json()["code"] == "STALE_REVISION"
+
+    still_paused = client.get(f"/v1/workspaces/{WS}/schedules/{schedule['scheduleId']}").json()
+    assert still_paused["pausedAt"] is not None
+
+
+def test_the_published_contract_declares_how_authentication_works(
+    client: TestClient,
+) -> None:
+    """A generated contract that declared no security would read as an open API.
+
+    Authority is resolved inside `build_context` from a cookie and a CSRF header, neither of which
+    appears in a route signature — so FastAPI cannot infer it and the document has to say it.
+    """
+    schema = client.get("/openapi.json").json()
+    schemes = schema["components"]["securitySchemes"]
+    assert schemes["sessionCookie"]["in"] == "cookie"
+    assert schemes["csrfHeader"]["in"] == "header"
+
+    mutating = schema["paths"]["/v1/workspaces/{workspace_id}/execution-grants"]["post"]
+    assert mutating["security"] == [{"sessionCookie": [], "csrfHeader": []}]
+
+    # Signing in cannot require a session.
+    assert schema["paths"]["/v1/sessions"]["post"]["security"] == []
+    assert schema["paths"]["/health/live"]["get"]["security"] == []
+
+
+def test_the_published_contract_describes_the_error_shape_that_actually_arrives(
+    client: TestClient,
+) -> None:
+    """FastAPI documents a 422 this application never returns.
+
+    `RequestValidationError` is caught and reshaped into an RFC7807 document with status 400. A
+    client generated from the old contract would branch on a field that never arrives.
+    """
+    schema = client.get("/openapi.json").json()
+    assert "HTTPValidationError" not in schema["components"].get("schemas", {})
+
+    operation = schema["paths"]["/v1/workspaces/{workspace_id}/execution-grants"]["post"]
+    assert "422" not in operation["responses"]
+    assert "400" in operation["responses"]
+    assert "application/problem+json" in operation["responses"]["400"]["content"]
+
+    problem = schema["components"]["schemas"]["ProblemDetail"]
+    assert "RESOURCE_NOT_FOUND" in problem["properties"]["code"]["enum"]
+
+    # And the real response matches the documented shape.
+    body = client.get(f"/v1/workspaces/{WS}/execution-grants/{uuid.uuid4()}").json()
+    assert set(problem["required"]) <= set(body)
