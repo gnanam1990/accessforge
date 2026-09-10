@@ -79,6 +79,11 @@ subset whose domain exists — with RFC7807 problem documents, uniform 404 for c
 If-Match on revisioned mutations, idempotent replay that rechecks authority, keyset pagination, and a
 contract generated from the live app and diffed in CI. **No CLI and no generated clients**, and the
 acceptance gate is not met: a journey has no write route and an authorized run cannot execute.
+Module 19: **implemented and locally verified**, delivery open. Durable integer event cursors over
+module 04's outbox, replay gaps reported as resets rather than short pages, snapshots that carry the
+cursor they were taken at, and schedules that pin their grant's revision and recheck it at every
+occurrence. **No SSE route is exposed and no real runner executes an occurrence** — the reconnect
+behaviour is proved against the primitives, not end to end, and schedule runtime proof is BLOCKED.
 All other modules: not started.
 
 See `docs/delivery/PLAN.md` for the full ledger.
