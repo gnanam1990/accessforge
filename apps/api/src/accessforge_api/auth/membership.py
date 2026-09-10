@@ -11,6 +11,7 @@ this function.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -95,7 +96,7 @@ def assert_route_matches_body(
 def record_audit_event(
     conn: psycopg.Connection[dict[str, Any]],
     *,
-    workspace_id: str | None,
+    workspace_id: str,
     action: str,
     target_kind: str,
     target_id: str | None,
@@ -104,17 +105,21 @@ def record_audit_event(
     actor_service: str | None = None,
     detail: dict[str, Any] | None = None,
 ) -> None:
-    """Append an audit row.
+    """Append a workspace-scoped audit row.
 
-    Denials are recorded as well as allowances: a denial that leaves no trace is indistinguishable
-    from a request nobody made, which makes probing invisible.
+    ``workspace_id`` is required. It used to be optional, with NULL meaning
+    "workspace-independent" — and because the policy read
+    ``workspace_id IS NULL OR workspace_id = current_workspace_id()``,
+    those rows were readable by **every** tenant. A sign-in row carrying an actor id and an
+    originating address was visible across the whole system. Workspace-independent events now go
+    to ``record_global_audit_event`` and a table a tenant connection can never read.
 
-    The table has no column for a token, password or reader transcript, so this function cannot
-    write one even if a caller passes something careless in ``detail`` — but callers should still
-    keep ``detail`` to identifiers and reasons.
+    Denials are recorded alongside allowances: a denial that leaves no trace is indistinguishable
+    from a request nobody made.
+
+    The table has no column for a token, password or reader transcript, so this cannot write one —
+    but callers should still keep ``detail`` to identifiers and reasons.
     """
-    import json
-
     conn.execute(
         """
         INSERT INTO audit_event
@@ -124,6 +129,43 @@ def record_audit_event(
         """,
         (
             workspace_id,
+            actor_user,
+            actor_service,
+            action,
+            target_kind,
+            target_id,
+            outcome,
+            datetime.now(UTC),
+            json.dumps(detail or {}),
+        ),
+    )
+
+
+def record_global_audit_event(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    action: str,
+    target_kind: str,
+    target_id: str | None,
+    outcome: str,
+    actor_user: str | None = None,
+    actor_service: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Append an audit row for an event that belongs to no workspace.
+
+    Sign-in, sign-out, account disable. Requires a connection with **no** workspace scope, because
+    the table's policy is the inverse of the scoped ones: readable only when no workspace is
+    established, which means an operator path rather than any tenant.
+    """
+    conn.execute(
+        """
+        INSERT INTO global_audit_event
+            (actor_user, actor_service, action, target_kind, target_id, outcome, occurred_at,
+             detail)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
             actor_user,
             actor_service,
             action,

@@ -78,6 +78,48 @@ reads application state and may submit receipts and observer assertions. The two
 asserted at import time, and every event kind has exactly one permitted producer — a kind with two
 has no separation, and a kind with none is dead contract surface.
 
+## Decision 4 — workspace-independent audit events live in their own table
+
+Added during independent review, after a confirmed cross-tenant leak.
+
+`audit_event`'s policy originally read `workspace_id IS NULL OR workspace_id = current_workspace_id()`
+so that sign-in events, which belong to no workspace, could be stored alongside scoped ones. But
+`workspace_id IS NULL` evaluates TRUE under every session's policy, so **every tenant could read
+every workspace-independent row** — including the actor id and whatever a caller had put in `detail`.
+Reproduced: two separate workspaces both read the same sign-in row with its user id and originating
+address.
+
+Workspace-independent events now live in `global_audit_event`, whose policy is the inverse:
+`current_workspace_id() IS NULL`. A tenant connection sees nothing there, ever; the operator path
+(no workspace scope) sees it normally. `audit_event.workspace_id` is now `NOT NULL`, so the carve-out
+cannot return, and `record_audit_event` requires a workspace rather than accepting `None`.
+
+The lesson worth recording is about the test, not the schema: the original isolation test for this
+table read `SELECT * FROM audit_event WHERE workspace_id IS NOT NULL`, and that predicate is exactly
+what hid the bug. Every other table's isolation test deliberately runs with **no** predicate, because
+the threat is a forgotten predicate. A test that avoids the failure it exists to catch is worse than
+no test, because it also reports success.
+
+## Decision 5 — a user may enumerate their own memberships
+
+Also from review. `workspace_membership` is workspace-scoped, so an unscoped connection saw zero
+rows — meaning there was **no way for a signed-in person to discover which workspaces they belong
+to**, and a post-login workspace picker was impossible. `unscoped_connection`'s docstring claimed to
+support exactly this, which was simply false.
+
+The risk was not the missing feature but what closing it would tempt: module 18 hitting this wall and
+reaching for a bypass role, a `NO FORCE` exception, or a broad `SECURITY DEFINER` shim — any of which
+would weaken the model to unblock a workspace picker.
+
+Rather than add a bypass, the policy is widened by exactly one predicate: a caller may also read
+membership rows that are **their own**, via a second session variable set by `user_connection`. Two
+properties keep this narrow, and both are tested:
+
+* Only `workspace_membership` consults the user scope. Enrollment credentials, devices, environment
+  authorizations and audit rows stay invisible, so identifying a user is not a general-purpose bypass.
+* `WITH CHECK` still demands a workspace scope. Reading your own memberships is safe; granting one is
+  not.
+
 ## Consequences
 
 Every workspace-scoped query now needs a scoped connection. `unscoped_connection` exists for
