@@ -106,6 +106,7 @@
     },
     "/health/ready": {
       "get": {
+        "description": "Every dependency this process needs, plus one it deliberately does not claim.\n\n`desktopRunner` is reported separately from `dependencies` on purpose. Anything inside\n`dependencies` contributes to the overall verdict; the runner note contributes nothing,\nbecause this probe has no way to establish that a machine somewhere is attached and able to\ndrive a real screen reader. Folding it in either way would be a lie -- as a passing check it\nclaims a desktop, and as a failing one it makes a healthy control plane look broken.",
         "operationId": "ready_health_ready_get",
         "responses": {
           "200": {

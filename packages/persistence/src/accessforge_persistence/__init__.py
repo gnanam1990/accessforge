@@ -34,6 +34,7 @@ __all__ = [
     "RowLevelSecurityNotEnforced",
     "applied_migrations",
     "assert_row_level_security_enforced",
+    "expected_migrations",
     "connect",
     "migrate",
     "unscoped_connection",
@@ -103,6 +104,17 @@ def _migration_paths() -> list[Path]:
     # orders are identical, and returning the numeric one means a future change to that requirement
     # cannot silently reintroduce out-of-order application.
     return [numbers[n] for n in sorted(numbers)]
+
+
+def expected_migrations() -> tuple[str, ...]:
+    """The migration names this tree ships, in execution order.
+
+    The counterpart to :func:`applied_migrations`, which reads a database. Comparing the two is how
+    readiness answers "can this code serve this data" — and the comparison is only meaningful if
+    both sides are lists of the same thing, so this reuses the same validated series the migrator
+    applies rather than globbing the directory a second time with different rules.
+    """
+    return tuple(path.name for path in _migration_paths())
 
 
 class RowLevelSecurityNotEnforced(RuntimeError):

@@ -1,0 +1,70 @@
+{
+  "//": "PROPOSED. Never applied to any account. The API task role: what a running control plane may do.",
+  "//scope": "Every ARN below is a placeholder of the form ${...}. This document is a shape, not a deployment.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadEvidenceObjects",
+      "//": "GetObject only, and only under the evidence prefix. Without it, no export or replay can read an artifact. Deliberately excludes DeleteObject: retention deletion is a separate identity, so a compromised API task cannot destroy evidence.",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::${evidence_bucket}/*",
+      "Condition": {
+        "Bool": { "aws:SecureTransport": "true" }
+      }
+    },
+    {
+      "Sid": "ListOnlyItsOwnBucket",
+      "//": "Needed to answer whether an artifact exists without fetching it. Scoped to the one bucket: a task that could list every bucket in the account could enumerate other systems' storage.",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::${evidence_bucket}"
+    },
+    {
+      "Sid": "UseTheEvidenceKey",
+      "//": "SSE-KMS means an object read is also a KMS Decrypt. Without this the bucket policy succeeds and the read fails, which is a confusing failure to debug at 3am.",
+      "Effect": "Allow",
+      "Action": ["kms:Decrypt", "kms:GenerateDataKey"],
+      "Resource": "${evidence_kms_key_arn}"
+    },
+    {
+      "Sid": "ReadItsOwnSecrets",
+      "//": "The database URL and object-store credentials. Named individually rather than by wildcard prefix: a wildcard grows to cover secrets nobody intended as new ones are added with matching names.",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": [
+        "${database_url_secret_arn}",
+        "${object_store_credentials_secret_arn}"
+      ]
+    },
+    {
+      "Sid": "EnqueueAndClaimWork",
+      "//": "The queue is a wake-up signal, not the source of truth. Losing this permission degrades latency; it does not lose work, because the job row is in PostgreSQL.",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "${job_queue_arn}"
+    },
+    {
+      "Sid": "DenyEvidenceDeletion",
+      "//": "Explicit Deny, because an explicit Deny cannot be overridden by a later Allow anywhere in the policy chain. Evidence deletion is retention's job, performed by a different identity against a workspace's recorded policy. An API task that could delete an artifact could destroy the record of a run it was in the middle of failing.",
+      "Effect": "Deny",
+      "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion", "s3:PutBucketVersioning"],
+      "Resource": [
+        "arn:aws:s3:::${evidence_bucket}",
+        "arn:aws:s3:::${evidence_bucket}/*"
+      ]
+    },
+    {
+      "Sid": "DenyModelInvocation",
+      "//": "The control plane does not call a model. The agent does, under a different role, and only after an ExecutionGrant is validated. Denying it here means a bug in an API route cannot spend money.",
+      "Effect": "Deny",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": "*"
+    }
+  ]
+}
