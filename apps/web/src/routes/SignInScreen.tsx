@@ -27,8 +27,8 @@ import { FormField } from '../components/FormField'
 import { Notice } from '../components/Notice'
 import { RouteHeading } from '../a11y/RouteHeading'
 import { DependencyUnavailableState } from '../components/states'
-import type { Problem } from '../api/problem'
 import { useSession } from '../session/SessionProvider'
+import type { SignInFailure } from '../session/SessionProvider'
 
 export const SignInScreen = (): JSX.Element => {
   const { state, signIn } = useSession()
@@ -66,9 +66,15 @@ export const SignInScreen = (): JSX.Element => {
 
     setBusy(true)
     setError(null)
-    const problem: Problem | null = await signIn(email.trim())
+    const failure: SignInFailure | null = await signIn(email.trim())
     setBusy(false)
-    if (problem !== null) setError(problem.detail)
+    if (failure === null) return
+    setError(
+      failure.kind === 'unreachable'
+        ? 'The sign-in request did not reach the server, so nothing was changed by it. Check your ' +
+            'connection and try again.'
+        : failure.problem.detail,
+    )
   }
 
   return (
@@ -115,9 +121,17 @@ export const SignInScreen = (): JSX.Element => {
         </Button>
       </form>
 
-      {state.status === 'unreachable' && (
-        <Notice tone="warning" heading="No connection to the server" headingLevel={2} live>
-          <p>The sign-in request did not reach the server, so nothing was changed by it.</p>
+      {state.status === 'anonymous' && state.signOutUnconfirmed && (
+        <Notice tone="warning" heading="Your sign-out was not confirmed" headingLevel={2} live>
+          <p>
+            This browser has been cleared, so nothing of your workspace is shown here. The server
+            never confirmed that the session itself was ended, which means it may still be usable by
+            anyone holding a copy of it.
+          </p>
+          <p className="af-secondary">
+            If you are on a machine other people can reach, sign in again and sign out from a working
+            connection, or ask an owner to end your sessions.
+          </p>
         </Notice>
       )}
     </main>

@@ -29,6 +29,11 @@ import type { ReactNode } from 'react'
 
 const MAX_PENDING = 3
 
+interface PendingMessage {
+  readonly id: number
+  readonly text: string
+}
+
 interface AnnouncerApi {
   readonly announce: (message: string) => void
 }
@@ -36,13 +41,16 @@ interface AnnouncerApi {
 const AnnouncerContext = createContext<AnnouncerApi | null>(null)
 
 export const AnnouncerProvider = ({ children }: { readonly children: ReactNode }): JSX.Element => {
-  const [messages, setMessages] = useState<readonly string[]>([])
+  const [messages, setMessages] = useState<readonly PendingMessage[]>([])
   const last = useRef<string | null>(null)
+  const nextId = useRef(0)
 
   const announce = useCallback((message: string) => {
     if (message === last.current) return
     last.current = message
-    setMessages((current) => [...current, message].slice(-MAX_PENDING))
+    nextId.current += 1
+    const entry = { id: nextId.current, text: message }
+    setMessages((current) => [...current, entry].slice(-MAX_PENDING))
   }, [])
 
   const api = useMemo(() => ({ announce }), [announce])
@@ -51,10 +59,14 @@ export const AnnouncerProvider = ({ children }: { readonly children: ReactNode }
     <AnnouncerContext.Provider value={api}>
       {children}
       <div aria-live="polite" aria-atomic="false" className="af-visually-hidden">
-        {messages.map((message, index) => (
-          // The index is part of the key deliberately: two identical announcements separated by a
-          // third must both be read, and a key based on the text alone would collapse them.
-          <p key={`${index}-${message}`}>{message}</p>
+        {messages.map((message) => (
+          // Keyed by a monotonic id, not by position or text. Position changes for every retained
+          // message as soon as the queue is full and shifts, which recreates their <p> elements —
+          // and a live region reads a recreated node again. The result would be the fourth
+          // announcement re-reading the second and third, which is precisely the flood this
+          // component exists to prevent. Text alone would collapse two identical announcements that
+          // were separated by a third, and both of those should be read.
+          <p key={message.id}>{message.text}</p>
         ))}
       </div>
     </AnnouncerContext.Provider>

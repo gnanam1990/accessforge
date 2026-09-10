@@ -37,6 +37,13 @@ export interface DialogProps {
   readonly actions: ReactNode
 }
 
+/** Return focus to `target`, but only while it is still in the document. */
+const restoreFocus = (target: HTMLElement | null): void => {
+  // Focusing a detached node silently sends focus to `<body>`, which is exactly the "focus lost
+  // after unmount" failure this guards against.
+  if (target !== null && document.contains(target)) target.focus()
+}
+
 export const Dialog = ({
   open,
   heading,
@@ -46,6 +53,9 @@ export const Dialog = ({
 }: DialogProps): JSX.Element => {
   const ref = useRef<HTMLDialogElement | null>(null)
   const returnTo = useRef<HTMLElement | null>(null)
+  /** Set while this component is the one calling `close()`, so the native `close` event that
+   * results is recognised as an echo rather than a second request to close. */
+  const closingOurselves = useRef(false)
   const headingId = useId()
 
   useEffect(() => {
@@ -64,15 +74,35 @@ export const Dialog = ({
     }
 
     if (!open && element.open) {
-      if (typeof element.close === 'function') element.close()
-      else element.removeAttribute('open')
-      const target = returnTo.current
-      // Only if it is still in the document. Focusing a detached node silently sends focus to
-      // `<body>`, which is exactly the "focus lost after unmount" failure.
-      if (target !== null && document.contains(target)) target.focus()
+      closingOurselves.current = true
+      if (typeof element.close === 'function') {
+        element.close()
+      } else {
+        // The degraded path mirrors the native one, `close` event included. Without the event the
+        // fallback would be quieter than the real element — and the guard against the duplicate
+        // callback would be untestable in exactly the environment the tests run in, which is how a
+        // guard ends up shipping unexercised.
+        element.removeAttribute('open')
+        element.dispatchEvent(new Event('close'))
+      }
+      closingOurselves.current = false
+      restoreFocus(returnTo.current)
       returnTo.current = null
     }
   }, [open])
+
+  useEffect(
+    () =>
+      // Unmount cleanup, because `{open && <Dialog />}` is the obvious way to write a caller — and
+      // it removes the element without ever rendering `open={false}`, so the branch above never
+      // runs. Focus would be left on a node that no longer exists, which means `<body>`, which means
+      // a keyboard user starts again from the top of the page.
+      () => {
+        restoreFocus(returnTo.current)
+        returnTo.current = null
+      },
+    [],
+  )
 
   return (
     <dialog
@@ -85,7 +115,14 @@ export const Dialog = ({
         event.preventDefault()
         onClose()
       }}
-      onClose={onClose}
+      onClose={() => {
+        // The native `close` event fires both when the browser closes the dialog and when this
+        // component does. Only the first is a request; the second is the echo of one already
+        // handled, and calling back for it would run the caller's close path twice — closing
+        // whatever they opened next, in the worst case.
+        if (closingOurselves.current) return
+        onClose()
+      }}
     >
       <div className="af-stack">
         <h2 id={headingId} className="af-notice__heading">

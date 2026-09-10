@@ -28,6 +28,8 @@ export interface FakeServer {
   releaseSession: () => void
   /** What `POST /v1/sessions` answers. */
   setSignInOutcome: (outcome: 'succeeds' | 'refused' | 'no-provider') => void
+  /** Make `DELETE /v1/session` fail without revoking anything, as an unreachable server would. */
+  setSignOutFails: (fails: boolean) => void
   readonly calls: readonly string[]
 }
 
@@ -45,6 +47,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
   let session = initial
   let offline = false
   let signInOutcome: 'succeeds' | 'refused' | 'no-provider' = 'succeeds'
+  let signOutFails = false
   let gate: Promise<void> | null = null
   let open: (() => void) | null = null
   const calls: string[] = []
@@ -71,6 +74,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     setSignInOutcome: (outcome) => {
       signInOutcome = outcome
     },
+    setSignOutFails: (fails) => {
+      signOutFails = fails
+    },
     fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input.toString()
       const method = init?.method ?? 'GET'
@@ -90,6 +96,11 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       }
 
       if (url.endsWith('/v1/session') && method === 'DELETE') {
+        if (signOutFails) {
+          // The session deliberately stays live: that is the whole point of the case. The browser
+          // was cleared and the server never revoked anything.
+          return problem(503, 'DEPENDENCY_UNAVAILABLE', 'the store is unavailable', 'Unavailable')
+        }
         session = null
         return new Response(null, { status: 204 })
       }

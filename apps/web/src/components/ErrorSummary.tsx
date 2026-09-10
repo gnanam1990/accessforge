@@ -21,7 +21,7 @@
 
 import type { JSX } from 'react'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 
 export interface FieldError {
   readonly fieldId: string
@@ -41,6 +41,10 @@ export const ErrorSummary = ({
   heading = 'This form could not be submitted',
 }: ErrorSummaryProps): JSX.Element | null => {
   const ref = useRef<HTMLDivElement | null>(null)
+  // Generated, not fixed. A page with two forms would otherwise have two elements sharing one id,
+  // and `aria-labelledby` resolves to the first — so one summary would be announced with the other
+  // one's heading.
+  const headingId = useId()
 
   useEffect(() => {
     if (errors.length === 0) return
@@ -59,10 +63,10 @@ export const ErrorSummary = ({
       // extra stop everyone must tab past on every visit.
       tabIndex={-1}
       role="alert"
-      aria-labelledby="af-error-summary-heading"
+      aria-labelledby={headingId}
       className="af-error-summary"
     >
-      <h2 id="af-error-summary-heading" className="af-notice__heading">
+      <h2 id={headingId} className="af-notice__heading">
         {heading}
       </h2>
       <ul>

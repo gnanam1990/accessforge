@@ -31,7 +31,14 @@ import { readSession, signIn as postSession, signOut as deleteSession } from '..
 
 export type SessionState =
   | { readonly status: 'checking' }
-  | { readonly status: 'anonymous'; readonly endedBecause: 'never-signed-in' | 'session-ended' }
+  | {
+      readonly status: 'anonymous'
+      readonly endedBecause: 'never-signed-in' | 'session-ended'
+      /** True when sign-out cleared this browser but the server never confirmed the revocation.
+       * The tenant data is gone from the screen either way; what is unknown is whether the session
+       * is still usable, which matters on a shared or stolen machine. */
+      readonly signOutUnconfirmed: boolean
+    }
   | {
       readonly status: 'authenticated'
       readonly userId: string
@@ -48,9 +55,17 @@ export interface SessionApi {
   readonly state: SessionState
   readonly client: ApiClient
   readonly refresh: () => Promise<void>
-  readonly signIn: (email: string) => Promise<Problem | null>
+  readonly signIn: (email: string) => Promise<SignInFailure | null>
   readonly signOut: () => Promise<void>
 }
+
+/** Why a sign-in attempt did not produce a session. */
+export type SignInFailure =
+  | { readonly kind: 'refused'; readonly problem: Problem }
+  /** The request never reached the server, so nothing was decided. Reported to the sign-in screen
+   * rather than promoted to the shared session state: promoting it unmounts the screen, which
+   * discards the address the person just typed and the message explaining why. */
+  | { readonly kind: 'unreachable' }
 
 const SessionContext = createContext<SessionApi | null>(null)
 
@@ -89,7 +104,11 @@ export const SessionProvider = ({
         applyPayload(outcome.value)
         break
       case 'unauthenticated':
-        setState({ status: 'anonymous', endedBecause: 'session-ended' })
+        setState({
+          status: 'anonymous',
+          endedBecause: 'session-ended',
+          signOutUnconfirmed: false,
+        })
         break
       case 'offline':
         setState({ status: 'unreachable' })
@@ -99,7 +118,11 @@ export const SessionProvider = ({
         break
       case 'accepted':
       case 'problem':
-        setState({ status: 'anonymous', endedBecause: 'never-signed-in' })
+        setState({
+          status: 'anonymous',
+          endedBecause: 'never-signed-in',
+          signOutUnconfirmed: false,
+        })
         break
     }
   }, [applyPayload, client])
@@ -110,7 +133,7 @@ export const SessionProvider = ({
   }, [refresh])
 
   const signIn = useCallback(
-    async (email: string): Promise<Problem | null> => {
+    async (email: string): Promise<SignInFailure | null> => {
       const outcome = await postSession(client, email)
       switch (outcome.kind) {
         case 'ok':
@@ -118,17 +141,20 @@ export const SessionProvider = ({
           await refresh()
           return null
         case 'unauthenticated':
-          return outcome.problem
+          return { kind: 'refused', problem: outcome.problem }
         case 'problem':
           if (outcome.problem.code === 'DEPENDENCY_UNAVAILABLE') {
             // Not a rejected credential. The deployment cannot sign anyone in at all, and the
             // screen has to say that rather than inviting a second attempt.
             setState({ status: 'signInUnavailable', problem: outcome.problem })
           }
-          return outcome.problem
+          return { kind: 'refused', problem: outcome.problem }
         case 'offline':
-          setState({ status: 'unreachable' })
-          return null
+          // Deliberately *not* `setState({ status: 'unreachable' })`. That is a shared-state change,
+          // and it unmounts the sign-in screen — taking with it the address the person just typed
+          // and the notice explaining what went wrong. A failure to reach the server during
+          // sign-in is the sign-in screen's problem to report.
+          return { kind: 'unreachable' }
         case 'cancelled':
         case 'stale':
           return null
@@ -142,9 +168,19 @@ export const SessionProvider = ({
     // signed out here, which is the safe direction: leaving a shared machine showing a workspace
     // because a sign-out request timed out is the failure that actually hurts someone.
     inFlight.current?.abort()
-    setState({ status: 'anonymous', endedBecause: 'session-ended' })
+    setState({ status: 'anonymous', endedBecause: 'session-ended', signOutUnconfirmed: false })
     client.endSession()
-    await deleteSession(client)
+
+    // But clearing the screen is not revocation. If the request never reached the server, or the
+    // server refused it, the session cookie is gone from this browser and the session itself is
+    // still live — reachable by anyone holding a copy of the token, and restorable by a reload if
+    // the cookie survived. Telling the person "you are signed out" would be a claim this code
+    // cannot support, so the unconfirmed case says exactly that and offers to try again.
+    const outcome = await deleteSession(client)
+    const confirmed = outcome.kind === 'ok' || outcome.kind === 'unauthenticated'
+    if (!confirmed) {
+      setState({ status: 'anonymous', endedBecause: 'session-ended', signOutUnconfirmed: true })
+    }
   }, [client])
 
   const api = useMemo(

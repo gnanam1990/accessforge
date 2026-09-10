@@ -148,6 +148,22 @@ describe('ErrorSummary', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
+  it('gives each instance its own heading id', () => {
+    render(
+      <>
+        <ErrorSummary submissionId={1} errors={[{ fieldId: 'a', message: 'First form.' }]} />
+        <ErrorSummary submissionId={1} errors={[{ fieldId: 'b', message: 'Second form.' }]} />
+      </>,
+    )
+    const [first, second] = screen.getAllByRole('alert')
+    // Two elements sharing one id means `aria-labelledby` resolves to the first, so one summary is
+    // announced with the other one's heading.
+    const firstId = first?.getAttribute('aria-labelledby')
+    const secondId = second?.getAttribute('aria-labelledby')
+    expect(firstId).not.toBe(secondId)
+    expect(document.querySelectorAll(`#${CSS.escape(firstId as string)}`)).toHaveLength(1)
+  })
+
   it('is not in the tab order', async () => {
     render(
       <>
@@ -226,6 +242,64 @@ describe('Dialog', () => {
     expect(trigger).toHaveFocus()
   })
 
+  it('restores focus when the caller unmounts it instead of closing it', async () => {
+    // `{open && <Dialog />}` is the obvious way to write a caller, and it removes the element
+    // without ever rendering open={false}. Focus would be left on a node that no longer exists,
+    // which means <body>, which means a keyboard user starts again from the top of the page.
+    const Conditional = ({ open }: { readonly open: boolean }): JSX.Element => (
+      <>
+        <button type="button">Opener</button>
+        {open && (
+          <Dialog
+            open
+            heading="Approve"
+            onClose={() => undefined}
+            actions={<button type="button">Inside</button>}
+          >
+            <p>body</p>
+          </Dialog>
+        )}
+      </>
+    )
+    const { rerender } = render(<Conditional open={false} />)
+    const opener = screen.getByRole('button', { name: 'Opener' })
+    opener.focus()
+
+    rerender(<Conditional open />)
+    // Focus has to actually be inside the dialog for the restore to mean anything. jsdom has no
+    // `showModal`, so nothing moves it there on its own, and a test that skipped this step would
+    // pass with the restore deleted.
+    screen.getByRole('button', { name: 'Inside' }).focus()
+
+    rerender(<Conditional open={false} />)
+    expect(opener).toHaveFocus()
+  })
+
+  it('calls onClose once when the browser cancels it, not twice', async () => {
+    const onClose = vi.fn()
+    const Harness = (): JSX.Element => {
+      const [open, setOpen] = useState(true)
+      return (
+        <Dialog
+          open={open}
+          heading="Approve"
+          onClose={() => {
+            onClose()
+            setOpen(false)
+          }}
+          actions={<span />}
+        >
+          <p>body</p>
+        </Dialog>
+      )
+    }
+    render(<Harness />)
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    // The native `close` event fires again when this component closes the element. Calling back for
+    // that echo would run the caller's close path twice, closing whatever they opened next.
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('offers consequence-named actions and no generic Confirm', async () => {
     const user = userEvent.setup()
     render(<DialogHarness />)
@@ -275,6 +349,25 @@ describe('Tabs', () => {
 
     await user.keyboard('{End}')
     expect(screen.getByRole('tab', { name: 'Evidence' })).toHaveFocus()
+  })
+
+  it('falls back to the first tab when the requested one does not exist', () => {
+    render(
+      <Tabs
+        label="Run detail"
+        selectedId="a-tab-that-was-removed"
+        onSelect={() => undefined}
+        tabs={[
+          { id: 'manifest', label: 'Manifest', content: <p>Manifest contents</p> },
+          { id: 'timeline', label: 'Timeline', content: <p>Timeline contents</p> },
+        ]}
+      />,
+    )
+    // The panel and the tab must agree. Showing the first panel while every tab reports itself
+    // unselected leaves a group with nothing in the tab order — a widget a keyboard cannot reach.
+    expect(screen.getByRole('tab', { name: 'Manifest' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Manifest' })).toHaveAttribute('tabindex', '0')
+    expect(screen.getByRole('tabpanel', { name: 'Manifest' })).toBeVisible()
   })
 
   it('labels each panel with its tab', () => {

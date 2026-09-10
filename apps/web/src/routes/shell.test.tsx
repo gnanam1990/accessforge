@@ -137,6 +137,23 @@ describe('sign-in', () => {
     expect(server.calls.filter((call) => call.includes('POST'))).toHaveLength(0)
   })
 
+  it('keeps the form and the typed address when the sign-in request cannot reach the server', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(null)
+    renderApp(server)
+
+    const field = await screen.findByLabelText(/Email address/)
+    await user.type(field, 'engineer@example.test')
+    server.setOffline(true)
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    // Promoting this to the shared session state unmounts the sign-in screen, which takes the
+    // address the person just typed and the explanation with it.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/did not reach the server/)
+    expect(screen.getByLabelText(/Email address/)).toHaveValue('engineer@example.test')
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+  })
+
   it('replaces the form with an explanation when the deployment has no identity provider', async () => {
     const user = userEvent.setup()
     const server = createFakeServer(null)
@@ -171,6 +188,21 @@ describe('the workspace shell', () => {
       'Alder (owner)',
       'Zebra (viewer)',
     ])
+  })
+
+  it('marks only the exact page as current, not every page beneath it', async () => {
+    const server = createFakeServer(MEMBER)
+    renderApp(server, ['/w/ws-alder/projects/p-1'])
+    await screen.findByRole('heading', { level: 1, name: 'Project' })
+
+    const nav = screen.getByRole('navigation', { name: 'Workspace sections' })
+    // `aria-current` is how a screen-reader user establishes where they are. Marking Projects while
+    // the project detail screen is showing tells them they are somewhere they are not.
+    expect(
+      within(nav)
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('aria-current') === 'page'),
+    ).toHaveLength(0)
   })
 
   it('shows breadcrumbs that end at the current page without linking to it', async () => {
@@ -379,6 +411,39 @@ describe('tenancy and the end of a session', () => {
       expect(screen.getByLabelText(/Email address/)).toBeInTheDocument()
     })
     expect(screen.queryByText('Alder')).not.toBeInTheDocument()
+  })
+
+  it('says so when sign-out cleared the browser but the server never confirmed it', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    renderApp(server, ['/w/ws-alder/overview'])
+    await screen.findByRole('heading', { level: 1, name: 'Overview' })
+
+    server.setSignOutFails(true)
+    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    // The tenant data goes either way — that is the part that protects a shared machine.
+    await screen.findByLabelText(/Email address/)
+    expect(screen.queryByText('Alder')).not.toBeInTheDocument()
+
+    // But claiming the session ended would be a claim this code cannot support: the cookie is gone
+    // from here and the session is still live for anyone holding a copy of the token.
+    expect(
+      await screen.findByRole('heading', { name: 'Your sign-out was not confirmed' }),
+    ).toBeVisible()
+  })
+
+  it('does not claim an unconfirmed sign-out when the server did confirm it', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    renderApp(server, ['/w/ws-alder/overview'])
+    await screen.findByRole('heading', { level: 1, name: 'Overview' })
+
+    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    await screen.findByLabelText(/Email address/)
+    expect(
+      screen.queryByRole('heading', { name: 'Your sign-out was not confirmed' }),
+    ).not.toBeInTheDocument()
   })
 
   it('drops a revoked membership from the navigation on the next session read', async () => {

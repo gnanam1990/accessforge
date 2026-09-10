@@ -26,7 +26,12 @@ const List = ({ workspaceId }: { readonly workspaceId: string }): JSX.Element =>
   <ul className="af-nav-list">
     {items.map((route) => (
       <li key={route.path}>
-        <NavLink to={workspacePath(workspaceId, route.path)}>{route.label}</NavLink>
+        {/* `end` so the match is exact. Without it, /projects/p-1 marks the Projects entry as the
+            current page while the project detail screen is the one showing, and `aria-current` is
+            how a screen-reader user establishes where they are. */}
+        <NavLink end to={workspacePath(workspaceId, route.path)}>
+          {route.label}
+        </NavLink>
       </li>
     ))}
   </ul>

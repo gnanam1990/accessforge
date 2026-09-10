@@ -196,6 +196,77 @@ describe('the session epoch', () => {
   })
 })
 
+describe('the window between the headers and the body', () => {
+  /** A response whose headers have arrived and whose body never finishes. */
+  const responseWithBody = (body: () => Promise<string>): Response =>
+    ({
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: body,
+    }) as unknown as Response
+
+  it('reports an abort during the body read as cancelled, not as an empty success', async () => {
+    // `Response.text()` rejects with an AbortError when the signal fires after the headers arrive.
+    // Swallowing that produced `{ kind: 'ok', value: null }` — a successful-looking response
+    // carrying nothing, which is the empty result this whole type exists to make impossible.
+    const controller = new AbortController()
+    const client = clientWith(
+      fetchMock(async () =>
+        responseWithBody(async () => {
+          controller.abort()
+          throw new DOMException('aborted', 'AbortError')
+        }),
+      ) as unknown as typeof fetch,
+    )
+    const outcome = await client.request('/v1/projects', { signal: controller.signal })
+    expect(outcome.kind).toBe('cancelled')
+  })
+
+  it('reports a session that ended during the body read as stale', async () => {
+    let client: ApiClient
+    client = clientWith(
+      fetchMock(async () =>
+        responseWithBody(async () => {
+          client.endSession()
+          return JSON.stringify({ secret: 'previous tenant' })
+        }),
+      ) as unknown as typeof fetch,
+    )
+    const outcome = await client.request('/v1/projects')
+    expect(outcome.kind).toBe('stale')
+    expect('value' in outcome).toBe(false)
+  })
+
+  it('reports a body that never finished transferring as offline', async () => {
+    const client = clientWith(
+      fetchMock(async () =>
+        responseWithBody(async () => {
+          throw new TypeError('network error while reading body')
+        }),
+      ) as unknown as typeof fetch,
+    )
+    const outcome = await client.request('/v1/projects')
+    // The headers arrived, so this is the one case that reaches `response.ok` and still has no
+    // result. It is a network failure, not an empty document.
+    expect(outcome.kind).toBe('offline')
+  })
+
+  it('still treats a body that arrived but is not JSON as a document, not a transfer failure', async () => {
+    const client = clientWith(
+      fetchMock(
+        async () =>
+          new Response('<html>502</html>', {
+            status: 502,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ) as unknown as typeof fetch,
+    )
+    const outcome = await client.request('/v1/projects')
+    expect(outcome.kind).toBe('problem')
+  })
+})
+
 describe('request construction', () => {
   it('sends the CSRF token from the cookie on a mutation', async () => {
     const fetchImpl = fetchMock(async () => jsonResponse(200, {}))

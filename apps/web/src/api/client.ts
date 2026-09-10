@@ -160,7 +160,20 @@ export class ApiClient {
       return { kind: 'ok', value: undefined as T, status: 204 }
     }
 
-    const payload = await this.#readJson(response)
+    const body = await this.#readJson(response)
+
+    // Checked again *after* the body read, not only after the headers. `Response.text()` rejects
+    // with an AbortError when the signal fires between the headers arriving and the body finishing,
+    // and the session can end in that same window. Without this, an aborted or superseded read
+    // returned `{ kind: 'ok', value: null }` — a successful-looking response carrying nothing, which
+    // is the empty list this whole type exists to make impossible.
+    if (options.signal?.aborted === true) return { kind: 'cancelled' }
+    if (epochAtStart !== this.#epoch) return { kind: 'stale' }
+    // A body that never finished transferring is a network failure, not an empty document. The
+    // headers had already arrived, so this is the one case where a request reaches `response.ok`
+    // and is still not a result.
+    if (!body.transferred) return { kind: 'offline' }
+    const payload = body.value
 
     if (response.ok) {
       if (response.status === 202) return { kind: 'accepted', value: payload as T }
@@ -177,14 +190,28 @@ export class ApiClient {
     return { kind: 'problem', problem }
   }
 
-  async #readJson(response: Response): Promise<unknown> {
+  /**
+   * Read and parse the body, distinguishing *did not arrive* from *did not parse*.
+   *
+   * They are different failures with different answers. A body that failed to transfer means the
+   * request has no result at all; a body that arrived and is not JSON — a proxy's HTML error page
+   * under a JSON content type — is a document `parseProblem` can still turn into an honest problem
+   * rather than an exception thrown inside the error path. Collapsing both into `null` is what made
+   * an aborted read look like a successful empty one.
+   */
+  async #readJson(
+    response: Response,
+  ): Promise<{ readonly transferred: boolean; readonly value: unknown }> {
+    let text: string
     try {
-      const text = await response.text()
-      return text.length === 0 ? null : (JSON.parse(text) as unknown)
+      text = await response.text()
     } catch {
-      // An unparseable body from a proxy or a crashed worker. Returning null lets `parseProblem`
-      // produce an honest document instead of this throwing inside the error path.
-      return null
+      return { transferred: false, value: null }
+    }
+    try {
+      return { transferred: true, value: text.length === 0 ? null : (JSON.parse(text) as unknown) }
+    } catch {
+      return { transferred: true, value: null }
     }
   }
 }

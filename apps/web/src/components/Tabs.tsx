@@ -39,10 +39,16 @@ export interface TabsProps {
 export const Tabs = ({ tabs, selectedId, onSelect, label }: TabsProps): JSX.Element => {
   const base = useId()
   const refs = useRef(new Map<string, HTMLButtonElement>())
+  // The effective selection, which is not always the requested one: a `selectedId` that names no
+  // tab falls back to the first. Deriving it once and using it for the panel, `aria-selected` and
+  // `tabIndex` alike keeps them agreeing. Comparing against the raw `selectedId` instead would show
+  // the first panel while every tab reported itself unselected and none was in the tab order — a
+  // group a keyboard could not reach at all.
   const index = Math.max(
     0,
     tabs.findIndex((tab) => tab.id === selectedId),
   )
+  const effectiveId = tabs[index]?.id ?? selectedId
 
   const move = (to: number): void => {
     const wrapped = (to + tabs.length) % tabs.length
@@ -65,9 +71,9 @@ export const Tabs = ({ tabs, selectedId, onSelect, label }: TabsProps): JSX.Elem
             type="button"
             role="tab"
             id={`${base}-tab-${tab.id}`}
-            aria-selected={tab.id === selectedId}
+            aria-selected={tab.id === effectiveId}
             aria-controls={`${base}-panel-${tab.id}`}
-            tabIndex={tab.id === selectedId ? 0 : -1}
+            tabIndex={tab.id === effectiveId ? 0 : -1}
             className="af-tabs__tab"
             onClick={() => onSelect(tab.id)}
             onKeyDown={(event) => {
@@ -103,7 +109,7 @@ export const Tabs = ({ tabs, selectedId, onSelect, label }: TabsProps): JSX.Elem
           role="tabpanel"
           id={`${base}-panel-${tab.id}`}
           aria-labelledby={`${base}-tab-${tab.id}`}
-          hidden={tab.id !== tabs[index]?.id}
+          hidden={tab.id !== effectiveId}
           tabIndex={0}
         >
           {tab.content}
