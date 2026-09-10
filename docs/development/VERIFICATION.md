@@ -72,7 +72,7 @@ leaves neither a half-applied schema nor a false record of success. The integrat
 | Contract | `uv run pytest tests/contract -q` | Schema validation, RFC8785 canonicalization, and Python/TypeScript digest agreement |
 | Binding drift | `uv run python scripts/generate_contract_bindings.py --check` | Generated bindings still match the authoritative schemas |
 | RLS precondition | `assert_row_level_security_enforced(TEST_DATABASE_URL)` | The test role cannot bypass row-level security, so the isolation suite means something |
-| Integration | `uv run pytest tests/integration -q` | Real PostgreSQL: journey, durability, readiness, row-level tenant isolation, session/CSRF/enrollment boundaries |
+| Integration | `uv run pytest tests/integration -q` | Real PostgreSQL: journey, durability, readiness, row-level tenant isolation, session/CSRF/enrollment boundaries, crash matrix, evidence sequencing |
 | Node types | `pnpm -r --if-present typecheck` | TypeScript strict mode |
 | Node build | `pnpm -r --if-present build` | Both TS packages compile |
 | Node tests | `pnpm -r --if-present test` | Runner reports non-implementation rather than false success; TypeScript canonicalization matches the shared vectors. Builds first, since the tests import from `dist/` |
@@ -159,6 +159,11 @@ tests fail:
 | Session or membership revocation not checked | 3 and 1 auth tests fail |
 | Enrollment redemption not single-use | 1 auth test fails |
 | `FORCE` removed from row-level security | both workspaces leak (asserted by a self-test) |
+| Outbox message written after the commit instead of within it | 6 crash-matrix tests fail |
+| Source-record conflict treated as a replay | 1 sequencer test fails |
+| Closing watermark accepted beyond the admitted tail | 1 sequencer test fails |
+| Attempt advisory lock removed | 1 sequencer test fails (observed in `pg_locks`) |
+| Caller-level or statement-level revision guard removed | 1 crash-matrix test fails each |
 | Canonical key order changed to code point | UTF-16 ordering test fails |
 | Cancelled outcome keyed on status rather than execution | reducer regression and property tests fail |
 
