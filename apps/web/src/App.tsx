@@ -42,6 +42,7 @@ import { ProjectsScreen } from './screens/ProjectsScreen'
 import { ReviewScreen } from './screens/ReviewScreen'
 import { RunScreen } from './screens/RunScreen'
 import { RunnersScreen } from './screens/RunnersScreen'
+import { SettingsScreen } from './screens/SettingsScreen'
 import { SignInScreen } from './routes/SignInScreen'
 import { WorkspaceRoute } from './routes/WorkspaceRoute'
 import { WORKSPACE_ROUTES } from './routes/routeMap'
@@ -67,6 +68,7 @@ const SCREENS: Readonly<Record<string, JSX.Element>> = {
   'patches/:patchId': <PatchScreen />,
   'reviews/:reviewId': <ReviewScreen />,
   'exports/:exportId': <ExportScreen />,
+  settings: <SettingsScreen />,
 }
 
 const AuthenticatedRoutes = (): JSX.Element => (

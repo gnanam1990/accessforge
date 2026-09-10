@@ -119,7 +119,7 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     inPrimaryNavigation: true,
     ownedByModule: 26,
     heading: 'Workspace settings',
-    built: false,
+    built: true,
   },
 ]
 

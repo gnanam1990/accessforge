@@ -54,6 +54,8 @@ export interface WorkspaceData {
   reviewRequests: Record<string, unknown>[]
   review: Record<string, unknown>
   exportRecord: Record<string, unknown>
+  usage: Record<string, unknown>
+  retention: Record<string, unknown>
 }
 
 export interface FakeServer {
@@ -136,6 +138,61 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     reviewRequests: [],
     review: {},
     exportRecord: {},
+    usage: {
+      entitlementRevision: 3,
+      configuredBy: 'u-1',
+      reason: 'pilot allowance',
+      window: 'rolling 24 hours',
+      usage: [
+        {
+          kind: 'RUN_ADMITTED',
+          measured: 2,
+          estimated: 0,
+          unavailableEvents: 0,
+          countedAgainstLimit: 2,
+          limit: 5,
+          remaining: 3,
+        },
+        {
+          kind: 'MODEL_TOKENS',
+          measured: 1000,
+          estimated: 2500,
+          unavailableEvents: 1,
+          countedAgainstLimit: 3500,
+          limit: 100000,
+          remaining: 96500,
+        },
+      ],
+      concurrentRuns: 1,
+      maxConcurrentRuns: 2,
+      meaning:
+        'Measured is what this system counted. Estimated is what a provider reported about its ' +
+        'own consumption. Unavailable is a count of events whose quantity could not be obtained; ' +
+        'it is not zero usage.',
+    },
+    retention: {
+      revision: 0,
+      classes: [
+        {
+          evidenceClass: 'READER_SPEECH',
+          retainDays: 30,
+          consentRequired: true,
+          invalidatesCompleteness: true,
+          meaning: 'What the screen reader actually announced.',
+        },
+        {
+          evidenceClass: 'SCREEN_RECORDING',
+          retainDays: 14,
+          consentRequired: true,
+          invalidatesCompleteness: false,
+          meaning: 'Optional visual capture, never the basis of a verdict.',
+        },
+      ],
+      limits: [
+        'Deleting evidence invalidates any completeness claim that depended on it.',
+        'An export already downloaded still contains what it contained.',
+      ],
+    },
   }
   const refusals = new Map<string, { status: number; code: string; detail: string }>()
   const bodies: {
@@ -292,6 +349,15 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         })
       }
 
+      if (url.endsWith('/usage') && method === 'GET') {
+        return json(data.usage)
+      }
+      if (url.includes('/settings/retention') && method === 'GET') {
+        return json(data.retention)
+      }
+      if (url.includes('/settings/entitlement') && method === 'PUT') {
+        return json({ revision: 4, meaning: 'A new revision.' }, 201)
+      }
       if (url.includes('/review-requests') && method === 'GET') {
         return json({
           items: data.reviewRequests,
