@@ -1,6 +1,6 @@
 # Delivery status
 
-**Last refreshed:** 2026-09-10 (module 07 delivery)
+**Last refreshed:** 2026-09-10 (module 07 merged; verified on main)
 **Repository:** `github.com/gnanam1990/accessforge` (public)
 **Target branch:** `main`
 
@@ -10,7 +10,7 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 
 | Claim | Answer |
 |---|---|
-| Is code merged? | Modules 00 through 06 are merged. Module 07 (desktop enrollment, leases and dispatch control) is **open in a pull request**, not yet merged. |
+| Is code merged? | **Modules 00 through 07 are all merged**, each verified on main with CI green. Module 08 is the next in dependency order and is blocked on the owner, not on code. |
 | Is a runtime verified? | **Partly.** The reference application and control-plane API were started and exercised over real HTTP against real PostgreSQL, including restart durability, and tenant isolation was proved by direct SQL. **No screen reader has ever run.** |
 | Is R1 release-ready? | **No**, and it cannot become ready on this host — module 09 requires Windows/NVDA. |
 | Did deployment or event submission occur? | **No.** Neither is authorized. |
@@ -27,8 +27,9 @@ Refresh this from live Git and CI state, not from a previous checkbox.
 | Module 04 integration commit | `9a1aef6` — verified on main |
 | Module 05 integration commit | `3977e18` (merge of `a37da63`) — CI green on the pull request |
 | Module 06 integration commit | `85e5935` (merge of `955f815`) — CI green, seven independent-review findings closed |
-| Latest verified integration commit | `85e5935` |
-| CI on main | **Passing** for `23fe6c8`. Three jobs: Python (real PostgreSQL), Node, documentation integrity. |
+| Module 07 integration commit | `0c88f49` (merge of `fc3505c`) — CI green on main, seventeen mutation checks |
+| Latest verified integration commit | `0c88f49` |
+| CI on main | **Passing** for `0c88f49`. Three jobs: Python (real PostgreSQL, non-superuser role), Node, documentation integrity. |
 
 ## Modules
 
@@ -41,11 +42,13 @@ Module 04: **merged** at `9a1aef6`, verified on main.
 Module 05: **merged** at `3977e18`, CI green on the pull request.
 Module 06: **merged** at `85e5935`, with seven findings from the independent review fixed and
 mutation-proven.
-Module 07: **implemented and locally verified** (1016 Python tests on a database created from nothing,
-plus 82 Node tests, seventeen mutations), delivery **open**. Real PostgreSQL concurrency and a real
+Module 07: **merged** at `0c88f49`, verified on main. 1016 Python tests and 82 Node tests on a
+database created from nothing, seventeen mutation checks. Real PostgreSQL concurrency and a real
 `fsync`ed action journal; **no screen reader, and no operating-system fencing demonstrated** — see
-`docs/handoffs/07.md` for the exact unverified boundaries.
-All other modules: not started.
+`docs/handoffs/07.md` for all seven unverified boundaries by name.
+All other modules: not started. **Module 07 is the last module buildable on this host** — 08 and 09
+require a real screen reader, and everything from 10 onwards depends on evidence only they can
+produce.
 
 See `docs/delivery/PLAN.md` for the full ledger.
 
