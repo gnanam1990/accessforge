@@ -338,7 +338,16 @@ def submit_preflight(
         conn,
         request,
         workspace_id,
-        Permission.RUN_REQUEST,
+        # INFRASTRUCTURE_OPERATE, not RUN_REQUEST. A preflight decides whether a runner becomes
+        # READY or is quarantined, which is runner management -- the same authority that enrolled it
+        # and can reset it. RUN_REQUEST is held by anyone who may ask for a run, and letting that
+        # role flip a desktop to READY would mean the permission to request work also grants the
+        # permission to declare the machine fit to do it.
+        #
+        # In production a preflight is submitted by the runner itself under a service credential.
+        # That principal does not exist yet, so this is the human-facing route and it takes the
+        # stricter of the two permissions rather than the more convenient one.
+        Permission.INFRASTRUCTURE_OPERATE,
         body=body,
         allowed_fields=PREFLIGHT_FIELDS,
     )
