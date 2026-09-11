@@ -3331,6 +3331,148 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/builds": {
+      "post": {
+        "description": "Record what was built, and from which source.\n\nOne operation for the source snapshot and the artifact, because they are one fact: an artifact\ndigest with no source identity is an artifact nobody can trace, and a source identity with no\nartifact is a commit nobody built. Recording them separately would allow both halves to exist\napart, and the half that goes missing is always the one a reader needed.\n\n**A dirty tree is recorded, not refused.** Local development is a legitimate case in E0. What is\nforbidden is describing it as clean afterwards, so `dirty` and the count of differing paths are\nstored and travel into every seal built on this build.\n\n**`identityObservable: false` is accepted and is a claim about the deployment, not the build.**\nIt means the environment cannot prove which artifact it is serving. Such a run may still\nexecute; it simply cannot make a fully verified provenance claim, and the limitation stays\nvisible rather than being replaced with a plausible digest.",
+        "operationId": "register_build",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register Build",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Register Build",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/projects/{project_id}/environments": {
       "get": {
         "description": "Environments for a project, with the reasons an unusable one is unusable.\n\n`usable` is reported alongside the specific cause rather than instead of it. \"Expired\",\n\"revoked\" and \"superseded\" send an operator to three different actions, and a single false\nwould send them to none of them.\n\nPaginated by keyset like every other listing here. An earlier version took the first 200 with no\ncursor and no indication that it had stopped \u2014 so a project with more environments than that\nlost the older ones silently, including ones still usable, and the screen presented what\nremained as the complete inventory.",
@@ -3948,6 +4090,148 @@
           }
         ],
         "summary": "List Sealed Manifests",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/seals": {
+      "post": {
+        "description": "Seal a manifest over every input a run's identity depends on.\n\nThis is the route a run is requested against. `POST /runs` refuses a digest nothing sealed, so\nuntil this existed a manifest could only be produced by writing SQL \u2014 which meant the product's\ncentral identity step had no surface at all, and the check that would have revealed it was\nmissing.\n\nThe environment is validated first by `seal_run`: sealing against a revoked, expired or\nsuperseded environment would produce a manifest that looked authoritative and was never\nauthorized.\n\nA digest is deliberately **not** unique. Two seals over identical inputs share one, which is how\na baseline and a candidate are shown to differ only by an approved patch (INV-04). Sealing twice\nis therefore not an error, and a caller who wants one seal per attempt supplies an\n`Idempotency-Key`.",
+        "operationId": "seal_manifest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Seal Manifest",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Seal Manifest",
         "tags": [
           "projects"
         ]
@@ -4906,6 +5190,148 @@
           }
         ],
         "summary": "Inspect Runner",
+        "tags": [
+          "runners"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/runners/{runner_id}/preflights": {
+      "post": {
+        "description": "Submit a preflight, and let the server decide what it established.\n\nThree things this route will not do, each of which is the obvious convenience:\n\n**It does not accept a `successful` field.** Success is computed from the submitted checks. A\nrunner that could declare itself ready would be the only witness to its own readiness, and the\nwhole purpose of a preflight is that READY means something a server checked.\n\n**An absent check is not a passing check.** Coverage is compared for equality against the\nrequired set, so a supervisor that stops reporting one after an upgrade fails preflight rather\nthan quietly dropping the guarantee. `UNKNOWN` is available and is not a pass: a runner that\ncould not determine whether the screen was locked has not shown that it was unlocked.\n\n**It does not trust the runner's own version-match check.** A supervisor that lied about its\nreader version would also lie about whether that version matches its profile, so the server\ncompares the observed values against the enrolled profile itself.\n\nA failed preflight is a 201, not a 4xx. The submission was accepted and recorded; what it\nestablished is in the body. Answering 400 would conflate \"you sent something malformed\" with\n\"your desktop is not ready\", and the second is a result worth keeping.",
+        "operationId": "submit_preflight",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "runner_id",
+            "required": true,
+            "schema": {
+              "title": "Runner Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Submit Preflight",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Submit Preflight",
         "tags": [
           "runners"
         ]

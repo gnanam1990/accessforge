@@ -524,3 +524,51 @@ def capability_summary(
             else bool(artifact["observable"])
         ),
     }
+
+
+@dataclass(frozen=True, slots=True)
+class SealedManifest:
+    """A sealed manifest, looked up by the digest a caller supplies."""
+
+    sealed_manifest_id: str
+    project_id: str
+    manifest_digest: str
+    journey_digest: str
+    sealed_at: str
+
+
+def find_sealed_manifest(
+    conn: psycopg.Connection[dict[str, Any]], *, manifest_digest: str
+) -> SealedManifest | None:
+    """The sealed manifest a digest names, or None.
+
+    Exists because a run is requested *by digest*, and until this was checked the digest was taken
+    on the caller's word: `POST /runs` accepted any 64-character hex string and queued a run whose
+    identity matched nothing. The UI refused to request a run when a project had sealed nothing,
+    which put the only check in the one place a caller can skip — and the failure surfaced much
+    later, at dispatch, as a run refusing to start for naming a manifest that was never sealed.
+
+    Oldest first, and `LIMIT 1`. A digest is deliberately **not** unique (migration 0006): two
+    runs with identical inputs share one, which is how a baseline and a candidate are shown to
+    differ only by an approved patch. So this answers "was this ever sealed", not "which run is
+    it" — and any matching row answers that, because they all describe the same inputs.
+    """
+    row = conn.execute(
+        """
+        SELECT id, project_id, manifest_digest, journey_digest, sealed_at
+        FROM sealed_manifest
+        WHERE manifest_digest = %s
+        ORDER BY sealed_at, id
+        LIMIT 1
+        """,
+        (manifest_digest,),
+    ).fetchone()
+    if row is None:
+        return None
+    return SealedManifest(
+        sealed_manifest_id=str(row["id"]),
+        project_id=str(row["project_id"]),
+        manifest_digest=str(row["manifest_digest"]),
+        journey_digest=str(row["journey_digest"]),
+        sealed_at=to_rfc3339_utc(row["sealed_at"]),
+    )
