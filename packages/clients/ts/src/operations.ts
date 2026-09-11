@@ -407,6 +407,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: true,
     authenticated: true,
   },
+  'retry_deletion_purge': {
+    operationId: 'retry_deletion_purge',
+    method: 'POST',
+    path: '/v1/workspaces/{workspace_id}/runs/{run_id}/deletions/{deletion_id}/retry',
+    parameters: ['workspace_id', 'run_id', 'deletion_id'],
+    mutating: true,
+    authenticated: true,
+  },
   'replay_events': {
     operationId: 'replay_events',
     method: 'GET',
@@ -572,6 +580,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/runs/{run_id}/cancel',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/completeness',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/deletions',
+  '/v1/workspaces/{workspace_id}/runs/{run_id}/deletions/{deletion_id}/retry',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/events',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/evidence',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/timeline',

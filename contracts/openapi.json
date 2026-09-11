@@ -6567,6 +6567,145 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/runs/{run_id}/deletions/{deletion_id}/retry": {
+      "post": {
+        "description": "Remove the bytes a committed deletion still owes, for a deletion that could not finish.\n\nThis route exists because the report promises one. A deletion whose object store was\nunreachable leaves keys queued, and nothing re-enqueues them: the artifacts are already\nDELETED, so requesting the same deletion again marks nothing and queues nothing. Without a way\nto run the purge again, `objectsStillPresent` would stay above zero for good and the sentence\nsaying a later pass finishes it would be describing a pass that does not exist.\n\nOwner-only, like the deletion itself. It destroys evidence -- the same evidence, finally --\nand the permission to read a run is not the permission to finish erasing it.\n\nSafe to call when nothing is pending: it purges nothing and says so. Safe to call repeatedly\nwhile a store is down: each attempt is counted on the row with its error, and the response\nreports what is still there rather than an optimistic zero.",
+        "operationId": "retry_deletion_purge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deletion_id",
+            "required": true,
+            "schema": {
+              "title": "Deletion Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retry Deletion Purge",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Retry Deletion Purge",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/runs/{run_id}/events": {
       "get": {
         "description": "Paginated canonical replay.\n\n`exhausted` is true only for a short page. A full page cannot distinguish \"four events exist\"\nfrom \"four events exist so far\", and reporting exhaustion on one would stop a reader a page\nearly whenever the total is a multiple of the page size.",

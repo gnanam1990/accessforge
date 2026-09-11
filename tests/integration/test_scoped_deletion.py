@@ -1117,3 +1117,214 @@ def test_the_route_removes_the_bytes_after_it_answers(
     assert len(records) == 1
     assert records[0]["objectsStillPresent"] == 0
     assert records[0]["artifactsMarkedDeleted"] == 1
+
+
+def test_a_backlog_longer_than_one_pass_is_drained_rather_than_left(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """One pass takes at most `limit` keys, and nothing re-enqueues what it leaves behind.
+
+    The scope query skips artifacts already marked DELETED, so requesting the same deletion again
+    queues nothing. A single pass would strand every key past the limit with no path back to them.
+    """
+    run_id, attempt_id = _run(db)
+    artifacts = [
+        _promoted(db, store, run_id, attempt_id, payload=TRANSCRIPT + str(n).encode())
+        for n in range(3)
+    ]
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+    assert report.objects_enqueued == 3
+
+    with workspace_connection(db, WS) as conn:
+        # One key per pass, so a single pass would leave two behind.
+        drained = report.with_purge(
+            deletion.purge_until_drained(conn, store, deletion_id=report.deletion_id, limit=1)
+        )
+    assert drained.objects_purged == 3
+    assert drained.objects_still_present == 0
+    for artifact in artifacts:
+        with pytest.raises(objectstore.ArtifactStoreError):
+            store.get(key=artifact.object_key)
+
+
+def test_a_store_that_is_down_stops_the_drain_instead_of_spinning(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """A pass that removes nothing is an outage, and repeating it changes nothing but the count."""
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id)
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+    with workspace_connection(db, WS) as conn:
+        outcome = deletion.purge_until_drained(
+            conn, _RefusingStore(), deletion_id=report.deletion_id
+        )
+        attempts = conn.execute(
+            "SELECT attempts FROM evidence_object_purge WHERE deletion_id = %s",
+            (report.deletion_id,),
+        ).fetchone()
+
+    assert outcome.purged == 0
+    assert outcome.still_pending == 1
+    # One attempt, not fifty. The loop stops on the first pass that removes nothing, so an outage
+    # costs one store call rather than hammering a service that is already struggling.
+    assert attempts is not None and attempts["attempts"] == 1
+
+
+def test_an_operator_can_finish_a_deletion_the_store_could_not(
+    db: str, store: evidence.S3ArtifactStore, api: object
+) -> None:
+    """The route the report names. Without it, `objectsStillPresent` never reaches zero.
+
+    The artifacts are already DELETED after the first attempt, so requesting the same deletion
+    again marks nothing and queues nothing -- the stranded keys have no other way back.
+    """
+    from accessforge_api.auth import CSRF_HEADER
+
+    run_id, attempt_id = _run(db)
+    artifact = _promoted(db, store, run_id, attempt_id)
+
+    # The original deletion, with the object store unreachable.
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+    with workspace_connection(db, WS) as conn:
+        deletion.purge_until_drained(conn, _RefusingStore(), deletion_id=report.deletion_id)
+    assert store.get(key=artifact.object_key) == TRANSCRIPT
+
+    csrf = _sign_in(db, api)
+    listing = api.get(f"/v1/workspaces/{WS}/runs/{run_id}/deletions")  # type: ignore[attr-defined]
+    assert listing.json()["items"][0]["objectsStillPresent"] == 1
+
+    retry = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/runs/{run_id}/deletions/{report.deletion_id}/retry",
+        headers={CSRF_HEADER: csrf},
+    )
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["objectsPurged"] == 1
+    assert retry.json()["objectsStillPresent"] == 0
+
+    with pytest.raises(objectstore.ArtifactStoreError):
+        store.get(key=artifact.object_key)
+    again = api.get(f"/v1/workspaces/{WS}/runs/{run_id}/deletions")  # type: ignore[attr-defined]
+    assert again.json()["items"][0]["objectsStillPresent"] == 0
+
+
+def test_a_retry_for_a_deletion_belonging_to_another_run_is_not_found(
+    db: str, store: evidence.S3ArtifactStore, api: object
+) -> None:
+    """Evidence destroyed under a URL naming something else is not what the caller agreed to."""
+    from accessforge_api.auth import CSRF_HEADER
+
+    mine, attempt = _run(db)
+    _promoted(db, store, mine, attempt)
+    other, _ = _run(db)
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=mine,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+    csrf = _sign_in(db, api)
+    response = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/runs/{other}/deletions/{report.deletion_id}/retry",
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 404, response.text
+
+
+def test_a_maintainer_who_is_not_an_owner_cannot_retry_a_purge(
+    db: str, store: evidence.S3ArtifactStore, api: object
+) -> None:
+    """It finishes destroying evidence. Reading a run is not permission to do that."""
+    from accessforge_api.auth import CSRF_HEADER
+
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id)
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+
+    maintainer = str(uuid.uuid4())
+    with unscoped_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO app_user (id, email) VALUES (%s, %s)",
+            (maintainer, f"{maintainer}@example.test"),
+        )
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "INSERT INTO workspace_membership (workspace_id, user_id, role) "
+            "VALUES (%s, %s, 'MAINTAINER')",
+            (WS, maintainer),
+        )
+    csrf = _sign_in(db, api, user_id=maintainer)
+    response = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/runs/{run_id}/deletions/{report.deletion_id}/retry",
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 403, response.text
+
+
+def test_an_unclassified_event_type_in_scope_is_refused_rather_than_skipped(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """`canonical_event.event_type` has no CHECK, so nothing else catches this.
+
+    The artifact path already refuses an unmapped kind. Without the same answer here, an event type
+    added later without a retention class would not be refused -- it would just be absent from the
+    list of types to clear, and its payload would survive a deletion that reported success.
+    """
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id)
+    _observation(db, run_id, attempt_id)
+
+    # Written past the sequencer deliberately: the point is an event type the mapping does not
+    # know, which is what a future migration adding one looks like from here.
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE canonical_event SET event_type = 'FUTURE_THING' WHERE run_id = %s", (run_id,)
+        )
+
+    with pytest.raises(deletion.DeletionError, match="FUTURE_THING"):
+        with workspace_connection(db, WS) as conn:
+            deletion.record_deletion(
+                conn,
+                workspace_id=WS,
+                run_id=run_id,
+                classes=("READER_SPEECH",),
+                reason="the customer withdrew consent for captured speech",
+                requested_by=OPERATOR,
+            )

@@ -738,7 +738,7 @@ def delete_run_evidence(
         # has already done should not be forgotten because something later in the request failed.
         with workspace_connection(database_url(request), workspace_id) as purger:
             report = report.with_purge(
-                deletion.purge_pending_objects(
+                deletion.purge_until_drained(
                     purger, _artifact_store(request), deletion_id=report.deletion_id
                 )
             )
@@ -776,6 +776,63 @@ def delete_run_evidence(
         conn, context, route="POST /runs/deletions", body=body, perform=perform
     )
     return outcome.response or {}
+
+
+@router.post("/runs/{run_id}/deletions/{deletion_id}/retry")
+def retry_deletion_purge(
+    workspace_id: str, run_id: str, deletion_id: str, request: Request, conn: Conn
+) -> dict[str, Any]:
+    """Remove the bytes a committed deletion still owes, for a deletion that could not finish.
+
+    This route exists because the report promises one. A deletion whose object store was
+    unreachable leaves keys queued, and nothing re-enqueues them: the artifacts are already
+    DELETED, so requesting the same deletion again marks nothing and queues nothing. Without a way
+    to run the purge again, `objectsStillPresent` would stay above zero for good and the sentence
+    saying a later pass finishes it would be describing a pass that does not exist.
+
+    Owner-only, like the deletion itself. It destroys evidence -- the same evidence, finally --
+    and the permission to read a run is not the permission to finish erasing it.
+
+    Safe to call when nothing is pending: it purges nothing and says so. Safe to call repeatedly
+    while a store is down: each attempt is counted on the row with its error, and the response
+    reports what is still there rather than an optimistic zero.
+    """
+    context = authorize(conn, request, workspace_id, Permission.WORKSPACE_CONFIGURE)
+    as_identifier(run_id, what="runId")
+    # Both identifiers, and the deletion must belong to this run. A deletion id from another run
+    # would otherwise purge that run's queue through this run's path -- evidence destroyed under a
+    # URL that names something else, which is not what the person clicking it agreed to.
+    record = conn.execute(
+        "SELECT id FROM evidence_deletion WHERE id = %s AND run_id = %s",
+        (as_identifier(deletion_id, what="deletionId"), run_id),
+    ).fetchone()
+    if record is None:
+        raise not_found()
+
+    # Its own connection: the purge's bookkeeping -- which keys went, which failed and why --
+    # belongs to the purge, not to whatever else this request might still do.
+    with workspace_connection(database_url(request), workspace_id) as purger:
+        outcome = deletion.purge_until_drained(
+            purger, _artifact_store(request), deletion_id=deletion_id
+        )
+
+    return {
+        "deletionId": deletion_id,
+        "objectsPurged": outcome.purged,
+        "objectsStillPresent": outcome.still_pending,
+        "keysFailed": list(outcome.keys_failed),
+        "meaning": (
+            "Objects this deletion had already promised to remove. Nothing new was deleted and no "
+            "new evidence class was included: this finishes work the original deletion recorded. "
+            "`objectsStillPresent` above zero means the store still holds those bytes and the "
+            "reason is recorded against each key; calling this again after the store recovers "
+            "finishes it."
+            if outcome.still_pending
+            else "Objects this deletion had already promised to remove. Nothing new was deleted. "
+            "The store now holds none of the keys this deletion queued."
+        ),
+        "requestId": context.request_id,
+    }
 
 
 @router.get("/runs/{run_id}/deletions")
