@@ -19,7 +19,20 @@ empty. Three things always survive:
   long the window is.
 * **Copies already downloaded.** An export handed to somebody is theirs.
 
-Two decisions inside the mechanism matter before changing anything:
+**Deletion is two phases with a commit between them.** The first version called the
+object store inside the caller's transaction, and that ordering can produce the
+exact failure this feature exists to prevent: an earlier object deletes, a later
+one raises, the transaction rolls back, and the store cannot -- leaving bytes gone,
+the artifact still RETAINED, no deletion record, and a *complete* evidence set
+reported for a run whose evidence no longer exists.
+
+So `record_deletion` marks the artifacts, writes the record and enqueues every
+object key; the caller commits; `purge_pending_objects` then deletes the bytes.
+The inconsistency window points the safe way now: after the commit the database
+says deleted while some bytes may remain, completeness is already invalidated,
+nobody is told the bytes are gone until they are, and a retry finishes the job.
+
+Two more decisions matter before changing anything:
 
 **The event chain survives the payload.** `canonical_event` carries `payload`,
 `payload_digest` and `previous_event_hash`. Deletion replaces the payload and keeps
@@ -146,7 +159,67 @@ class DeletionReport:
     a deleted required artifact as missing precisely so that it does not.
     """
 
-    retained: tuple[str, ...] = field(default_factory=tuple)
+    objects_enqueued: int = 0
+    """Object keys this deletion promised to remove."""
+
+    objects_purged: int = 0
+    """How many of those the store has actually released."""
+
+    objects_still_present: int = 0
+    """How many it has not.
+
+    A measured count, not `enqueued - purged`. A purge pass takes at most `limit`
+    keys, so a pass that removed every key it looked at can still leave a queue
+    behind it; subtracting would report that backlog as zero. This number is read
+    from the queue, which is the only place that knows.
+    """
+
+    statements: tuple[str, ...] = field(default_factory=tuple)
+    """What this deletion could not reach, independent of the object store."""
+
+    @property
+    def retained(self) -> tuple[str, ...]:
+        """Everything this deletion did not reach, including bytes still in the store.
+
+        Composed rather than stored, so the pending-object line cannot go stale or
+        be forgotten by a caller who never ran a purge. That caller is the common
+        one -- the route answers before the purge starts -- and it is exactly the
+        case where omitting the line would read as a completed erasure.
+        """
+        if self.objects_still_present <= 0:
+            return self.statements
+        return self.statements + (
+            f"{self.objects_still_present} object(s) are recorded as deleted and the "
+            "object store has not released them yet. The database already reports "
+            "this evidence as deleted and the completeness claim is already "
+            "invalidated; the bytes are queued for removal and the next pass "
+            "finishes it. Until then, they exist.",
+        )
+
+    def with_purge(self, outcome: PurgeOutcome) -> DeletionReport:
+        """The same report, knowing how much of the store actually released.
+
+        Returned rather than mutated because a report is a statement about what
+        happened, and a statement that can be edited after the fact is not one.
+        """
+        from dataclasses import replace
+
+        if outcome.scope != self.deletion_id:
+            # A sweep across every pending deletion counts other deletions' backlogs
+            # too. Folding that into this report would either invent objects this
+            # deletion never enqueued or, worse, report somebody else's cleared queue
+            # as this one's -- a deletion claiming bytes are gone on another's work.
+            raise DeletionError(
+                "this purge outcome measured "
+                f"{outcome.scope or 'every pending deletion'}, not deletion "
+                f"{self.deletion_id}. A report may only quote a count taken for "
+                "itself."
+            )
+        return replace(
+            self,
+            objects_purged=self.objects_purged + outcome.purged,
+            objects_still_present=outcome.still_pending,
+        )
 
     @property
     def summary(self) -> str:
@@ -160,8 +233,35 @@ class DeletionReport:
             f"cleared {self.event_payloads_cleared} event payload(s) for "
             f"{', '.join(self.classes)}. {self.artifact_tombstones_kept} tombstone "
             f"row(s) were kept on purpose. {consequence}"
-            f"{len(self.retained)} thing(s) were not reached -- see `retained`."
+            f"{self.objects_purged} of {self.objects_enqueued} object(s) have been "
+            f"released by the store. {len(self.retained)} thing(s) were not reached "
+            "-- see `retained`."
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PurgeOutcome:
+    """What one pass of the object purge achieved.
+
+    `still_pending` above zero is not an error. The database has already committed
+    saying the evidence is deleted; these are bytes the store has not yet released,
+    and the next pass takes them.
+    """
+
+    purged: int
+    still_pending: int
+    """Everything left in the queue for this scope: failures *and* keys this pass
+    never reached because it stopped at its limit."""
+
+    keys_failed: tuple[str, ...] = field(default_factory=tuple)
+    """The keys this pass tried and could not delete, with their errors recorded."""
+
+    scope: str | None = None
+    """The deletion this pass measured, or None for a sweep across all of them.
+
+    Carried so :meth:`DeletionReport.with_purge` can refuse a count taken for
+    something else rather than quoting it as its own.
+    """
 
 
 def _assert_classes_known(classes: tuple[str, ...]) -> None:
@@ -242,9 +342,8 @@ def _retained_statements(
     return tuple(statements)
 
 
-def delete_evidence(
+def record_deletion(
     conn: psycopg.Connection[dict[str, Any]],
-    store: ArtifactStore,
     *,
     workspace_id: str,
     run_id: str,
@@ -255,14 +354,16 @@ def delete_evidence(
     backup_window_days: int = 35,
     now: datetime | None = None,
 ) -> DeletionReport:
-    """Delete the named evidence classes for one run, or one attempt of it.
+    """Phase one: mark, record, and enqueue. Touches no object store.
+
+    The caller commits after this and then calls :func:`purge_pending_objects`. The
+    separation is the correction described in the module docstring: the database
+    must be the thing that commits first, so the only window is one where the
+    record says deleted and some bytes survive -- never the reverse.
 
     Scoped to a run rather than offered workspace-wide. A workspace-wide erasure is
     a different operation with a different blast radius, and the one-button version
     is how somebody deletes a year of evidence meaning to delete a week.
-
-    `reason` is required and recorded. A deletion nobody can explain later is the
-    one an auditor asks about first.
     """
     moment = now or datetime.now(UTC)
     _assert_classes_known(classes)
@@ -282,7 +383,8 @@ def delete_evidence(
         scope += " AND attempt_id = %s"
         params.append(attempt_id)
 
-    deleted_bytes = 0
+    deletion_id = str(uuid.uuid4())
+    marked: list[tuple[str, str]] = []
     for row in conn.execute(scope + " FOR UPDATE", params).fetchall():
         kind = str(row["kind"])
         if kind not in ARTIFACT_CLASS:
@@ -294,12 +396,14 @@ def delete_evidence(
         if ARTIFACT_CLASS[kind] not in classes:
             continue
 
-        store.delete(key=str(row["object_key"]))
+        artifact_id = str(row["id"])
+        marked.append((artifact_id, str(row["object_key"])))
         if row["redacted_object_key"] is not None:
             # The redacted view is a derived object. Leaving it would mean removing
             # the original and keeping a copy of it with some values masked -- still
             # the thing somebody asked to have removed.
-            store.delete(key=str(row["redacted_object_key"]))
+            marked.append((artifact_id, str(row["redacted_object_key"])))
+
         conn.execute(
             """
             UPDATE evidence_artifact
@@ -307,9 +411,8 @@ def delete_evidence(
                    retention_reason = %s
              WHERE id = %s
             """,
-            (to_rfc3339_utc(moment), reason, row["id"]),
+            (to_rfc3339_utc(moment), reason, artifact_id),
         )
-        deleted_bytes += 1
 
     placeholder = json.dumps(DELETED_PAYLOAD)
     event_types = [kind for kind, name in EVENT_CLASS.items() if name in classes]
@@ -329,7 +432,7 @@ def delete_evidence(
         cleared = conn.execute(event_scope, event_params).rowcount
 
     invalidates = any(CLASS_DEFINITIONS[name][2] for name in classes)
-    deletion_id = str(uuid.uuid4())
+    artifacts = len({artifact_id for artifact_id, _ in marked})
 
     conn.execute(
         """
@@ -347,12 +450,23 @@ def delete_evidence(
             list(classes),
             reason,
             requested_by,
-            deleted_bytes,
+            artifacts,
             cleared,
             invalidates,
             moment,
         ),
     )
+
+    for artifact_id, object_key in marked:
+        conn.execute(
+            """
+            INSERT INTO evidence_object_purge
+                (id, workspace_id, deletion_id, artifact_id, object_key, enqueued_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (deletion_id, object_key) DO NOTHING
+            """,
+            (str(uuid.uuid4()), workspace_id, deletion_id, artifact_id, object_key, moment),
+        )
 
     return DeletionReport(
         deletion_id=deletion_id,
@@ -361,17 +475,111 @@ def delete_evidence(
         classes=classes,
         run_id=run_id,
         attempt_id=attempt_id,
-        artifact_bytes_deleted=deleted_bytes,
-        artifact_tombstones_kept=deleted_bytes,
+        artifact_bytes_deleted=artifacts,
+        artifact_tombstones_kept=artifacts,
         event_payloads_cleared=cleared,
         completeness_invalidated=invalidates,
-        retained=_retained_statements(
+        objects_enqueued=len(marked),
+        objects_purged=0,
+        objects_still_present=len(marked),
+        statements=_retained_statements(
             conn,
             classes=classes,
             run_id=run_id,
             backup_window_days=backup_window_days,
         ),
     )
+
+
+def purge_pending_objects(
+    conn: psycopg.Connection[dict[str, Any]],
+    store: ArtifactStore,
+    *,
+    deletion_id: str | None = None,
+    limit: int = 200,
+    now: datetime | None = None,
+) -> PurgeOutcome:
+    """Phase two: delete the bytes a committed deletion promised to remove.
+
+    Called after the caller commits phase one, and safe to call again: a key that
+    failed stays pending with its error, and one already purged is skipped. That is
+    what makes an object store outage a delay rather than a silent divergence.
+
+    A failure here does **not** raise. The database has already committed saying the
+    evidence is deleted, and raising would tell a caller the deletion failed when
+    what actually happened is that some bytes are still queued for removal. The
+    outcome says how many remain, and the report says so in words.
+    """
+    moment = now or datetime.now(UTC)
+    if deletion_id is not None and (
+        conn.execute("SELECT 1 FROM evidence_deletion WHERE id = %s", (deletion_id,)).fetchone()
+        is None
+    ):
+        # Loud, because the quiet version of this is indistinguishable from success. A purge asked
+        # about a deletion this connection cannot see finds no queued keys and reports nothing
+        # pending -- which reads exactly like "the store released everything". That is how bytes
+        # survive a deletion that reported a clean result. It happens when phase one has not
+        # committed yet, or is in another workspace; both are bugs in the caller's ordering.
+        raise DeletionError(
+            f"deletion {deletion_id} is not visible on this connection, so there is nothing "
+            "here to purge. Reported rather than treated as an empty queue: an empty queue "
+            "and an invisible one are the same answer and opposite facts. Commit phase one "
+            "before purging."
+        )
+    scope = "SELECT id, object_key FROM evidence_object_purge WHERE purged_at IS NULL"
+    params: list[Any] = []
+    if deletion_id is not None:
+        scope += " AND deletion_id = %s"
+        params.append(deletion_id)
+    scope += " ORDER BY enqueued_at LIMIT %s"
+    params.append(limit)
+
+    purged = 0
+    failures: list[str] = []
+    for row in conn.execute(scope, params).fetchall():
+        try:
+            store.delete(key=str(row["object_key"]))
+        except Exception as exc:  # noqa: BLE001 - any store failure is a retry, not a crash
+            conn.execute(
+                "UPDATE evidence_object_purge SET attempts = attempts + 1, last_error = %s "
+                " WHERE id = %s",
+                (f"{type(exc).__name__}: {exc}"[:500], row["id"]),
+            )
+            failures.append(str(row["object_key"]))
+            continue
+        conn.execute(
+            "UPDATE evidence_object_purge SET purged_at = %s, attempts = attempts + 1, "
+            "    last_error = NULL WHERE id = %s",
+            (moment, row["id"]),
+        )
+        purged += 1
+
+    # Counted, not inferred. `limit` caps what one pass looks at, so "everything I
+    # tried succeeded" and "the queue is empty" are different facts, and only the
+    # second one means the bytes are gone.
+    return PurgeOutcome(
+        purged=purged,
+        still_pending=pending_purges(conn, deletion_id=deletion_id),
+        keys_failed=tuple(failures),
+        scope=deletion_id,
+    )
+
+
+def pending_purges(
+    conn: psycopg.Connection[dict[str, Any]], *, deletion_id: str | None = None
+) -> int:
+    """How many object keys a committed deletion still promises to remove.
+
+    The number an operator needs and a report must not round to zero. While it is
+    above zero the database reports evidence as deleted that the store still holds.
+    """
+    scope = "SELECT count(*) AS n FROM evidence_object_purge WHERE purged_at IS NULL"
+    params: list[Any] = []
+    if deletion_id is not None:
+        scope += " AND deletion_id = %s"
+        params.append(deletion_id)
+    row = conn.execute(scope, params).fetchone()
+    return int(row["n"]) if row else 0
 
 
 def deletions_for_run(
