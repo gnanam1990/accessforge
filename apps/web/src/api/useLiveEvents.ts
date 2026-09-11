@@ -66,10 +66,17 @@ export const useLiveEvents = (
   // *offer* following before anyone asks for it, and an offer that cannot be honoured is worse than
   // none: the reader presses the button and learns the truth afterwards.
   const available = client.canOpenEventStream
-  const [status, setStatus] = useState<LiveStatus>(available ? 'idle' : 'unavailable')
+
   const [changes, setChanges] = useState(0)
   const [wasReset, setWasReset] = useState(false)
+
+  // Intent and outcome are separate pieces of state, and conflating them was a bug. The first
+  // version closed the stream on a reset while leaving `following` true: the control went back to
+  // reading "Follow live updates", and pressing it called `setFollowing(true)` on a value that was
+  // already true -- so React never re-ran the effect and the button was dead. Nothing about the
+  // screen looked wrong.
   const [following, setFollowing] = useState(false)
+  const [endedBecause, setEndedBecause] = useState<'reset' | 'accessEnded' | null>(null)
 
   // The callback is held in a ref so that a screen passing an inline closure -- which every screen
   // does -- does not tear down and reopen the connection on every render. Reconnecting once per
@@ -78,23 +85,12 @@ export const useLiveEvents = (
   latest.current = onChange
 
   useEffect(() => {
-    if (!available) {
-      setStatus('unavailable')
-      return
-    }
-    if (!following) {
-      setStatus('idle')
-      return
-    }
+    if (!available || !following) return
 
     const stream = client.openEventStream(
       `/v1/workspaces/${encodeURIComponent(workspaceId)}/events/stream`,
     )
-    if (stream === null) {
-      setStatus('unavailable')
-      return
-    }
-    setStatus('following')
+    if (stream === null) return
 
     // One listener per server-sent event type this application understands, and no catch-all.
     // `EventSource` delivers an unnamed event as `message`; every frame the server sends is named,
@@ -107,16 +103,17 @@ export const useLiveEvents = (
 
     const onReset = (): void => {
       // The cursor is older than retention. The screen must discard what it has and re-read rather
-      // than continue from a truncated stream, so this both flags the staleness and asks for a read.
-      setStatus('reset')
+      // than continue from a truncated stream, so this flags the staleness, asks for a read, and
+      // ends the subscription -- intent included, so following can be started again.
+      setEndedBecause('reset')
       setWasReset(true)
+      setFollowing(false)
       latest.current()
-      stream.close()
     }
 
     const onAccessEnded = (): void => {
-      setStatus('accessEnded')
-      stream.close()
+      setEndedBecause('accessEnded')
+      setFollowing(false)
     }
 
     // Every topic the outbox publishes. Listed rather than wildcarded, because a stream that
@@ -143,18 +140,34 @@ export const useLiveEvents = (
     // reader something about a gap the transport is already closing. It is also, emphatically, not
     // a statement that anything finished.
 
+    // One close, in the cleanup. The handlers above end the *intent*, and ending the intent re-runs
+    // this effect, whose cleanup closes the socket. Closing inside a handler as well would be two
+    // paths to the same call and one of them would eventually be forgotten.
     return () => {
       stream.close()
     }
   }, [client, workspaceId, following, available])
 
+  const status: LiveStatus = !available
+    ? 'unavailable'
+    : endedBecause !== null
+      ? endedBecause
+      : following
+        ? 'following'
+        : 'idle'
+
   return {
     status,
     changes,
     wasReset,
-    // A no-op where there is nothing to follow, so a caller cannot move the screen into a state
-    // that claims to be following a stream that was never opened.
-    start: () => setFollowing(available),
+    // Clearing `endedBecause` is what makes this a real restart rather than a no-op: without it the
+    // intent would already be false, the status would still read `reset`, and the effect would have
+    // nothing to react to.
+    start: () => {
+      if (!available) return
+      setEndedBecause(null)
+      setFollowing(true)
+    },
     stop: () => setFollowing(false),
     acknowledgeReset: () => setWasReset(false),
   }

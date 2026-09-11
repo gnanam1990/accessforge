@@ -32,7 +32,7 @@
  * section 5 requires that: a reader who stops watching has not cancelled anything.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 
 import { Link } from 'react-router-dom'
@@ -333,12 +333,26 @@ const FollowControl = ({
   readonly live: ReturnType<typeof useLiveEvents>
   readonly status: string
 }): JSX.Element | null => {
-  if (!NON_TERMINAL.has(status)) {
-    return live.status === 'following' ? (
+  const terminal = !NON_TERMINAL.has(status)
+  const wasFollowing = useRef(false)
+  if (live.status === 'following') wasFollowing.current = true
+
+  // Close the subscription when the run this page is about reaches a terminal state.
+  //
+  // The first version only swapped the controls for a notice, which left the workspace stream open:
+  // every later event about *any other run* kept reloading this finished one, and the reader had no
+  // stop control to reach for because the notice had replaced it. A subscription nobody can see and
+  // nobody can stop is the worst of both.
+  useEffect(() => {
+    if (terminal && live.status === 'following') live.stop()
+  }, [terminal, live])
+
+  if (terminal) {
+    return wasFollowing.current ? (
       <Notice tone="information" heading="This run has ended" headingLevel={2} live>
         <p>
-          No further events will arrive for it. What is shown is the final record; stopping here
-          changes nothing.
+          No further events will arrive for it, so following has stopped. What is shown is the final
+          record.
         </p>
       </Notice>
     ) : null
