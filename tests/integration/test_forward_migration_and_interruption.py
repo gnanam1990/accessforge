@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0016_schedule_reapproval.sql"
+NEWEST = "0018_object_purge_queue.sql"
 
 
 def _with_database(url: str, name: str) -> str:
@@ -135,31 +135,122 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     """The newest migration's actual effect, in both directions.
 
     Asserting only that the new thing works afterwards would pass against a database where the
-    constraint had been dropped entirely, or the column had always been there -- and "the guard is
-    gone" is a much worse outcome than "the feature is missing".
+    guard had been dropped entirely, or the table had always been there -- and "the guard is gone"
+    is a much worse outcome than "the feature is missing".
     """
     _apply_through(disposable, _previous())
     with connect(disposable) as conn:
         before = conn.execute(
-            "SELECT count(*) AS n FROM information_schema.columns "
-            " WHERE table_name = 'schedule' AND column_name IN ('reapproved_at','reapproved_by')"
+            "SELECT 1 FROM information_schema.tables "
+            " WHERE table_schema = 'public' AND table_name = 'evidence_object_purge'"
         ).fetchone()
-    assert before is not None and int(before["n"]) == 0
+        # And the constraint this migration corrects, in its old form. CASCADE here meant deleting a
+        # run would take the record of its deletion with it.
+        cascading = conn.execute(
+            "SELECT confdeltype FROM pg_constraint "
+            " WHERE conrelid = 'evidence_deletion'::regclass AND contype = 'f' "
+            "   AND confrelid = 'run'::regclass"
+        ).fetchone()
+    assert before is None
+    assert cascading is not None and cascading["confdeltype"] == "c"
 
     migrate(disposable)
 
     with connect(disposable) as conn:
         after = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            " WHERE table_schema = 'public' AND table_name = 'evidence_object_purge'"
+        ).fetchone()
+        # The partial index, not merely an index. A retry sweeps for unfinished work, and the done
+        # rows become the overwhelming majority of the table.
+        pending_index = conn.execute(
+            "SELECT indexdef FROM pg_indexes "
+            " WHERE tablename = 'evidence_object_purge' "
+            "   AND indexname = 'evidence_object_purge_pending'"
+        ).fetchone()
+        # One row per key per deletion: a repeated enqueue is a retry of the same work, and without
+        # this a stuck key would accumulate a duplicate on every attempt.
+        unique_key = conn.execute(
+            "SELECT 1 FROM pg_constraint WHERE conrelid = 'evidence_object_purge'::regclass "
+            "   AND contype = 'u' "
+            "   AND pg_get_constraintdef(oid) LIKE '%(deletion_id, object_key)%'"
+        ).fetchone()
+        forced = conn.execute(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+            " WHERE relname = 'evidence_object_purge'"
+        ).fetchone()
+        restricted = conn.execute(
+            "SELECT confdeltype, convalidated FROM pg_constraint "
+            " WHERE conrelid = 'evidence_deletion'::regclass AND contype = 'f' "
+            "   AND confrelid = 'run'::regclass"
+        ).fetchone()
+    assert after is not None
+    assert pending_index is not None
+    assert "purged_at IS NULL" in str(pending_index["indexdef"]), (
+        "the index covers every row, so a sweep for unfinished purges scans the finished ones too"
+    )
+    assert unique_key is not None, "the same key could be enqueued twice for one deletion"
+    assert forced is not None
+    # FORCE, not merely ENABLE: the application role owns this table, and ENABLE does nothing for a
+    # table's owner. An object key names a workspace, a run and an artifact in its path.
+    assert bool(forced["relrowsecurity"]) and bool(forced["relforcerowsecurity"])
+    # 'r' is RESTRICT. The table comment always said the deletion record must survive its subject;
+    # until this migration the constraint said the opposite and the constraint is what runs.
+    assert restricted is not None and restricted["confdeltype"] == "r"
+    # And validated. The constraint is added NOT VALID so the row scan runs under a lock that does
+    # not block writes to `run`, then validated in its own statement -- leaving it NOT VALID would
+    # mean existing rows were never checked against it at all.
+    assert bool(restricted["convalidated"]), "the foreign key was added but never validated"
+
+
+def test_the_deletion_record_from_an_earlier_migration_is_still_correct(
+    disposable: str,
+) -> None:
+    """Migration 0017's effect, kept as its own case now that it is no longer the newest.
+
+    A migration test that only ever covered the tip would stop exercising every earlier change the
+    moment another one landed -- which is precisely when a regression in one of them would ship.
+    """
+    migrate(disposable)
+    with connect(disposable) as conn:
+        table = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            " WHERE table_schema = 'public' AND table_name = 'evidence_deletion'"
+        ).fetchone()
+        reason_guard = conn.execute(
+            "SELECT 1 FROM pg_constraint WHERE conrelid = 'evidence_deletion'::regclass "
+            "   AND pg_get_constraintdef(oid) LIKE '%btrim(reason)%'"
+        ).fetchone()
+        forced = conn.execute(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+            " WHERE relname = 'evidence_deletion'"
+        ).fetchone()
+    assert table is not None
+    assert reason_guard is not None, "a deletion could be recorded with no stated reason"
+    assert forced is not None
+    # A deletion record readable across tenants would disclose what another workspace removed, why,
+    # and who asked for it.
+    assert bool(forced["relrowsecurity"]) and bool(forced["relforcerowsecurity"])
+
+
+def test_the_schedule_reapproval_columns_from_an_earlier_migration_are_still_correct(
+    disposable: str,
+) -> None:
+    """Migration 0016's effect, kept as its own case now that it is no longer the newest.
+
+    A migration test that only ever covered the tip would stop exercising every earlier change the
+    moment another one landed -- which is precisely when a regression in one of them would ship.
+    """
+    migrate(disposable)
+    with connect(disposable) as conn:
+        columns = conn.execute(
             "SELECT count(*) AS n FROM information_schema.columns "
             " WHERE table_name = 'schedule' AND column_name IN ('reapproved_at','reapproved_by')"
         ).fetchone()
-        # The pairing constraint, not just the columns. Half a re-approval record -- a timestamp
-        # with nobody attached -- is the thing the constraint exists to make impossible, and
-        # asserting only that the columns arrived would pass without it.
         constraint = conn.execute(
             "SELECT 1 FROM pg_constraint WHERE conname = 'reapproval_is_attributable'"
         ).fetchone()
-    assert after is not None and int(after["n"]) == 2
+    assert columns is not None and int(columns["n"]) == 2
     assert constraint is not None
 
 
