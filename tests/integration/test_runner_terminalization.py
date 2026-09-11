@@ -104,6 +104,36 @@ def _queued_run(db: str) -> str:
         return runs.create_run(conn, workspace_id=WS, manifest_digest=MANIFEST)
 
 
+def _just_after_the_deadline(db: str, lease_id: str) -> str:
+    """A moment one second past this lease's own deadline.
+
+    Derived from the row, never written as a date. Both fencing calls in this file used to pass a
+    literal -- `"2026-09-11T00:00:00Z"` -- which was comfortably in the future on the day it was
+    written and became the past on 2026-09-11. `admit_lease` sets the deadline from the real clock,
+    so the lease outlived the "now" it was being fenced against, nothing was fenced, and the
+    assertion that an action is refused on a released lease stopped holding.
+
+    The other call site is worse, because it did not fail. It asserts that a cancellation cannot be
+    terminalized without proof of a stop, and that is true whether or not the lease was fenced -- so
+    from 2026-09-11 it passed while testing a weaker thing than it claimed. A date in a test is a
+    fuse with no indicator light.
+    """
+    with workspace_connection(db, WS) as conn:
+        row = conn.execute(
+            # AT TIME ZONE 'UTC' before formatting. `to_char` on a timestamptz renders it in the
+            # *session* timezone while this format string appends a literal "Z", so on a machine set
+            # to anything but UTC the result claims to be UTC and is not -- here seven hours early,
+            # which put the "just after the deadline" moment comfortably before it and fenced
+            # nothing.
+            "SELECT to_char((deadline_at + interval '1 second') AT TIME ZONE 'UTC', "
+            '       \'YYYY-MM-DD"T"HH24:MI:SS.US"Z"\') AS after '
+            "FROM desktop_lease WHERE id = %s",
+            (lease_id,),
+        ).fetchone()
+    assert row is not None, "no such lease"
+    return str(row["after"])
+
+
 def _running_with_lease(db: str) -> tuple[str, str, str, int]:
     """A run that is RUNNING on a real lease, with one action admitted."""
     runner_id = _ready_runner(db)
@@ -182,7 +212,7 @@ def test_an_expired_lease_is_not_a_route_to_cancelled(db: str) -> None:
     _, lease_id, run_id, _ = _running_with_lease(db)
     _request_cancel(db, run_id, lease_id)
     with workspace_connection(db, WS) as conn:
-        runners.fence_expired_leases(conn, now="2026-09-10T23:00:00.000000Z")
+        runners.fence_expired_leases(conn, now=_just_after_the_deadline(db, lease_id))
     _, _, revision = _state(db, run_id)
     with workspace_connection(db, WS) as conn:
         with pytest.raises(runners.RunnerError, match="not proof"):
@@ -453,13 +483,18 @@ def test_an_action_cannot_be_journaled_against_a_released_lease(db: str) -> None
     attributed to a session that had already ended.
     """
     _, lease_id, run_id, epoch = _running_with_lease(db)
+    after_the_deadline = _just_after_the_deadline(db, lease_id)
     with workspace_connection(db, WS) as conn:
         attempt = str(
             conn.execute(
                 "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
             ).fetchone()["attempt_id"]
         )
-        runners.fence_expired_leases(conn, now="2026-09-11T00:00:00.000000Z")
+        fenced = runners.fence_expired_leases(conn, now=after_the_deadline)
+        # Asserted, because the interesting assertion below holds whether or not anything was
+        # fenced. The literal this replaced stopped fencing on 2026-09-11 and the test failed; the
+        # sibling test using the same literal kept passing while testing less.
+        assert fenced == [lease_id]
         with pytest.raises(runners.RunnerError, match="was released"):
             runners.record_action_intent(
                 conn,
