@@ -22,9 +22,17 @@
  *
  * **Cancellation is reported as what the server proved.** "Requested; waiting for runner
  * acknowledgement" until a stop is acknowledged, and never "cancelled" before it is.
+ *
+ * **Following live events re-reads this run; it never renders them.** An event carries a reference,
+ * not state, so an arriving `run.finished` increments a counter and triggers a read of the
+ * authoritative record — it does not put "finished" on the screen. Rendering an event's own payload
+ * is how a stream becomes a source of verdicts, and the one thing the server will not let it be.
+ *
+ * Following is off until somebody asks for it, and stopping changes nothing about the run. UI-UX
+ * section 5 requires that: a reader who stops watching has not cancelled anything.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 
 import { Link } from 'react-router-dom'
@@ -46,6 +54,7 @@ import {
   requestExport,
 } from '../api/resources'
 import type { Run } from '../api/resources'
+import { useLiveEvents } from '../api/useLiveEvents'
 import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
 import { situationFor } from './runStatus'
@@ -296,6 +305,126 @@ const TimelineSection = ({
   )
 }
 
+
+/**
+ * Turning live updates on and off, and saying what "live" does and does not mean.
+ *
+ * Four things this control refuses to do:
+ *
+ * **It does not start following by itself.** A view that began updating under a reader's cursor
+ * would replace the thing they were reading mid-sentence. UI-UX section 5 requires that following is
+ * something a person chooses and can stop, and that stopping does not stop the work.
+ *
+ * **It does not offer to follow a run that has ended.** A terminal run receives no further events,
+ * so the control would connect, sit silent, and leave a reader wondering what it was waiting for.
+ * The copy says the record is final instead.
+ *
+ * **It never implies completion.** Neither the stream closing on its own schedule nor a silence
+ * between events says anything finished, and no state of this control reads that way.
+ *
+ * **It says when the view was stale.** A `reset` means the cursor fell below retention and the
+ * screen has just re-read. Continuing silently would leave a reader believing they had seen
+ * everything since their last update, which is the one thing a truncated stream must never imply.
+ */
+const FollowControl = ({
+  live,
+  status,
+}: {
+  readonly live: ReturnType<typeof useLiveEvents>
+  readonly status: string
+}): JSX.Element | null => {
+  const terminal = !NON_TERMINAL.has(status)
+  const wasFollowing = useRef(false)
+  if (live.status === 'following') wasFollowing.current = true
+
+  // Close the subscription when the run this page is about reaches a terminal state.
+  //
+  // The first version only swapped the controls for a notice, which left the workspace stream open:
+  // every later event about *any other run* kept reloading this finished one, and the reader had no
+  // stop control to reach for because the notice had replaced it. A subscription nobody can see and
+  // nobody can stop is the worst of both.
+  useEffect(() => {
+    if (terminal && live.status === 'following') live.stop()
+  }, [terminal, live])
+
+  if (terminal) {
+    return wasFollowing.current ? (
+      <Notice tone="information" heading="This run has ended" headingLevel={2} live>
+        <p>
+          No further events will arrive for it, so following has stopped. What is shown is the final
+          record.
+        </p>
+      </Notice>
+    ) : null
+  }
+
+  return (
+    <section className="af-stack">
+      <h2>Live updates</h2>
+
+      {live.status === 'unavailable' ? (
+        <p className="af-secondary">
+          This browser cannot open an event stream, so this page shows what it read when it loaded.
+          Reading it again is the way to see anything newer. Nothing about the run depends on this.
+        </p>
+      ) : (
+        <>
+          <p className="af-secondary">
+            Following re-reads this run whenever the server publishes an event about it. An event is
+            a reference, never a result: nothing in the stream appears on this page until it has been
+            read back from the authoritative record.
+          </p>
+          {live.status === 'following' ? (
+            <>
+              <p aria-live="polite">
+                Following. {live.changes === 0
+                  ? 'Nothing has been published yet.'
+                  : `${live.changes} update${live.changes === 1 ? '' : 's'} so far.`}
+              </p>
+              <Button variant="secondary" onClick={live.stop}>
+                Stop following
+              </Button>
+              <p className="af-secondary">
+                Stopping stops the updates, not the run. Nothing is cancelled by looking away.
+              </p>
+            </>
+          ) : (
+            <Button variant="secondary" onClick={live.start}>
+              Follow live updates
+            </Button>
+          )}
+        </>
+      )}
+
+      {live.wasReset && (
+        <Notice tone="warning" heading="Your view was out of date" headingLevel={3} live>
+          <p>
+            The server no longer retains events from as far back as this page had read, so it could
+            not tell you what you missed one event at a time. The run has been re-read from the
+            authoritative record, and what is shown now is current.
+          </p>
+          <p className="af-secondary">
+            This is a reset, not a gap: a stream that served only what remained would have left you
+            believing you had seen everything since.
+          </p>
+          <Button variant="secondary" onClick={live.acknowledgeReset}>
+            Understood
+          </Button>
+        </Notice>
+      )}
+
+      {live.status === 'accessEnded' && (
+        <Notice tone="warning" heading="Live updates stopped" headingLevel={3} live>
+          <p>
+            Your access to this workspace ended while this page was following, so the stream was
+            closed. The run itself is unaffected.
+          </p>
+        </Notice>
+      )}
+    </section>
+  )
+}
+
 export const RunScreen = (): JSX.Element => {
   const workspaceId = useWorkspaceId()
   const runId = useRunId()
@@ -313,6 +442,14 @@ export const RunScreen = (): JSX.Element => {
   const [selectedAttempt, setSelectedAttempt] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [cancelNotice, setCancelNotice] = useState<string | null>(null)
+
+  // Re-read on every published event. Both resources, because a run's status and its attempts move
+  // together: a lease produces a new attempt and a status change in the same transaction, and
+  // refreshing one would show a RUNNING run with no attempt to read.
+  const live = useLiveEvents(client, workspaceId, () => {
+    run.reload()
+    attempts.reload()
+  })
 
   const cancel = async (current: Run): Promise<void> => {
     setCancelling(true)
@@ -349,6 +486,8 @@ export const RunScreen = (): JSX.Element => {
         return (
           <>
             <RouteHeading>Run {value.runId.slice(0, 8)}</RouteHeading>
+
+            <FollowControl live={live} status={value.status} />
 
             <section className="af-stack">
               <h2>What happened</h2>
