@@ -15,7 +15,7 @@ from accessforge_api.routes._common import as_body, as_identifier, authorize, wo
 from accessforge_domain import reducers
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.timestamps import to_rfc3339_utc
-from accessforge_persistence import budgets, evidence, runners, runs
+from accessforge_persistence import budgets, evidence, projects, runners, runs
 from accessforge_persistence.evidence import artifacts as artifacts_module
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runs"])
@@ -102,6 +102,30 @@ def request_run(
     )
 
     def perform() -> dict[str, Any]:
+        # The manifest digest must name something this workspace actually sealed. Until this check
+        # existed the field was taken on the caller's word: any 64-character hex string queued a run
+        # whose identity matched nothing, and the only guard was module 22's screen refusing to
+        # request a run when a project had sealed none -- a check in the one place a caller can
+        # skip.
+        # The failure then surfaced at dispatch, as a run refusing to start because it named a
+        # manifest nobody could find, long after somebody believed it was queued.
+        #
+        # Looked up on the workspace-scoped connection, so a digest sealed in another workspace
+        # is as absent as one that was never sealed at all.
+        sealed = projects.find_sealed_manifest(conn, manifest_digest=str(body["manifestDigest"]))
+        if sealed is None:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT,
+                "no sealed manifest has that digest in this workspace. A run is requested against "
+                "a sealed manifest -- the source commit, the built artifact, the environment "
+                "configuration, the journey, its assertions and fixture, the runner profile, the "
+                "evaluator version and the model configuration, together -- not against a journey "
+                "digest or any other value of the right shape. Seal one with "
+                "POST /projects/{projectId}/seals, or list what exists with "
+                "GET /projects/{projectId}/manifests.",
+                request_id=context.request_id,
+            )
+
         try:
             runners.assert_queue_capacity(conn)
         except runners.QueueFull as exc:

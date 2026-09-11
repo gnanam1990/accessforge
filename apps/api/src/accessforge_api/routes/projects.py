@@ -8,13 +8,14 @@ from typing import Annotated, Any
 import psycopg
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from accessforge_api.dependencies import clamp_page_size
+from accessforge_api.dependencies import clamp_page_size, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.origins import OriginError, normalize_origin
 from accessforge_persistence import projects
+from accessforge_persistence.source_intake import SourceIdentity
 
-from ._common import as_body, authorize, workspace_scope
+from ._common import as_body, as_identifier, authorize, workspace_scope
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["projects"])
 
@@ -416,3 +417,253 @@ def get_journey_version(
         "supersedes": None if row["supersedes"] is None else str(row["supersedes"]),
         "createdAt": str(row["created_at"]),
     }
+
+
+def _assert_project_visible(conn: psycopg.Connection[Any], *, project_id: str) -> None:
+    """The uniform 404 for a project this caller cannot see.
+
+    Row-level security already hides another tenant's project, so this answers the same way whether
+    the project does not exist or belongs to somebody else. Checked before the body is acted on, so
+    a caller cannot learn that a project exists by watching which validation error comes back.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM project WHERE id = %s",
+        (as_identifier(project_id, what="projectId"),),
+    ).fetchone()
+    if row is None:
+        raise not_found()
+
+
+BUILD_FIELDS = frozenset(
+    {
+        "commitSha",
+        "treeDigest",
+        "dirty",
+        "dirtyPaths",
+        "requestedRevision",
+        "artifactDigest",
+        "identityObservable",
+    }
+)
+
+SEAL_FIELDS = frozenset(
+    {
+        "buildId",
+        "environmentId",
+        "journeyDigest",
+        "assertionSetDigest",
+        "fixtureDigest",
+        "runnerProfileDigest",
+        "navigatorPolicyDigest",
+        "evaluatorVersion",
+        "modelConfigDigest",
+    }
+)
+
+
+@router.post("/projects/{project_id}/builds", status_code=status.HTTP_201_CREATED)
+def register_build(
+    workspace_id: str,
+    project_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Record what was built, and from which source.
+
+    One operation for the source snapshot and the artifact, because they are one fact: an artifact
+    digest with no source identity is an artifact nobody can trace, and a source identity with no
+    artifact is a commit nobody built. Recording them separately would allow both halves to exist
+    apart, and the half that goes missing is always the one a reader needed.
+
+    **A dirty tree is recorded, not refused.** Local development is a legitimate case in E0. What is
+    forbidden is describing it as clean afterwards, so `dirty` and the count of differing paths are
+    stored and travel into every seal built on this build.
+
+    **`identityObservable: false` is accepted and is a claim about the deployment, not the build.**
+    It means the environment cannot prove which artifact it is serving. Such a run may still
+    execute; it simply cannot make a fully verified provenance claim, and the limitation stays
+    visible rather than being replaced with a plausible digest.
+    """
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.PROJECT_CONFIGURE,
+        body=body,
+        allowed_fields=BUILD_FIELDS,
+    )
+    _assert_project_visible(conn, project_id=project_id)
+
+    missing = sorted({"commitSha", "treeDigest", "requestedRevision", "artifactDigest"} - set(body))
+    if missing:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            f"missing required field(s): {', '.join(missing)}. A build records both where the "
+            "source came from and what was produced from it; neither half is optional, because "
+            "either one alone is untraceable.",
+            request_id=context.request_id,
+        )
+
+    dirty_paths = body.get("dirtyPaths", [])
+    if not isinstance(dirty_paths, list):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "dirtyPaths must be an array. A bare string is iterable and would be recorded as one "
+            "path per character.",
+            request_id=context.request_id,
+        )
+
+    def perform() -> dict[str, Any]:
+        identity = SourceIdentity(
+            commit_sha=str(body["commitSha"]),
+            tree_digest=str(body["treeDigest"]),
+            dirty=bool(body.get("dirty", False)),
+            dirty_paths=tuple(str(p) for p in dirty_paths),
+        )
+        try:
+            snapshot_id = projects.record_source_snapshot(
+                conn,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                identity=identity,
+                requested_revision=str(body["requestedRevision"]),
+            )
+            artifact_id = projects.record_build_artifact(
+                conn,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                source_snapshot_id=snapshot_id,
+                artifact_digest=str(body["artifactDigest"]),
+                identity_observable=bool(body.get("identityObservable", True)),
+            )
+        except (projects.ProjectError, ValueError) as exc:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
+            ) from exc
+
+        return {
+            "buildId": artifact_id,
+            "sourceSnapshotId": snapshot_id,
+            "commitSha": identity.commit_sha,
+            "treeDigest": identity.tree_digest,
+            "dirty": identity.dirty,
+            "dirtyPathCount": len(identity.dirty_paths),
+            "artifactDigest": str(body["artifactDigest"]),
+            "identityObservable": bool(body.get("identityObservable", True)),
+            "meaning": (
+                "Recorded as observed. A dirty tree stays dirty in every seal built on this build, "
+                "and identityObservable false means the deployment cannot prove which artifact it "
+                "serves -- not that it serves the one named here."
+            ),
+        }
+
+    outcome = run_idempotently(
+        conn, context, route="POST /projects/builds", body=body, perform=perform
+    )
+    return outcome.response or {}
+
+
+@router.post("/projects/{project_id}/seals", status_code=status.HTTP_201_CREATED)
+def seal_manifest(
+    workspace_id: str,
+    project_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Seal a manifest over every input a run's identity depends on.
+
+    This is the route a run is requested against. `POST /runs` refuses a digest nothing sealed, so
+    until this existed a manifest could only be produced by writing SQL — which meant the product's
+    central identity step had no surface at all, and the check that would have revealed it was
+    missing.
+
+    The environment is validated first by `seal_run`: sealing against a revoked, expired or
+    superseded environment would produce a manifest that looked authoritative and was never
+    authorized.
+
+    A digest is deliberately **not** unique. Two seals over identical inputs share one, which is how
+    a baseline and a candidate are shown to differ only by an approved patch (INV-04). Sealing twice
+    is therefore not an error, and a caller who wants one seal per attempt supplies an
+    `Idempotency-Key`.
+    """
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.PROJECT_CONFIGURE,
+        body=body,
+        allowed_fields=SEAL_FIELDS,
+    )
+    _assert_project_visible(conn, project_id=project_id)
+
+    missing = sorted(SEAL_FIELDS - set(body))
+    if missing:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            f"missing required field(s): {', '.join(missing)}. Every input is required: a "
+            "manifest that omitted one would describe a run identity not covering it, and the gap "
+            "would surface as two runs looking identical while differing in the field nobody "
+            "sealed.",
+            request_id=context.request_id,
+        )
+
+    def perform() -> dict[str, Any]:
+        build = conn.execute(
+            "SELECT id, source_snapshot_id FROM build_artifact WHERE id = %s",
+            (as_identifier(str(body["buildId"]), what="buildId"),),
+        ).fetchone()
+        if build is None:
+            raise not_found()
+
+        try:
+            sealed = projects.seal_run(
+                conn,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                source_snapshot_id=str(build["source_snapshot_id"]),
+                build_artifact_id=str(build["id"]),
+                environment_manifest_id=as_identifier(
+                    str(body["environmentId"]), what="environmentId"
+                ),
+                inputs=projects.SealInputs(
+                    journey_digest=str(body["journeyDigest"]),
+                    assertion_set_digest=str(body["assertionSetDigest"]),
+                    fixture_digest=str(body["fixtureDigest"]),
+                    runner_profile_digest=str(body["runnerProfileDigest"]),
+                    navigator_policy_digest=str(body["navigatorPolicyDigest"]),
+                    evaluator_version=str(body["evaluatorVersion"]),
+                    model_config_digest=str(body["modelConfigDigest"]),
+                ),
+            )
+        except projects.SealError as exc:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
+            ) from exc
+        except projects.ProjectError as exc:
+            # A revoked, expired or superseded environment. 409 rather than 400: the body is
+            # well-formed and the state it names is not usable.
+            raise ProblemDetail(
+                ProblemCode.CONFLICT, str(exc), request_id=context.request_id
+            ) from exc
+
+        return {
+            "sealedManifestId": sealed.sealed_manifest_id,
+            "manifestDigest": sealed.manifest_digest,
+            "requestRunWith": sealed.manifest_digest,
+            "meaning": (
+                "This digest covers the source commit, the built artifact, the environment "
+                "configuration, the journey, its assertions, its fixture, the runner profile, the "
+                "evaluator version and the model configuration -- together. Request a run against "
+                "it. Two seals over identical inputs share a digest by design; that is how a "
+                "baseline and a candidate are shown to differ only by an approved patch."
+            ),
+        }
+
+    outcome = run_idempotently(
+        conn, context, route="POST /projects/seals", body=body, perform=perform
+    )
+    return outcome.response or {}
