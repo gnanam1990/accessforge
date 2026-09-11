@@ -180,7 +180,7 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
             " WHERE relname = 'evidence_object_purge'"
         ).fetchone()
         restricted = conn.execute(
-            "SELECT confdeltype FROM pg_constraint "
+            "SELECT confdeltype, convalidated FROM pg_constraint "
             " WHERE conrelid = 'evidence_deletion'::regclass AND contype = 'f' "
             "   AND confrelid = 'run'::regclass"
         ).fetchone()
@@ -197,6 +197,10 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     # 'r' is RESTRICT. The table comment always said the deletion record must survive its subject;
     # until this migration the constraint said the opposite and the constraint is what runs.
     assert restricted is not None and restricted["confdeltype"] == "r"
+    # And validated. The constraint is added NOT VALID so the row scan runs under a lock that does
+    # not block writes to `run`, then validated in its own statement -- leaving it NOT VALID would
+    # mean existing rows were never checked against it at all.
+    assert bool(restricted["convalidated"]), "the foreign key was added but never validated"
 
 
 def test_the_deletion_record_from_an_earlier_migration_is_still_correct(

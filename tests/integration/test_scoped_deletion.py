@@ -1328,3 +1328,50 @@ def test_an_unclassified_event_type_in_scope_is_refused_rather_than_skipped(
                 reason="the customer withdrew consent for captured speech",
                 requested_by=OPERATOR,
             )
+
+
+def test_a_second_purge_skips_rows_another_is_holding_rather_than_double_counting(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """Two callers purging one deletion must not both claim the same key.
+
+    An operator retrying twice, or a retry racing a fresh deletion's drain, would otherwise select
+    the same pending rows, both call the store for the same key and both count it -- so
+    `objectsPurged` would describe more work than was done. Without SKIP LOCKED the second caller
+    blocks instead, waiting on network deletes it cannot see, which is why this asserts against a
+    statement timeout: a version that blocks fails here rather than hanging the suite.
+    """
+    run_id, attempt_id = _run(db)
+    artifact = _promoted(db, store, run_id, attempt_id)
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+
+    with workspace_connection(db, WS) as holder:
+        # Whatever a concurrent purge looks like mid-flight: the row claimed, the store call not
+        # finished, nothing committed.
+        held = holder.execute(
+            "SELECT id FROM evidence_object_purge WHERE deletion_id = %s FOR UPDATE",
+            (report.deletion_id,),
+        ).fetchall()
+        assert len(held) == 1
+
+        with workspace_connection(db, WS) as other:
+            other.execute("SELECT set_config('statement_timeout', '4s', true)")
+            outcome = deletion.purge_pending_objects(other, store, deletion_id=report.deletion_id)
+
+        assert outcome.purged == 0, "the second caller claimed a row the first was already holding"
+        # Still pending, and truthfully so: as far as this caller can see those bytes are there.
+        assert outcome.still_pending == 1
+
+    # And the holder's own claim is intact -- skipping is not stealing.
+    assert store.get(key=artifact.object_key) == TRANSCRIPT
+    with workspace_connection(db, WS) as conn:
+        assert deletion.pending_purges(conn, deletion_id=report.deletion_id) == 1
