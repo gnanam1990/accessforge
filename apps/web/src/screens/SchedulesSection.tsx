@@ -28,6 +28,16 @@
  * nobody asked it to restart — overnight, against a real desktop, on one click during an incident.
  * So the schedule's own control stays separate and appears only once its grant is usable.
  *
+ * **A reader who cannot act sees no controls, and all of the data.** Every mutation here needs
+ * `RUN_APPROVE`, which OWNER and MAINTAINER hold and REVIEWER and VIEWER do not. Rendering a Revoke
+ * button for a viewer would offer an action the server answers with 403 — a control that exists to
+ * fail. The rows, the states and the server's own reasons stay visible, because a thing somebody
+ * cannot change is still one they may need to know.
+ *
+ * The role set is **not** `MAY_CONFIGURE` from the settings screen. That one is owner-only, for
+ * limits and retention, and reusing it here would hide working controls from a maintainer who
+ * genuinely holds the permission — which is a different failure, and a quieter one.
+ *
  * **Nothing here creates a grant or a schedule.** Both are authorizations with bounds on every axis
  * and an expiry, and a form that collected nine digests would be a form nobody could fill in
  * correctly from a browser. The routes exist and the CLI reaches them; a creation form that produced
@@ -58,8 +68,17 @@ import type { ExecutionGrant, GrantInventory, Schedule } from '../api/resources'
 import type { ApiOutcome } from '../api/client'
 import { useResource } from '../api/useResource'
 import type { Resource } from '../api/useResource'
-import { useSession } from '../session/SessionProvider'
+import { membershipFor, useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
+
+/**
+ * The roles that hold `RUN_APPROVE`, which every mutation on this section requires.
+ *
+ * From module 03's matrix: OWNER holds every permission and MAINTAINER is granted RUN_APPROVE
+ * explicitly. REVIEWER and VIEWER are not, and that matrix is written out per role rather than
+ * derived by inheritance precisely so a reviewer cannot quietly acquire execution authority.
+ */
+const MAY_APPROVE = new Set(['OWNER', 'MAINTAINER'])
 
 /**
  * What a grant's state is called, and the tone it is shown in.
@@ -94,8 +113,11 @@ const scheduleState = (
 
 export const SchedulesSection = (): JSX.Element => {
   const workspaceId = useWorkspaceId()
-  const { client } = useSession()
+  const { client, state } = useSession()
   const { announce } = useAnnouncer()
+
+  const membership = membershipFor(state, workspaceId)
+  const mayApprove = membership !== null && MAY_APPROVE.has(membership.role)
 
   const grants = useResource(
     (signal) => listGrants(client, workspaceId, signal),
@@ -175,6 +197,20 @@ export const SchedulesSection = (): JSX.Element => {
         </p>
       </Notice>
 
+      {!mayApprove && (
+        <Notice
+          tone="information"
+          heading="You can read these but not change them"
+          headingLevel={3}
+        >
+          <p>
+            Revoking a grant, confirming a restored one, and pausing or re-approving a schedule all
+            need the owner or maintainer role. Everything below is shown in full: an authorization
+            somebody cannot change is still one they may need to understand.
+          </p>
+        </Notice>
+      )}
+
       {refusal !== null && (
         <Notice tone="warning" heading="That was refused" headingLevel={3}>
           <p>{refusal}</p>
@@ -242,7 +278,7 @@ export const SchedulesSection = (): JSX.Element => {
                     header: 'Action',
                     cell: (grant) => (
                       <div className="af-row">
-                        {grant.revalidationRequired && !grant.revoked && (
+                        {mayApprove && grant.revalidationRequired && !grant.revoked && (
                           <Button
                             variant="primary"
                             busy={busyId === grant.grantId}
@@ -260,7 +296,7 @@ export const SchedulesSection = (): JSX.Element => {
                             Confirm still authorized
                           </Button>
                         )}
-                        {!grant.revoked && (
+                        {mayApprove && !grant.revoked && (
                           <Button
                             variant="destructive"
                             busy={busyId === grant.grantId}
@@ -355,7 +391,7 @@ export const SchedulesSection = (): JSX.Element => {
                         schedule.grantRevisionAtApproval !== grant.revision
                       return (
                         <div className="af-row">
-                          {needsReapproval && (
+                          {mayApprove && needsReapproval && (
                             <Button
                               variant="primary"
                               busy={busyId === schedule.scheduleId}
@@ -373,7 +409,7 @@ export const SchedulesSection = (): JSX.Element => {
                               Re-approve
                             </Button>
                           )}
-                          {schedule.pausedAt === null ? (
+                          {!mayApprove ? null : schedule.pausedAt === null ? (
                             <Button
                               variant="secondary"
                               busy={busyId === schedule.scheduleId}
