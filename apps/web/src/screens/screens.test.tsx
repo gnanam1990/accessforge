@@ -125,9 +125,15 @@ describe('projects', () => {
     // own name into it.
     const picker = await screen.findByLabelText(/Authorized by/)
     expect(picker.tagName.toLowerCase()).toBe('select')
-    expect(
-      within(picker).getByRole('option', { name: /engineer@example.test/ }),
-    ).toBeInTheDocument()
+    // Waited for, not queried synchronously. The `<select>` renders as soon as the screen does and
+    // its options arrive with the *members* request, so a synchronous query here is a race -- it
+    // passed most of the time and failed roughly one run in ten, which is the worst kind of test
+    // failure: real, intermittent, and easy to blame on whatever was changed last.
+    await waitFor(() =>
+      expect(
+        within(picker).getByRole('option', { name: /engineer@example.test/ }),
+      ).toBeInTheDocument(),
+    )
   })
 
   it('creates a project and shows it in the list', async () => {
