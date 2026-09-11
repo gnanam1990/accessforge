@@ -192,8 +192,9 @@ class DeletionReport:
             f"{self.objects_still_present} object(s) are recorded as deleted and the "
             "object store has not released them yet. The database already reports "
             "this evidence as deleted and the completeness claim is already "
-            "invalidated; the bytes are queued for removal and the next pass "
-            "finishes it. Until then, they exist.",
+            "invalidated; the bytes stay queued until a purge retry removes them "
+            "-- POST /runs/{runId}/deletions/{deletionId}/retry. Until then, they "
+            "exist.",
         )
 
     def with_purge(self, outcome: PurgeOutcome) -> DeletionReport:
@@ -414,6 +415,26 @@ def record_deletion(
             (to_rfc3339_utc(moment), reason, artifact_id),
         )
 
+    # Every event type actually present on this run has to have a class, the same way every
+    # artifact kind does. `canonical_event.event_type` carries no CHECK constraint, so an event
+    # type added later without a mapping would not be refused here -- it would simply not appear
+    # in `event_types` below and its payload would survive a deletion that reported success. The
+    # artifact path already refuses an unmapped kind; this is the same failure and gets the same
+    # answer.
+    present = {
+        str(row["event_type"])
+        for row in conn.execute(
+            "SELECT DISTINCT event_type FROM canonical_event WHERE run_id = %s", (run_id,)
+        ).fetchall()
+    }
+    unclassified = sorted(present - set(EVENT_CLASS))
+    if unclassified:
+        raise DeletionError(
+            f"event type(s) {', '.join(unclassified)} have no retention class. Refused rather "
+            "than skipped: an unclassified payload surviving a deletion that reported success "
+            "is the failure this operation exists to avoid."
+        )
+
     placeholder = json.dumps(DELETED_PAYLOAD)
     event_types = [kind for kind, name in EVENT_CLASS.items() if name in classes]
     cleared = 0
@@ -561,6 +582,44 @@ def purge_pending_objects(
         purged=purged,
         still_pending=pending_purges(conn, deletion_id=deletion_id),
         keys_failed=tuple(failures),
+        scope=deletion_id,
+    )
+
+
+def purge_until_drained(
+    conn: psycopg.Connection[dict[str, Any]],
+    store: ArtifactStore,
+    *,
+    deletion_id: str,
+    limit: int = 200,
+    max_passes: int = 50,
+    now: datetime | None = None,
+) -> PurgeOutcome:
+    """Purge one deletion's queue until it stops shrinking.
+
+    One pass takes at most `limit` keys, so a single call leaves a backlog whenever
+    the queue is longer than that -- and nothing re-enqueues it, because the
+    artifacts are already DELETED and the scope query skips them. Without this the
+    "a later pass finishes it" the report promises has nothing to do it.
+
+    Stops on the first pass that removes nothing, which is what a store outage looks
+    like: the keys stay pending with their errors and the count stays honest rather
+    than the loop spinning against a store that is down. `max_passes` bounds the
+    work a single request can do; whatever is left is reported, not hidden.
+    """
+    total = 0
+    outcome = PurgeOutcome(purged=0, still_pending=pending_purges(conn, deletion_id=deletion_id))
+    for _ in range(max_passes):
+        if outcome.still_pending == 0:
+            break
+        outcome = purge_pending_objects(conn, store, deletion_id=deletion_id, limit=limit, now=now)
+        total += outcome.purged
+        if outcome.purged == 0:
+            break
+    return PurgeOutcome(
+        purged=total,
+        still_pending=pending_purges(conn, deletion_id=deletion_id),
+        keys_failed=outcome.keys_failed,
         scope=deletion_id,
     )
 
