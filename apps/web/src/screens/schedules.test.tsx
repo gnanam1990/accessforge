@@ -316,3 +316,67 @@ describe('recovering from a restore', () => {
     ).toBeVisible()
   })
 })
+
+describe('who may act', () => {
+  it('offers no controls to a viewer, and shows them everything', async () => {
+    // A Revoke button a viewer can press is a control that exists to fail: the server answers 403.
+    // The rows stay, because an authorization somebody cannot change is still one they may need to
+    // understand.
+    const server = createFakeServer({
+      userId: 'u-2',
+      email: 'viewer@example.test',
+      workspaces: [{ workspaceId: 'ws-1', name: 'Alder', role: 'VIEWER' }],
+    })
+    server.data.grants = [grant({ revalidationRequired: true, usable: false })]
+    server.data.schedules = [schedule()]
+    renderSettings(server)
+
+    const grants = await grantsTable()
+    expect(within(grants).queryByRole('button', { name: 'Revoke' })).toBeNull()
+    expect(within(grants).queryByRole('button', { name: /Confirm still authorized/ })).toBeNull()
+    expect(within(grants).getByText(/Awaiting revalidation/)).toBeVisible()
+
+    const schedules = await schedulesTable()
+    expect(within(schedules).queryByRole('button', { name: 'Pause' })).toBeNull()
+    expect(within(schedules).queryByRole('button', { name: 'Resume' })).toBeNull()
+    expect(within(schedules).queryByRole('button', { name: 'Re-approve' })).toBeNull()
+
+    expect(screen.getByText(/need the owner or maintainer role/)).toBeVisible()
+  })
+
+  it('offers controls to a maintainer, who holds RUN_APPROVE', async () => {
+    // Not gated on the owner-only set the allowance form uses. Reusing that would hide working
+    // controls from a maintainer who genuinely holds the permission -- a quieter failure than
+    // offering one that cannot work.
+    const server = createFakeServer({
+      userId: 'u-3',
+      email: 'maintainer@example.test',
+      workspaces: [{ workspaceId: 'ws-1', name: 'Alder', role: 'MAINTAINER' }],
+    })
+    server.data.grants = [grant({ revalidationRequired: true, usable: false })]
+    server.data.schedules = [schedule()]
+    renderSettings(server)
+
+    const grants = await grantsTable()
+    expect(within(grants).getByRole('button', { name: /Confirm still authorized/ })).toBeVisible()
+    expect(within(grants).getByRole('button', { name: 'Revoke' })).toBeVisible()
+
+    const schedules = await schedulesTable()
+    expect(within(schedules).getByRole('button', { name: 'Pause' })).toBeVisible()
+  })
+
+  it('offers a paused schedule no resume control to a reviewer', async () => {
+    const server = createFakeServer({
+      userId: 'u-4',
+      email: 'reviewer@example.test',
+      workspaces: [{ workspaceId: 'ws-1', name: 'Alder', role: 'REVIEWER' }],
+    })
+    server.data.grants = [grant()]
+    server.data.schedules = [schedule({ pausedAt: '2026-09-02T00:00:00Z', pausedBy: 'u-1' })]
+    renderSettings(server)
+
+    const table = await schedulesTable()
+    expect(within(table).getByText(/Paused/)).toBeVisible()
+    expect(within(table).queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
+})
