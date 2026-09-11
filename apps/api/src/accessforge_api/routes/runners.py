@@ -7,12 +7,19 @@ from typing import Annotated, Any
 import psycopg
 from fastapi import APIRouter, Depends, Request, status
 
-from accessforge_api.dependencies import clamp_page_size
+from accessforge_api.dependencies import clamp_page_size, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
-from accessforge_api.routes._common import as_body, authorize, workspace_scope
+from accessforge_api.routes._common import (
+    as_body,
+    as_identifier,
+    authorize,
+    workspace_scope,
+)
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.runners import PhysicalSession, RunnerProfile
 from accessforge_domain.runners.identity import EnrollmentError
+from accessforge_domain.runners.preflight import PreflightCheck, PreflightResult
+from accessforge_domain.states import Condition
 from accessforge_persistence import runners
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runners"])
@@ -279,3 +286,152 @@ def reset_runner(
         "fencedEpoch": outcome.fenced_epoch,
         "localImpactWarning": runners.RESET_LOCAL_IMPACT_WARNING,
     }
+
+
+PREFLIGHT_FIELDS = frozenset(
+    {
+        "runnerProfileDigest",
+        "environmentConfigDigest",
+        "manifestDigest",
+        "observedReaderVersion",
+        "observedBrowserVersion",
+        "observedLocale",
+        "observedKeyboardLayout",
+        "desktopSessionKey",
+        "observedAt",
+        "checks",
+    }
+)
+
+
+@router.post("/runners/{runner_id}/preflights", status_code=status.HTTP_201_CREATED)
+def submit_preflight(
+    workspace_id: str,
+    runner_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Submit a preflight, and let the server decide what it established.
+
+    Three things this route will not do, each of which is the obvious convenience:
+
+    **It does not accept a `successful` field.** Success is computed from the submitted checks. A
+    runner that could declare itself ready would be the only witness to its own readiness, and the
+    whole purpose of a preflight is that READY means something a server checked.
+
+    **An absent check is not a passing check.** Coverage is compared for equality against the
+    required set, so a supervisor that stops reporting one after an upgrade fails preflight rather
+    than quietly dropping the guarantee. `UNKNOWN` is available and is not a pass: a runner that
+    could not determine whether the screen was locked has not shown that it was unlocked.
+
+    **It does not trust the runner's own version-match check.** A supervisor that lied about its
+    reader version would also lie about whether that version matches its profile, so the server
+    compares the observed values against the enrolled profile itself.
+
+    A failed preflight is a 201, not a 4xx. The submission was accepted and recorded; what it
+    established is in the body. Answering 400 would conflate "you sent something malformed" with
+    "your desktop is not ready", and the second is a result worth keeping.
+    """
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        # INFRASTRUCTURE_OPERATE, not RUN_REQUEST. A preflight decides whether a runner becomes
+        # READY or is quarantined, which is runner management -- the same authority that enrolled it
+        # and can reset it. RUN_REQUEST is held by anyone who may ask for a run, and letting that
+        # role flip a desktop to READY would mean the permission to request work also grants the
+        # permission to declare the machine fit to do it.
+        #
+        # In production a preflight is submitted by the runner itself under a service credential.
+        # That principal does not exist yet, so this is the human-facing route and it takes the
+        # stricter of the two permissions rather than the more convenient one.
+        Permission.INFRASTRUCTURE_OPERATE,
+        body=body,
+        allowed_fields=PREFLIGHT_FIELDS,
+    )
+
+    missing = sorted(PREFLIGHT_FIELDS - set(body))
+    if missing:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            f"missing required field(s): {', '.join(missing)}",
+            request_id=context.request_id,
+        )
+
+    checks = body["checks"]
+    if not isinstance(checks, dict):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "checks must be an object mapping each check name to TRUE, FALSE or UNKNOWN",
+            request_id=context.request_id,
+        )
+
+    try:
+        parsed = {
+            PreflightCheck(str(name)): Condition(str(value)) for name, value in checks.items()
+        }
+    except ValueError as exc:
+        # A closed vocabulary on both sides. If a runner could name its own checks, the
+        # required-coverage comparison would silently stop covering anything.
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            f"unrecognised check name or condition: {exc}. Both vocabularies are closed, because a "
+            "runner that could invent a check name could satisfy coverage without performing one.",
+            request_id=context.request_id,
+        ) from exc
+
+    def perform() -> dict[str, Any]:
+        try:
+            result = PreflightResult(
+                runner_profile_digest=str(body["runnerProfileDigest"]),
+                environment_config_digest=str(body["environmentConfigDigest"]),
+                manifest_digest=str(body["manifestDigest"]),
+                observed_reader_version=str(body["observedReaderVersion"]),
+                observed_browser_version=str(body["observedBrowserVersion"]),
+                observed_locale=str(body["observedLocale"]),
+                observed_keyboard_layout=str(body["observedKeyboardLayout"]),
+                desktop_session_key=str(body["desktopSessionKey"]),
+                observed_at=str(body["observedAt"]),
+                checks=parsed,
+            )
+        except (ValueError, TypeError) as exc:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
+            ) from exc
+
+        try:
+            record = runners.record_preflight(
+                conn,
+                workspace_id=workspace_id,
+                runner_id=as_identifier(runner_id, what="runnerId"),
+                result=result,
+            )
+        except runners.RunnerError as exc:
+            # "no such runner in this workspace" is the uniform 404; anything else is a refusal
+            # about the submission itself.
+            if "no such runner" in str(exc):
+                raise not_found() from exc
+            raise ProblemDetail(
+                ProblemCode.CONFLICT, str(exc), request_id=context.request_id
+            ) from exc
+
+        return {
+            "preflightId": record.preflight_id,
+            "successful": record.successful,
+            "runnerStatus": str(record.runner_status),
+            "refusalSummary": record.refusal_summary,
+            "meaning": (
+                "successful is computed from the checks you submitted, not taken from your "
+                "submission. READY means this server compared the observed reader and browser "
+                "versions against the enrolled profile and found every required check TRUE -- not "
+                "that the runner reported itself ready. A preflight is evidence for the profile, "
+                "environment and manifest it names and for nothing else."
+            ),
+        }
+
+    outcome = run_idempotently(
+        conn, context, route="POST /runners/preflights", body=body, perform=perform
+    )
+    return outcome.response or {}

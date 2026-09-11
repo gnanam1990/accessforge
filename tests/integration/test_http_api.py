@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,7 +39,6 @@ WS_OTHER = str(uuid.UUID(int=0xF1))
 OWNER = str(uuid.UUID(int=0xF2))
 VIEWER = str(uuid.UUID(int=0xF3))
 OUTSIDER = str(uuid.UUID(int=0xF4))
-MANIFEST = digest({"m": "18"})
 
 
 @pytest.fixture()
@@ -100,6 +99,22 @@ def db(test_database_url: str) -> Iterator[str]:
                 reason="generous, so these tests exercise the routes rather than the limit",
             )
     yield test_database_url
+
+
+@pytest.fixture()
+def manifest(db: str, seal_manifest: Callable[..., str]) -> str:
+    """A manifest this workspace has genuinely sealed.
+
+    `POST /runs` refuses a digest nothing sealed, so a test that wants to request a run has to do
+    what a caller does. The module constant this replaced was a bare `digest({...})` the route
+    accepted on trust — which was the defect, not the test.
+    """
+
+    from accessforge_persistence import projects as project_store
+
+    with workspace_connection(db, WS) as conn:
+        project_id = project_store.create_project(conn, workspace_id=WS, name="sealed")
+    return seal_manifest(db, workspace_id=WS, project_id=project_id, authorized_by=OWNER)
 
 
 @pytest.fixture()
@@ -270,7 +285,9 @@ def test_another_workspaces_project_is_not_visible(db: str, client: TestClient) 
 # --- runs ----------------------------------------------------------------------------------------
 
 
-def test_requesting_a_run_returns_202_and_no_outcome(db: str, client: TestClient) -> None:
+def test_requesting_a_run_returns_202_and_no_outcome(
+    db: str, client: TestClient, manifest: str
+) -> None:
     """202, because requesting is not running, and the body carries no result.
 
     `NOT_EVALUATED` is what the run actually holds. A 201 with something outcome-shaped would invite
@@ -279,7 +296,7 @@ def test_requesting_a_run_returns_202_and_no_outcome(db: str, client: TestClient
     token, csrf = _sign_in(db, OWNER)
     response = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         cookies=_cookies(token),
         headers=_headers(csrf),
     )
@@ -290,13 +307,15 @@ def test_requesting_a_run_returns_202_and_no_outcome(db: str, client: TestClient
     assert "Location" in response.headers
 
 
-def test_a_run_reports_status_and_outcome_as_separate_fields(db: str, client: TestClient) -> None:
+def test_a_run_reports_status_and_outcome_as_separate_fields(
+    db: str, client: TestClient, manifest: str
+) -> None:
     """Never merged. Status says how a run ended; outcome says what it established, and a run can
     end cleanly having established nothing."""
     token, csrf = _sign_in(db, OWNER)
     run_id = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         cookies=_cookies(token),
         headers=_headers(csrf),
     ).json()["runId"]
@@ -307,11 +326,13 @@ def test_a_run_reports_status_and_outcome_as_separate_fields(db: str, client: Te
     assert "state" not in body, "a single merged field is how the distinction gets lost"
 
 
-def test_a_run_carries_an_etag_matching_its_revision(db: str, client: TestClient) -> None:
+def test_a_run_carries_an_etag_matching_its_revision(
+    db: str, client: TestClient, manifest: str
+) -> None:
     token, csrf = _sign_in(db, OWNER)
     run_id = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         cookies=_cookies(token),
         headers=_headers(csrf),
     ).json()["runId"]
@@ -320,7 +341,7 @@ def test_a_run_carries_an_etag_matching_its_revision(db: str, client: TestClient
 
 
 def test_cancellation_returns_request_metadata_not_a_stopped_claim(
-    db: str, client: TestClient
+    db: str, client: TestClient, manifest: str
 ) -> None:
     """The distinction the module prompt insists on, asserted on the response body.
 
@@ -330,7 +351,7 @@ def test_cancellation_returns_request_metadata_not_a_stopped_claim(
     token, csrf = _sign_in(db, OWNER)
     run_id = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         cookies=_cookies(token),
         headers=_headers(csrf),
     ).json()["runId"]
@@ -354,11 +375,13 @@ def test_cancellation_returns_request_metadata_not_a_stopped_claim(
     assert after["status"] != "CANCELLED", "a request is not a terminal state"
 
 
-def test_a_revisioned_mutation_without_if_match_is_refused(db: str, client: TestClient) -> None:
+def test_a_revisioned_mutation_without_if_match_is_refused(
+    db: str, client: TestClient, manifest: str
+) -> None:
     token, csrf = _sign_in(db, OWNER)
     run_id = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         cookies=_cookies(token),
         headers=_headers(csrf),
     ).json()["runId"]
@@ -372,11 +395,11 @@ def test_a_revisioned_mutation_without_if_match_is_refused(db: str, client: Test
     assert response.json()["code"] == "IF_MATCH_REQUIRED"
 
 
-def test_a_stale_if_match_is_a_conflict(db: str, client: TestClient) -> None:
+def test_a_stale_if_match_is_a_conflict(db: str, client: TestClient, manifest: str) -> None:
     token, csrf = _sign_in(db, OWNER)
     run_id = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         cookies=_cookies(token),
         headers=_headers(csrf),
     ).json()["runId"]
@@ -390,13 +413,13 @@ def test_a_stale_if_match_is_a_conflict(db: str, client: TestClient) -> None:
     assert response.json()["code"] == "STALE_REVISION"
 
 
-def test_a_non_numeric_if_match_is_refused(db: str, client: TestClient) -> None:
+def test_a_non_numeric_if_match_is_refused(db: str, client: TestClient, manifest: str) -> None:
     """A weak or opaque validator cannot be compared against a revision, so accepting one would mean
     accepting it and ignoring it."""
     token, csrf = _sign_in(db, OWNER)
     run_id = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         cookies=_cookies(token),
         headers=_headers(csrf),
     ).json()["runId"]
@@ -412,10 +435,12 @@ def test_a_non_numeric_if_match_is_refused(db: str, client: TestClient) -> None:
 # --- idempotency ---------------------------------------------------------------------------------
 
 
-def test_the_same_key_and_body_replays_the_first_operation(db: str, client: TestClient) -> None:
+def test_the_same_key_and_body_replays_the_first_operation(
+    db: str, client: TestClient, manifest: str
+) -> None:
     token, csrf = _sign_in(db, OWNER)
     headers = _headers(csrf, **{"Idempotency-Key": "retry-1"})
-    body = {"manifestDigest": MANIFEST}
+    body = {"manifestDigest": manifest}
 
     first = client.post(
         f"/v1/workspaces/{WS}/runs", json=body, cookies=_cookies(token), headers=headers
@@ -427,7 +452,9 @@ def test_the_same_key_and_body_replays_the_first_operation(db: str, client: Test
     assert second.headers.get("Idempotent-Replay") == "true"
 
 
-def test_the_same_key_with_a_changed_body_is_a_conflict(db: str, client: TestClient) -> None:
+def test_the_same_key_with_a_changed_body_is_a_conflict(
+    db: str, client: TestClient, manifest: str
+) -> None:
     """Two different operations wearing one name. Replaying the first would silently discard the
     second."""
     token, csrf = _sign_in(db, OWNER)
@@ -435,7 +462,7 @@ def test_the_same_key_with_a_changed_body_is_a_conflict(db: str, client: TestCli
 
     client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         cookies=_cookies(token),
         headers=headers,
     )
@@ -449,7 +476,7 @@ def test_the_same_key_with_a_changed_body_is_a_conflict(db: str, client: TestCli
     assert response.json()["code"] == "IDEMPOTENCY_KEY_REUSED"
 
 
-def test_a_replay_rechecks_authorization(db: str, client: TestClient) -> None:
+def test_a_replay_rechecks_authorization(db: str, client: TestClient, manifest: str) -> None:
     """The subtlety that matters.
 
     A stored response returned without re-checking would be a cached authorization decision. The
@@ -458,7 +485,7 @@ def test_a_replay_rechecks_authorization(db: str, client: TestClient) -> None:
     """
     token, csrf = _sign_in(db, OWNER)
     headers = _headers(csrf, **{"Idempotency-Key": "retry-3"})
-    body = {"manifestDigest": MANIFEST}
+    body = {"manifestDigest": manifest}
 
     first = client.post(
         f"/v1/workspaces/{WS}/runs", json=body, cookies=_cookies(token), headers=headers
@@ -479,10 +506,12 @@ def test_a_replay_rechecks_authorization(db: str, client: TestClient) -> None:
     assert "runId" not in replay.json()
 
 
-def test_without_a_key_each_call_is_its_own_operation(db: str, client: TestClient) -> None:
+def test_without_a_key_each_call_is_its_own_operation(
+    db: str, client: TestClient, manifest: str
+) -> None:
     """Idempotency is a client's tool for making a retry safe, not a server requirement."""
     token, csrf = _sign_in(db, OWNER)
-    body = {"manifestDigest": MANIFEST}
+    body = {"manifestDigest": manifest}
     first = client.post(
         f"/v1/workspaces/{WS}/runs", json=body, cookies=_cookies(token), headers=_headers(csrf)
     )
@@ -508,14 +537,16 @@ def test_pagination_is_bounded_and_a_nonsense_size_is_refused(db: str, client: T
     )
 
 
-def test_a_cursor_walks_the_whole_list_exactly_once(db: str, client: TestClient) -> None:
+def test_a_cursor_walks_the_whole_list_exactly_once(
+    db: str, client: TestClient, manifest: str
+) -> None:
     token, csrf = _sign_in(db, OWNER)
     created = set()
     for _ in range(5):
         created.add(
             client.post(
                 f"/v1/workspaces/{WS}/runs",
-                json={"manifestDigest": MANIFEST},
+                json={"manifestDigest": manifest},
                 cookies=_cookies(token),
                 headers=_headers(csrf),
             ).json()["runId"]

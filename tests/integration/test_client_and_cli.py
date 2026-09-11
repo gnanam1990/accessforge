@@ -25,7 +25,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import httpx
@@ -218,7 +218,7 @@ def test_a_problem_document_becomes_a_typed_exception_carrying_its_code(
 
 
 def test_requesting_a_run_returns_a_request_and_not_a_result(
-    db: str, client: AccessForgeClient
+    db: str, client: AccessForgeClient, manifest: Callable[[str], str]
 ) -> None:
     """The single confusion this product exists to prevent, at the client boundary.
 
@@ -227,7 +227,7 @@ def test_requesting_a_run_returns_a_request_and_not_a_result(
     `if client.request_run(...)` and believes a run happened.
     """
     project = client.call("create_project", workspace_id=WS, body={"name": "Runs"})
-    manifest = _manifest(project["projectId"])
+    manifest = manifest(project["projectId"])
 
     outcome = client.call(
         "request_run",
@@ -251,10 +251,10 @@ def test_requesting_a_run_returns_a_request_and_not_a_result(
 
 
 def test_the_same_idempotency_key_replays_rather_than_creating_twice(
-    db: str, client: AccessForgeClient
+    db: str, client: AccessForgeClient, manifest: Callable[[str], str]
 ) -> None:
     project = client.call("create_project", workspace_id=WS, body={"name": "Idempotent"})
-    manifest = _manifest(project["projectId"])
+    manifest = manifest(project["projectId"])
     key = str(uuid.uuid4())
     body = {"projectId": project["projectId"], "manifestDigest": manifest}
 
@@ -267,11 +267,11 @@ def test_the_same_idempotency_key_replays_rather_than_creating_twice(
 
 
 def test_the_same_key_with_a_different_body_is_a_conflict(
-    db: str, client: AccessForgeClient
+    db: str, client: AccessForgeClient, manifest: Callable[[str], str]
 ) -> None:
     """Two different operations wearing one name; replaying the first would discard the second."""
     project = client.call("create_project", workspace_id=WS, body={"name": "Conflict"})
-    manifest = _manifest(project["projectId"])
+    manifest = manifest(project["projectId"])
     key = str(uuid.uuid4())
 
     client.call(
@@ -393,7 +393,7 @@ def test_the_cli_refuses_a_mutation_when_nobody_is_signed_in(
 
 
 def test_the_cli_prints_a_run_request_as_requested_and_never_as_a_result(
-    db: str, server: str, session_file: Path
+    db: str, server: str, session_file: Path, manifest: Callable[[str], str]
 ) -> None:
     """`jq -r .outcome` on this output returns nothing useful, which is correct."""
     assert _cli(server, session_file, "sign-in", "--email", EMAIL).returncode == 0
@@ -403,7 +403,7 @@ def test_the_cli_prints_a_run_request_as_requested_and_never_as_a_result(
     with AccessForgeClient(server) as api:
         api.sign_in(EMAIL)
         project = api.call("create_project", workspace_id=WS, body={"name": "CLI"})
-    manifest = _manifest(project["projectId"])
+    manifest = manifest(project["projectId"])
 
     result = _cli(
         server,
@@ -447,15 +447,16 @@ def test_the_cli_lists_only_operations_this_build_can_call(
     assert "patch" not in result.stdout
 
 
-def _manifest(project_id: str) -> str:
-    """A manifest digest the run route accepts.
+@pytest.fixture()
+def manifest(db: str, seal_manifest: Callable[..., str]) -> Callable[[str], str]:
+    """Seal a manifest for a given project, so a run can be requested against it.
 
-    Note what this reveals: `POST /runs` takes a `manifestDigest` and does **not** check that a
-    manifest with that digest was ever sealed. Module 22's UI refuses to request a run when nothing
-    is sealed, which is a check in the one place a determined caller can skip. That gap belongs to
-    module 18 and is recorded in its handoff rather than hidden behind a fixture that seals
-    something to make the test look thorough.
+    This file previously had a `_manifest()` that returned a bare digest, with a docstring
+    explaining that `POST /runs` never checked whether it had been sealed. That gap is closed, so
+    the helper is replaced by the real thing rather than by the note about its absence.
     """
-    from accessforge_domain.canonical import digest
 
-    return digest({"manifest": project_id})
+    def seal_for(project_id: str) -> str:
+        return seal_manifest(db, workspace_id=WS, project_id=project_id, authorized_by=OWNER)
+
+    return seal_for

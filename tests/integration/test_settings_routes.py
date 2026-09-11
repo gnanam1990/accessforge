@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -21,7 +21,6 @@ from fastapi.testclient import TestClient
 from accessforge_api.app import create_app
 from accessforge_api.auth import CSRF_HEADER, SESSION_COOKIE, issue_session
 from accessforge_api.config import ApiSettings
-from accessforge_domain.canonical import digest
 from accessforge_persistence import (
     assert_row_level_security_enforced,
     budgets,
@@ -35,7 +34,6 @@ pytestmark = pytest.mark.integration
 WS = str(uuid.UUID(int=0x270))
 OWNER = str(uuid.UUID(int=0x271))
 VIEWER = str(uuid.UUID(int=0x272))
-MANIFEST = digest({"manifest": "settings"})
 
 
 @pytest.fixture()
@@ -74,6 +72,22 @@ def db(test_database_url: str) -> Iterator[str]:
 
 
 @pytest.fixture()
+def manifest(db: str, seal_manifest: Callable[..., str]) -> str:
+    """A manifest this workspace has genuinely sealed.
+
+    `POST /runs` refuses a digest nothing sealed, so a test that wants to request a run has to do
+    what a caller does. The module constant this replaced was a bare `digest({...})` the route
+    accepted on trust — which was the defect, not the test.
+    """
+
+    from accessforge_persistence import projects as project_store
+
+    with workspace_connection(db, WS) as conn:
+        project_id = project_store.create_project(conn, workspace_id=WS, name="sealed")
+    return seal_manifest(db, workspace_id=WS, project_id=project_id, authorized_by=OWNER)
+
+
+@pytest.fixture()
 def client(db: str, settings_object: ApiSettings) -> Iterator[TestClient]:
     with TestClient(create_app(settings_object)) as test_client:
         yield test_client
@@ -105,11 +119,11 @@ def _entitlement_body(**over: Any) -> dict[str, Any]:
 
 
 def test_a_run_cannot_be_requested_before_anyone_configures_an_allowance(
-    client: TestClient, db: str
+    client: TestClient, db: str, manifest: str
 ) -> None:
     headers = _sign_in(db, client)
     response = client.post(
-        f"/v1/workspaces/{WS}/runs", json={"manifestDigest": MANIFEST}, headers=headers
+        f"/v1/workspaces/{WS}/runs", json={"manifestDigest": manifest}, headers=headers
     )
     # Not 202, and not a generous default. A workspace nobody configured is refused, because
     # treating it as unlimited would make "undecided" and "permitted anything" the same state.
@@ -119,7 +133,7 @@ def test_a_run_cannot_be_requested_before_anyone_configures_an_allowance(
 
 
 def test_requesting_runs_consumes_the_allowance_and_is_then_refused(
-    client: TestClient, db: str
+    client: TestClient, db: str, manifest: str
 ) -> None:
     headers = _sign_in(db, client)
     # Concurrency deliberately generous: this test is about the daily allowance, and a low
@@ -134,14 +148,14 @@ def test_requesting_runs_consumes_the_allowance_and_is_then_refused(
     for index in range(2):
         accepted = client.post(
             f"/v1/workspaces/{WS}/runs",
-            json={"manifestDigest": MANIFEST},
+            json={"manifestDigest": manifest},
             headers={**headers, "Idempotency-Key": f"run-{index}"},
         )
         assert accepted.status_code == 202, accepted.text
 
     refused = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         headers={**headers, "Idempotency-Key": "run-2"},
     )
     assert refused.status_code == 429
@@ -154,14 +168,16 @@ def test_requesting_runs_consumes_the_allowance_and_is_then_refused(
     assert problem["used"] == 2
 
 
-def test_an_idempotent_retry_is_not_charged_twice(client: TestClient, db: str) -> None:
+def test_an_idempotent_retry_is_not_charged_twice(
+    client: TestClient, db: str, manifest: str
+) -> None:
     headers = _sign_in(db, client)
     client.put(
         f"/v1/workspaces/{WS}/settings/entitlement",
         json=_entitlement_body(maxRunsPerDay=1, maxConcurrentRuns=50),
         headers={**headers, "If-Match": "0"},
     )
-    body = {"manifestDigest": MANIFEST}
+    body = {"manifestDigest": manifest}
     first = client.post(
         f"/v1/workspaces/{WS}/runs", json=body, headers={**headers, "Idempotency-Key": "same"}
     )
@@ -360,7 +376,7 @@ def test_there_is_no_value_meaning_unlimited(client: TestClient, db: str) -> Non
 
 
 def test_a_run_request_key_cannot_be_reused_to_admit_a_second_run_for_free(
-    client: TestClient, db: str
+    client: TestClient, db: str, manifest: str
 ) -> None:
     """The usage event key is namespaced by route.
 
@@ -382,7 +398,7 @@ def test_a_run_request_key_cannot_be_reused_to_admit_a_second_run_for_free(
 
     response = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         headers={**headers, "Idempotency-Key": "shared-key"},
     )
     # Refused, because the allowance of one is already spent and this key is not the key that spent
@@ -391,7 +407,9 @@ def test_a_run_request_key_cannot_be_reused_to_admit_a_second_run_for_free(
     assert response.json()["code"] == "QUOTA_EXHAUSTED"
 
 
-def test_concurrency_is_refused_with_its_own_explanation(client: TestClient, db: str) -> None:
+def test_concurrency_is_refused_with_its_own_explanation(
+    client: TestClient, db: str, manifest: str
+) -> None:
     headers = _sign_in(db, client)
     client.put(
         f"/v1/workspaces/{WS}/settings/entitlement",
@@ -400,14 +418,14 @@ def test_concurrency_is_refused_with_its_own_explanation(client: TestClient, db:
     )
     first = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         headers={**headers, "Idempotency-Key": "one"},
     )
     assert first.status_code == 202
 
     second = client.post(
         f"/v1/workspaces/{WS}/runs",
-        json={"manifestDigest": MANIFEST},
+        json={"manifestDigest": manifest},
         headers={**headers, "Idempotency-Key": "two"},
     )
     assert second.status_code == 429
