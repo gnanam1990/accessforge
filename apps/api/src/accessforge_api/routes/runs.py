@@ -126,6 +126,22 @@ def request_run(
                 request_id=context.request_id,
             )
 
+        # A supplied projectId must agree with the project that sealed the manifest, and the run
+        # records the sealing project either way. Two ways this mattered: a caller could name
+        # project A while using a manifest project B sealed -- false provenance on a run whose
+        # identity says otherwise -- and a caller who omitted the field stored NULL, so the run had
+        # no project at all while its manifest plainly belonged to one.
+        supplied_project = body.get("projectId")
+        if supplied_project is not None and str(supplied_project) != sealed.project_id:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT,
+                "projectId does not match the project that sealed this manifest. A run's "
+                "provenance is the manifest's, not the caller's: recording a different project "
+                "would describe a run against inputs that project never sealed. Omit the field, "
+                "or send the sealing project.",
+                request_id=context.request_id,
+            )
+
         try:
             runners.assert_queue_capacity(conn)
         except runners.QueueFull as exc:
@@ -182,7 +198,9 @@ def request_run(
             conn,
             workspace_id=workspace_id,
             manifest_digest=str(body["manifestDigest"]),
-            project_id=body.get("projectId"),
+            # From the seal, never from the body. The manifest is the run's identity, so the
+            # project that sealed it is the project the run belongs to.
+            project_id=sealed.project_id,
             authorization_id=body.get("authorizationId"),
             retry_of=body.get("retryOf"),
         )

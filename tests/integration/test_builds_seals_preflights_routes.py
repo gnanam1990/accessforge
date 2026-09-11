@@ -729,3 +729,198 @@ def test_a_preflight_for_an_unknown_runner_is_not_found(client: TestClient, csrf
     )
     assert response.status_code == 404
     assert response.json()["code"] == "RESOURCE_NOT_FOUND"
+
+
+# --- provenance cannot be misreported ------------------------------------------------------------
+
+
+def test_a_clean_tree_cannot_be_recorded_with_differing_paths(
+    client: TestClient, csrf: str, project: str
+) -> None:
+    """Two halves of one fact, and they were read independently.
+
+    `{"dirtyPaths": ["a.ts"]}` with `dirty` omitted recorded a snapshot saying a clean tree had one
+    differing path — and that record travels into every seal built on the build, which is precisely
+    what the route's own docstring forbids.
+    """
+    refused = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/builds",
+        json=_build_body(dirty=False, dirtyPaths=["src/app.ts"]),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "they describe the same fact and disagree" in refused.json()["detail"]
+
+    # The other direction is a contradiction too: dirty with nothing to point at.
+    assert (
+        client.post(
+            f"/v1/workspaces/{WS}/projects/{project}/builds",
+            json=_build_body(dirty=True, dirtyPaths=[]),
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 400
+    )
+
+
+def test_omitting_dirty_derives_it_from_the_paths(
+    client: TestClient, csrf: str, project: str
+) -> None:
+    """Derived rather than defaulted to clean, which is the safe direction.
+
+    Refusing the contradiction and defaulting the omission are different choices on purpose: a
+    caller who said "clean" while listing paths disagrees with themselves and should be told, and a
+    caller who said nothing should get the truth rather than the convenient answer.
+    """
+    body = _build_body(dirtyPaths=["src/app.ts", "README.md"])
+    del body["dirty"]
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/builds",
+        json=body,
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["dirty"] is True
+    assert response.json()["dirtyPathCount"] == 2
+
+
+def test_a_seal_cannot_use_another_projects_build_or_environment(
+    db: str, client: TestClient, csrf: str, project: str, environment: str
+) -> None:
+    """Row-level security scopes by workspace, not by project.
+
+    The foreign keys are composite on (id, workspace_id), so neither stops a caller authorized for
+    project A from sealing project B's artifact into a manifest whose `project_id` is A. Runs
+    requested with that digest would carry provenance naming a project that never built the
+    artifact.
+    """
+    with workspace_connection(db, WS) as conn:
+        other_project = project_store.create_project(conn, workspace_id=WS, name="Other project")
+
+    other_environment = client.post(
+        f"/v1/workspaces/{WS}/projects/{other_project}/environments",
+        json={
+            "name": "staging",
+            "allowedOrigins": ["https://other.example.test"],
+            "fixtureResetStrategy": "RESET_ENDPOINT",
+            "observerCredentialRef": "observer-profile",
+            "resetCredentialRef": "reset-profile",
+            "permittedEffects": ["FORM_SUBMIT"],
+            "expiresAt": (datetime.now(UTC) + timedelta(days=30))
+            .isoformat()
+            .replace("+00:00", "Z"),
+        },
+        headers={CSRF_HEADER: csrf},
+    ).json()["environmentId"]
+    other_build = client.post(
+        f"/v1/workspaces/{WS}/projects/{other_project}/builds",
+        json=_build_body(),
+        headers={CSRF_HEADER: csrf},
+    ).json()["buildId"]
+    own_build = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/builds",
+        json=_build_body(),
+        headers={CSRF_HEADER: csrf},
+    ).json()["buildId"]
+
+    borrowed_build = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=_seal_body(other_build, environment),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert borrowed_build.status_code == 400, borrowed_build.text
+    assert "belongs to a different project" in borrowed_build.json()["detail"]
+
+    borrowed_environment = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=_seal_body(own_build, other_environment),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert borrowed_environment.status_code == 400, borrowed_environment.text
+    assert "environment belongs to a different project" in borrowed_environment.json()["detail"]
+
+
+def test_a_run_records_the_project_that_sealed_its_manifest(
+    db: str, client: TestClient, csrf: str, project: str, environment: str
+) -> None:
+    """A run's provenance is its manifest's, not its caller's.
+
+    Two holes here. A caller could name project A while using a manifest project B sealed — false
+    provenance on a run whose identity says otherwise — and a caller who omitted `projectId` stored
+    NULL, so the run had no project at all while its manifest plainly belonged to one.
+    """
+    build = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/builds",
+        json=_build_body(),
+        headers={CSRF_HEADER: csrf},
+    ).json()
+    sealed = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=_seal_body(build["buildId"], environment),
+        headers={CSRF_HEADER: csrf},
+    ).json()
+
+    with workspace_connection(db, WS) as conn:
+        other_project = project_store.create_project(conn, workspace_id=WS, name="Bystander")
+
+    mismatched = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"projectId": other_project, "manifestDigest": sealed["manifestDigest"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert mismatched.status_code == 400, mismatched.text
+    assert "does not match the project that sealed this manifest" in mismatched.json()["detail"]
+
+    # Omitted, and the run still records the sealing project rather than NULL.
+    requested = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": sealed["manifestDigest"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert requested.status_code == 202, requested.text
+    with workspace_connection(db, WS) as conn:
+        row = conn.execute(
+            "SELECT project_id FROM run WHERE id = %s", (requested.json()["runId"],)
+        ).fetchone()
+    assert row is not None
+    assert str(row["project_id"]) == project
+
+
+def test_submitting_a_preflight_needs_runner_management_not_run_request(
+    db: str, client: TestClient, runner: dict[str, Any]
+) -> None:
+    """A preflight decides whether a desktop becomes READY, which is runner management.
+
+    `RUN_REQUEST` is held by anyone who may ask for a run. Letting that role flip a runner to READY
+    would make the permission to request work also the permission to declare the machine fit to do
+    it. In production the runner submits its own preflight under a service credential; that
+    principal does not exist yet, so this human-facing route takes the stricter permission.
+    """
+    from accessforge_api.auth import issue_session
+    from accessforge_domain.authorization.roles import Permission, Role, permissions_for
+
+    # The premise, asserted rather than assumed: these are genuinely different permissions, and the
+    # role under test holds one and not the other.
+    assert Permission.RUN_REQUEST in permissions_for(Role.MAINTAINER)
+    assert Permission.INFRASTRUCTURE_OPERATE not in permissions_for(Role.MAINTAINER)
+
+    maintainer = str(uuid.UUID(int=0x353))
+    with unscoped_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO app_user (id, email) VALUES (%s, 'maintainer@example.test')", (maintainer,)
+        )
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "INSERT INTO workspace_membership (workspace_id, user_id, role) "
+            "VALUES (%s,%s,'MAINTAINER')",
+            (WS, maintainer),
+        )
+        issued = issue_session(conn, user_id=maintainer)
+    client.cookies.set(SESSION_COOKIE, issued.session_token)
+
+    response = client.post(
+        f"/v1/workspaces/{WS}/runners/{runner['runnerId']}/preflights",
+        json=_preflight_body(runner),
+        headers={CSRF_HEADER: issued.csrf_token},
+    )
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "PERMISSION_DENIED"

@@ -515,11 +515,34 @@ def register_build(
             request_id=context.request_id,
         )
 
+    # `dirty` and `dirtyPaths` were read independently, so `{"dirtyPaths": ["a.ts"]}` with `dirty`
+    # omitted recorded a snapshot saying a *clean* tree had one differing path -- and that record
+    # travels into every seal built on the build, which is exactly what this route's docstring
+    # forbids. Two halves of one fact cannot be supplied separately:
+    #
+    #   * omitted, it is derived -- paths present means dirty;
+    #   * supplied and contradicting the paths, it is refused rather than reconciled. Silently
+    #     correcting a caller who said "clean" would hide a disagreement about the thing the whole
+    #     provenance chain rests on.
+    if "dirty" in body:
+        if bool(body["dirty"]) != bool(dirty_paths):
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT,
+                f"dirty is {bool(body['dirty'])} and dirtyPaths has {len(dirty_paths)} entry/ies; "
+                "they describe the same fact and disagree. A snapshot recording a clean tree with "
+                "differing paths -- or a dirty tree with none -- would be carried into every seal "
+                "built on this build. Send one or the other, not a contradiction.",
+                request_id=context.request_id,
+            )
+        dirty = bool(body["dirty"])
+    else:
+        dirty = bool(dirty_paths)
+
     def perform() -> dict[str, Any]:
         identity = SourceIdentity(
             commit_sha=str(body["commitSha"]),
             tree_digest=str(body["treeDigest"]),
-            dirty=bool(body.get("dirty", False)),
+            dirty=dirty,
             dirty_paths=tuple(str(p) for p in dirty_paths),
         )
         try:
@@ -612,12 +635,41 @@ def seal_manifest(
         )
 
     def perform() -> dict[str, Any]:
+        # Both inputs are checked to belong to *this* project, not merely to this workspace.
+        # Row-level security scopes by workspace and the foreign keys are composite on
+        # (id, workspace_id), so neither stops a caller authorized for project A from sealing
+        # project B's artifact and environment into a manifest whose project_id is A. Runs requested
+        # with that digest would then carry provenance naming a project that never built the
+        # artifact -- a false claim of exactly the kind this chain exists to make impossible.
         build = conn.execute(
-            "SELECT id, source_snapshot_id FROM build_artifact WHERE id = %s",
+            "SELECT id, source_snapshot_id, project_id FROM build_artifact WHERE id = %s",
             (as_identifier(str(body["buildId"]), what="buildId"),),
         ).fetchone()
         if build is None:
             raise not_found()
+        if str(build["project_id"]) != project_id:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT,
+                "that build belongs to a different project. A seal describes one project's inputs; "
+                "naming another's artifact would record provenance for a build this project never "
+                "produced.",
+                request_id=context.request_id,
+            )
+
+        environment_row = conn.execute(
+            "SELECT project_id FROM environment_manifest WHERE id = %s",
+            (as_identifier(str(body["environmentId"]), what="environmentId"),),
+        ).fetchone()
+        if environment_row is None:
+            raise not_found()
+        if str(environment_row["project_id"]) != project_id:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT,
+                "that environment belongs to a different project. An environment is authorized for "
+                "one project, and sealing against another's would claim an authorization nobody "
+                "gave.",
+                request_id=context.request_id,
+            )
 
         try:
             sealed = projects.seal_run(
