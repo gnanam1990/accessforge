@@ -15,7 +15,7 @@ from accessforge_api.routes._common import as_body, as_identifier, authorize, wo
 from accessforge_domain import reducers
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.timestamps import to_rfc3339_utc
-from accessforge_persistence import budgets, evidence, projects, runners, runs
+from accessforge_persistence import budgets, deletion, evidence, projects, runners, runs
 from accessforge_persistence.evidence import artifacts as artifacts_module
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runs"])
@@ -587,5 +587,179 @@ def evidence_completeness(
         "meaning": (
             "This describes the evidence, not the run. A complete evidence set can still describe "
             "a failure, and an incomplete one does not become a pass by being tidy."
+        ),
+    }
+
+
+DELETION_FIELDS = frozenset({"evidenceClasses", "reason", "attemptId"})
+
+
+def _artifact_store(request: Request) -> evidence.S3ArtifactStore:
+    config = request.app.state.config
+    return evidence.S3ArtifactStore(
+        evidence.S3Settings(
+            endpoint_url=str(config.evidence_endpoint_url),
+            access_key=str(config.evidence_access_key),
+            secret_key=str(config.evidence_secret_key),
+            bucket=str(config.evidence_bucket),
+        )
+    )
+
+
+@router.post("/runs/{run_id}/deletions", status_code=status.HTTP_201_CREATED)
+def delete_run_evidence(
+    workspace_id: str,
+    run_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Delete named evidence classes for one run, and report what the deletion did not reach.
+
+    **The response is the deliverable, not the status code.** A 201 here means the deletion was
+    performed; it does not mean the data is gone, and `retained` says why in every case. FR-020
+    requires that a report state the retained audit metadata, the backup delay and the
+    downloaded-copy limit. A route answering `{"deleted": true}` would be the most dangerous
+    endpoint here: somebody would call it, see success, and tell a regulator the data was erased.
+
+    **`WORKSPACE_CONFIGURE`, which is owner-only.** Deleting evidence is irreversible within this
+    system and it invalidates completeness claims that other people's reviews may rest on. The
+    permission to request a run is not the permission to destroy its evidence.
+
+    **No `If-Match`, deliberately.** A revision guards a decision about current state, and this
+    decision is about a scope — a class of evidence for a run — not about a value somebody read.
+    What it does require is a stated reason, recorded with the deletion, because this is the
+    operation an auditor asks about first.
+
+    This route does not delete a whole workspace. That is a different operation with a different
+    blast radius, and the one-button version of it is how somebody removes a year of evidence
+    meaning to remove a week.
+    """
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.WORKSPACE_CONFIGURE,
+        body=body,
+        allowed_fields=DELETION_FIELDS,
+    )
+
+    classes = body.get("evidenceClasses")
+    if not isinstance(classes, list) or not all(isinstance(name, str) for name in classes):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "evidenceClasses must be an array of class names. A bare string is iterable and would "
+            "be read as one class per character, which matches nothing and would report a "
+            "successful deletion that removed nothing at all.",
+            request_id=context.request_id,
+        )
+    if "reason" not in body:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "a reason is required and is recorded with the deletion. A deletion nobody can explain "
+            "later is the one that gets asked about first.",
+            request_id=context.request_id,
+        )
+
+    # Confirms the run is visible here before anything is removed. Row-level security already scopes
+    # the deletion itself, so this is about the answer a caller gets: a 404 for a run in another
+    # workspace rather than a report saying nothing was deleted, which would read as success.
+    if (
+        conn.execute(
+            "SELECT 1 FROM run WHERE id = %s", (as_identifier(run_id, what="runId"),)
+        ).fetchone()
+        is None
+    ):
+        raise not_found()
+
+    def perform() -> dict[str, Any]:
+        try:
+            report = deletion.delete_evidence(
+                conn,
+                _artifact_store(request),
+                workspace_id=workspace_id,
+                run_id=run_id,
+                classes=tuple(str(name) for name in classes),
+                attempt_id=(
+                    as_identifier(str(body["attemptId"]), what="attemptId")
+                    if body.get("attemptId") is not None
+                    else None
+                ),
+                reason=str(body["reason"]),
+                requested_by=context.principal.user_id,
+            )
+        except deletion.UnknownEvidenceClass as exc:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
+            ) from exc
+        except deletion.DeletionError as exc:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
+            ) from exc
+
+        return {
+            "deletionId": report.deletion_id,
+            "requestedAt": report.requested_at,
+            "evidenceClasses": list(report.classes),
+            "attemptId": report.attempt_id,
+            "artifactBytesDeleted": report.artifact_bytes_deleted,
+            "artifactTombstonesKept": report.artifact_tombstones_kept,
+            "eventPayloadsCleared": report.event_payloads_cleared,
+            "completenessInvalidated": report.completeness_invalidated,
+            "retained": list(report.retained),
+            "summary": report.summary,
+            "meaning": (
+                "This deletion was performed. It does not mean the data is gone: `retained` lists "
+                "what it could not reach, and that list is never empty. Read it before telling "
+                "anybody the evidence has been erased."
+            ),
+        }
+
+    outcome = run_idempotently(
+        conn, context, route="POST /runs/deletions", body=body, perform=perform
+    )
+    return outcome.response or {}
+
+
+@router.get("/runs/{run_id}/deletions")
+def list_run_deletions(
+    workspace_id: str, run_id: str, request: Request, conn: Conn
+) -> dict[str, Any]:
+    """Every deletion recorded against this run.
+
+    Exists so a reviewer can tell deliberately removed evidence from evidence that was never
+    captured. Those are different facts, and a reader who cannot distinguish them will assume
+    whichever suits the conclusion they already hold.
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    if (
+        conn.execute(
+            "SELECT 1 FROM run WHERE id = %s", (as_identifier(run_id, what="runId"),)
+        ).fetchone()
+        is None
+    ):
+        raise not_found()
+
+    records = deletion.deletions_for_run(conn, run_id=run_id)
+    return {
+        "items": [
+            {
+                "deletionId": str(record["id"]),
+                "attemptId": str(record["attempt_id"]) if record["attempt_id"] else None,
+                "evidenceClasses": list(record["evidence_classes"]),
+                "reason": str(record["reason"]),
+                "requestedBy": str(record["requested_by"]) if record["requested_by"] else None,
+                "artifactBytesDeleted": int(record["artifact_bytes_deleted"]),
+                "eventPayloadsCleared": int(record["event_payloads_cleared"]),
+                "completenessInvalidated": bool(record["completeness_invalidated"]),
+                "requestedAt": str(record["requested_at"]),
+            }
+            for record in records
+        ],
+        "meaning": (
+            "Evidence named here was deliberately removed. That is a different fact from evidence "
+            "that was never captured, and an export of this run reports the difference rather than "
+            "presenting either as a complete set."
         ),
     }
