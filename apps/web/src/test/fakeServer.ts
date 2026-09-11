@@ -13,10 +13,12 @@
 
 import type {
   Environment,
+  ExecutionGrant,
   JourneyVersion,
   Project,
   Run,
   Runner,
+  Schedule,
   SealedManifest,
 } from '../api/resources'
 
@@ -56,6 +58,8 @@ export interface WorkspaceData {
   exportRecord: Record<string, unknown>
   usage: Record<string, unknown>
   retention: Record<string, unknown>
+  grants: ExecutionGrant[]
+  schedules: Schedule[]
 }
 
 export interface FakeServer {
@@ -137,6 +141,10 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     findings: {},
     reviewRequests: [],
     review: {},
+    // Empty by default. A settings test that is about an allowance should not have to think about
+    // grants, and an empty successful answer is the state most workspaces are genuinely in.
+    grants: [],
+    schedules: [],
     exportRecord: {},
     usage: {
       entitlementRevision: 3,
@@ -347,6 +355,28 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
             'desktop. It is not inferred from the runner process being reachable, and no status ' +
             'here is evidence that a journey will pass.',
         })
+      }
+
+      if (url.includes('/execution-grants') && method === 'GET') {
+        return json({
+          items: data.grants,
+          meaning:
+            'Revoked grants are listed. The question after an incident is what was allowed to run ' +
+            'and when that stopped, and a listing that hid them would answer only the first half.',
+        })
+      }
+      if (url.includes('/execution-grants/') && method === 'POST') {
+        return json(data.grants[0] ?? {})
+      }
+      if (url.endsWith('/schedules') && method === 'GET') {
+        return json({
+          items: data.schedules,
+          meaning:
+            'Paused schedules are listed. "Why did this stop firing" is the question these answer.',
+        })
+      }
+      if (url.includes('/schedules/') && method === 'POST') {
+        return json(data.schedules[0] ?? {})
       }
 
       if (url.endsWith('/usage') && method === 'GET') {
