@@ -38,7 +38,7 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | implemented (SSE stream, snapshot, schedule and grant routes added by module 18 completion) | passed (no real runner) | merged | E0 |
 | 20 | Opt-in GitHub checks and publication | 15, 16, 18 | FR-001, 010–012, 014, 018 | not started | pending | local | R1 |
 | 21 | Accessible modern UI foundation | 18 | FR-014, 016, 019 | implemented (shell only; screens are 22–24) | passed (no actual screen reader) | merged | E0 |
-| 22 | Projects, journeys and runner UI | 19, 21 | FR-001–005, 015, 017, 019 | implemented (6 screens incl. schedules and grants under settings; no live-events UI) | passed for what exists; a run can now be requested but **no run can execute** | merged | E0 |
+| 22 | Projects, journeys and runner UI | 19, 21 | FR-001–005, 015, 017, 019 | implemented (6 screens incl. schedules and grants under settings) | passed for what exists; a run can now be requested but **no run can execute** | merged | E0 |
 | 23 | Run and evidence replay UI | 10, 11, 19, 21 | FR-006, 007, 009, 015, 017, 019 | implemented (run, timeline, finding; live updates consume the SSE stream; no media) | **blocked — no per-assertion results are served, and no run has executed** | merged | E0 |
 | 24 | Patch, comparison and review UI | 15, 16, 17, 21 | FR-010–013, 019, 020 | implemented (review, export; repair workspace states its absence) | passed for export; **blocked — no patch or verification can exist** | merged | E0 |
 | 25 | Fault laboratory and benchmarks | 12, 15, 22, 23, 24; 09 for R1 | FR-004–013, 015, 019, 023 | not started | pending | local | R1 |
