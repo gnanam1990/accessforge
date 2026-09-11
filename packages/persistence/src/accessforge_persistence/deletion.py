@@ -552,7 +552,12 @@ def purge_pending_objects(
     if deletion_id is not None:
         scope += " AND deletion_id = %s"
         params.append(deletion_id)
-    scope += " ORDER BY enqueued_at LIMIT %s"
+    # Claimed, not merely read. Two calls purging the same deletion -- an operator retrying twice,
+    # or a retry racing the drain of a fresh deletion -- would otherwise select the same pending
+    # rows, both call the store for the same key and both count it, so `objectsPurged` would
+    # describe more work than was done. SKIP LOCKED rather than plain FOR UPDATE: a second caller
+    # takes the rows nobody is holding instead of blocking on network deletes it cannot see.
+    scope += " ORDER BY enqueued_at LIMIT %s FOR UPDATE SKIP LOCKED"
     params.append(limit)
 
     purged = 0

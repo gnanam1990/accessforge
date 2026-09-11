@@ -69,6 +69,15 @@ COMMENT ON TABLE evidence_object_purge IS
 ALTER TABLE evidence_deletion
     DROP CONSTRAINT IF EXISTS evidence_deletion_run_id_workspace_id_fkey;
 
+-- NOT VALID first, then validated as a separate statement. ADD CONSTRAINT on its own scans every
+-- existing row while holding SHARE ROW EXCLUSIVE on *both* tables, so writes to `run` -- the busiest
+-- table here -- wait for the scan. NOT VALID takes the same lock only long enough to record the
+-- constraint, and VALIDATE CONSTRAINT does the scan under SHARE UPDATE EXCLUSIVE, which does not
+-- block writes. New rows are checked from the moment the constraint exists either way.
 ALTER TABLE evidence_deletion
     ADD CONSTRAINT evidence_deletion_run_id_workspace_id_fkey
-    FOREIGN KEY (run_id, workspace_id) REFERENCES run (id, workspace_id) ON DELETE RESTRICT;
+    FOREIGN KEY (run_id, workspace_id) REFERENCES run (id, workspace_id) ON DELETE RESTRICT
+    NOT VALID;
+
+ALTER TABLE evidence_deletion
+    VALIDATE CONSTRAINT evidence_deletion_run_id_workspace_id_fkey;
