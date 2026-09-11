@@ -46,6 +46,7 @@ import {
   readUsage,
 } from '../api/resources'
 import type { Member, RetentionClass, UsageRow } from '../api/resources'
+import { SchedulesSection } from './SchedulesSection'
 import { useResource } from '../api/useResource'
 import { useSession, membershipFor } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
@@ -347,6 +348,8 @@ export const SettingsScreen = (): JSX.Element => {
           )}
         </ResourceView>
       </section>
+
+      <SchedulesSection />
 
       <section className="af-stack">
         <h2>Retention</h2>
