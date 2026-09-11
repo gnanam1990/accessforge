@@ -154,10 +154,13 @@ def _delete(
     attempt_id: str | None = None,
     reason: str = "the customer withdrew consent for captured speech",
 ) -> deletion.DeletionReport:
+    # Two connections, deliberately. Phase one commits when its block exits; only then does phase
+    # two touch the store. Doing both on one connection would purge bytes for a deletion that could
+    # still roll back, which is the exact failure this split exists to prevent -- so the helper
+    # every test goes through enforces the order rather than leaving each test to remember it.
     with workspace_connection(url, WS) as conn:
-        report = deletion.delete_evidence(
+        report = deletion.record_deletion(
             conn,
-            s3,
             workspace_id=WS,
             run_id=run_id,
             classes=classes,
@@ -165,7 +168,10 @@ def _delete(
             reason=reason,
             requested_by=OPERATOR,
         )
-    return report
+    with workspace_connection(url, WS) as conn:
+        return report.with_purge(
+            deletion.purge_pending_objects(conn, s3, deletion_id=report.deletion_id)
+        )
 
 
 # --- the bytes are actually gone -----------------------------------------------------------------
@@ -680,6 +686,210 @@ def test_a_restore_from_a_backup_taken_before_a_deletion_brings_the_evidence_bac
             admin.execute(f'DROP DATABASE IF EXISTS "{target}" WITH (FORCE)')  # noqa: S608
 
 
+# --- the two phases, and the window between them --------------------------------------------------
+
+
+class _Interrupted(Exception):
+    """Whatever ends a request between marking the rows and committing them."""
+
+
+def test_a_rollback_before_the_commit_leaves_the_bytes_and_the_record_agreeing(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """The failure the two-phase split exists to prevent.
+
+    Deleting objects inside the transaction means a rollback can leave the bytes gone, the artifact
+    still RETAINED and no deletion record at all -- a run reporting a *complete* evidence set whose
+    evidence no longer exists. Nothing about that state looks wrong to a reader, which is what makes
+    it the worst outcome this feature has.
+
+    So the order is fixed: the database commits first, and the only reachable window is the harmless
+    one, where the record says deleted and some bytes are still queued for removal.
+    """
+    run_id, attempt_id = _run(db)
+    artifact = _promoted(db, store, run_id, attempt_id)
+
+    with pytest.raises(_Interrupted):
+        with workspace_connection(db, WS) as conn:
+            deletion.record_deletion(
+                conn,
+                workspace_id=WS,
+                run_id=run_id,
+                classes=("READER_SPEECH",),
+                reason="the customer withdrew consent for captured speech",
+                requested_by=OPERATOR,
+            )
+            raise _Interrupted
+
+    # The bytes are still there, which is the point: phase one promised nothing that survived.
+    assert store.get(key=artifact.object_key) == TRANSCRIPT
+    with workspace_connection(db, WS) as conn:
+        row = conn.execute(
+            "SELECT retention FROM evidence_artifact WHERE id = %s", (artifact.artifact_id,)
+        ).fetchone()
+        assert row is not None and row["retention"] == "RETAINED"
+        assert deletion.deletions_for_run(conn, run_id=run_id) == []
+        assert deletion.pending_purges(conn) == 0
+
+
+def test_a_purge_that_stops_at_its_limit_reports_the_backlog(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """A pass where everything it tried succeeded is not a pass that emptied the queue.
+
+    `limit` caps what one pass looks at, so counting only this pass's failures would report a
+    backlog of untouched keys as zero -- a report saying the store released everything while it
+    still holds the bytes.
+    """
+    run_id, attempt_id = _run(db)
+    first = _promoted(db, store, run_id, attempt_id)
+    second = _promoted(db, store, run_id, attempt_id, payload=TRANSCRIPT + b" second")
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+    assert report.objects_enqueued == 2
+
+    with workspace_connection(db, WS) as conn:
+        partial = report.with_purge(
+            deletion.purge_pending_objects(conn, store, deletion_id=report.deletion_id, limit=1)
+        )
+    assert partial.objects_purged == 1
+    assert partial.objects_still_present == 1
+    assert any("has not released them yet" in line for line in partial.retained)
+
+    with workspace_connection(db, WS) as conn:
+        finished = partial.with_purge(
+            deletion.purge_pending_objects(conn, store, deletion_id=report.deletion_id)
+        )
+    assert finished.objects_purged == 2
+    assert finished.objects_still_present == 0
+    assert not any("has not released them yet" in line for line in finished.retained)
+    for artifact in (first, second):
+        with pytest.raises(objectstore.ArtifactStoreError):
+            store.get(key=artifact.object_key)
+
+
+class _RefusingStore:
+    """An object store that is down, which is a delay and not a failed deletion."""
+
+    def delete(self, *, key: str) -> None:
+        raise RuntimeError(f"connection refused while deleting {key}")
+
+
+def test_a_store_outage_keeps_the_key_pending_instead_of_raising(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """The database has already committed saying this evidence is deleted.
+
+    Raising here would tell a caller the deletion failed when what actually happened is that some
+    bytes are queued. The error is recorded on the row, the count stays honest, and the next pass
+    finishes the job.
+    """
+    run_id, attempt_id = _run(db)
+    artifact = _promoted(db, store, run_id, attempt_id)
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+
+    with workspace_connection(db, WS) as conn:
+        outage = report.with_purge(
+            deletion.purge_pending_objects(conn, _RefusingStore(), deletion_id=report.deletion_id)
+        )
+    assert outage.objects_purged == 0
+    assert outage.objects_still_present == 1
+    assert any("has not released them yet" in line for line in outage.retained)
+    assert store.get(key=artifact.object_key) == TRANSCRIPT
+
+    with workspace_connection(db, WS) as conn:
+        failure = conn.execute(
+            "SELECT attempts, last_error FROM evidence_object_purge WHERE deletion_id = %s",
+            (report.deletion_id,),
+        ).fetchone()
+        assert failure is not None
+        assert failure["attempts"] == 1
+        assert "connection refused" in failure["last_error"]
+
+        # And a retry finishes it, which is what makes an outage a delay.
+        retried = outage.with_purge(
+            deletion.purge_pending_objects(conn, store, deletion_id=report.deletion_id)
+        )
+    assert retried.objects_purged == 1
+    assert retried.objects_still_present == 0
+    with pytest.raises(objectstore.ArtifactStoreError):
+        store.get(key=artifact.object_key)
+
+
+def test_a_purge_refuses_a_deletion_it_cannot_see_rather_than_finding_nothing(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """An empty queue and an invisible one are the same answer and opposite facts.
+
+    This is the bug the two-phase split invites: purge before phase one commits, and the queue looks
+    empty. Every count comes back zero, the report says the store released everything, and the bytes
+    are still there. It reads as a clean deletion, which is why it has to raise.
+    """
+    run_id, attempt_id = _run(db)
+    artifact = _promoted(db, store, run_id, attempt_id)
+
+    with workspace_connection(db, WS) as uncommitted:
+        report = deletion.record_deletion(
+            uncommitted,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+        # A second session, which cannot see the still-open transaction above.
+        with workspace_connection(db, WS) as other:
+            with pytest.raises(deletion.DeletionError, match="not visible on this connection"):
+                deletion.purge_pending_objects(other, store, deletion_id=report.deletion_id)
+
+    assert store.get(key=artifact.object_key) == TRANSCRIPT
+
+
+def test_a_report_refuses_a_count_measured_for_another_deletion(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """A sweep counts every deletion's backlog, and this one may only quote its own.
+
+    Folding a sweep's number in would let one deletion report bytes as released on another's work,
+    or invent objects it never enqueued.
+    """
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id)
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+
+    with workspace_connection(db, WS) as conn:
+        sweep = deletion.purge_pending_objects(conn, store)
+    assert sweep.scope is None
+    with pytest.raises(deletion.DeletionError, match="may only quote a count taken for itself"):
+        report.with_purge(sweep)
+
+
 # --- through the HTTP surface ---------------------------------------------------------------------
 
 
@@ -742,12 +952,18 @@ def test_the_route_reports_what_it_could_not_reach(
     assert response.status_code == 201, response.text
     body = response.json()
 
-    assert body["artifactBytesDeleted"] == 1
+    assert body["artifactsMarkedDeleted"] == 1
     assert body["completenessInvalidated"] is True
     assert body["retained"], "a deletion that reached everything does not exist"
     assert any("Audit metadata is retained" in line for line in body["retained"])
     assert any("Backups taken in the last" in line for line in body["retained"])
     assert "does not mean the data is gone" in body["meaning"]
+    # Counted, not promised. The route reports what the store actually released, so a reader can
+    # tell "recorded as deleted" from "erased" -- which is the distinction whoever quotes this to a
+    # regulator depends on.
+    assert body["objectsPurged"] == body["objectsEnqueued"] > 0
+    assert body["objectsStillPresent"] == 0
+    assert not any("has not released them yet" in line for line in body["retained"])
 
 
 def test_the_route_refuses_a_bare_string_of_classes(
@@ -857,3 +1073,47 @@ def test_the_listing_distinguishes_deleted_from_never_captured(
     assert body["items"][0]["evidenceClasses"] == ["READER_SPEECH"]
     assert body["items"][0]["reason"] == "consent withdrawn"
     assert "different fact from evidence that was never captured" in body["meaning"]
+
+
+def test_the_route_removes_the_bytes_after_it_answers(
+    db: str, store: evidence.S3ArtifactStore, api: object
+) -> None:
+    """Through the route, the bytes really go — and only after the record of it is committed.
+
+    The report is honest either way, so the one thing it cannot prove about itself is that anything
+    ran. That assertion belongs on the store.
+
+    The purge runs on its own connection because this request's transaction has not committed while
+    the endpoint is executing: purging there would delete bytes for a deletion that could still roll
+    back, leaving the artifact RETAINED with its evidence gone.
+    """
+    from accessforge_api.auth import CSRF_HEADER
+
+    run_id, attempt_id = _run(db)
+    artifact = _promoted(db, store, run_id, attempt_id)
+    csrf = _sign_in(db, api)
+
+    response = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/runs/{run_id}/deletions",
+        json={
+            "evidenceClasses": ["READER_SPEECH"],
+            "reason": "the customer withdrew consent for captured speech",
+        },
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["objectsPurged"] == 1
+    assert response.json()["objectsStillPresent"] == 0
+
+    # Gone from the store, not merely marked in a row.
+    with pytest.raises(objectstore.ArtifactStoreError):
+        store.get(key=artifact.object_key)
+
+    # And the listing says so, read from the queue rather than repeated from the 201. This is the
+    # field an operator checks when they need to know whether the bytes actually went.
+    listing = api.get(f"/v1/workspaces/{WS}/runs/{run_id}/deletions")  # type: ignore[attr-defined]
+    assert listing.status_code == 200, listing.text
+    records = listing.json()["items"]
+    assert len(records) == 1
+    assert records[0]["objectsStillPresent"] == 0
+    assert records[0]["artifactsMarkedDeleted"] == 1

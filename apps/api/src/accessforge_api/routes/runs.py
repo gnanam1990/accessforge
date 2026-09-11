@@ -11,11 +11,25 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from accessforge_api.dependencies import clamp_page_size, require_if_match, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
-from accessforge_api.routes._common import as_body, as_identifier, authorize, workspace_scope
+from accessforge_api.routes._common import (
+    as_body,
+    as_identifier,
+    authorize,
+    database_url,
+    workspace_scope,
+)
 from accessforge_domain import reducers
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.timestamps import to_rfc3339_utc
-from accessforge_persistence import budgets, deletion, evidence, projects, runners, runs
+from accessforge_persistence import (
+    budgets,
+    deletion,
+    evidence,
+    projects,
+    runners,
+    runs,
+    workspace_connection,
+)
 from accessforge_persistence.evidence import artifacts as artifacts_module
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runs"])
@@ -645,6 +659,19 @@ def delete_run_evidence(
         allowed_fields=DELETION_FIELDS,
     )
 
+    reason = body.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        # Checked as a *type* before it is stringified. `str(None)` is "None", which passes a
+        # non-blank test and would be stored as the stated reason for destroying somebody's
+        # evidence -- a deletion whose recorded justification is the word "None".
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "a reason is required and must be a non-empty string. It is recorded with the "
+            "deletion, and a deletion nobody can explain later is the one that gets asked about "
+            "first.",
+            request_id=context.request_id,
+        )
+
     classes = body.get("evidenceClasses")
     if not isinstance(classes, list) or not all(isinstance(name, str) for name in classes):
         raise ProblemDetail(
@@ -654,14 +681,6 @@ def delete_run_evidence(
             "successful deletion that removed nothing at all.",
             request_id=context.request_id,
         )
-    if "reason" not in body:
-        raise ProblemDetail(
-            ProblemCode.INVALID_INPUT,
-            "a reason is required and is recorded with the deletion. A deletion nobody can explain "
-            "later is the one that gets asked about first.",
-            request_id=context.request_id,
-        )
-
     # Confirms the run is visible here before anything is removed. Row-level security already scopes
     # the deletion itself, so this is about the answer a caller gets: a 404 for a run in another
     # workspace rather than a report saying nothing was deleted, which would read as success.
@@ -673,22 +692,32 @@ def delete_run_evidence(
     ):
         raise not_found()
 
+    attempt_id: str | None = None
+    if body.get("attemptId") is not None:
+        # Bound to this run, not merely well-formed. An attempt belonging to another run matches no
+        # artifacts and no events, so the deletion would record a row saying evidence was removed
+        # while removing nothing -- a misleading audit entry, which is worse than a 404.
+        attempt_id = _bound_attempt(
+            conn, run_id=run_id, attempt_id=as_identifier(str(body["attemptId"]), what="attemptId")
+        )
+
     def perform() -> dict[str, Any]:
         try:
-            report = deletion.delete_evidence(
-                conn,
-                _artifact_store(request),
-                workspace_id=workspace_id,
-                run_id=run_id,
-                classes=tuple(str(name) for name in classes),
-                attempt_id=(
-                    as_identifier(str(body["attemptId"]), what="attemptId")
-                    if body.get("attemptId") is not None
-                    else None
-                ),
-                reason=str(body["reason"]),
-                requested_by=context.principal.user_id,
-            )
+            # On its own connection, which commits when this block exits. If the surrounding
+            # request then fails, a deletion stands with no idempotency record: a retry records a
+            # second deletion that removes nothing, and both appear in the listing. That is the
+            # survivable direction. The other one -- the caller told the evidence was deleted while
+            # nothing was recorded -- is the one nobody can audit afterwards.
+            with workspace_connection(database_url(request), workspace_id) as writer:
+                report = deletion.record_deletion(
+                    writer,
+                    workspace_id=workspace_id,
+                    run_id=run_id,
+                    classes=tuple(str(name) for name in classes),
+                    attempt_id=attempt_id,
+                    reason=reason,
+                    requested_by=context.principal.user_id,
+                )
         except deletion.UnknownEvidenceClass as exc:
             raise ProblemDetail(
                 ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
@@ -698,21 +727,48 @@ def delete_run_evidence(
                 ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
             ) from exc
 
+        # Phase two, now that phase one is committed. The commit above is what makes this safe:
+        # touching the store first, or from a transaction that can still roll back, leaves the bytes
+        # gone with the artifact still RETAINED and no deletion record -- a *complete* evidence set
+        # reported for a run whose evidence no longer exists, which is the failure this feature
+        # exists to prevent.
+        #
+        # Its own connection so the purge's own bookkeeping -- which keys were released, which
+        # failed and why -- commits on the purge's terms rather than the request's. Work the store
+        # has already done should not be forgotten because something later in the request failed.
+        with workspace_connection(database_url(request), workspace_id) as purger:
+            report = report.with_purge(
+                deletion.purge_pending_objects(
+                    purger, _artifact_store(request), deletion_id=report.deletion_id
+                )
+            )
+
         return {
             "deletionId": report.deletion_id,
             "requestedAt": report.requested_at,
             "evidenceClasses": list(report.classes),
             "attemptId": report.attempt_id,
-            "artifactBytesDeleted": report.artifact_bytes_deleted,
+            # Named for what has happened by the time this is read: the artifact rows are marked
+            # DELETED and their bytes are queued. Calling it "bytesDeleted" here would claim the
+            # store has released them, which at 201 is never yet true.
+            "artifactsMarkedDeleted": report.artifact_bytes_deleted,
             "artifactTombstonesKept": report.artifact_tombstones_kept,
             "eventPayloadsCleared": report.event_payloads_cleared,
             "completenessInvalidated": report.completeness_invalidated,
+            "objectsEnqueued": report.objects_enqueued,
+            "objectsPurged": report.objects_purged,
+            # Above zero means the database reports this evidence as deleted and the store has not
+            # released those bytes yet. Reported rather than omitted, because a reader who sees no
+            # such field assumes zero.
+            "objectsStillPresent": report.objects_still_present,
             "retained": list(report.retained),
             "summary": report.summary,
             "meaning": (
                 "This deletion was performed. It does not mean the data is gone: `retained` lists "
-                "what it could not reach, and that list is never empty. Read it before telling "
-                "anybody the evidence has been erased."
+                "what it could not reach, and that list is never empty. `objectsStillPresent` "
+                "above zero means some bytes are queued for removal and a later pass takes them; "
+                "until then they exist. Read all of it before telling anybody the evidence has "
+                "been erased."
             ),
         }
 
@@ -750,10 +806,14 @@ def list_run_deletions(
                 "evidenceClasses": list(record["evidence_classes"]),
                 "reason": str(record["reason"]),
                 "requestedBy": str(record["requested_by"]) if record["requested_by"] else None,
-                "artifactBytesDeleted": int(record["artifact_bytes_deleted"]),
+                "artifactsMarkedDeleted": int(record["artifact_bytes_deleted"]),
                 "eventPayloadsCleared": int(record["event_payloads_cleared"]),
                 "completenessInvalidated": bool(record["completeness_invalidated"]),
                 "requestedAt": str(record["requested_at"]),
+                # What the store has actually released, read now rather than recorded at request
+                # time. Above zero means the database reports this evidence as deleted and the
+                # object store still holds those bytes -- unfinished work, not a contradiction.
+                "objectsStillPresent": deletion.pending_purges(conn, deletion_id=str(record["id"])),
             }
             for record in records
         ],
