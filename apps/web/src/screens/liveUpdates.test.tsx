@@ -263,3 +263,79 @@ describe('what following never claims', () => {
     expect(screen.queryByRole('button', { name: 'Follow live updates' })).toBeNull()
   })
 })
+
+describe('the subscription’s lifecycle', () => {
+  it('can be started again after a reset', async () => {
+    // The bug this covers was invisible on screen. The first version closed the stream on a reset
+    // while leaving the follow *intent* true, so the control read "Follow live updates" and pressing
+    // it called setFollowing(true) on a value already true -- React never re-ran the effect and the
+    // button did nothing at all.
+    const streams = streamFactory()
+    renderRun(serverWithRun(), streams)
+    await follow()
+
+    const first = streams.last()
+    first?.emit('reset')
+    await screen.findByText(/Your view was out of date/)
+    expect(first?.closed()).toBe(true)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Follow live updates' }))
+
+    // A genuinely new stream, and the screen says it is following again.
+    expect(streams.last()).not.toBe(first)
+    expect(streams.last()?.closed()).toBe(false)
+    expect(await screen.findByRole('button', { name: 'Stop following' })).toBeVisible()
+
+    // And it works: an event on the new stream still moves the counter.
+    streams.last()?.emit('run.leased')
+    await waitFor(() => expect(screen.getByText(/1 update so far/)).toBeVisible())
+  })
+
+  it('can be started again after access ends and is restored', async () => {
+    const streams = streamFactory()
+    renderRun(serverWithRun(), streams)
+    await follow()
+
+    const first = streams.last()
+    first?.emit('access-revoked')
+    await screen.findByText(/Live updates stopped/)
+    expect(first?.closed()).toBe(true)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Follow live updates' }))
+    expect(streams.last()).not.toBe(first)
+    expect(streams.last()?.closed()).toBe(false)
+  })
+
+  it('closes the stream when the followed run reaches a terminal state', async () => {
+    // A subscription nobody can see and nobody can stop. The first version swapped the controls for
+    // a notice and left the workspace stream open, so every later event about any other run kept
+    // reloading this finished one -- with no stop control left to reach for.
+    const streams = streamFactory()
+    const server = serverWithRun({ status: 'RUNNING', outcome: 'NOT_EVALUATED' })
+    renderRun(server, streams)
+    await follow()
+
+    const stream = streams.last()
+    expect(stream?.closed()).toBe(false)
+
+    server.data.runs[0] = { ...RUN, status: 'COMPLETED', outcome: 'FAIL' }
+    stream?.emit('run.finished')
+
+    await screen.findByText(/This run has ended/)
+    await waitFor(() => expect(stream?.closed()).toBe(true))
+    expect(screen.getByText(/following has stopped/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Stop following' })).toBeNull()
+  })
+
+  it('says nothing about following on a run that was already terminal when opened', async () => {
+    // The notice belongs to a transition, not to the state. A reader opening a finished run never
+    // followed anything, and telling them following has stopped would describe something that never
+    // started.
+    const streams = streamFactory()
+    renderRun(serverWithRun({ status: 'COMPLETED', outcome: 'FAIL' }), streams)
+
+    await screen.findByText('COMPLETED')
+    expect(screen.queryByText(/This run has ended/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Follow live updates' })).toBeNull()
+  })
+})
