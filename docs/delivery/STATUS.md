@@ -119,6 +119,26 @@ ordering made a broken standalone command look fine.
 | ~~No object store running~~ | **Resolved 2026-09-10** — Colima started, MinIO running under it, credentials in a gitignored `.env.objectstore`. A real S3-compatible endpoint, not a filesystem fallback. | — |
 | Branch protection not configured | Owner configures protection rules; the agent does not change repository settings | guarded merge strength |
 
+## FR-020 scoped deletion — merged 2026-09-11 (PR #29, main `6436fac`)
+
+Deletion is two phases with a commit between them: the record is written and every object key
+enqueued, the transaction commits, and only then are the bytes removed. The earlier order could
+leave bytes gone with the artifact still `RETAINED` and no deletion record, which is a run reporting
+a **complete** evidence set for evidence that no longer exists.
+
+`POST /runs/{runId}/deletions/{deletionId}/retry` finishes a deletion whose object store was
+unreachable. Without it `objectsStillPresent` could never reach zero: the artifacts are already
+`DELETED`, so requesting the same deletion again enqueues nothing.
+
+**1587 tests pass on main.** Verified against a real uvicorn process, PostgreSQL 17 and MinIO,
+including an outage that strands a key and a retry that finishes it. Eleven mutation checks across
+the two rounds, each breaking one guard and naming the test that fails.
+
+Reviews: one independent agent review (one Important finding, fixed) and one CodeRabbit round (two
+findings fixed, one disagreed with evidence and recorded). CodeRabbit was rate-limited on the first
+and third passes, so only the middle head received a full external review. Devin's trial has
+expired and reviewed nothing.
+
 ## Outstanding debts
 
 - Executable negative-verification tests now exist for the fixture and configuration guards, proved
@@ -127,6 +147,18 @@ ordering made a broken standalone command look fine.
   Owed by module 08.
 - Test-first ordering was not followed in module 01; guards were mutated afterwards to prove the
   tests are falsifiable. See `docs/handoffs/01.md`.
+- No scheduled worker drains the object purge queue. A deletion the store could not finish waits for
+  an operator to call the retry route; nothing sweeps on its own, because no job runner exists yet
+  (`apps/orchestrator` is a README). Raised by the module 26 independent review, closed as far as a
+  request-driven system can close it.
+- `purge_pending_objects` holds one transaction across up to 200 blocking object-store calls. A
+  latency and lock-duration smell rather than a correctness bug; noted by review and not acted on.
+- `evidence_object_purge.artifact_id` has no foreign key to `evidence_artifact`, so nothing at the
+  database layer enforces that it names a real, same-workspace artifact. It is only ever written
+  from a row selected in the same transaction.
+- No test drives the deletion route with an `Idempotency-Key`. Phase one commits on its own
+  connection, so a request that fails after it leaves a deletion with no idempotency record and a
+  retry records a second, zero-effect deletion. Reasoned about and accepted; not exercised.
 - `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
   `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
   else, and it is untouched rather than unknown.
