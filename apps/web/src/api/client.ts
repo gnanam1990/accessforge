@@ -68,16 +68,38 @@ export const readCookie = (name: string, cookieString: string): string | null =>
   return null
 }
 
+/**
+ * What an event stream has to be able to do, from this application's point of view.
+ *
+ * Narrower than `EventSource` on purpose. The browser's class is injected in production and a fake
+ * supplies this shape in tests, and a test double that had to implement `readyState`, `onopen`,
+ * `url` and the rest would be a second implementation of a standard — most of it unused, and the
+ * unused parts free to be wrong.
+ */
+export interface EventStream {
+  addEventListener: (type: string, listener: (event: MessageEvent) => void) => void
+  close: () => void
+}
+
+export type EventStreamFactory = (url: string) => EventStream
+
 export interface ApiClientOptions {
   readonly baseUrl?: string
   readonly fetchImpl?: typeof fetch
   readonly cookieSource?: () => string
+  /**
+   * How to open a server-sent event stream. Injected for the same reason `fetchImpl` is: jsdom has
+   * no `EventSource`, and a component that constructed one directly could not be tested at all
+   * without a global stub that every other test then inherits.
+   */
+  readonly eventStreamImpl?: EventStreamFactory
 }
 
 export class ApiClient {
   readonly #baseUrl: string
   readonly #fetch: typeof fetch
   readonly #cookies: () => string
+  readonly #openStream: EventStreamFactory | null
   /**
    * Incremented whenever the authenticated context ends. Captured at the start of each request and
    * compared when it resolves; a mismatch discards the response.
@@ -88,6 +110,37 @@ export class ApiClient {
     this.#baseUrl = options.baseUrl ?? ''
     this.#fetch = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
     this.#cookies = options.cookieSource ?? (() => document.cookie)
+    this.#openStream =
+      options.eventStreamImpl ??
+      (typeof EventSource === 'undefined'
+        ? null
+        : // `withCredentials` so the session cookie travels. Same-origin only: this application is
+          // served from the same origin as the API, and a cross-origin stream carrying credentials
+          // is how a misconfigured deployment leaks a session to somebody else's page.
+          (url: string) => new EventSource(url, { withCredentials: true }))
+  }
+
+  /**
+   * Open a live event stream, or return null where the environment has none.
+   *
+   * Null rather than throwing. A browser without `EventSource` — or a test that did not supply one —
+   * should leave a screen reading from the API as it always did, not render an error about a
+   * transport the person never asked for. The screen's own copy says whether it is following.
+   */
+  openEventStream(path: string): EventStream | null {
+    if (this.#openStream === null) return null
+    return this.#openStream(`${this.#baseUrl}${path}`)
+  }
+
+  /**
+   * Whether a live stream is possible here at all, answerable without opening one.
+   *
+   * Separate from `openEventStream` because a screen needs to know *before* it offers to follow. The
+   * first version found out by opening a stream, which meant the offer was made in browsers that
+   * could not honour it and the reader discovered the truth only after pressing the button.
+   */
+  get canOpenEventStream(): boolean {
+    return this.#openStream !== null
   }
 
   /**
