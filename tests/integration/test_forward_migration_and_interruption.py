@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0016_schedule_reapproval.sql"
+NEWEST = "0017_evidence_deletion_record.sql"
 
 
 def _with_database(url: str, name: str) -> str:
@@ -135,31 +135,62 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     """The newest migration's actual effect, in both directions.
 
     Asserting only that the new thing works afterwards would pass against a database where the
-    constraint had been dropped entirely, or the column had always been there -- and "the guard is
-    gone" is a much worse outcome than "the feature is missing".
+    guard had been dropped entirely, or the table had always been there -- and "the guard is gone"
+    is a much worse outcome than "the feature is missing".
     """
     _apply_through(disposable, _previous())
     with connect(disposable) as conn:
         before = conn.execute(
-            "SELECT count(*) AS n FROM information_schema.columns "
-            " WHERE table_name = 'schedule' AND column_name IN ('reapproved_at','reapproved_by')"
+            "SELECT 1 FROM information_schema.tables "
+            " WHERE table_schema = 'public' AND table_name = 'evidence_deletion'"
         ).fetchone()
-    assert before is not None and int(before["n"]) == 0
+    assert before is None
 
     migrate(disposable)
 
     with connect(disposable) as conn:
         after = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            " WHERE table_schema = 'public' AND table_name = 'evidence_deletion'"
+        ).fetchone()
+        # The constraints, not only the table. A deletion record with an empty reason is the thing
+        # the CHECK exists to make impossible, and a test that only looked for the table would pass
+        # against a version that had dropped it.
+        reason_guard = conn.execute(
+            "SELECT 1 FROM pg_constraint WHERE conrelid = 'evidence_deletion'::regclass "
+            "   AND pg_get_constraintdef(oid) LIKE '%btrim(reason)%'"
+        ).fetchone()
+        forced = conn.execute(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+            " WHERE relname = 'evidence_deletion'"
+        ).fetchone()
+    assert after is not None
+    assert reason_guard is not None, "a deletion could be recorded with no stated reason"
+    assert forced is not None
+    # FORCE, not merely ENABLE: the application role owns this table, and ENABLE does nothing for a
+    # table's owner. A deletion record readable across tenants would disclose what another workspace
+    # removed and why.
+    assert bool(forced["relrowsecurity"]) and bool(forced["relforcerowsecurity"])
+
+
+def test_the_schedule_reapproval_columns_from_an_earlier_migration_are_still_correct(
+    disposable: str,
+) -> None:
+    """Migration 0016's effect, kept as its own case now that it is no longer the newest.
+
+    A migration test that only ever covered the tip would stop exercising every earlier change the
+    moment another one landed -- which is precisely when a regression in one of them would ship.
+    """
+    migrate(disposable)
+    with connect(disposable) as conn:
+        columns = conn.execute(
             "SELECT count(*) AS n FROM information_schema.columns "
             " WHERE table_name = 'schedule' AND column_name IN ('reapproved_at','reapproved_by')"
         ).fetchone()
-        # The pairing constraint, not just the columns. Half a re-approval record -- a timestamp
-        # with nobody attached -- is the thing the constraint exists to make impossible, and
-        # asserting only that the columns arrived would pass without it.
         constraint = conn.execute(
             "SELECT 1 FROM pg_constraint WHERE conname = 'reapproval_is_attributable'"
         ).fetchone()
-    assert after is not None and int(after["n"]) == 2
+    assert columns is not None and int(columns["n"]) == 2
     assert constraint is not None
 
 
