@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0022_rate_limit_buckets.sql"
+NEWEST = "0023_candidate_build_attempt.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -142,8 +142,60 @@ def test_data_written_under_the_previous_rules_survives_the_migration(disposable
 def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     disposable: str,
 ) -> None:
-    """The newest migration's actual effect, in both directions."""
+    """0023 adds exact durable build identity and fencing without weakening tenant isolation."""
     _apply_through(disposable, _previous())
+    with connect(disposable) as conn:
+        assert conn.execute("SELECT to_regclass('candidate_build_attempt') AS name").fetchone() == {
+            "name": None,
+        }
+    migrate(disposable)
+    with connect(disposable) as conn:
+        forced = conn.execute(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+            "WHERE relname = 'candidate_build_attempt'",
+        ).fetchone()
+        policy = conn.execute(
+            "SELECT qual, with_check FROM pg_policies WHERE tablename = 'candidate_build_attempt'",
+        ).fetchone()
+        constraints = [
+            str(row["definition"])
+            for row in conn.execute(
+                "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+                "WHERE conrelid = 'candidate_build_attempt'::regclass",
+            ).fetchall()
+        ]
+        trigger = conn.execute(
+            "SELECT tgenabled FROM pg_trigger WHERE tgrelid = 'candidate_build_attempt'::regclass "
+            "AND tgname = 'candidate_build_identity_is_immutable'",
+        ).fetchone()
+    assert forced == {"relrowsecurity": True, "relforcerowsecurity": True}
+    assert policy is not None
+    for clause in (str(policy["qual"]), str(policy["with_check"])):
+        assert "current_workspace_id()" in clause
+        assert "IS NULL" not in clause
+    assert "UNIQUE (patch_id)" in constraints
+    for column, parent in (
+        ("patch_id", "patch_proposal"),
+        ("verification_id", "patch_verification"),
+        ("project_id", "project"),
+        ("source_snapshot_id", "source_snapshot"),
+        ("approval_id", "approval"),
+    ):
+        assert any(
+            f"FOREIGN KEY ({column}, workspace_id) REFERENCES {parent}(id, workspace_id)"
+            in definition
+            for definition in constraints
+        )
+    assert any("building_revision = (approved_revision + 1)" in item for item in constraints)
+    assert any(
+        "cleanup_confirmed" in item and "dispatched_at IS NOT NULL" in item for item in constraints
+    )
+    assert trigger == {"tgenabled": "O"}
+
+
+def test_the_rate_limit_migrations_effect_remains_correct(disposable: str) -> None:
+    """Preserve every former tip assertion for 0022, including its pre-migration absence."""
+    _apply_through(disposable, "0021_patches_and_verification.sql")
     with connect(disposable) as conn:
         before = conn.execute(
             "SELECT 1 FROM information_schema.tables "

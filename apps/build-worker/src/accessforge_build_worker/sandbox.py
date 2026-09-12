@@ -155,6 +155,7 @@ class DockerSandbox:
         source: SourceSnapshot,
         *,
         command: tuple[str, ...],
+        task_id: str | None = None,
         cancelled: Callable[[], bool] = lambda: False,
     ) -> SandboxBuild:
         """Run one owned build, hash captured output, and confirm removal before returning.
@@ -182,7 +183,10 @@ class DockerSandbox:
         if image.get("Config", {}).get("Volumes"):
             raise SandboxRefused("toolchain image declares unbounded implicit volumes")
         image_id = str(image["Id"])
-        task_id = str(uuid.uuid4())
+        if task_id is None:
+            task_id = str(uuid.uuid4())
+        elif str(uuid.UUID(task_id)) != task_id:
+            raise SandboxRefused("task ID must be a canonical supervisor-generated UUID")
         name = f"accessforge-build-{task_id}"
         creation_confirmed = False
         try:
