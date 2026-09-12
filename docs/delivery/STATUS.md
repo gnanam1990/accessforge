@@ -154,6 +154,57 @@ silently does nothing is worse than no worker: the first looks finished.
 guard and naming the test that fails, restored byte-identically by SHA-256. **No external review
 yet, and nothing pushed** — this branch is for independent review before it goes anywhere.
 
+## Patch proposal and candidate verification — 2026-09-12 (branch `feat/m14-m15-patch-and-verification`, not yet reviewed)
+
+FR-010 and FR-011's API surface: six routes, a pure patch path policy, `PATCH_APPLY` approval
+persistence with a recheck at dispatch, and the verification record with every gate that refuses to
+call a repair verified.
+
+The design claim is that `conclude_verification` has no verdict parameter, so nothing — no route, no
+retry, no sufficiently senior reviewer — can mark an inconclusive candidate VERIFIED. A test reads the
+signature, and a contract test reads the live OpenAPI schema and fails if any request body anywhere
+accepts a `conclusion`.
+
+**Maintainer review found three defects, all now fixed.** The proposal stored only filenames and a
+digest, so nothing could reload the diff an approval was granted over. `baseSourceDigest` was
+unverified — any 64-character hex string — which made the stale-base check at dispatch compare the
+current tree against a number somebody typed. And the dispatch check compared the approval's
+`expected_revision` against itself, a check that cannot fail, so a patch edited after approval stayed
+dispatchable; repairing it meant reordering approval so the approval binds to the revision the patch
+has once approved.
+
+A second review round found the digest comparison on load was skipped when a proposal had no change
+rows, so deleting them all returned an empty patch that kept its digest, its APPROVED status and a
+valid approval. The comparison is now unconditional.
+
+A third round, from an adversarial review, closed seven more: decision transitions now compare-and-swap
+on the revision inside the UPDATE (an approval and a rejection could both succeed); the base identity
+is bound to the finding's own run; proposal idempotency is namespaced by finding; duplicate paths are
+refused as invalid input rather than surfacing as a 500; **caller-supplied evidence can no longer
+produce VERIFIED** — every gate reads recorded rows, and with no runner attesting protected
+regressions the conclusion is conclusively non-VERIFIED; the repair surface is trusted project
+configuration an unconfigured project cannot widen; and `binary`, `mode` and
+`acknowledgeSeparateReview` are validated rather than coerced.
+
+A fourth round closed five residual blockers: `open_verification` now rechecks the approval before it
+inserts or transitions; the conclusion `UPDATE` carries state and revision predicates so two
+concluders cannot both succeed; `permitted_differences` are validated with a sentinel separating a
+missing `candidate` key from a null one; the generated contract documents the exact current request
+shapes and the required `If-Match`, with no stale `applicationPaths`; and `PLAN.md` rows 18 and 24
+carry measured counts and the honest candidate/rerun gap.
+
+**1751 tests pass** against real PostgreSQL 17 and MinIO. 22 mutation checks across the policy, the
+persistence gates and the schema, including ones that reinstate the self-referential revision
+comparison and the `changes and` short-circuit exactly as each shipped. Each restored
+byte-identically by SHA-256.
+
+**Runtime proof is BLOCKED, and this is not acceptance of FR-010 or FR-011.** No candidate has been
+built or run: there is no containment boundary for executing an application's build and no real screen
+reader attached. The VERIFIED path is exercised with evidence the tests name `_fabricated_`. Module
+14's sandbox (prompt tasks 5–9) is not implemented and no containment claim is made. The gates
+currently trust what a caller reports about a candidate run; when a real runner exists those fields
+must be read from evidence instead. **Nothing pushed; no external review.**
+
 ## Outstanding debts
 
 - Executable negative-verification tests now exist for the fixture and configuration guards, proved
@@ -182,6 +233,9 @@ yet, and nothing pushed** — this branch is for independent review before it go
 - `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
   `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
   else, and it is untouched rather than unknown.
+- The verification gates accept `closing_watermarks` and `protected_regressions_passed` as reported
+  by the caller rather than reading them from evidence. Today the only caller is a test. This is the
+  largest remaining hole in FR-011 and it is open, not closed.
 - `fixture_digest` is an unkeyed SHA-256 over fixture and observer values, several of which have low
   entropy, so anyone holding an export can test offline guesses at what a run was checked against.
   Raised by the module 06 independent review; a keyed commitment was refused because it would make
