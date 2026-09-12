@@ -18,8 +18,9 @@ from accessforge_domain.canonical import digest
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import approvals, patches, workspace_connection
 from accessforge_persistence import candidate_builds as builds
+from accessforge_persistence import candidate_materializations as materializations
 
-from .artifacts import CandidateArchiveStore, retain_candidate
+from .artifacts import CandidateArchiveStore, read_retained_candidate, retain_candidate
 from .sandbox import (
     MEMORY,
     PIDS,
@@ -119,6 +120,13 @@ def prepare_and_claim(
             inputs=inputs,
             lease_seconds=math.ceil(sandbox.policy.wall_seconds) + 60,
         )
+        materializations.capture_source(
+            conn,
+            claim=claim,
+            tree_digest=candidate.source.tree_digest,
+            archive_digest=candidate.source.archive_digest,
+            changed_paths=candidate.changed_paths,
+        )
     return ClaimedCandidate(claim, inputs, candidate)
 
 
@@ -178,4 +186,28 @@ def execute_claim(
     retain_candidate(
         database_url, workspace_id=workspace_id, claim=claim, result=result, store=store
     )
+    publish_retained_materialization(
+        database_url, workspace_id=workspace_id, build_id=claim.build_id, store=store
+    )
     return result
+
+
+def publish_retained_materialization(
+    database_url: str,
+    *,
+    workspace_id: str,
+    build_id: str,
+    store: CandidateArchiveStore,
+) -> tuple[str, str]:
+    """Publish exact canonical source/build IDs; no environment, run, or reader proof is implied."""
+    artifact = read_retained_candidate(
+        database_url, workspace_id=workspace_id, build_id=build_id, store=store
+    )
+    with workspace_connection(database_url, workspace_id) as conn:
+        row = materializations.publish(
+            conn,
+            workspace_id=workspace_id,
+            build_id=build_id,
+            observed_artifact_digest=artifact.archive_digest,
+        )
+        return str(row["source_snapshot_id"]), str(row["build_artifact_id"])

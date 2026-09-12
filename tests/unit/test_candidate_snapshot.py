@@ -86,6 +86,37 @@ def test_tree_digest_matches_the_existing_source_identity_contract() -> None:
     assert snapshot.tree_digest == digest({"entries": entries})
 
 
+@pytest.mark.parametrize(
+    "changes,expected_paths",
+    [
+        ((CHANGE,), ("src/form.html",)),
+        ((ProposedChange("src/form.html", '<input id="email">'),), ()),
+        (
+            (ProposedChange("src/form.html", '<input id="email">', mode="100755"),),
+            ("src/form.html",),
+        ),
+        (
+            (ProposedChange("src/form.html", None), ProposedChange("src/new.html", "new")),
+            ("src/form.html", "src/new.html"),
+        ),
+    ],
+)
+def test_candidate_dirty_paths_describe_actual_content_or_mode_changes(
+    changes: tuple[ProposedChange, ...],
+    expected_paths: tuple[str, ...],
+) -> None:
+    patch = _proposal(changes)
+    result = prepare_candidate(
+        BASE,
+        patch=patch,
+        approval=_approval(patch),
+        workspace_id="workspace-1",
+        application_paths=("src",),
+        now=NOW,
+    )
+    assert result.changed_paths == expected_paths
+
+
 def test_modes_are_bound_in_archive_identity_even_when_content_digest_is_equal() -> None:
     plain = SourceSnapshot((SourceFile("src/script.py", b"pass"),))
     executable = SourceSnapshot((SourceFile("src/script.py", b"pass", 0o755),))

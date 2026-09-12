@@ -649,3 +649,40 @@ passed all 36 tests in 10.45 seconds. Strict mypy: 227 files; Ruff lint/format: 
 OpenAPI, six schema/enumeration bindings, frozen logical fixture and 74-operation client drift
 checks pass. Current-head GitHub CI remains required; the preceding head's Python job failed
 as documented above, while Node, documentation and security jobs passed.
+
+### Canonical candidate source/build inputs (continuation)
+
+Migration 0031 records the prepared candidate's actual content-tree digest, exact changed paths
+and canonical source snapshot in the same transaction as its build claim, before Docker starts.
+Failure after source insertion rolls back the claim, verification, source record and patch
+transition together. The snapshot's commit remains the base commit as lineage; approved in-memory
+changes are explicitly dirty, not a fictitious clean commit. Dirty paths include mode-only changes,
+additions and deletions, while no-op patch entries do not count as changes. The existing v1 content
+tree digest does not include file mode; the independently captured candidate archive digest does.
+
+After retention and fresh bounded byte read-back, the coordinator publishes a canonical
+`build_artifact` linked to that captured candidate snapshot, not the baseline snapshot. The observed
+artifact flag describes those actual output bytes, not a claim that a browser or deployment served
+them. Source/build IDs are now available for subsequent candidate sealing; no environment or run is
+created here. Historical builds get no invented source capture and cannot use this publication path.
+
+Publication rechecks current patch/source/approval/retention authority and exact captured source
+and output identities, including on idempotent repeats. Repeating metadata publication returns the
+same IDs without rebuilding. A failed metadata publication after BUILT can be retried through the
+metadata-only function; it must not rerun the candidate build. Captured source and first published
+output binding are immutable. Missing or changed source/build rows, wrong workspace and unavailable
+retained bytes fail closed. Real encrypted backup/isolated-restore tests preserve both unpublished
+and published materializations, without converting them to reader evidence.
+
+Remaining is still the actual endpoint/environment/run/lease binding and canonical reader/observer
+path, plus E0 controller and UNKNOWN reconciliation. This input-materialization slice does not
+enable `_regression_attestation` or satisfy Module 15's actual-VoiceOver acceptance gate.
+
+Validation: **2,134 passed, zero failures/skips**, 58 upstream deprecation warnings, 266.02 seconds.
+This includes the actual source-capture rollback fault and retained/quarantined/deleted byte
+backup/restore with materialization identity checks. Earlier focused integration run: 72 passed;
+snapshot suite: 64 passed. Strict mypy: 228 files; Ruff lint/format: 330 files; all four contract
+drift checks pass. The preceding endpoint-lifecycle head
+`6149426c098322a238edbc472126dff66b2bd286` passed all GitHub CI jobs in run 34724314684,
+including the Linux expiry regressions and real backup/restore. This materialization head requires
+its own CI and remains an incomplete draft, not a verified repair.
