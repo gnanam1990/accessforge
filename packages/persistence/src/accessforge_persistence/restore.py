@@ -30,6 +30,7 @@ holding a backup.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -37,7 +38,7 @@ from typing import Any
 
 import psycopg
 
-from .evidence.objectstore import S3ArtifactStore
+from .evidence.objectstore import ObjectStoreUnavailable, S3ArtifactStore, is_candidate_archive_key
 
 
 class RestoreError(RuntimeError):
@@ -73,10 +74,20 @@ def assert_can_reconcile(conn: psycopg.Connection[dict[str, Any]]) -> None:
 
 def restore_object_bytes(store: S3ArtifactStore, *, key: str, payload: bytes) -> None:
     """Write and re-read one archive member before restored database authority is exposed."""
-    if not 0 < len(payload) <= 64 * 1024 * 1024:
+    candidate = is_candidate_archive_key(key)
+    if len(payload) > 64 * 1024 * 1024 or (not payload and not candidate):
         raise RestoreError("stored object is empty or exceeds the supported restore bound")
-    store.put(key=key, payload=payload, content_type="application/octet-stream")
-    if store.get_bounded(key=key, max_bytes=len(payload)) != payload:
+    if candidate:
+        try:
+            store.put_create_only(key=key, payload=payload, content_type="application/octet-stream")
+        except ObjectStoreUnavailable:
+            # A retry of a partial isolated restore may find an identical object. Never overwrite
+            # a different payload or a retirement tombstone to make the restore pass.
+            if store.get_bounded(key=key, max_bytes=max(1, len(payload))) != payload:
+                raise
+    else:
+        store.put(key=key, payload=payload, content_type="application/octet-stream")
+    if store.get_bounded(key=key, max_bytes=max(1, len(payload))) != payload:
         raise RestoreError("restored object failed bounded read-back")
 
 
@@ -92,6 +103,54 @@ def assert_backup_run_integrity(conn: psycopg.Connection[dict[str, Any]]) -> Non
             "backup refused: runs reference missing workspaces (possible pre-0026 delete-trigger "
             "corruption). Recover parent records from trusted history before retrying; "
             "no data was repaired or deleted."
+        )
+
+
+def record_candidate_restore_locations(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    store: S3ArtifactStore,
+    restored_keys: set[str],
+    restore_id: str,
+) -> None:
+    """Operator-only append after verified object transfer; keep original capture provenance."""
+    assert_can_reconcile(conn)
+    rows = conn.execute(
+        "SELECT build_id,workspace_id,object_key,state,size_bytes,content_digest "
+        "FROM candidate_archive ORDER BY build_id"
+    ).fetchall()
+    for row in rows:
+        if row["object_key"] not in restored_keys:
+            continue
+        if row["state"] == "DELETED":
+            if store.get_bounded(key=row["object_key"], max_bytes=1) != b"":
+                raise RestoreError("restored candidate tombstone contains nonempty bytes")
+        elif row["state"] == "RETAINED":
+            payload = store.get_bounded(key=row["object_key"], max_bytes=int(row["size_bytes"]))
+            if len(payload) != row["size_bytes"] or (
+                hashlib.sha256(payload).hexdigest() != row["content_digest"]
+            ):
+                raise RestoreError("restored candidate does not match its persisted archive")
+        conn.execute(
+            "SELECT id FROM candidate_build_attempt WHERE id = %s FOR UPDATE", (row["build_id"],)
+        )
+        prior = conn.execute(
+            "SELECT coalesce(max(revision),0) AS revision FROM candidate_archive_restore_location "
+            "WHERE build_id = %s",
+            (row["build_id"],),
+        ).fetchone()
+        assert prior is not None
+        conn.execute(
+            "INSERT INTO candidate_archive_restore_location "
+            "(build_id,workspace_id,revision,restore_id,store_endpoint,store_bucket) "
+            "VALUES (%s,%s,%s,%s,%s,%s)",
+            (
+                row["build_id"],
+                row["workspace_id"],
+                int(prior["revision"]) + 1,
+                restore_id,
+                *store.storage_identity,
+            ),
         )
 
 

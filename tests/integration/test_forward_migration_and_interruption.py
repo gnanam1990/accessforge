@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0026_nonterminal_run_delete.sql"
+NEWEST = "0028_candidate_archive_location.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -143,6 +143,89 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     disposable: str,
 ) -> None:
     _apply_through(disposable, _previous())
+    with connect(disposable) as conn:
+        assert conn.execute(
+            "SELECT to_regclass('candidate_archive_restore_location') AS name"
+        ).fetchone() == {"name": None}
+    assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        assert conn.execute(
+            "SELECT relrowsecurity,relforcerowsecurity FROM pg_class "
+            "WHERE relname = 'candidate_archive_restore_location'"
+        ).fetchone() == {"relrowsecurity": True, "relforcerowsecurity": True}
+        columns = conn.execute(
+            "SELECT column_name,is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'candidate_archive' "
+            "AND column_name IN ('store_endpoint','store_bucket') ORDER BY column_name"
+        ).fetchall()
+        assert columns == [
+            {"column_name": "store_bucket", "is_nullable": "YES"},
+            {"column_name": "store_endpoint", "is_nullable": "YES"},
+        ]
+
+
+def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) -> None:
+    _apply_through(disposable, "0026_nonterminal_run_delete.sql")
+    build = _seed_legacy_candidate(disposable, "BUILT")
+    with connect(disposable) as conn:
+        conn.execute(
+            "INSERT INTO candidate_process_receipt "
+            "(build_id,workspace_id,container_id,image_id,platform) "
+            "VALUES (%s,%s,repeat('a',64),'sha256:' || repeat('b',64),'linux/arm64')",
+            (build, WS),
+        )
+        conn.execute(
+            "INSERT INTO candidate_archive (build_id,workspace_id,content_digest,size_bytes,"
+            "object_key,stdout_digest,stderr_digest,state) "
+            "VALUES (%s,%s,repeat('a',64),10240,'synthetic',"
+            "repeat('b',64),repeat('c',64),'QUARANTINED')",
+            (build, WS),
+        )
+        assert conn.execute(
+            "SELECT to_regclass('candidate_archive_retirement') AS name"
+        ).fetchone() == {"name": None}
+    assert migrate(disposable) == [
+        "0027_candidate_archive_retirement.sql",
+        "0028_candidate_archive_location.sql",
+    ]
+    with connect(disposable) as conn:
+        assert conn.execute(
+            "SELECT storage_protocol FROM candidate_archive WHERE build_id = %s", (build,)
+        ).fetchone() == {"storage_protocol": None}
+        assert conn.execute(
+            "SELECT store_endpoint,store_bucket FROM candidate_archive WHERE build_id = %s",
+            (build,),
+        ).fetchone() == {"store_endpoint": None, "store_bucket": None}
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_archive SET store_endpoint = 'http://localhost:9000', "
+                "store_bucket = 'invented' WHERE build_id = %s",
+                (build,),
+            )
+        assert conn.execute(
+            "SELECT relrowsecurity,relforcerowsecurity FROM pg_class "
+            "WHERE relname = 'candidate_archive_retirement'"
+        ).fetchone() == {"relrowsecurity": True, "relforcerowsecurity": True}
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_archive SET storage_protocol = 'CREATE_ONLY_V1' "
+                "WHERE build_id = %s",
+                (build,),
+            )
+        conn.execute(
+            "INSERT INTO candidate_archive_retirement "
+            "(build_id,workspace_id,policy_revision,retain_days) VALUES (%s,%s,0,90)",
+            (build, WS),
+        )
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_archive_retirement SET retain_days = 0 WHERE build_id = %s",
+                (build,),
+            )
+
+
+def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
+    _apply_through(disposable, "0025_candidate_artifact_receipts.sql")
     run_id = str(uuid.uuid4())
     with connect(disposable) as conn:
         conn.execute("INSERT INTO workspace (id,name) VALUES (%s,'delete-regression')", (WS,))
@@ -157,7 +240,11 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
             assert conn.execute("SELECT id FROM run WHERE id = %s", (run_id,)).fetchone()
             with pytest.raises(restore.RestoreError, match="missing workspaces"):
                 restore.assert_backup_run_integrity(conn)
-    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == [
+        "0026_nonterminal_run_delete.sql",
+        "0027_candidate_archive_retirement.sql",
+        "0028_candidate_archive_location.sql",
+    ]
     with connect(disposable) as conn:
         assert conn.execute("DELETE FROM workspace WHERE id = %s", (WS,)).rowcount == 1
         assert conn.execute("SELECT id FROM run WHERE id = %s", (run_id,)).fetchone() is None
@@ -196,6 +283,8 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
     assert migrate(disposable) == [
         "0025_candidate_artifact_receipts.sql",
         "0026_nonterminal_run_delete.sql",
+        "0027_candidate_archive_retirement.sql",
+        "0028_candidate_archive_location.sql",
     ]
     with connect(disposable) as conn:
         # Migration cannot invent process provenance or available bytes for an old digest.
