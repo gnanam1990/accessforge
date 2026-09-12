@@ -158,12 +158,13 @@ jobs:
       - name: Type check (strict)
         # `scripts` is included: the operator scripts are the commands a runbook tells somebody to
         # run during an incident, which makes them the code least likely to be exercised before it
-        # matters and the code where a TypeError is most expensive.
+        # matters and the code where a TypeError is most expensive. Tests are included too:
+        # the helpers used as proof must obey the same interfaces as production callers.
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
           apps/orchestrator/src packages/agent-tools/navigation/src
           packages/domain/src packages/contracts/python/src
-          packages/persistence/src packages/evidence/src scripts
+          packages/persistence/src packages/evidence/src packages/clients/python/src scripts tests
 
       - name: Install a PostgreSQL 17 client
         # The runner image ships pg_dump 16, and the service container is PostgreSQL 17. An older

@@ -96,7 +96,7 @@ ignore = ["S101"]  # assert is how pytest expresses expectations
 [tool.mypy]
 python_version = "3.13"
 strict = true
-mypy_path = "apps/api/src:apps/orchestrator/src:fixtures/reference-app/src:packages/agent-tools/navigation/src:packages/domain/src:packages/contracts/python/src:packages/persistence/src:packages/evidence/src:packages/clients/python/src"
+mypy_path = "apps/api/src:apps/orchestrator/src:fixtures/reference-app/src:packages/agent-tools/navigation/src:packages/domain/src:packages/contracts/python/src:packages/persistence/src:packages/evidence/src:packages/clients/python/src:scripts"
 namespace_packages = true
 explicit_package_bases = true
 

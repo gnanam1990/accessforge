@@ -26,6 +26,7 @@ from accessforge_domain.evaluation import (
     ObserverError,
     Provenance,
     ProvenanceError,
+    Verdict,
     assert_provenance_permitted,
     decide,
     evaluate_assertions,
@@ -102,7 +103,7 @@ def _decide(
     observed_identities: dict[IdentityKind, str] | None = None,
     completeness_reasons: tuple[str, ...] = (),
     preflight_passed: bool = True,
-):
+) -> Verdict:
     values = (
         assertion_values
         if assertion_values is not None

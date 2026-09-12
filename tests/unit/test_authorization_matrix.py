@@ -102,7 +102,7 @@ def test_requesting_a_run_is_not_approving_one() -> None:
     # A viewer can do neither; the two permissions are distinct capabilities, not a scale.
     assert not role_permits(Role.VIEWER, Permission.RUN_REQUEST)
     assert not role_permits(Role.VIEWER, Permission.RUN_APPROVE)
-    assert Permission.RUN_REQUEST != Permission.RUN_APPROVE
+    assert len({Permission.RUN_REQUEST, Permission.RUN_APPROVE}) == 2
 
 
 def test_exporting_is_separate_from_reading() -> None:

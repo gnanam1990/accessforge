@@ -19,6 +19,7 @@ from __future__ import annotations
 import pathlib
 import re
 import sys
+from typing import Any
 
 import pytest
 import yaml
@@ -40,7 +41,9 @@ HEALTHY_REQUIREMENTS = "\n".join(
 )
 
 
-def _report(count: int = MINIMUM_AUDITED_PACKAGES, **vulnerable: list[dict[str, object]]):
+def _report(
+    count: int = MINIMUM_AUDITED_PACKAGES, **vulnerable: list[dict[str, object]]
+) -> dict[str, Any]:
     """A pip-audit report shape with `count` clean packages, plus any named vulnerable ones."""
     dependencies: list[dict[str, object]] = [
         {"name": f"package-{n}", "version": "1.0.0", "vulns": []} for n in range(count)

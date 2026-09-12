@@ -71,8 +71,8 @@ Request and outcome telemetry with no evidence content and no object keys in it.
 **Depends on:** 18.
 </details>
 
-### ~~P5 — Python dependency scanning in CI~~ — built, awaiting review
-Branch `feat/ci-python-dependency-scanning`. `scripts/audit_python_dependencies.py` audits `uv.lock`
+### ~~P5 — Python dependency scanning in CI~~ — merged (PR #35, `49747cb`)
+`scripts/audit_python_dependencies.py` audits `uv.lock`
 rendered with `--frozen`, runs first in the security job, installs nothing and executes no package
 code. Handoff in `docs/handoffs/ci-python-dependency-scanning.md`.
 
@@ -84,9 +84,12 @@ it audits, and twelve mutation checks cover the ways the gate could go green whi
 markers), the input floor is a floor rather than an equality, and every advisory fails at every
 severity because pip-audit cannot grade many of them.
 
-### P6 — `mypy` over `tests/`
-139 strict errors, almost all bare `dict` annotations, in the suite that is the evidence for
-everything else. **Depends on:** nothing. Mechanical but large.
+### P6 — `mypy` over `tests/` — validated locally, awaiting PR/CI
+The refreshed baseline had 234 errors across 29 test files, not the previously recorded 139.
+CI now checks every Python workspace member, operator scripts and the complete test tree with
+strict mode unchanged. Typed helpers, explicit row/cookie preconditions and complete fault-store
+interfaces replace invalid annotations; negative tests remain. Two CI-configuration tests guard
+the target list and prevent test exemptions. See `docs/handoffs/test-suite-mypy.md`.
 
 ### P7 — `fixture_digest` offline-guess exposure
 An unkeyed SHA-256 over low-entropy fixture values; anyone holding an export can test guesses

@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -158,7 +158,7 @@ def _sign_in_again(db: str, client: TestClient) -> str:
 
 def _create_grant(
     client: TestClient, csrf: str, project_id: str, **overrides: object
-) -> httpx.Response:
+) -> httpx2.Response:
     body = {
         "projectId": project_id,
         "environment": "staging",
