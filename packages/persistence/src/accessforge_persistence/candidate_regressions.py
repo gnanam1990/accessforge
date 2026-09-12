@@ -110,7 +110,10 @@ def claim(
     image_id: str,
     daemon_endpoint: str,
     daemon_id: str,
+    endpoint_required: bool = False,
 ) -> RegressionClaim:
+    if type(endpoint_required) is not bool:
+        raise Refused("endpoint dispatch mode must be boolean")
     for value in (artifact_digest, policy_digest):
         if not re.fullmatch(r"[a-f0-9]{64}", value):
             raise Refused("invalid regression digest")
@@ -131,8 +134,8 @@ def claim(
         inserted = conn.execute(
             "INSERT INTO candidate_regression_attempt "
             "(id,workspace_id,build_id,worker_token,artifact_digest,policy_digest,image_id,"
-            "daemon_endpoint,daemon_id,state,lease_expires_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'CLAIMED',"
+            "daemon_endpoint,daemon_id,endpoint_required,state,lease_expires_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'CLAIMED',"
             "clock_timestamp()+interval '180 seconds') "
             "ON CONFLICT (build_id) DO NOTHING RETURNING id",
             (
@@ -145,6 +148,7 @@ def claim(
                 image_id,
                 daemon_endpoint,
                 daemon_id,
+                endpoint_required,
             ),
         ).fetchone()
         if inserted is None:
@@ -267,6 +271,15 @@ def finish(
             raise Refused("regression policy changed before receipt")
         if row["artifact_digest"] != artifact_digest:
             raise Refused("regression artifact changed before receipt")
+        endpoint = conn.execute(
+            "SELECT state,receipt,cleanup_confirmed FROM candidate_endpoint WHERE attempt_id=%s",
+            (claim.attempt_id,),
+        ).fetchone()
+        if (row["endpoint_required"] and (endpoint is None or endpoint["receipt"] is None)) or (
+            endpoint is not None
+            and (endpoint["state"] != "CLOSED" or not endpoint["cleanup_confirmed"])
+        ):
+            raise Refused("regression result lacks required endpoint binding/cleanup")
         if (
             not checks
             or len(checks) > 128
@@ -311,7 +324,11 @@ def fail(
             "AND state<>'REMOVED' LIMIT 1",
             (claim.attempt_id,),
         ).fetchone()
-        clean = cleanup_confirmed and unresolved is None
+        endpoint = conn.execute(
+            "SELECT 1 FROM candidate_endpoint WHERE attempt_id=%s AND state<>'CLOSED' LIMIT 1",
+            (claim.attempt_id,),
+        ).fetchone()
+        clean = cleanup_confirmed and unresolved is None and endpoint is None
         conn.execute(
             "UPDATE candidate_regression_attempt SET state=%s,epoch=epoch+1,"
             "cleanup_confirmed=%s,failure_code=%s,finished_at=clock_timestamp() WHERE id=%s",

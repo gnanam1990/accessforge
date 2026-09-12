@@ -168,6 +168,7 @@ class Reconciliation:
     grants_requiring_revalidation: list[str] = field(default_factory=list)
     candidate_builds_fenced: int = 0
     candidate_regressions_fenced: int = 0
+    candidate_endpoints_fenced: int = 0
 
     @property
     def summary(self) -> str:
@@ -179,6 +180,7 @@ class Reconciliation:
             f"and suppressed {self.outbox_messages_suppressed} undelivered messages. "
             f"Fenced {self.candidate_builds_fenced} candidate builds without redispatch. "
             f"Fenced {self.candidate_regressions_fenced} protected regressions without redispatch. "
+            f"Fenced {self.candidate_endpoints_fenced} browser endpoints without resumption. "
             f"{len(self.grants_requiring_revalidation)} execution grants require revalidation "
             "before anything may be dispatched under them."
         )
@@ -354,12 +356,18 @@ def reconcile(
         "WHERE state IN ('CLAIMED', 'DISPATCHED')",
         (moment,),
     ).rowcount
+    endpoint_count = conn.execute(
+        "SELECT count(*) AS n FROM candidate_endpoint WHERE state IN ('PLANNED','BOUND')"
+    ).fetchone()
+    assert endpoint_count is not None
+    candidate_endpoints = int(endpoint_count["n"])
     candidate_regressions = conn.execute(
         "UPDATE candidate_regression_attempt SET state='UNKNOWN',epoch=epoch+1,"
         "finished_at=%s,failure_code='RESTORED_DATABASE' "
         "WHERE state IN ('CLAIMED','DISPATCHED')",
         (moment,),
     ).rowcount
+    conn.execute("UPDATE candidate_endpoint SET state='UNKNOWN' WHERE state IN ('PLANNED','BOUND')")
 
     conn.execute(
         """
@@ -385,6 +393,7 @@ def reconcile(
                     "grantsRequiringRevalidation": len(grants),
                     "candidateBuildsFenced": candidate_builds,
                     "candidateRegressionsFenced": candidate_regressions,
+                    "candidateEndpointsFenced": candidate_endpoints,
                 }
             ),
         ),
@@ -401,6 +410,7 @@ def reconcile(
         grants_requiring_revalidation=grants,
         candidate_builds_fenced=candidate_builds,
         candidate_regressions_fenced=candidate_regressions,
+        candidate_endpoints_fenced=candidate_endpoints,
     )
 
 

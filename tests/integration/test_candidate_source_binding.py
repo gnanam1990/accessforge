@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import http.client
 import io
+import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -22,7 +24,11 @@ import psycopg
 import pytest
 
 from accessforge_build_worker.artifacts import read_retained_candidate, retire_expired_candidate
-from accessforge_build_worker.candidate_gateway import CSP, CandidateGateway
+from accessforge_build_worker.candidate_gateway import (
+    CSP,
+    CandidateEndpointBinding,
+    CandidateGateway,
+)
 from accessforge_build_worker.coordinator import ClaimedCandidate, execute_claim, prepare_and_claim
 from accessforge_build_worker.process import CommandResult, CommandStopped
 from accessforge_build_worker.reference_regressions import ReferenceRegressions
@@ -58,6 +64,7 @@ from accessforge_persistence import (
 from accessforge_persistence import (
     candidate_builds as builds,
 )
+from accessforge_persistence import candidate_endpoints as endpoints
 from accessforge_persistence import candidate_regressions as regressions
 from accessforge_persistence.source_intake import SourceIdentity
 
@@ -413,6 +420,8 @@ def _prepare_owned_build(
         ("", "cancelled", False),
         ("", "fenced", False),
         ("", "endpoint-fenced", False),
+        ("", "endpoint-bind-failed", False),
+        ("", "endpoint-before-admission-fenced", False),
         (
             "\nfrom . import fixture_definition as _fixture\n"
             "_fixture.REFERENCE_FIXTURE_DIGEST = '0' * 64\n",
@@ -452,6 +461,8 @@ def _prepare_owned_build(
         "cancelled",
         "fenced",
         "endpoint-fenced",
+        "endpoint-bind-failed",
+        "endpoint-before-admission-fenced",
         "fixture-declaration-tampered",
         "validation-removed",
         "authorization-bypassed",
@@ -620,6 +631,50 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
                 (claimed.claim.build_id,),
             ).fetchall() == [{"state": "REMOVED"}]
         return
+    if failure in {"endpoint-bind-failed", "endpoint-before-admission-fenced"}:
+        original_bound = endpoints.bound
+        bound_observations: list[dict[str, Any]] = []
+
+        def interrupted_binding(conn: Any, *, claim: Any, receipt: dict[str, Any]) -> None:
+            bound_observations.append(receipt)
+            if failure == "endpoint-bind-failed":
+                raise RuntimeError("injected endpoint binding persistence failure")
+            original_bound(conn, claim=claim, receipt=receipt)
+            assert regressions.fence_expired(conn, now=datetime.now(UTC) + timedelta(hours=1)) == 1
+
+        monkeypatch.setattr(endpoints, "bound", interrupted_binding)
+        expected_error = (
+            RuntimeError if failure == "endpoint-bind-failed" else builds.BuildClaimRefused
+        )
+        with pytest.raises(expected_error):
+            execute_regressions(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                runner=runner,
+                store=store,
+                on_candidate_endpoint=lambda gateway: pytest.fail("uncommitted/fenced admission"),
+            )
+        assert len(bound_observations) == 1
+        with pytest.raises(OSError):
+            socket.create_connection(
+                ("127.0.0.1", int(bound_observations[0]["origin"].rsplit(":", 1)[1])), timeout=1
+            )
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            assert conn.execute(
+                "SELECT state,receipt,cleanup_confirmed FROM candidate_endpoint "
+                "WHERE attempt_id=%s",
+                (bound_observations[0]["taskId"],),
+            ).fetchone() == {
+                "state": "CLOSED" if failure == "endpoint-bind-failed" else "UNKNOWN",
+                "receipt": None if failure == "endpoint-bind-failed" else bound_observations[0],
+                "cleanup_confirmed": True,
+            }
+            assert conn.execute(
+                "SELECT state FROM candidate_regression_attempt WHERE id=%s",
+                (bound_observations[0]["taskId"],),
+            ).fetchone() == {"state": "FAILED" if failure == "endpoint-bind-failed" else "UNKNOWN"}
+        return
     if failure is not None and failure != "endpoint-fenced":
         with pytest.raises(SandboxRefused, match=failure):
             execute_regressions(
@@ -637,6 +692,27 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
             ).fetchone()
             assert record == {"state": "FAILED", "cleanup_confirmed": True}
         return
+    original_endpoint_bound = endpoints.bound
+
+    def verify_binding_guards(conn: Any, *, claim: Any, receipt: dict[str, Any]) -> None:
+        # The real listener is reserved, but no request handler can run until this returns.
+        for key, value in {
+            "artifactDigest": "0" * 64,
+            "runtimePolicyDigest": "0" * 64,
+            "candidateId": "0" * 64,
+            "driverId": "0" * 64,
+            "imageId": "sha256:" + "0" * 64,
+            "daemonId": "another-daemon",
+            "origin": "http://example.test:80",
+            "bindingDigest": "0" * 64,
+        }.items():
+            with pytest.raises((builds.BuildClaimRefused, ValueError)), conn.transaction():
+                original_endpoint_bound(conn, claim=claim, receipt={**receipt, key: value})
+        original_endpoint_bound(conn, claim=claim, receipt=receipt)
+        with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+            original_endpoint_bound(conn, claim=claim, receipt=receipt)
+
+    monkeypatch.setattr(endpoints, "bound", verify_binding_guards)
     endpoint_receipts: list[dict[str, Any]] = []
 
     def browser_endpoint_probe(gateway: CandidateGateway) -> None:
@@ -646,6 +722,28 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
         assert receipt["daemonId"] == sandbox.daemon.daemon_id
         assert receipt["runtimePolicyDigest"] == runner.policy_digest()
         endpoint_receipts.append(receipt)
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            assert conn.execute(
+                "SELECT state,receipt,cleanup_confirmed FROM candidate_endpoint "
+                "WHERE attempt_id=%s",
+                (receipt["taskId"],),
+            ).fetchone() == {"state": "BOUND", "receipt": receipt, "cleanup_confirmed": False}
+            assert conn.execute(
+                "SELECT endpoint_required FROM candidate_regression_attempt WHERE id=%s",
+                (receipt["taskId"],),
+            ).fetchone() == {"endpoint_required": True}
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(
+                    "UPDATE candidate_regression_attempt SET endpoint_required=false WHERE id=%s",
+                    (receipt["taskId"],),
+                )
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(
+                    "UPDATE candidate_endpoint SET origin='http://127.0.0.1:1' WHERE attempt_id=%s",
+                    (receipt["taskId"],),
+                )
+        with workspace_connection(binding.database, str(uuid.uuid4())) as conn:
+            assert conn.execute("SELECT * FROM candidate_endpoint").fetchall() == []
         connection = http.client.HTTPConnection(gateway.origin.removeprefix("http://"), timeout=10)
         try:
             connection.request("GET", gateway.path)
@@ -706,6 +804,16 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
                 "SELECT state,epoch FROM candidate_regression_attempt WHERE build_id=%s",
                 (claimed.claim.build_id,),
             ).fetchone() == {"state": "UNKNOWN", "epoch": 2}
+            assert conn.execute(
+                "SELECT state,receipt,cleanup_confirmed,closed_at IS NOT NULL AS closed "
+                "FROM candidate_endpoint WHERE attempt_id=%s",
+                (endpoint_receipts[0]["taskId"],),
+            ).fetchone() == {
+                "state": "UNKNOWN",
+                "receipt": endpoint_receipts[0],
+                "cleanup_confirmed": True,
+                "closed": True,
+            }
             assert (
                 conn.execute(
                     "SELECT state FROM candidate_regression_process WHERE attempt_id="
@@ -740,6 +848,19 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
         assert record is not None and record["state"] == "PASSED"
         assert record["artifact_digest"] == retained.archive_digest
         assert tuple(record["checks"]) == regression.checks
+        assert conn.execute(
+            "SELECT state,receipt,cleanup_confirmed FROM candidate_endpoint WHERE attempt_id=%s",
+            (regression.task_id,),
+        ).fetchone() == {
+            "state": "CLOSED",
+            "receipt": endpoint_receipts[0],
+            "cleanup_confirmed": True,
+        }
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_endpoint SET state='BOUND' WHERE attempt_id=%s",
+                (regression.task_id,),
+            )
         with pytest.raises(psycopg.IntegrityError), conn.transaction():
             conn.execute(
                 "UPDATE candidate_regression_attempt SET state='UNKNOWN' WHERE id=%s",
@@ -816,7 +937,7 @@ def test_regression_claim_rechecks_exact_authority_and_fences_late_receipts(
         command=command,
         store=isolated_archives[0].store,
     )
-    arguments = {
+    arguments: dict[str, Any] = {
         "workspace_id": binding.workspace,
         "build_id": claimed.claim.build_id,
         "artifact_digest": built.artifact.archive_digest,
@@ -1269,12 +1390,33 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
                 image_id=str(process_row["image_id"]),
                 daemon_endpoint=sandbox.daemon.endpoint,
                 daemon_id=sandbox.daemon.daemon_id,
+                endpoint_required=True,
             )
             regressions.dispatch(
                 conn,
                 claim=regression_claim,
                 policy_digest="d" * 64,
                 artifact_digest=str(archive_row["content_digest"]),
+            )
+            # Synthetic crash-state seed, not observed endpoint/process execution evidence.
+            # The backup drill must retain this intent but never resume it or invent cleanup.
+            endpoint_plan = CandidateGateway(
+                binding=CandidateEndpointBinding(
+                    task_id=regression_claim.attempt_id,
+                    artifact_digest=str(archive_row["content_digest"]),
+                    runtime_policy_digest="d" * 64,
+                    candidate_id="c" * 64,
+                    driver_id="e" * 64,
+                    image_id=str(process_row["image_id"]),
+                    daemon=sandbox.daemon,
+                ),
+                nonce="synthetic-restore-fixture",
+                transport=lambda *args: {},
+            ).plan()
+            conn.execute(
+                "INSERT INTO candidate_endpoint(attempt_id,workspace_id,plan,state,expires_at) "
+                "VALUES (%s,%s,%s::jsonb,'PLANNED',clock_timestamp()+interval '30 seconds')",
+                (regression_claim.attempt_id, binding.workspace, json.dumps(endpoint_plan)),
             )
     key = str(archive_row["object_key"])
     captured = source.store.get_bounded(key=key, max_bytes=int(archive_row["size_bytes"]))
@@ -1338,6 +1480,19 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
                 "WHERE build_id=%s",
                 (claimed.claim.build_id,),
             ).fetchone() == {"state": "UNKNOWN", "epoch": 2, "failure_code": "RESTORED_DATABASE"}
+            assert conn.execute(
+                "SELECT state,plan,receipt,cleanup_confirmed,closed_at FROM candidate_endpoint "
+                "WHERE attempt_id=%s",
+                (regression_claim.attempt_id,),
+            ).fetchone() == {
+                "state": "UNKNOWN",
+                "plan": endpoint_plan,
+                "receipt": None,
+                "cleanup_confirmed": False,
+                "closed_at": None,
+            }
+            with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+                endpoints.assert_live(conn, claim=regression_claim)
             with pytest.raises(builds.BuildClaimRefused), conn.transaction():
                 regressions.dispatch(
                     conn,

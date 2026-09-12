@@ -602,3 +602,50 @@ Strict mypy: 225 files; Ruff lint/format: 327 files. OpenAPI, six schema/enumera
 74-operation client and frozen fixture drift checks pass; Node workspace typecheck passes.
 The preceding fixture-identity head `bdeb4f4e57c5ce1d7909af1d4dffa6b2b93f8681` passed all
 GitHub CI jobs in run 34721876262. This bridge continuation requires separate current-head CI.
+
+### Durable endpoint intent, admission and closure (continuation)
+
+Migration 0030 adds workspace-isolated `candidate_endpoint` records and an immutable
+`endpoint_required` mode on the build-bound regression claim. Historical rows default to false;
+the migration preserves old PASSED results without manufacturing endpoint receipts.
+
+The coordinator commits an exact intent before allocating a listener, commits the reserved
+loopback origin and canonical binding receipt before starting request handling, and rechecks
+current worker/epoch/lease/source/approval and endpoint authority before admission and every
+candidate transport. The intent must match the three already observed runtime processes, original
+image/daemon, retained artifact and runtime policy. It is not a sealed reader environment.
+
+Intent and first binding are immutable. Successful publication requires a bound and cleanly CLOSED
+endpoint when one was requested. Parent expiry/restore fences active endpoints UNKNOWN; a later
+confirmed close can add cleanup facts but cannot reopen UNKNOWN or publish a passing result.
+Restore audits/counts fenced endpoints. The encrypted candidate backup drill includes a clearly
+synthetic endpoint crash-intent seed: its plan survives real backup/isolated restore, remains
+UNKNOWN with no invented binding/cleanup and cannot regain live authority. That seed is not
+evidence of an actually interrupted browser or listener.
+
+Fault injection covers binding-persistence failure and a fence between binding and admission;
+neither reaches the browser callback, and the reserved socket is closed. Real runtime probes
+check the committed BOUND receipt before GET/POST, tenant invisibility, substituted identities,
+duplicate binding, immutable endpoint mode and final CLOSED/UNKNOWN cleanup records.
+
+Two timeout defects were reproduced and corrected during this continuation. CI 34723248738 on
+`0a7aad73b635c961e019ffc8ebded4643652702a` failed the Linux expiry test: closing a descriptor
+from another thread could leave the underlying listener accepting while select held it. Explicit
+socket shutdown now precedes close. A disposable Linux/arm64 harness ran the actual baseline and
+working gateway source against the same delayed-select case: baseline accepted a post-expiry
+connection (exit 1), working source refused it (exit 0). The harness loads exact gateway/domain
+source and the sandbox identity/error definitions only; it is not a full Linux integration run.
+The expiry timer also now starts immediately after socket reservation, before persistence
+callbacks, and expired callbacks cannot admit a handler. The same scratch callback-stall regression
+failed before the fix and passed after it; the repository retains equivalent regression coverage.
+
+Remaining: bounded E0 controller, original-daemon UNKNOWN reconciliation, exact sealed
+environment/deployment/source/project/verification linkage, and fresh canonical actual-reader
+run/lease/observer proof. `_regression_attestation` remains false; PR #37 remains draft.
+
+Current local validation: **2,127 passed, zero failures/skips**, 58 upstream deprecation
+warnings, 261.76 seconds. The final gateway-only rerun, including delayed Linux-select timing,
+passed all 36 tests in 10.45 seconds. Strict mypy: 227 files; Ruff lint/format: 329 files.
+OpenAPI, six schema/enumeration bindings, frozen logical fixture and 74-operation client drift
+checks pass. Current-head GitHub CI remains required; the preceding head's Python job failed
+as documented above, while Node, documentation and security jobs passed.

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
+from accessforge_persistence import candidate_endpoints as endpoints
 from accessforge_persistence import candidate_regressions as regressions
 from accessforge_persistence import workspace_connection
 
@@ -46,6 +48,7 @@ def execute_regressions(
             image_id=runner.image,
             daemon_endpoint=runner.sandbox.daemon.endpoint,
             daemon_id=runner.sandbox.daemon.daemon_id,
+            endpoint_required=on_candidate_endpoint is not None,
         )
     with workspace_connection(database_url, workspace_id) as conn:
         regressions.dispatch(
@@ -76,6 +79,22 @@ def execute_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             regressions.assert_active(conn, claim=claim)
 
+    def endpoint_live() -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            endpoints.assert_live(conn, claim=claim)
+
+    def endpoint_planned(identity: dict[str, Any]) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            endpoints.plan(conn, claim=claim, identity=identity)
+
+    def endpoint_bound(receipt: dict[str, Any]) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            endpoints.bound(conn, claim=claim, receipt=receipt)
+
+    def endpoint_closed(clean: bool) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            endpoints.closed(conn, claim=claim, cleanup_confirmed=clean)
+
     try:
         result = runner.run(
             artifact,
@@ -86,6 +105,10 @@ def execute_regressions(
             on_removed=removed,
             on_candidate_endpoint=on_candidate_endpoint,
             assert_endpoint_authority=endpoint_authority,
+            assert_endpoint_live=endpoint_live,
+            on_endpoint_planned=endpoint_planned,
+            on_endpoint_bound=endpoint_bound,
+            on_endpoint_closed=endpoint_closed,
         )
         if result.task_id != claim.attempt_id or result.daemon != runner.sandbox.daemon:
             raise regressions.Refused("regression task or daemon identity changed")
