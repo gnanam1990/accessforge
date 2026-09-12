@@ -9,9 +9,8 @@ constrained Strands navigator and the bounded diagnosis projection. Their rows s
 
 ## Buildable now
 
-### ~~P1 — Purge pipeline operations~~ — built, awaiting review
-Branch `feat/purge-queue-operations`. All four acceptance criteria met; see `STATUS.md`.
-Nothing pushed. **Next unblocked slice is P2.**
+### ~~P1 — Purge pipeline operations~~ — merged (PR #31, `42d83cc`)
+All four acceptance criteria met; see `STATUS.md`.
 
 <details><summary>Original entry</summary>
 
@@ -28,8 +27,8 @@ The four debts `STATUS.md` records against FR-020, all still present on `7c9e0bf
 store outage, nothing removes them.
 </details>
 
-### ~~P2 — Module 14/15 routes~~ — built, awaiting review
-Branch `feat/m14-m15-patch-and-verification`. Six routes, the patch path policy, `PATCH_APPLY`
+### ~~P2 — Module 14/15 routes~~ — merged (PR #32, `3ed20db`)
+ Six routes, the patch path policy, `PATCH_APPLY`
 approval persistence with a dispatch recheck, and every gate that refuses VERIFIED. Handoffs in
 `docs/handoffs/14.md` and `15.md`.
 
@@ -48,8 +47,8 @@ minting reordered after the transition so a legitimate approval stays dispatchab
 Round 2 closed a fourth: the digest check on load was conditional on there being changes, so an
 emptied proposal passed it while keeping its approval.
 
-### ~~P3 — Rate limiting~~ — built, awaiting review
-Branch `feat/m26-rate-limits`. Per-principal and per-workspace token buckets in PostgreSQL, enforced
+### ~~P3 — Rate limiting~~ — merged (PR #33, `ea0aa4e`)
+ Per-principal and per-workspace token buckets in PostgreSQL, enforced
 at the single `build_context` chokepoint for authenticated mutating `/v1/workspaces/` routes, refused
 as RFC7807 `RATE_LIMITED` with `Retry-After`. Handoff in `docs/handoffs/26-rate-limits.md`.
 
@@ -57,9 +56,20 @@ as RFC7807 `RATE_LIMITED` with `Retry-After`. Handoff in `docs/handoffs/26-rate-
 trustworthy key without a client address from a proxy. Limits are global configuration rather than
 per workspace. Neither is hidden: both are asserted or recorded.
 
-### P4 — Structured telemetry (module 26 gap)
+### ~~P4 — Structured telemetry~~ — built, awaiting review
+Branch `feat/m26-structured-telemetry`. One structured record per request from a single ASGI
+middleware: route template (never a path), method, status, outcome, duration, request id and stable
+problem code. Handoff in `docs/handoffs/26-telemetry.md`.
+
+**The privacy boundary is a whitelist, not redaction**, and it excludes tenant identifiers — so the
+records answer what the API is doing and cannot answer what a customer is doing. No metrics backend,
+no traces, and `streamed` describes the headers rather than the body's fate.
+
+<details><summary>Original entry</summary>
+
 Request and outcome telemetry with no evidence content and no object keys in it.
 **Depends on:** 18.
+</details>
 
 ### P5 — Python dependency scanning in CI
 The Node side is covered by dependency review; Python is not. **Depends on:** 01.

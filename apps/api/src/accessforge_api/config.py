@@ -77,6 +77,15 @@ class ApiSettings(BaseSettings):
     # that fires six requests on load work at a limit of 120/minute.
     rate_limit_burst_multiplier: float = Field(default=1.0, ge=1.0, le=10.0)
 
+    # Route templates the telemetry middleware does not record. The health probes only, by default:
+    # a load balancer polling `/health/live` every second produces 86,400 records a day that say
+    # nothing, and a signal that arrives buried in noise is one nobody reads.
+    #
+    # Templates, not paths, and the same values that appear in the `route` field -- so what to
+    # silence
+    # is read straight off a record rather than guessed at.
+    telemetry_quiet_routes: frozenset[str] = frozenset({"/health/live", "/health/ready"})
+
     host: str = "127.0.0.1"
     port: int = Field(default=8080, ge=1024, le=65535)
 
