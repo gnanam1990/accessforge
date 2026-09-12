@@ -49,6 +49,24 @@ class FixtureInstance:
     change is distinguishable from a new run of an unchanged template."""
 
 
+def contract_digest(
+    *,
+    template_id: str,
+    template_digest: str,
+    navigator_values: dict[str, str],
+    observer_config: dict[str, str],
+) -> str:
+    """Frozen per-run logical material; fresh nonces are deliberately compared separately."""
+    return digest(
+        {
+            "templateId": template_id,
+            "templateDigest": template_digest,
+            "navigatorValues": navigator_values,
+            "observerConfig": observer_config,
+        }
+    )
+
+
 def create_instance(
     conn: psycopg.Connection[dict[str, Any]],
     *,
@@ -72,8 +90,8 @@ def create_instance(
         """
         INSERT INTO run_fixture_instance
             (id, workspace_id, run_id, template_id, template_digest, nonce,
-             navigator_values, observer_config, created_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             navigator_values, observer_config, created_at, captured_contract_digest)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (
             instance_id,
@@ -85,6 +103,12 @@ def create_instance(
             Jsonb(navigator_values),
             Jsonb(observer_config),
             now or datetime.now(UTC),
+            contract_digest(
+                template_id=template_id,
+                template_digest=template_digest,
+                navigator_values=navigator_values,
+                observer_config=observer_config,
+            ),
         ),
     )
     return FixtureInstance(

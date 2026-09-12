@@ -94,9 +94,12 @@ the target list and prevent test exemptions. See `docs/handoffs/test-suite-mypy.
 ### Module 14 continuation — candidate preparation and isolated build
 In progress on `feat/isolated-candidate-build`. The new build-worker package prepares bounded,
 immutable candidate source bytes without executing or extracting repository content on the host.
-Sandbox execution, durable dispatch/cleanup, protected regression execution and candidate artifact
-publication are still pending. See `docs/handoffs/14-candidate-build.md`; no build or containment
-success is claimed by source-preparation tests.
+Isolated owned-reference builds, retained canonical artifacts, protected backend regressions,
+durable endpoint lifecycle, materialized source/build identities, and live candidate seal/fixture/
+first-lease binding are implemented on draft PR #37. Still pending: canonical independently
+authorized reader/observer controller and finalization, UNKNOWN reconciliation, and actual matched
+failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;
+neither synthetic desktop metadata nor backend regressions establish an actual-reader repair.
 
 ### P7 — `fixture_digest` offline-guess exposure
 An unkeyed SHA-256 over low-entropy fixture values; anyone holding an export can test guesses
