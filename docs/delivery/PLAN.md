@@ -24,12 +24,12 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 05 | Authorized projects and immutable builds | 03, 04 | FR-001, 002, 010, 014 | implemented | passed | merged | E0 |
 | 06 | Versioned journey DSL, fixtures, assertions | 02, 05 | FR-003, 005, 007, 023 | implemented | passed | merged | E0 |
 | 07 | Runner enrollment, admission, desktop leases | 04, 06 | FR-004, 005, 014, 015, 021 | implemented | passed | merged | E0 |
-| 08 | Actual macOS VoiceOver execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no real reader** | merged | E0 |
+| 08 | Actual macOS VoiceOver execution | 00, 07 | FR-004, 005, 006, 015 | runner boundary implemented; driver loaded only at runtime | **blocked — no real reader** | merged | E0 |
 | 09 | Actual Windows NVDA execution | 00, 07 | FR-004, 005, 006, 015 | contract only | **blocked — no Windows host** | merged | R1 |
 | 10 | Provenance-bound evidence ingestion | 04, 07, 08 | FR-006, 014, 015, 020 | implemented | passed (contract, not end-to-end) | merged | E0 |
 | 11 | Independent deterministic outcome verifier | 06, 10 | FR-006, 007, 011, 023 | implemented | passed (no real reader trace) | merged | E0 |
-| 12 | Real Strands navigator and bounded tools | 07, 08, 11 | FR-005, 008, 015, 021 | not started | **blocked** | local | E0 |
-| 13 | Evidence-grounded diagnosis and findings | 11, 12 | FR-009, 012, 023 | not started | **blocked** | local | E0 |
+| 12 | Real Strands navigator and bounded tools | 07, 08, 11 | FR-005, 008, 015, 021 | implemented (constrained navigator, bounded tools, planning checkpoints) | passed against fakes; **no real model invoked** | merged (PR #30) | E0 |
+| 13 | Evidence-grounded diagnosis and findings | 11, 12 | FR-009, 012, 023 | implemented (bounded diagnosis source projection, validation) | passed against fakes; **no real model invoked** | merged (PR #30) | E0 |
 | 14 | Constrained patch proposal and sandbox | 05, 13 | FR-002, 010, 014, 015 | not started | **blocked** | local | E0 |
 | 15 | Matched candidate verification | 11, 14 | FR-002, 007, 010, 011 | not started | pending | local | E0 |
 | 16 | Human review and finding lifecycle | 03, 15 | FR-009, 011, 012, 014 | implemented | passed (no human reviewer) | merged | E0 |
@@ -42,7 +42,7 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 23 | Run and evidence replay UI | 10, 11, 19, 21 | FR-006, 007, 009, 015, 017, 019 | implemented (run, timeline, finding; live updates consume the SSE stream; no media) | **blocked — no per-assertion results are served, and no run has executed** | merged | E0 |
 | 24 | Patch, comparison and review UI | 15, 16, 17, 21 | FR-010–013, 019, 020 | implemented (review, export; repair workspace states its absence) | passed for export; **blocked — no patch or verification can exist** | merged | E0 |
 | 25 | Fault laboratory and benchmarks | 12, 15, 22, 23, 24; 09 for R1 | FR-004–013, 015, 019, 023 | not started | pending | local | R1 |
-| 26 | Security, privacy, metering and operations | 17, 19, 25 | FR-014, 015, 019–021, 025 | implemented (entitlements, metering, retention, settings, probes, two-phase scoped deletion with an honest report and an operator purge retry; no telemetry or rate limits) | passed for what is enforced; **no external penetration test** | merged (PR #29, `6436fac`) | R1 |
+| 26 | Security, privacy, metering and operations | 17, 19, 25 | FR-014, 015, 019–021, 025 | implemented (entitlements, metering, retention, settings, probes, two-phase scoped deletion with a maintenance worker that drains the purge queue; with an honest report and an operator purge retry; no telemetry or rate limits) | passed for what is enforced; **no external penetration test** | merged (PR #29, `6436fac`) | R1 |
 | 27 | CI, deployment preparation and restore | 26 | FR-004, 014, 015, 020–022, 025 | implemented (doctor, migrator, encrypted backup/restore, reconciliation, readiness, trusted/untrusted CI split, AWS proposal) | passed; real backup + restore + reconcile drill executed | merged; **hosted PREPARED, never applied** | R1 |
 | 28 | Release proof, documentation and pilot | 27; 09 and 20 for R1 | FR-001–025 | not started | pending | local | R1 |
 | 29 | Independent adversarial final review | 28 | FR-001–025 | not started | pending | local | R1 |

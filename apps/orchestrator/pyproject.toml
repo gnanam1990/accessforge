@@ -10,6 +10,9 @@ dependencies = [
   "strands-agents==1.55.1",
 ]
 
+[project.scripts]
+accessforge-purge-worker = "accessforge_orchestrator.maintenance.purge_worker:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

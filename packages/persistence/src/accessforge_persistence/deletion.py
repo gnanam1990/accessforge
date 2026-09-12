@@ -53,6 +53,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -591,42 +593,90 @@ def purge_pending_objects(
     )
 
 
-def purge_until_drained(
-    conn: psycopg.Connection[dict[str, Any]],
+def drain_purge_queue(
+    connect: Callable[[], AbstractContextManager[psycopg.Connection[dict[str, Any]]]],
     store: ArtifactStore,
     *,
-    deletion_id: str,
-    limit: int = 200,
-    max_passes: int = 50,
+    deletion_id: str | None = None,
+    batch_size: int = 10,
+    max_batches: int = 500,
     now: datetime | None = None,
 ) -> PurgeOutcome:
-    """Purge one deletion's queue until it stops shrinking.
+    """Drain the purge queue in committed batches until it stops shrinking.
 
-    One pass takes at most `limit` keys, so a single call leaves a backlog whenever
-    the queue is longer than that -- and nothing re-enqueues it, because the
-    artifacts are already DELETED and the scope query skips them. Without this the
-    "a later pass finishes it" the report promises has nothing to do it.
+    Takes a connection *factory*, not a connection, and that is the point. One
+    transaction per batch means a batch that succeeds stays succeeded: the earlier
+    design ran every pass inside a single caller-held transaction, so anything that
+    raised late rolled back the `purged_at` marks for bytes the store had already
+    released -- bytes gone, queue still claiming them, `attempts` counters reset.
+    Each batch also holds its row locks for `batch_size` store calls rather than for
+    the whole drain, so a long queue no longer blocks a concurrent purge of the same
+    deletion for the duration.
 
-    Stops on the first pass that removes nothing, which is what a store outage looks
-    like: the keys stay pending with their errors and the count stays honest rather
-    than the loop spinning against a store that is down. `max_passes` bounds the
-    work a single request can do; whatever is left is reported, not hidden.
+    Stops on the first batch that removes nothing, which is what a store outage looks
+    like: the keys stay pending with their errors recorded and the count stays honest
+    rather than the loop spinning against a service that is already struggling.
+    `max_batches` bounds one call; whatever is left is reported, not hidden.
+
+    `deletion_id=None` drains every pending key the connection can see, which is what
+    the maintenance worker does. The returned `scope` carries whichever was asked for,
+    so :meth:`DeletionReport.with_purge` can still refuse a count measured for
+    something else.
     """
-    total = 0
-    outcome = PurgeOutcome(purged=0, still_pending=pending_purges(conn, deletion_id=deletion_id))
-    for _ in range(max_passes):
-        if outcome.still_pending == 0:
-            break
-        outcome = purge_pending_objects(conn, store, deletion_id=deletion_id, limit=limit, now=now)
-        total += outcome.purged
+    purged = 0
+    failed: tuple[str, ...] = ()
+    for _ in range(max_batches):
+        with connect() as conn:
+            outcome = purge_pending_objects(
+                conn, store, deletion_id=deletion_id, limit=batch_size, now=now
+            )
+        purged += outcome.purged
+        failed = outcome.keys_failed
         if outcome.purged == 0:
             break
+    with connect() as conn:
+        remaining = pending_purges(conn, deletion_id=deletion_id)
     return PurgeOutcome(
-        purged=total,
-        still_pending=pending_purges(conn, deletion_id=deletion_id),
-        keys_failed=outcome.keys_failed,
-        scope=deletion_id,
+        purged=purged, still_pending=remaining, keys_failed=failed, scope=deletion_id
     )
+
+
+def workspaces_with_pending_purges(conn: psycopg.Connection[dict[str, Any]]) -> list[str]:
+    """Every workspace holding bytes a committed deletion promised to remove.
+
+    For the maintenance worker, which has to find work before it can scope itself to
+    a workspace to do it. Requires a connection that sees every workspace; call
+    :func:`assert_can_sweep` first, because on a scoped role this returns an empty
+    list and an empty list is indistinguishable from "nothing to do".
+    """
+    return [
+        str(row["workspace_id"])
+        for row in conn.execute(
+            "SELECT DISTINCT workspace_id FROM evidence_object_purge "
+            " WHERE purged_at IS NULL ORDER BY workspace_id"
+        ).fetchall()
+    ]
+
+
+def assert_can_sweep(conn: psycopg.Connection[dict[str, Any]]) -> None:
+    """Refuse to look for work on a role that cannot see it.
+
+    Row-level security hides other workspaces' queue rows, so a sweeper on a scoped
+    role finds nothing, reports nothing pending and exits successfully -- for ever,
+    while the bytes it exists to remove stay in the store. A deletion feature whose
+    worker silently does nothing is worse than one with no worker at all, because the
+    first looks finished.
+    """
+    row = conn.execute(
+        "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user"
+    ).fetchone()
+    if row is None or not (bool(row["rolsuper"]) or bool(row["rolbypassrls"])):
+        raise DeletionError(
+            "finding pending purges across workspaces needs a role that bypasses row-level "
+            "security. The connected role does not, so it sees an empty queue whatever is "
+            "actually in it -- and a sweep that reports nothing to do is the one failure mode "
+            "nobody notices."
+        )
 
 
 def pending_purges(
