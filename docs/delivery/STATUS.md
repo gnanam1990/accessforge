@@ -154,6 +154,27 @@ silently does nothing is worse than no worker: the first looks finished.
 guard and naming the test that fails, restored byte-identically by SHA-256. **No external review
 yet, and nothing pushed** — this branch is for independent review before it goes anywhere.
 
+## Patch proposal and candidate verification — 2026-09-12 (branch `feat/m14-m15-patch-and-verification`, not yet reviewed)
+
+FR-010 and FR-011's API surface: six routes, a pure patch path policy, `PATCH_APPLY` approval
+persistence with a recheck at dispatch, and the verification record with every gate that refuses to
+call a repair verified.
+
+The design claim is that `conclude_verification` has no verdict parameter, so nothing — no route, no
+retry, no sufficiently senior reviewer — can mark an inconclusive candidate VERIFIED. A test reads the
+signature, and a contract test reads the live OpenAPI schema and fails if any request body anywhere
+accepts a `conclusion`.
+
+**1719 tests pass** against real PostgreSQL 17 and MinIO. 12 mutation checks across the policy, the
+persistence gates and two schema constraints, each restored byte-identically by SHA-256.
+
+**Runtime proof is BLOCKED, and this is not acceptance of FR-010 or FR-011.** No candidate has been
+built or run: there is no containment boundary for executing an application's build and no real screen
+reader attached. The VERIFIED path is exercised with evidence the tests name `_fabricated_`. Module
+14's sandbox (prompt tasks 5–9) is not implemented and no containment claim is made. The gates
+currently trust what a caller reports about a candidate run; when a real runner exists those fields
+must be read from evidence instead. **Nothing pushed; no external review.**
+
 ## Outstanding debts
 
 - Executable negative-verification tests now exist for the fixture and configuration guards, proved
@@ -182,6 +203,9 @@ yet, and nothing pushed** — this branch is for independent review before it go
 - `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
   `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
   else, and it is untouched rather than unknown.
+- The verification gates accept `closing_watermarks` and `protected_regressions_passed` as reported
+  by the caller rather than reading them from evidence. Today the only caller is a test. This is the
+  largest remaining hole in FR-011 and it is open, not closed.
 - `fixture_digest` is an unkeyed SHA-256 over fixture and observer values, several of which have low
   entropy, so anyone holding an export can test offline guesses at what a run was checked against.
   Raised by the module 06 independent review; a keyed commitment was refused because it would make

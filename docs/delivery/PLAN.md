@@ -30,11 +30,11 @@ Status is tracked in four independent fields, because a merged foundation is not
 | 11 | Independent deterministic outcome verifier | 06, 10 | FR-006, 007, 011, 023 | implemented | passed (no real reader trace) | merged | E0 |
 | 12 | Real Strands navigator and bounded tools | 07, 08, 11 | FR-005, 008, 015, 021 | implemented (constrained navigator, bounded tools, planning checkpoints) | passed against fakes; **no real model invoked** | merged (PR #30) | E0 |
 | 13 | Evidence-grounded diagnosis and findings | 11, 12 | FR-009, 012, 023 | implemented (bounded diagnosis source projection, validation) | passed against fakes; **no real model invoked** | merged (PR #30) | E0 |
-| 14 | Constrained patch proposal and sandbox | 05, 13 | FR-002, 010, 014, 015 | not started | **blocked** | local | E0 |
-| 15 | Matched candidate verification | 11, 14 | FR-002, 007, 010, 011 | not started | pending | local | E0 |
+| 14 | Constrained patch proposal and sandbox | 05, 13 | FR-002, 010, 014, 015 | partial (proposal, path policy, PATCH_APPLY approval and dispatch recheck; **no sandbox or candidate build**) | policy and approval gates passed; **containment not demonstrated** | local | E0 |
+| 15 | Matched candidate verification | 11, 14 | FR-002, 007, 010, 011 | partial (verification record, lifecycle and every VERIFIED gate; **no candidate build or rerun**) | gates passed against fabricated evidence; **runtime proof BLOCKED** | local | E0 |
 | 16 | Human review and finding lifecycle | 03, 15 | FR-009, 011, 012, 014 | implemented | passed (no human reviewer) | merged | E0 |
 | 17 | Redacted export and offline verifier | 10, 11, 16 | FR-006, 007, 012, 013, 020 | implemented | passed (synthetic bundles only) | merged | E0 |
-| 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | partial (50 `/v1` paths, SSE stream, generated clients, CLI; only modules 14/15/20 routes remain) | passed | merged | E0 |
+| 18 | HTTP API, generated clients and CLI | 05, 06, 07, 15, 16, 17 | FR-001–007, 010–016 | partial (50 `/v1` paths, SSE stream, generated clients, CLI; only module 20 routes remain) | passed | merged | E0 |
 | 19 | Durable events and bounded schedules | 04, 18 | FR-015, 017, 021 | implemented (SSE stream, snapshot, schedule and grant routes added by module 18 completion) | passed (no real runner) | merged | E0 |
 | 20 | Opt-in GitHub checks and publication | 15, 16, 18 | FR-001, 010–012, 014, 018 | not started | pending | local | R1 |
 | 21 | Accessible modern UI foundation | 18 | FR-014, 016, 019 | implemented (shell only; screens are 22–24) | passed (no actual screen reader) | merged | E0 |
