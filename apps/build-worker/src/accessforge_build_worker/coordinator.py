@@ -33,7 +33,9 @@ class ClaimedCandidate:
 def execution_policy(sandbox: DockerSandbox, command: tuple[str, ...]) -> str:
     return digest(
         {
-            "version": "e0-docker-v1",
+            "version": "e0-docker-v2",
+            "daemon": asdict(sandbox.daemon),
+            "isolatedCliConfig": True,
             "toolchain": asdict(sandbox.policy),
             "command": list(command),
             "memory": MEMORY,
@@ -94,6 +96,8 @@ def prepare_and_claim(
             builds.surface_identity(tuple(baseline["paths"]), int(baseline["surface_revision"])),
             patch.patch_digest,
             patch.revision,
+            sandbox.daemon.endpoint,
+            sandbox.daemon.daemon_id,
         )
     # This transaction commits before this function returns. Preparation did not execute source.
     with workspace_connection(database_url, workspace_id) as conn:
@@ -143,6 +147,11 @@ def execute_claim(
                 builds.fence_expired(conn)
         raise
     with workspace_connection(database_url, workspace_id) as conn:
+        if (
+            result.daemon.endpoint != inputs.daemon_endpoint
+            or result.daemon.daemon_id != inputs.daemon_id
+        ):
+            raise builds.BuildClaimRefused("build receipt belongs to another daemon")
         builds.finish_build(
             conn,
             claim=claim,

@@ -37,9 +37,15 @@ class BuildInputs:
     surface_digest: str
     patch_digest: str
     approved_revision: int
+    daemon_endpoint: str
+    daemon_id: str
 
     def __post_init__(self) -> None:
         uuid.UUID(self.source_snapshot_id)
+        if not re.fullmatch(r"unix:///[^\x00-\x1f\x7f]+", self.daemon_endpoint) or not re.fullmatch(
+            r"[A-Za-z0-9:-]{1,128}", self.daemon_id
+        ):
+            raise BuildClaimRefused("an explicit local daemon binding is required")
         if self.approved_revision < 1:
             raise BuildClaimRefused("invalid approved revision")
         if not re.fullmatch(r"[a-f0-9]{40}", self.source_commit):
@@ -190,8 +196,9 @@ def claim_build(
                 approval_id, approved_revision, building_revision, source_commit,
                 source_tree_digest,
                 base_archive_digest, candidate_archive_digest, patch_digest, policy_digest,
-                surface_digest, worker_token, state, lease_expires_at, created_at
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'CLAIMED',%s,%s)
+                surface_digest, worker_token, state, lease_expires_at, created_at,
+                daemon_endpoint, daemon_id
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'CLAIMED',%s,%s,%s,%s)
             RETURNING *
             """,
             (
@@ -214,6 +221,8 @@ def claim_build(
                 str(uuid.uuid4()),
                 moment + timedelta(seconds=lease_seconds),
                 moment,
+                inputs.daemon_endpoint,
+                inputs.daemon_id,
             ),
         ).fetchone()
         assert row is not None

@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0023_candidate_build_attempt.sql"
+NEWEST = "0024_candidate_daemon_binding.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -142,8 +142,124 @@ def test_data_written_under_the_previous_rules_survives_the_migration(disposable
 def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     disposable: str,
 ) -> None:
-    """0023 adds exact durable build identity and fencing without weakening tenant isolation."""
+    """Legacy in-flight builds are fenced; no historical endpoint is invented."""
     _apply_through(disposable, _previous())
+    ids = {
+        state: _seed_legacy_candidate(disposable, state)
+        for state in ("CLAIMED", "DISPATCHED", "BUILT")
+    }
+    with connect(disposable) as conn:
+        assert (
+            conn.execute(
+                "SELECT 1 FROM information_schema.columns WHERE "
+                "table_name = 'candidate_build_attempt' AND column_name = 'daemon_id'"
+            ).fetchone()
+            is None
+        )
+    migrate(disposable)
+    with connect(disposable) as conn:
+        for old_state, build_id in ids.items():
+            row = conn.execute(
+                "SELECT state, epoch, daemon_endpoint, daemon_id, artifact_digest, "
+                "failure_code FROM candidate_build_attempt WHERE id = %s",
+                (build_id,),
+            ).fetchone()
+            assert row is not None
+            assert row["daemon_endpoint"] is None and row["daemon_id"] is None
+            if old_state == "BUILT":
+                assert row["state"] == "BUILT" and row["epoch"] == 1
+                assert row["artifact_digest"] == "a" * 64
+            else:
+                assert row["state"] == "UNKNOWN" and row["epoch"] == 2
+                assert row["failure_code"] == "MISSING_DAEMON_BINDING"
+        with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_build_attempt SET state = 'CLAIMED', finished_at = NULL "
+                "WHERE id = %s",
+                (ids["CLAIMED"],),
+            )
+
+
+def _seed_legacy_candidate(database_url: str, state: str) -> str:
+    """Synthetic pre-0024 rows through real constraints, not historical execution proof."""
+    lease = _seed_released_lease(database_url, reason="OPERATOR_RESET")
+    ids = {
+        key: str(uuid.uuid4())
+        for key in (
+            "user",
+            "project",
+            "source",
+            "finding",
+            "patch",
+            "approval",
+            "verification",
+            "build",
+        )
+    }
+    ids["ws"] = WS
+    ids["email"] = ids["user"] + "@example.test"
+    ids["name"] = "legacy-" + ids["project"]
+    with connect(database_url) as conn:
+        conn.execute("SELECT set_config('app.workspace_id', %s, true)", (WS,))
+        run = conn.execute("SELECT run_id FROM desktop_lease WHERE id = %s", (lease,)).fetchone()
+        assert run is not None
+        ids["run"] = str(run["run_id"])
+        conn.execute("INSERT INTO app_user (id,email) VALUES (%(user)s,%(email)s)", ids)
+        conn.execute(
+            "INSERT INTO project (id,workspace_id,name) VALUES (%(project)s,%(ws)s,%(name)s)",
+            ids,
+        )
+        conn.execute(
+            "INSERT INTO source_snapshot (id,workspace_id,project_id,commit_sha,tree_digest,"
+            "dirty,requested_revision) "
+            "VALUES (%(source)s,%(ws)s,%(project)s,repeat('a',40),repeat('a',64),false,'HEAD')",
+            ids,
+        )
+        conn.execute(
+            "INSERT INTO finding (id,workspace_id,run_id,assertion_id,status,summary) "
+            "VALUES (%(finding)s,%(ws)s,%(run)s,'synthetic','REPRODUCED','synthetic')",
+            ids,
+        )
+        conn.execute(
+            "INSERT INTO patch_proposal (id,workspace_id,finding_id,base_manifest_digest,"
+            "base_source_digest,patch_digest,status,proposed_by,rationale) "
+            "VALUES (%(patch)s,%(ws)s,%(finding)s,repeat('a',64),repeat('a',64),"
+            "repeat('a',64),'BUILDING',%(user)s,'synthetic')",
+            ids,
+        )
+        conn.execute(
+            "INSERT INTO approval (id,workspace_id,scope,actor_user,target_id,target_digest,"
+            "expected_revision,expires_at) VALUES (%(approval)s,%(ws)s,'PATCH_APPLY',%(user)s,"
+            "%(patch)s,repeat('a',64),1,now()+interval '1 hour')",
+            ids,
+        )
+        conn.execute(
+            "INSERT INTO patch_verification (id,workspace_id,patch_id,baseline_run_id,"
+            "baseline_identity,state) "
+            "VALUES (%(verification)s,%(ws)s,%(patch)s,%(run)s,'{}','BUILDING')",
+            ids,
+        )
+        conn.execute(
+            "INSERT INTO candidate_build_attempt (id,workspace_id,patch_id,verification_id,"
+            "project_id,source_snapshot_id,approval_id,approved_revision,building_revision,"
+            "source_commit,source_tree_digest,base_archive_digest,candidate_archive_digest,"
+            "patch_digest,policy_digest,surface_digest,worker_token,state,lease_expires_at,"
+            "created_at,dispatched_at,finished_at,artifact_digest,cleanup_confirmed) "
+            "VALUES (%(build)s,%(ws)s,%(patch)s,%(verification)s,"
+            "%(project)s,%(source)s,%(approval)s,"
+            "1,2,repeat('a',40),repeat('a',64),repeat('a',64),repeat('a',64),repeat('a',64),"
+            "repeat('a',64),repeat('a',64),%(user)s,%(state)s,now()+interval '1 hour',now(),"
+            "CASE WHEN %(state)s <> 'CLAIMED' THEN now() END,"
+            "CASE WHEN %(state)s = 'BUILT' THEN now() END,"
+            "CASE WHEN %(state)s = 'BUILT' THEN repeat('a',64) END,%(state)s = 'BUILT')",
+            {**ids, "state": state},
+        )
+    return ids["build"]
+
+
+def test_the_candidate_attempt_migrations_effect_remains_correct(disposable: str) -> None:
+    """Keep every 0023 constraint/trigger/isolation assertion after it ceases to be the tip."""
+    _apply_through(disposable, "0022_rate_limit_buckets.sql")
     with connect(disposable) as conn:
         assert conn.execute("SELECT to_regclass('candidate_build_attempt') AS name").fetchone() == {
             "name": None,

@@ -168,6 +168,8 @@ def build_ready(
         builds.surface_identity(tuple(row["paths"]), int(row["revision"])),
         approved.patch_digest,
         approved.revision,
+        "unix:///test/docker.sock",
+        "test-daemon",
     )
 
 
@@ -247,7 +249,7 @@ def test_candidate_approval_revocation_between_claim_and_dispatch_is_rechecked(
             builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=inputs)
 
 
-@pytest.mark.parametrize("change", ["source", "surface", "project", "policy", "patch"])
+@pytest.mark.parametrize("change", ["source", "surface", "project", "policy", "patch", "daemon"])
 def test_candidate_changed_dispatch_inputs_are_refused(
     db: str,
     project: str,
@@ -278,6 +280,8 @@ def test_candidate_changed_dispatch_inputs_are_refused(
                 actor_id=OWNER,
                 reason="cancelled",
             )
+        elif change == "daemon":
+            inputs = replace(inputs, daemon_id="another-daemon")
         else:
             inputs = replace(inputs, policy_digest="f" * 64)
         with pytest.raises(builds.BuildClaimRefused):
