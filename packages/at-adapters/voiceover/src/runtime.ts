@@ -6,7 +6,7 @@
  * the bottom imports the pinned package and exposes only the methods AccessForge permits.
  */
 
-import { voiceOver } from '@guidepup/guidepup';
+import { createRequire } from 'node:module';
 
 import { type ActionRequest, assertActionPermitted } from './actions.js';
 import {
@@ -199,5 +199,12 @@ export class VoiceOverAdapter {
 export function createGuidepupVoiceOverAdapter(
   options: VoiceOverAdapterOptions = {},
 ): VoiceOverAdapter {
+  // Guidepup constructs its platform reader while the module is imported. Loading it eagerly would
+  // make even policy and projection tests crash on Linux CI before they can inject a fake client.
+  // Keep the host probe at the production construction boundary, where an unsupported host should
+  // fail, instead of at package import time, where every platform-independent consumer would fail.
+  const { voiceOver } = createRequire(import.meta.url)('@guidepup/guidepup') as {
+    readonly voiceOver: VoiceOverClient;
+  };
   return new VoiceOverAdapter(voiceOver, options);
 }
