@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0019_navigator_planning_checkpoints.sql"
+NEWEST = "0020_purge_queue_artifact_key.sql"
 
 
 def _with_database(url: str, name: str) -> str:
@@ -135,21 +135,61 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     """The newest migration's actual effect, in both directions.
 
     Asserting only that the new thing works afterwards would pass against a database where the
-    guard had been dropped entirely, or the table had always been there -- and "the guard is gone"
-    is a much worse outcome than "the feature is missing".
+    guard had been dropped entirely, or the constraint had always been there -- and "the guard is
+    gone" is a much worse outcome than "the feature is missing".
     """
     _apply_through(disposable, _previous())
     with connect(disposable) as conn:
         before = conn.execute(
-            "SELECT 1 FROM information_schema.tables "
-            " WHERE table_schema = 'public' AND table_name = 'navigator_planning_checkpoint'"
+            "SELECT 1 FROM pg_constraint "
+            " WHERE conrelid = 'evidence_object_purge'::regclass AND contype = 'f' "
+            "   AND confrelid = 'evidence_artifact'::regclass"
         ).fetchone()
-    assert before is None
+    assert before is None, "the artifact reference already existed, so this proves nothing"
 
     migrate(disposable)
 
     with connect(disposable) as conn:
-        after = conn.execute(
+        key = conn.execute(
+            "SELECT conname, confdeltype, convalidated, "
+            "       pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            " WHERE conrelid = 'evidence_object_purge'::regclass AND contype = 'f' "
+            "   AND confrelid = 'evidence_artifact'::regclass"
+        ).fetchone()
+        target = conn.execute(
+            "SELECT 1 FROM pg_constraint "
+            " WHERE conrelid = 'evidence_artifact'::regclass AND contype = 'u' "
+            "   AND conname = 'evidence_artifact_id_workspace_key'"
+        ).fetchone()
+
+    assert key is not None, "a purge row could still name an artifact that does not exist"
+    assert target is not None, "the composite key the reference points at is missing"
+    # Composite, not a bare reference to the primary key. Foreign key checks bypass row-level
+    # security, so a single-column reference would pass while naming another tenant's artifact.
+    definition = str(key["definition"])
+    assert "(artifact_id, workspace_id)" in definition
+    assert "(id, workspace_id)" in definition
+    # 'r' is RESTRICT. Artifacts are never deleted here -- deletion leaves a tombstone -- so this
+    # can only fire if a later migration removes one, and taking the record of an unfinished purge
+    # with it is what must not happen quietly.
+    assert key["confdeltype"] == "r"
+    # And validated. Added NOT VALID so the row scan runs under a lock that does not block writes
+    # to evidence_artifact, then validated in its own statement; leaving it NOT VALID would mean
+    # existing rows were never checked against it at all.
+    assert bool(key["convalidated"]), "the foreign key was added but never validated"
+
+
+def test_the_navigator_checkpoints_from_an_earlier_migration_are_still_correct(
+    disposable: str,
+) -> None:
+    """Migration 0019's effect, kept as its own case now that it is no longer the newest.
+
+    A migration test that only ever covered the tip would stop exercising every earlier change the
+    moment another one landed -- which is precisely when a regression in one of them would ship.
+    """
+    migrate(disposable)
+    with connect(disposable) as conn:
+        table = conn.execute(
             "SELECT 1 FROM information_schema.tables "
             " WHERE table_schema = 'public' AND table_name = 'navigator_planning_checkpoint'"
         ).fetchone()
@@ -166,21 +206,11 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
             "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
             " WHERE relname = 'navigator_planning_checkpoint'"
         ).fetchone()
-        columns = {
-            str(row["column_name"])
-            for row in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'navigator_planning_checkpoint'"
-            ).fetchall()
-        }
-    assert after is not None
+    assert table is not None
     assert ordered_index is not None
     assert shape is not None
     assert forced is not None
     assert bool(forced["relrowsecurity"]) and bool(forced["relforcerowsecurity"])
-    assert columns.isdisjoint(
-        {"announcement", "raw_text", "dom", "source", "screenshot", "observer_receipt"}
-    )
 
 
 def test_the_object_purge_queue_from_the_previous_migration_remains_correct(

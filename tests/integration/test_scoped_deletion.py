@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -143,6 +145,20 @@ def _observation(url: str, run_id: str, attempt_id: str, *, sequence: int = 1) -
             payload={"phrase": "Email, invalid entry"},
             source_time=datetime(2026, 9, 11, 12, tzinfo=UTC),
         )
+
+
+def _connect(db: str, workspace: str = WS) -> Callable[[], AbstractContextManager[Any]]:
+    """A connection factory, which is what a batched drain takes.
+
+    `drain_purge_queue` opens one transaction per batch rather than running inside the caller's, so
+    a batch that released bytes stays released when a later one fails. Handing it a live connection
+    is the mistake the signature exists to prevent.
+    """
+
+    def connect() -> AbstractContextManager[Any]:
+        return workspace_connection(db, workspace)
+
+    return connect
 
 
 def _delete(
@@ -1144,11 +1160,13 @@ def test_a_backlog_longer_than_one_pass_is_drained_rather_than_left(
         )
     assert report.objects_enqueued == 3
 
-    with workspace_connection(db, WS) as conn:
-        # One key per pass, so a single pass would leave two behind.
-        drained = report.with_purge(
-            deletion.purge_until_drained(conn, store, deletion_id=report.deletion_id, limit=1)
+    # One key per batch, so a single batch would leave two behind -- and each batch commits, so
+    # the first key stays gone whatever happens to the third.
+    drained = report.with_purge(
+        deletion.drain_purge_queue(
+            _connect(db), store, deletion_id=report.deletion_id, batch_size=1
         )
+    )
     assert drained.objects_purged == 3
     assert drained.objects_still_present == 0
     for artifact in artifacts:
@@ -1172,10 +1190,10 @@ def test_a_store_that_is_down_stops_the_drain_instead_of_spinning(
             reason="the customer withdrew consent for captured speech",
             requested_by=OPERATOR,
         )
+    outcome = deletion.drain_purge_queue(
+        _connect(db), _RefusingStore(), deletion_id=report.deletion_id
+    )
     with workspace_connection(db, WS) as conn:
-        outcome = deletion.purge_until_drained(
-            conn, _RefusingStore(), deletion_id=report.deletion_id
-        )
         attempts = conn.execute(
             "SELECT attempts FROM evidence_object_purge WHERE deletion_id = %s",
             (report.deletion_id,),
@@ -1211,8 +1229,7 @@ def test_an_operator_can_finish_a_deletion_the_store_could_not(
             reason="the customer withdrew consent for captured speech",
             requested_by=OPERATOR,
         )
-    with workspace_connection(db, WS) as conn:
-        deletion.purge_until_drained(conn, _RefusingStore(), deletion_id=report.deletion_id)
+    deletion.drain_purge_queue(_connect(db), _RefusingStore(), deletion_id=report.deletion_id)
     assert store.get(key=artifact.object_key) == TRANSCRIPT
 
     csrf = _sign_in(db, api)
@@ -1375,3 +1392,234 @@ def test_a_second_purge_skips_rows_another_is_holding_rather_than_double_countin
     assert store.get(key=artifact.object_key) == TRANSCRIPT
     with workspace_connection(db, WS) as conn:
         assert deletion.pending_purges(conn, deletion_id=report.deletion_id) == 1
+
+
+class _FailsOnTheLastKey:
+    """A store that dies partway through, the way a killed worker does.
+
+    `KeyboardInterrupt` rather than `Exception` on purpose: `purge_pending_objects` catches every
+    `Exception` per key and records it, so an ordinary store error is already a handled delay. What
+    it cannot handle is the process being torn down mid-drain, and that is the case the batch
+    boundary exists for.
+    """
+
+    def __init__(self, store: evidence.S3ArtifactStore, die_after: int) -> None:
+        self._store = store
+        self._die_after = die_after
+        self.deleted = 0
+
+    def delete(self, *, key: str) -> None:
+        if self.deleted >= self._die_after:
+            raise KeyboardInterrupt("worker terminated mid-drain")
+        self._store.delete(key=key)
+        self.deleted += 1
+
+
+def test_a_drain_killed_partway_keeps_the_keys_it_already_released(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """Every committed batch stays committed when the process dies on a later one.
+
+    This is what the connection factory buys. Running the whole drain inside one caller-held
+    transaction meant an interrupt rolled back every `purged_at` mark the drain had made -- while
+    the bytes were already gone from the store. The queue would then claim keys that no longer
+    exist, `attempts` counters would reset, and the next pass would re-delete absent objects and
+    call it progress.
+    """
+    run_id, attempt_id = _run(db)
+    artifacts = [
+        _promoted(db, store, run_id, attempt_id, payload=TRANSCRIPT + str(n).encode())
+        for n in range(3)
+    ]
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+    assert report.objects_enqueued == 3
+
+    dying = _FailsOnTheLastKey(store, die_after=2)
+    with pytest.raises(KeyboardInterrupt):
+        deletion.drain_purge_queue(
+            _connect(db), dying, deletion_id=report.deletion_id, batch_size=1
+        )
+
+    # Two batches committed before the interrupt, and the database says so.
+    with workspace_connection(db, WS) as conn:
+        rows = conn.execute(
+            "SELECT object_key, purged_at FROM evidence_object_purge WHERE deletion_id = %s",
+            (report.deletion_id,),
+        ).fetchall()
+        assert deletion.pending_purges(conn, deletion_id=report.deletion_id) == 1
+    marked = {str(r["object_key"]) for r in rows if r["purged_at"] is not None}
+    assert len(marked) == 2
+
+    # And the store agrees with the database about which two. A queue that disagreed with the
+    # store is the whole failure; this asserts they match key for key.
+    gone = set()
+    for artifact in artifacts:
+        try:
+            store.get(key=artifact.object_key)
+        except objectstore.ArtifactStoreError:
+            gone.add(artifact.object_key)
+    assert gone == marked
+
+
+def test_a_deletion_replayed_with_the_same_idempotency_key_records_one_deletion(
+    db: str, store: evidence.S3ArtifactStore, api: object
+) -> None:
+    """A retry of an admitted deletion must not destroy a second scope of evidence.
+
+    The route runs phase one on its own connection so the record commits before any byte is
+    touched, which means the idempotency record and the deletion are not written by the same
+    transaction. Worth pinning: a replay that re-ran `record_deletion` would mark a second scope
+    DELETED and enqueue its keys, and the second report would read as a successful deletion of
+    evidence the caller never asked about twice.
+    """
+    from accessforge_api.auth import CSRF_HEADER
+
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id)
+    csrf = _sign_in(db, api)
+    headers = {CSRF_HEADER: csrf, "Idempotency-Key": str(uuid.uuid4())}
+    body = {
+        "evidenceClasses": ["READER_SPEECH"],
+        "reason": "the customer withdrew consent for captured speech",
+    }
+
+    first = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/runs/{run_id}/deletions", json=body, headers=headers
+    )
+    second = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/runs/{run_id}/deletions", json=body, headers=headers
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    # The same report, not a second deletion that happened to remove nothing. Those are different
+    # facts and an auditor reading the listing is entitled to the first one.
+    assert second.json()["deletionId"] == first.json()["deletionId"]
+    assert second.headers.get("Idempotent-Replay") == "true"
+
+    with workspace_connection(db, WS) as conn:
+        assert len(deletion.deletions_for_run(conn, run_id=run_id)) == 1
+
+
+def test_a_different_idempotency_key_records_a_second_deletion_that_removes_nothing(
+    db: str, store: evidence.S3ArtifactStore, api: object
+) -> None:
+    """The honest other half: a *new* key is a new request, and it is recorded as one.
+
+    Not a bug to be asserted away. The artifacts are already DELETED so nothing further is removed,
+    and both rows appear in the listing -- because a deletion somebody asked for is a fact even
+    when it had no effect, and hiding the second would hide that they asked twice.
+    """
+    from accessforge_api.auth import CSRF_HEADER
+
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id)
+    csrf = _sign_in(db, api)
+    body = {
+        "evidenceClasses": ["READER_SPEECH"],
+        "reason": "the customer withdrew consent for captured speech",
+    }
+
+    first = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/runs/{run_id}/deletions",
+        json=body,
+        headers={CSRF_HEADER: csrf, "Idempotency-Key": str(uuid.uuid4())},
+    )
+    second = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/runs/{run_id}/deletions",
+        json=body,
+        headers={CSRF_HEADER: csrf, "Idempotency-Key": str(uuid.uuid4())},
+    )
+
+    assert first.status_code == 201 and second.status_code == 201
+    assert second.json()["deletionId"] != first.json()["deletionId"]
+    assert first.json()["artifactsMarkedDeleted"] == 1
+    assert second.json()["artifactsMarkedDeleted"] == 0
+    assert second.headers.get("Idempotent-Replay") is None
+    with workspace_connection(db, WS) as conn:
+        assert len(deletion.deletions_for_run(conn, run_id=run_id)) == 2
+
+
+def test_a_purge_row_cannot_name_an_artifact_that_does_not_exist(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """The queue row is what an operator reads to explain a stuck purge.
+
+    A key naming an artifact nobody can find is a key nobody can attribute, in the one table whose
+    job is saying which bytes are still out there. Enforced by the database rather than trusted to
+    the one code path that writes it today.
+    """
+    import psycopg
+
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id)
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "INSERT INTO evidence_object_purge "
+                "   (id, workspace_id, deletion_id, artifact_id, object_key, enqueued_at) "
+                "VALUES (%s, %s, %s, %s, 'orphan/key', now())",
+                (str(uuid.uuid4()), WS, report.deletion_id, str(uuid.uuid4())),
+            )
+
+
+def test_a_purge_row_cannot_name_an_artifact_in_another_workspace(
+    db: str, store: evidence.S3ArtifactStore
+) -> None:
+    """Why the key is composite.
+
+    Foreign key checks run as the table owner and bypass row-level security, so a reference to the
+    artifact's primary key alone would happily point at another tenant's evidence: the check would
+    pass and a purge row in this workspace would name bytes belonging to someone else. Carrying
+    `workspace_id` into the constraint is what refuses it.
+    """
+    import psycopg
+
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id)
+    other_run, other_attempt = _run(db, WS_OTHER)
+    theirs = _promoted(db, store, other_run, other_attempt, workspace=WS_OTHER)
+
+    with workspace_connection(db, WS) as conn:
+        report = deletion.record_deletion(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            classes=("READER_SPEECH",),
+            reason="the customer withdrew consent for captured speech",
+            requested_by=OPERATOR,
+        )
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "INSERT INTO evidence_object_purge "
+                "   (id, workspace_id, deletion_id, artifact_id, object_key, enqueued_at) "
+                "VALUES (%s, %s, %s, %s, %s, now())",
+                (
+                    str(uuid.uuid4()),
+                    WS,
+                    report.deletion_id,
+                    theirs.artifact_id,
+                    theirs.object_key,
+                ),
+            )
