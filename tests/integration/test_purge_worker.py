@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from accessforge_orchestrator.maintenance import sweep_once
+from accessforge_orchestrator.maintenance.purge_worker import sweep_once
 from accessforge_persistence import (
     assert_row_level_security_enforced,
     deletion,
