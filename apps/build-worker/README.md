@@ -45,8 +45,22 @@ CI provisions its own platform image and never reuses another daemon's local ima
 
 Current proof builds the actual committed reference-app package after a deliberately build-only
 approved edit, verifies every wheel source member, retains it in the real object store, and imports
-the captured wheel inside a fresh contained process. This does not prove protected HTTP/database
-regressions, an accessibility repair, a matched reader run, or UNKNOWN recovery.
+the captured wheel inside a fresh contained process.
+
+`ReferenceRegressions` additionally runs protected HTTP/database checks against captured wheels.
+Provision its `POSTGRES_IMAGE` constant before execution. A task-specific network-none PostgreSQL
+container, separate trusted HTTP driver, and candidate containers share only private loopback
+networking; nothing is published to the host. The supervisor owns the schema, and the candidate
+receives only fixture DML permissions, never administrator credentials. Direct SQL verifies
+invalid-input refusal, exact successful submission, authorization/no-write boundaries, duplicate
+handling and fresh-container restart durability. Late DB writers are fenced before the final read.
+All containers are removed before a result is returned; ambiguous cleanup raises rather than
+passing. Actual metadata/public-network and denied-DDL/admin canaries must pass.
+
+This is currently a bounded local primitive, not a durable verification worker. No regression
+attestation is written to a candidate run, and no API consumer may infer VERIFIED from its result.
+Hard supervisor-crash reconciliation, a real accessibility repair and matched actual-reader proof
+remain incomplete. Hostile multi-tenant execution remains unsupported.
 
 See `docs/handoffs/14-candidate-build.md` for the current evidence and remaining work. The older
 `14.md` describes the historical policy-only checkpoint, not the current worker implementation.

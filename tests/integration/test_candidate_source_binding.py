@@ -7,12 +7,14 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
@@ -20,6 +22,8 @@ import pytest
 
 from accessforge_build_worker.artifacts import read_retained_candidate, retire_expired_candidate
 from accessforge_build_worker.coordinator import ClaimedCandidate, execute_claim, prepare_and_claim
+from accessforge_build_worker.process import CommandResult, CommandStopped
+from accessforge_build_worker.reference_regressions import ReferenceRegressions
 from accessforge_build_worker.sandbox import (
     DockerSandbox,
     SandboxPolicy,
@@ -396,9 +400,42 @@ def _prepare_owned_build(
 
 @pytest.mark.sandbox
 @pytest.mark.parametrize("binding", ["reference"], indirect=True)
+@pytest.mark.parametrize(
+    ("sabotage", "failure"),
+    [
+        ("", None),
+        (
+            "\nfrom . import validation as _validation\n"
+            "_validation.validate_service_request = lambda **values: []\n",
+            "reject_invalid_email",
+        ),
+        (
+            "\nimport secrets\nsecrets.compare_digest = lambda *args: True\n",
+            "fixture_creation_authorization",
+        ),
+        (
+            "\nfrom . import validation as _validation\nimport os, psycopg\n"
+            "_original_validate = _validation.validate_service_request\n"
+            "def _write_and_reject(**values):\n"
+            "    with psycopg.connect(os.environ['REFAPP_DATABASE_URL']) as conn:\n"
+            '        conn.execute("INSERT INTO service_request '
+            "(id,fixture_nonce,full_name,email,category,description) "
+            "SELECT '11111111-1111-4111-8111-111111111111'::uuid,nonce,%s,%s,%s,%s "
+            'FROM fixture_instance", tuple(values[key] for key in '
+            "('full_name','email','category','description')))\n"
+            "    return _original_validate(**values)\n"
+            "_validation.validate_service_request = _write_and_reject\n",
+            "no_invalid_write_email",
+        ),
+    ],
+    ids=["healthy", "validation-removed", "authorization-bypassed", "writes-despite-error"],
+)
 def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
     binding: BoundFixture,
     isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+    sabotage: str,
+    failure: str | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image = os.environ.get("ACCESSFORGE_REFERENCE_TOOLCHAIN")
     if not image:
@@ -408,7 +445,7 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
     path = "src/reference_app/templates.py"
     original = next(file.content for file in binding.source.files if file.path == path)
     # Deliberately a build-only approved edit, not an accessibility repair/reader attestation.
-    content = original.decode() + "\n# Owned candidate packaging probe.\n"
+    content = original.decode() + "\n# Owned candidate packaging probe.\n" + sabotage
     claimed, sandbox, command = _prepare_owned_build(
         binding,
         image=image,
@@ -469,6 +506,48 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
         ),
     )
     assert smoke.artifact.files[0].content == b"imported captured wheel"
+    runner = ReferenceRegressions(image=image, daemon=sandbox.daemon)
+    if failure is not None:
+        with pytest.raises(SandboxRefused, match=failure):
+            runner.run(retained)
+        return
+    regression = runner.run(retained)
+    assert regression.artifact_digest == retained.archive_digest
+    assert "exact_independent_database_receipt" in regression.checks
+    assert len(regression.containers) == 4
+    assert "durable_receipt_after_stop" in regression.checks
+    # Cancel only after an actual PostgreSQL process was started, then verify exact cleanup.
+    original_checked = runner.sandbox._checked
+    stop = False
+    created: list[str] = []
+
+    def observed(*args: str, **kwargs: Any) -> CommandResult:
+        nonlocal stop
+        result = original_checked(*args, **kwargs)
+        if args[:2] == ("container", "create"):
+            created.append(result.stdout.decode().strip())
+        if any(arg.endswith("/pg_ctl") for arg in args):
+            stop = True
+        return result
+
+    with monkeypatch.context() as context:
+        context.setattr(runner.sandbox, "_checked", observed)
+        with pytest.raises(CommandStopped, match="cancelled"):
+            runner.run(retained, cancelled=lambda: stop)
+    assert len(created) == 1
+    for container in created:
+        remaining = original_checked(
+            "container",
+            "ls",
+            "-a",
+            "--no-trunc",
+            "--filter",
+            f"id={container}",
+            "--format",
+            "{{.ID}}",
+            deadline=time.monotonic() + 10,
+        )
+        assert not remaining.stdout.strip()
     with workspace_connection(binding.database, binding.workspace) as conn:
         row = conn.execute(
             "SELECT state FROM candidate_build_attempt WHERE id=%s", (claimed.claim.build_id,)

@@ -139,6 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           docker --host "$ACCESSFORGE_SANDBOX_ENDPOINT" pull python@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e
+          docker --host "$ACCESSFORGE_SANDBOX_ENDPOINT" pull postgres@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
           reference_image=$(uv run python scripts/provision_reference_toolchain.py --endpoint "$ACCESSFORGE_SANDBOX_ENDPOINT")
           echo "ACCESSFORGE_REFERENCE_TOOLCHAIN=$reference_image" >> "$GITHUB_ENV"
 
