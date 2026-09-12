@@ -65,6 +65,138 @@ DEFAULT_APPROVAL_SECONDS = 3600
 MAX_APPROVAL_SECONDS = 86_400
 
 
+# --- contract shapes ------------------------------------------------------------------------------
+#
+# Declared so the generated OpenAPI describes what these routes actually accept. The handlers take a
+# plain dict and validate it themselves -- which keeps every refusal an RFC7807 problem document
+# rather than FastAPI's own 422 -- but that left the contract saying "object" and nothing more, so a
+# consumer could not see which fields exist. Two specific consequences: `applicationPaths` lived on
+# in consumers' heads after it was removed, and the `If-Match` these routes require appeared nowhere
+# at all, because `require_if_match` reads the raw header and FastAPI never sees it.
+
+_IF_MATCH_PARAMETER = {
+    "name": "If-Match",
+    "in": "header",
+    "required": True,
+    "schema": {"type": "string"},
+    "description": (
+        "The revision the decision was made against, as returned in ETag. Required: a decision "
+        "about a patch that moved in the meantime is a decision about something the caller never "
+        "read. Omitting it is 428, not 422."
+    ),
+}
+
+
+def _body_schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": required,
+                    "properties": properties,
+                }
+            }
+        },
+    }
+
+
+PROPOSE_BODY = _body_schema(
+    {
+        "baseManifestDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "The manifest the finding's own run used. Any other is refused.",
+        },
+        "baseSourceDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "The source tree that manifest sealed. Verified, not taken on trust.",
+        },
+        "changes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["path"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {
+                        "type": ["string", "null"],
+                        "description": "The content after the change; null for a deletion.",
+                    },
+                    "mode": {
+                        "type": ["string", "null"],
+                        "enum": [*sorted(ALLOWED_MODES), None],
+                        "description": "Git file mode. 120000 is a symlink and is refused.",
+                    },
+                    "binary": {"type": "boolean"},
+                },
+            },
+        },
+        "rationale": {"type": "string", "minLength": 1},
+        "acknowledgeSeparateReview": {
+            "type": "boolean",
+            "description": (
+                "Required true when the patch touches a dependency manifest, lockfile or build "
+                "configuration. There is no repair-surface field here: the surface is project "
+                "configuration and a proposal cannot supply or widen it."
+            ),
+        },
+    },
+    ["baseManifestDigest", "baseSourceDigest", "changes", "rationale"],
+)
+
+APPROVE_BODY = _body_schema(
+    {
+        "expiresInSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_APPROVAL_SECONDS,
+            "description": (
+                "Defaults to one hour. There is no way to express an approval that never expires."
+            ),
+        }
+    },
+    [],
+)
+
+REJECT_BODY = _body_schema({"reason": {"type": "string", "minLength": 1}}, ["reason"])
+
+SURFACE_BODY = _body_schema(
+    {
+        "paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"},
+            "description": (
+                "Path prefixes a repair may touch. No way to express 'anywhere': a project with no "
+                "surface accepts no proposals."
+            ),
+        }
+    },
+    ["paths"],
+)
+
+VERIFY_BODY = _body_schema(
+    {
+        "baselineRunId": {"type": "string", "format": "uuid"},
+        "baselineIdentity": {
+            "type": "object",
+            "description": (
+                "Accepted and recorded, but not used by any gate. Identities are read from each "
+                "run's sealed manifest; a caller cannot supply the evidence its own verification "
+                "is judged on."
+            ),
+        },
+    },
+    ["baselineRunId"],
+)
+
+
 def _changes_from(body: dict[str, Any], *, request_id: str | None) -> tuple[ProposedChange, ...]:
     """Read the proposed changes, refusing anything that is not a list of objects.
 
@@ -174,7 +306,10 @@ def _verification_view(record: patches.VerificationRecord) -> dict[str, Any]:
     }
 
 
-@router.put("/projects/{project_id}/repair-surface")
+@router.put(
+    "/projects/{project_id}/repair-surface",
+    openapi_extra={"requestBody": SURFACE_BODY},
+)
 def configure_repair_surface(
     workspace_id: str,
     project_id: str,
@@ -236,7 +371,11 @@ def configure_repair_surface(
     }
 
 
-@router.post("/findings/{finding_id}/patches", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/findings/{finding_id}/patches",
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={"requestBody": PROPOSE_BODY},
+)
 def propose_patch(
     workspace_id: str,
     finding_id: str,
@@ -375,7 +514,11 @@ def list_patches_for_finding(
     }
 
 
-@router.post("/patches/{patch_id}/approval", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/patches/{patch_id}/approval",
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={"requestBody": APPROVE_BODY, "parameters": [_IF_MATCH_PARAMETER]},
+)
 def approve_patch(
     workspace_id: str,
     patch_id: str,
@@ -461,7 +604,11 @@ def approve_patch(
     return view
 
 
-@router.post("/patches/{patch_id}/verifications", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/patches/{patch_id}/verifications",
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={"requestBody": VERIFY_BODY},
+)
 def open_verification(
     workspace_id: str,
     patch_id: str,
@@ -575,7 +722,10 @@ def list_verifications(
     }
 
 
-@router.post("/patches/{patch_id}/rejection")
+@router.post(
+    "/patches/{patch_id}/rejection",
+    openapi_extra={"requestBody": REJECT_BODY, "parameters": [_IF_MATCH_PARAMETER]},
+)
 def reject_patch(
     workspace_id: str,
     patch_id: str,

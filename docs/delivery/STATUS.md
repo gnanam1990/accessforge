@@ -186,7 +186,14 @@ regressions the conclusion is conclusively non-VERIFIED; the repair surface is t
 configuration an unconfigured project cannot widen; and `binary`, `mode` and
 `acknowledgeSeparateReview` are validated rather than coerced.
 
-**1739 tests pass** against real PostgreSQL 17 and MinIO. 22 mutation checks across the policy, the
+A fourth round closed five residual blockers: `open_verification` now rechecks the approval before it
+inserts or transitions; the conclusion `UPDATE` carries state and revision predicates so two
+concluders cannot both succeed; `permitted_differences` are validated with a sentinel separating a
+missing `candidate` key from a null one; the generated contract documents the exact current request
+shapes and the required `If-Match`, with no stale `applicationPaths`; and `PLAN.md` rows 18 and 24
+carry measured counts and the honest candidate/rerun gap.
+
+**1751 tests pass** against real PostgreSQL 17 and MinIO. 22 mutation checks across the policy, the
 persistence gates and the schema, including ones that reinstate the self-referential revision
 comparison and the `changes and` short-circuit exactly as each shipped. Each restored
 byte-identically by SHA-256.

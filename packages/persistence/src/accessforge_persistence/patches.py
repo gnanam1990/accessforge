@@ -695,6 +695,44 @@ def approve_patch(
     return attached
 
 
+def _assert_approval_authorizes(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    workspace_id: str,
+    patch: PatchProposal,
+    now: datetime,
+) -> None:
+    """Raise unless this patch's recorded approval still authorizes acting on it.
+
+    One implementation, called from both places that act under an approval: dispatching a patch and
+    opening a verification. `open_verification` used to check only that the status said APPROVED, so
+    a revoked, expired or superseded approval still produced a verification record and moved the
+    patch to BUILDING -- a candidate begun under an authorization that no longer existed, and a row
+    saying so afterwards.
+
+    Scope, target, digest, revision, expiry and revocation, all compared by the domain's own check.
+    The patch's *current* revision is the comparison: anything that moved the patch since approval
+    voids it.
+    """
+    if patch.approval_id is None:
+        raise PatchError(
+            f"patch {patch.patch_id} is {patch.status} with no recorded approval, which should be "
+            "impossible; refusing rather than acting on it"
+        )
+    approval = approvals.load_for_check(conn, approval_id=patch.approval_id)
+    try:
+        approval.check(
+            now=to_rfc3339_utc(now),
+            scope=ApprovalScope.PATCH_APPLY,
+            workspace_id=workspace_id,
+            target_id=patch.patch_id,
+            target_digest=patch.patch_digest,
+            current_revision=patch.revision,
+        )
+    except AuthorityError as exc:
+        raise PatchError(f"the approval no longer authorizes this patch: {exc}") from exc
+
+
 def assert_dispatchable(
     conn: psycopg.Connection[dict[str, Any]],
     *,
@@ -720,11 +758,6 @@ def assert_dispatchable(
         raise PatchError(
             f"patch {patch_id} is {patch.status}, and only an APPROVED patch may be applied"
         )
-    if patch.approval_id is None:
-        raise PatchError(
-            f"patch {patch_id} is APPROVED with no recorded approval, which should be impossible; "
-            "refusing rather than applying it"
-        )
     if current_source_digest != patch.base_source_digest:
         raise StalePatchBase(
             "the source tree has changed since this patch was approved "
@@ -733,21 +766,7 @@ def assert_dispatchable(
             "is a different change."
         )
 
-    approval = approvals.load_for_check(conn, approval_id=patch.approval_id)
-    try:
-        approval.check(
-            now=to_rfc3339_utc(moment),
-            scope=ApprovalScope.PATCH_APPLY,
-            workspace_id=workspace_id,
-            target_id=patch_id,
-            target_digest=patch.patch_digest,
-            # The patch's current revision, not the approval's own expectation. Comparing the
-            # approval against itself is a check that cannot fail, and it let a patch edited after
-            # approval stay dispatchable.
-            current_revision=patch.revision,
-        )
-    except AuthorityError as exc:
-        raise PatchError(f"the approval no longer authorizes this application: {exc}") from exc
+    _assert_approval_authorizes(conn, workspace_id=workspace_id, patch=patch, now=moment)
     return patch
 
 
@@ -954,6 +973,18 @@ def open_verification(
             f"patch {patch_id} is {patch.status}. A verification begins from APPROVED -- "
             "building a candidate from anything else would be work nobody authorized."
         )
+    # Before anything is inserted and before the patch moves. A status saying APPROVED is not the
+    # same as an approval still authorizing anything: it can have been revoked, it can have expired,
+    # and the patch can have moved since. Opening a verification under a dead approval would begin a
+    # candidate nobody authorized and leave a record implying somebody had.
+    #
+    # The source-tree comparison that `assert_dispatchable` also makes is deliberately absent: no
+    # candidate source can be observed from here, and inventing a digest to compare would be worse
+    # than comparing nothing. That limitation is stated in the route's response.
+    try:
+        _assert_approval_authorizes(conn, workspace_id=workspace_id, patch=patch, now=moment)
+    except PatchError as exc:
+        raise VerificationError(f"this patch cannot begin a verification: {exc}") from exc
 
     verification_id = str(uuid.uuid4())
     conn.execute(
@@ -1082,9 +1113,50 @@ def _unmet_gates(patch: PatchProposal, evidence: TrustedEvidence) -> list[str]:
     return unmet
 
 
-def _identity_drift(evidence: TrustedEvidence, permitted: tuple[dict[str, Any], ...]) -> list[str]:
+#: Distinguishes "this key was not provided" from "this key was provided as null". `dict.get`
+#: collapses the two, and `str(None)` is the string "None" -- so an entry that simply forgot to say
+#: what the candidate value was could waive a drift whose candidate value happened to be absent.
+_MISSING: Any = object()
+
+
+def _validate_permitted_differences(
+    permitted: tuple[dict[str, Any], ...],
+) -> tuple[tuple[str, Any], ...]:
+    """Check every recorded permitted difference, and refuse a malformed one.
+
+    These are the only things allowed to excuse a difference between a baseline and a candidate
+    (INV-04), so a malformed entry must not quietly participate in that decision. An entry with no
+    `candidate` key says nothing about what the candidate was, and one with no `field` says nothing
+    about what it applies to; either would previously have stringified into the comparison set and
+    been capable of matching a real difference.
+    """
+    checked: list[tuple[str, Any]] = []
+    for index, entry in enumerate(permitted):
+        if not isinstance(entry, dict):
+            raise VerificationError(
+                f"permitted difference {index} is a {type(entry).__name__}, not an object. Each "
+                "one names a field and the candidate value that is allowed to differ."
+            )
+        field = entry.get("field", _MISSING)
+        if not isinstance(field, str) or not field.strip():
+            raise VerificationError(
+                f"permitted difference {index} needs a non-empty string `field`. Without one it "
+                "applies to nothing, and an entry that applies to nothing cannot excuse anything."
+            )
+        candidate = entry.get("candidate", _MISSING)
+        if candidate is _MISSING:
+            raise VerificationError(
+                f"permitted difference {index} for {field!r} has no `candidate` key. Saying a "
+                "field may differ without saying what it may differ *to* waives the check "
+                "entirely: any value would match. State the value, explicitly including null."
+            )
+        checked.append((field, str(candidate)))
+    return tuple(checked)
+
+
+def _identity_drift(evidence: TrustedEvidence, permitted: tuple[tuple[str, Any], ...]) -> list[str]:
     """Identity fields that differ and were not recorded as permitted (INV-04)."""
-    allowed = {(str(d.get("field")), str(d.get("candidate"))) for d in permitted}
+    allowed = set(permitted)
     return sorted(
         field
         for field in COMPARED_IDENTITY
@@ -1131,6 +1203,9 @@ def conclude_verification(
             f"verification {verification_id} already concluded as {record.conclusion}. A frozen "
             "outcome is not rewritten; run another verification instead."
         )
+    # Validated before anything is written, so a malformed waiver cannot reach the comparison and
+    # cannot leave a half-updated record behind.
+    allowances = _validate_permitted_differences(permitted_differences)
 
     if candidate_run_id is not None:
         conn.execute(
@@ -1167,7 +1242,7 @@ def conclude_verification(
 
     patch = load_patch(conn, patch_id=record.patch_id)
     unmet = _unmet_gates(patch, evidence)
-    drift = _identity_drift(evidence, permitted_differences)
+    drift = _identity_drift(evidence, allowances)
     if drift:
         unmet.append(
             f"unexplained identity drift in: {', '.join(drift)}. INV-04 allows the baseline and "
@@ -1197,11 +1272,22 @@ def conclude_verification(
         conclusion = "INCONCLUSIVE"
         reasons = unmet
 
-    conn.execute(
+    # The read at the top of this function is not the check. Two conclusions racing both passed it,
+    # both computed their own gates and both wrote -- the second overwriting a frozen outcome, which
+    # is the one thing a frozen outcome must not permit. So state and revision are predicates in the
+    # statement that writes, and the decision is whether it changed a row.
+    concluded = conn.execute(
         "UPDATE patch_verification SET state = 'CONCLUDED', conclusion = %s, "
-        "    conclusion_reasons = %s, concluded_at = %s, revision = revision + 1 WHERE id = %s",
-        (conclusion, reasons, moment, verification_id),
-    )
+        "    conclusion_reasons = %s, concluded_at = %s, revision = revision + 1 "
+        " WHERE id = %s AND state <> 'CONCLUDED' AND revision = %s",
+        (conclusion, reasons, moment, verification_id, record.revision),
+    ).rowcount
+    if concluded != 1:
+        raise VerificationError(
+            f"verification {verification_id} was concluded by somebody else while this conclusion "
+            "was being computed. The first outcome stands: a frozen verdict is not overwritten by "
+            "whichever caller finished second."
+        )
 
     target = PatchStatus.VERIFIED if conclusion == "VERIFIED" else PatchStatus.FAILED
     if target in ALLOWED_TRANSITIONS[patch.status]:

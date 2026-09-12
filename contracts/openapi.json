@@ -2305,7 +2305,73 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
+                "additionalProperties": false,
+                "properties": {
+                  "acknowledgeSeparateReview": {
+                    "description": "Required true when the patch touches a dependency manifest, lockfile or build configuration. There is no repair-surface field here: the surface is project configuration and a proposal cannot supply or widen it.",
+                    "type": "boolean"
+                  },
+                  "baseManifestDigest": {
+                    "description": "The manifest the finding's own run used. Any other is refused.",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "baseSourceDigest": {
+                    "description": "The source tree that manifest sealed. Verified, not taken on trust.",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "changes": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "binary": {
+                          "type": "boolean"
+                        },
+                        "content": {
+                          "description": "The content after the change; null for a deletion.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "mode": {
+                          "description": "Git file mode. 120000 is a symlink and is refused.",
+                          "enum": [
+                            "100644",
+                            "100755",
+                            "120000",
+                            "160000",
+                            null
+                          ],
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "path": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "rationale": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "baseManifestDigest",
+                  "baseSourceDigest",
+                  "changes",
+                  "rationale"
+                ],
                 "title": "Payload",
                 "type": "object"
               }
@@ -3341,13 +3407,31 @@
               "title": "Patch Id",
               "type": "string"
             }
+          },
+          {
+            "description": "The revision the decision was made against, as returned in ETag. Required: a decision about a patch that moved in the meantime is a decision about something the caller never read. Omitting it is 428, not 422.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
+                "additionalProperties": false,
+                "properties": {
+                  "expiresInSeconds": {
+                    "description": "Defaults to one hour. There is no way to express an approval that never expires.",
+                    "maximum": 86400,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [],
                 "title": "Payload",
                 "type": "object"
               }
@@ -3483,13 +3567,31 @@
               "title": "Patch Id",
               "type": "string"
             }
+          },
+          {
+            "description": "The revision the decision was made against, as returned in ETag. Required: a decision about a patch that moved in the meantime is a decision about something the caller never read. Omitting it is 428, not 422.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
                 "title": "Payload",
                 "type": "object"
               }
@@ -3758,7 +3860,20 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
+                "additionalProperties": false,
+                "properties": {
+                  "baselineIdentity": {
+                    "description": "Accepted and recorded, but not used by any gate. Identities are read from each run's sealed manifest; a caller cannot supply the evidence its own verification is judged on.",
+                    "type": "object"
+                  },
+                  "baselineRunId": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "baselineRunId"
+                ],
                 "title": "Payload",
                 "type": "object"
               }
@@ -5073,7 +5188,20 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
+                "additionalProperties": false,
+                "properties": {
+                  "paths": {
+                    "description": "Path prefixes a repair may touch. No way to express 'anywhere': a project with no surface accepts no proposals.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "paths"
+                ],
                 "title": "Payload",
                 "type": "object"
               }
