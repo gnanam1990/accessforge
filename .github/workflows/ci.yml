@@ -444,6 +444,20 @@ jobs:
           uv sync --frozen
           pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Known vulnerabilities in the locked Python dependency set
+        # Audits `uv.lock` rendered with `--frozen`, not the installed environment: a lock pinning a
+        # vulnerable version would otherwise pass on a runner that happened to resolve something
+        # else, and the gate would be green about the wrong artifact.
+        #
+        # Nothing is installed and no package code runs -- `--no-deps` and `--disable-pip` inside the
+        # script -- which is the Python equivalent of `--ignore-scripts` below. Resolving a
+        # dependency can mean executing a third party's `setup.py` inside this job.
+        #
+        # No `continue-on-error` and no `|| true`. Every advisory at every severity fails this step,
+        # and there is no ignore list to add one to; a guard below asserts all of that against this
+        # file so the gate cannot be softened without the assertion failing.
+        run: uv run python scripts/audit_python_dependencies.py
+
       - name: Known vulnerabilities in the JavaScript dependency tree
         # Reported at high and above and allowed to fail the job. An advisory that is genuinely not
         # applicable is dismissed with a recorded reason in pnpm's own overrides, not by lowering
@@ -506,11 +520,65 @@ jobs:
               if "pull_request_target" in triggers:
                   failures.append(f"{path}: triggers on pull_request_target")
 
+          # 3. The Python dependency audit is present, fail-closed, and reads the lock. Each of
+          #    these is a way the gate could go green while auditing nothing: the step deleted, its
+          #    failure swallowed, the scanner unpinned, or the input switched from the lock to
+          #    whatever is installed.
+          document = yaml.safe_load(ci.read_text())
+          steps = document["jobs"]["security"]["steps"]
+          # This step is itself a step in this job, and its own source mentions the script and every
+          # pattern it looks for -- so a naive scan matches the guard and fails on itself. That is
+          # not hypothetical: it happened on the first run of this check. Candidates exclude any
+          # step that parses YAML, which is this one and only this one.
+          audit = [
+              step
+              for step in steps
+              if "audit_python_dependencies.py" in str(step.get("run", ""))
+              and "safe_load" not in str(step.get("run", ""))
+          ]
+          if len(audit) != 1:
+              failures.append(
+                  f"expected exactly one Python dependency audit step, found {len(audit)}"
+              )
+          for step in audit:
+              if step.get("continue-on-error"):
+                  failures.append("the Python dependency audit is continue-on-error, so it cannot fail the build")
+              run = str(step.get("run", ""))
+              for swallow in ("|| true", "|| :", "; true", "set +e"):
+                  if swallow in run:
+                      failures.append(f"the Python dependency audit swallows its exit status with `{swallow}`")
+
+          script = pathlib.Path("scripts/audit_python_dependencies.py").read_text()
+          for required, why in (
+              ('"--frozen"', "the export could re-resolve, so the audited set would not be the locked set"),
+              ('"--no-deps"', "pip-audit could resolve dependencies, which executes third-party setup code"),
+              ('"--disable-pip"', "pip could be invoked, which executes third-party setup code"),
+              ('"--strict"', "pip-audit could skip a package it failed to read and still exit zero"),
+          ):
+              if required not in script:
+                  failures.append(f"the audit script no longer passes {required}: {why}")
+          # Executable code only, via the script's own detector. A substring search over the file
+          # matched the prose that names these flags in order to forbid them -- so documenting the
+          # guarantee would have turned the security job red, and the obvious fix would have looked
+          # like deleting the check. Docstrings are stripped and comments never survive `ast.unparse`.
+          sys.path.insert(0, "scripts")
+          from audit_python_dependencies import suppression_in_code
+
+          for forbidden in suppression_in_code(script):
+              failures.append(f"the audit script suppresses findings with {forbidden}")
+
+          lock = pathlib.Path("uv.lock").read_text()
+          if 'name = "pip-audit"' not in lock:
+              failures.append("pip-audit is not in uv.lock, so the scanner itself is unpinned")
+
           for failure in failures:
               print(f"::error::{failure}")
           if failures:
               sys.exit(1)
-          print("no repository secret is referenced; no workflow uses pull_request_target")
+          print(
+              "no repository secret is referenced; no workflow uses pull_request_target; "
+              "the Python dependency audit is present, pinned, fail-closed and reads the lock"
+          )
           PY
 
   platform-only:
