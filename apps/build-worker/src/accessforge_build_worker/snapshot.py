@@ -192,6 +192,7 @@ class PreparedCandidate:
     base_archive_digest: str
     patch_digest: str
     source: SourceSnapshot
+    changed_paths: tuple[str, ...]
     # No boolean named success, build status, verification status or trusted regression result.
 
 
@@ -254,4 +255,11 @@ def prepare_candidate(
         mode = int(change.mode[-3:], 8) if change.mode else (old.mode if old else 0o644)
         entries[change.path] = SourceFile(change.path, content, mode)
     candidate = SourceSnapshot(tuple(entries.values()))
-    return PreparedCandidate(base.tree_digest, base.archive_digest, patch.patch_digest, candidate)
+    before = {file.path: file for file in base.files}
+    after = {file.path: file for file in candidate.files}
+    changed_paths = tuple(
+        sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+    )
+    return PreparedCandidate(
+        base.tree_digest, base.archive_digest, patch.patch_digest, candidate, changed_paths
+    )

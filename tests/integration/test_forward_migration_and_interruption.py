@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0030_candidate_endpoint.sql"
+NEWEST = "0031_candidate_materialization.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -147,7 +147,11 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         assert conn.execute(
             "SELECT to_regclass('candidate_regression_attempt') AS name"
         ).fetchone() == {"name": None}
-    assert migrate(disposable) == ["0029_candidate_regressions.sql", NEWEST]
+    assert migrate(disposable) == [
+        "0029_candidate_regressions.sql",
+        "0030_candidate_endpoint.sql",
+        NEWEST,
+    ]
     with connect(disposable) as conn:
         for table in ("candidate_regression_attempt", "candidate_regression_process"):
             assert conn.execute(
@@ -159,8 +163,27 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         assert conn.execute("SELECT * FROM candidate_regression_attempt").fetchall() == []
 
 
-def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
+def test_materialization_upgrade_does_not_fabricate_historical_source(disposable: str) -> None:
     _apply_through(disposable, _previous())
+    historical = _seed_legacy_candidate(disposable, "BUILT")
+    with connect(disposable) as conn:
+        assert conn.execute(
+            "SELECT to_regclass('candidate_materialization') AS name"
+        ).fetchone() == {"name": None}
+    assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        assert conn.execute("SELECT * FROM candidate_materialization").fetchall() == []
+        assert conn.execute(
+            "SELECT state FROM candidate_build_attempt WHERE id=%s", (historical,)
+        ).fetchone() == {"state": "BUILT"}
+        assert conn.execute(
+            "SELECT relrowsecurity,relforcerowsecurity FROM pg_class "
+            "WHERE relname='candidate_materialization'"
+        ).fetchone() == {"relrowsecurity": True, "relforcerowsecurity": True}
+
+
+def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
+    _apply_through(disposable, "0029_candidate_regressions.sql")
     historical = _seed_legacy_candidate(disposable, "BUILT")
     attempt = str(uuid.uuid4())
     with connect(disposable) as conn:
@@ -176,7 +199,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
         assert conn.execute("SELECT to_regclass('candidate_endpoint') AS name").fetchone() == {
             "name": None
         }
-    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == ["0030_candidate_endpoint.sql", NEWEST]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM candidate_endpoint").fetchall() == []
         assert conn.execute(
@@ -200,6 +223,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
     assert migrate(disposable) == [
         "0028_candidate_archive_location.sql",
         "0029_candidate_regressions.sql",
+        "0030_candidate_endpoint.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -242,6 +266,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0027_candidate_archive_retirement.sql",
         "0028_candidate_archive_location.sql",
         "0029_candidate_regressions.sql",
+        "0030_candidate_endpoint.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -301,6 +326,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0027_candidate_archive_retirement.sql",
         "0028_candidate_archive_location.sql",
         "0029_candidate_regressions.sql",
+        "0030_candidate_endpoint.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -344,6 +370,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0027_candidate_archive_retirement.sql",
         "0028_candidate_archive_location.sql",
         "0029_candidate_regressions.sql",
+        "0030_candidate_endpoint.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:

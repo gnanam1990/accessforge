@@ -29,7 +29,12 @@ from accessforge_build_worker.candidate_gateway import (
     CandidateEndpointBinding,
     CandidateGateway,
 )
-from accessforge_build_worker.coordinator import ClaimedCandidate, execute_claim, prepare_and_claim
+from accessforge_build_worker.coordinator import (
+    ClaimedCandidate,
+    execute_claim,
+    prepare_and_claim,
+    publish_retained_materialization,
+)
 from accessforge_build_worker.process import CommandResult, CommandStopped
 from accessforge_build_worker.reference_regressions import ReferenceRegressions
 from accessforge_build_worker.regression_coordinator import execute_regressions
@@ -65,6 +70,7 @@ from accessforge_persistence import (
     candidate_builds as builds,
 )
 from accessforge_persistence import candidate_endpoints as endpoints
+from accessforge_persistence import candidate_materializations as materializations
 from accessforge_persistence import candidate_regressions as regressions
 from accessforge_persistence.source_intake import SourceIdentity
 
@@ -920,6 +926,131 @@ class IsolatedArchiveStore:
 
 
 @pytest.mark.sandbox
+def test_candidate_source_capture_failure_rolls_back_claim_and_patch_transition(
+    binding: BoundFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture_source = materializations.capture_source
+
+    def fail_after_capture(*args: Any, **kwargs: Any) -> None:
+        capture_source(*args, **kwargs)
+        raise RuntimeError("injected source capture commit failure")
+
+    monkeypatch.setattr(materializations, "capture_source", fail_after_capture)
+    with pytest.raises(RuntimeError, match="capture commit failure"):
+        _prepare_owned_build(binding)
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        for table in ("candidate_materialization", "candidate_build_attempt", "patch_verification"):
+            assert conn.execute(
+                psycopg.sql.SQL("SELECT count(*) AS n FROM {}").format(
+                    psycopg.sql.Identifier(table)
+                )
+            ).fetchone() == {"n": 0}
+        assert conn.execute("SELECT status FROM patch_proposal").fetchall() == [
+            {"status": "APPROVED"}
+        ]
+        assert conn.execute("SELECT count(*) AS n FROM source_snapshot").fetchone() == {"n": 1}
+
+
+@pytest.mark.sandbox
+def test_candidate_materialization_uses_actual_patched_source_and_retained_output(
+    binding: BoundFixture,
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+) -> None:
+    claimed, sandbox, command = _prepare_owned_build(binding)
+    arguments = {"workspace_id": binding.workspace, "build_id": claimed.claim.build_id}
+    store = isolated_archives[0].store
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        capture = conn.execute(
+            "SELECT * FROM candidate_materialization WHERE build_id=%s",
+            (claimed.claim.build_id,),
+        ).fetchone()
+        assert capture is not None and capture["build_artifact_id"] is None
+        assert capture["source_tree_digest"] == claimed.candidate.source.tree_digest
+        assert tuple(capture["changed_paths"]) == claimed.candidate.changed_paths
+        assert str(capture["source_snapshot_id"]) != claimed.inputs.source_snapshot_id
+    with pytest.raises(builds.BuildClaimRefused):
+        publish_retained_materialization(binding.database, **arguments, store=store)
+    built = execute_claim(
+        binding.database,
+        workspace_id=binding.workspace,
+        claimed=claimed,
+        sandbox=sandbox,
+        command=command,
+        store=store,
+    )
+    source_id, artifact_id = publish_retained_materialization(
+        binding.database, **arguments, store=store
+    )
+    assert publish_retained_materialization(binding.database, **arguments, store=store) == (
+        source_id,
+        artifact_id,
+    )
+    with workspace_connection(binding.database, str(uuid.uuid4())) as conn:
+        assert conn.execute("SELECT * FROM candidate_materialization").fetchall() == []
+    with pytest.raises(builds.BuildClaimRefused):
+        publish_retained_materialization(
+            binding.database,
+            **{**arguments, "workspace_id": str(uuid.uuid4())},
+            store=store,
+        )
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        source = conn.execute("SELECT * FROM source_snapshot WHERE id=%s", (source_id,)).fetchone()
+        assert source is not None
+        assert source["commit_sha"] == claimed.inputs.source_commit
+        assert source["tree_digest"] == claimed.candidate.source.tree_digest
+        assert source["dirty"] is True
+        assert source["dirty_path_count"] == len(claimed.candidate.changed_paths)
+        assert source["requested_revision"] == "approved-patch:" + claimed.inputs.patch_digest
+        assert conn.execute(
+            "SELECT artifact_digest,source_snapshot_id,identity_observable FROM build_artifact "
+            "WHERE id=%s",
+            (artifact_id,),
+        ).fetchone() == {
+            "artifact_digest": built.artifact.archive_digest,
+            "source_snapshot_id": uuid.UUID(source_id),
+            "identity_observable": True,
+        }
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_materialization SET source_tree_digest=repeat('0',64) "
+                "WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            )
+    # Readers recheck source/artifact records even though the materialization itself is immutable.
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        for sql, identifier in (
+            ("UPDATE source_snapshot SET tree_digest=repeat('0',64) WHERE id=%s", source_id),
+            (
+                "UPDATE source_snapshot SET dirty_path_count=dirty_path_count+1 WHERE id=%s",
+                source_id,
+            ),
+            ("UPDATE source_snapshot SET requested_revision='HEAD' WHERE id=%s", source_id),
+            ("UPDATE build_artifact SET artifact_digest=repeat('0',64) WHERE id=%s", artifact_id),
+            ("UPDATE build_artifact SET identity_observable=false WHERE id=%s", artifact_id),
+            ("DELETE FROM candidate_materialization WHERE build_id=%s", claimed.claim.build_id),
+        ):
+            with conn.transaction(force_rollback=True):
+                conn.execute(sql, (identifier,))
+                with pytest.raises(builds.BuildClaimRefused):
+                    materializations.publish(
+                        conn,
+                        **arguments,
+                        observed_artifact_digest=built.artifact.archive_digest,
+                    )
+        with conn.transaction(force_rollback=True):
+            conn.execute(
+                "UPDATE approval SET revoked_at=clock_timestamp() WHERE id="
+                "(SELECT approval_id FROM candidate_build_attempt WHERE id=%s)",
+                (claimed.claim.build_id,),
+            )
+            with pytest.raises((builds.BuildClaimRefused, AuthorityError)):
+                materializations.publish(
+                    conn, **arguments, observed_artifact_digest=built.artifact.archive_digest
+                )
+
+
+@pytest.mark.sandbox
 @pytest.mark.parametrize(
     "invalid", ["artifact", "image", "daemon", "workspace", "revision", "revoked"]
 )
@@ -1378,6 +1509,12 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
             (claimed.claim.build_id,),
         ).fetchone()
         assert archive_row is not None and process_row is not None
+        materialization_row = conn.execute(
+            "SELECT * FROM candidate_materialization WHERE build_id=%s",
+            (claimed.claim.build_id,),
+        ).fetchone()
+        assert materialization_row is not None
+        assert (materialization_row["build_artifact_id"] is not None) is retained
         if archive_state == "retained":
             # Durable dispatch intent over actual retained bytes; no regression execution is
             # fabricated. A restored intent cannot establish what ran on the original daemon.
@@ -1474,6 +1611,13 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
         binding.database, urlsplit(candidate_restore_target).path.lstrip("/")
     )
     with workspace_connection(restored_app_url, binding.workspace) as conn:
+        assert (
+            conn.execute(
+                "SELECT * FROM candidate_materialization WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone()
+            == materialization_row
+        )
         if archive_state == "retained":
             assert conn.execute(
                 "SELECT state,epoch,failure_code FROM candidate_regression_attempt "
