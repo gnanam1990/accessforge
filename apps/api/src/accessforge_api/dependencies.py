@@ -24,6 +24,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
@@ -33,7 +34,7 @@ from accessforge_domain.authorization import AuthorizationError
 from accessforge_domain.authorization.principals import HumanPrincipal
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.canonical import digest
-from accessforge_persistence import idempotency, workspace_connection
+from accessforge_persistence import idempotency, rate_limits, workspace_connection
 
 from .auth import (
     CSRF_HEADER,
@@ -96,6 +97,120 @@ def _parse_if_match(request: Request) -> int | None:
     return int(candidate)
 
 
+class _Denied(Exception):
+    """Carries a refusal out of the limiter's transaction so that it rolls back.
+
+    Internal. Leaving the `with` block by exception is what discards the decrements a refused
+    request
+    made, which is the behaviour the two buckets need: see `enforce_write_rate_limit`.
+    """
+
+    def __init__(self, decision: rate_limits.Decision) -> None:
+        super().__init__(decision.meaning)
+        self.decision = decision
+
+
+def enforce_write_rate_limit(
+    request: Request,
+    *,
+    principal_id: str,
+    workspace_id: str,
+    request_id: str,
+    now: datetime | None = None,
+) -> None:
+    """Refuse a mutating request that is arriving faster than the configured rate.
+
+    **On its own connection, committed before the route can fail.** This is the correction: the
+    decrements used to run on the request's connection, which `workspace_scope` holds inside a
+    single
+    transaction for the whole request. Any later refusal -- a permission denial, a stale revision, a
+    domain error -- rolled the transaction back, and the tokens came back with it. So precisely the
+    requests worth limiting were the ones that were never charged: a caller without permission could
+    probe every write route for ever, and a caller whose writes kept failing could retry for ever,
+    at
+    any rate, while the limiter reported itself working.
+
+    A second connection per mutating request is the cost of that durability, and it is the point
+    rather than an oversight: a decision that is only durable when the request succeeds is not a
+    limit.
+
+    **Both buckets inside one transaction, so they move together.** A refused request consumes
+    nothing: if the workspace bucket denies after the principal bucket was decremented, the
+    exception
+    leaves the block, the transaction rolls back, and neither token is spent. Otherwise being
+    refused
+    by one bucket would quietly drain the other, and a caller over their workspace limit would lose
+    their personal allowance to refusals they never got any work from.
+
+    **Identity comes from the resolved session and the path, never from the request.** The principal
+    is the one `resolve_human_principal` returned from the session cookie and a live membership; the
+    workspace is the one in the path that membership was checked against. Nothing here reads a
+    header
+    or a body field, because a limiter keyed on something the caller chooses is a limiter the caller
+    turns off by changing it.
+
+    **Principal first, then workspace, always in that order.** Two requests from one principal in
+    different workspaces both take the principal row first and then their own workspace row, so
+    there
+    is no cycle and no deadlock. The order is load-bearing, not cosmetic.
+    """
+    if request.method not in MUTATING_METHODS:
+        return
+    moment = now or datetime.now(UTC)
+    config = getattr(request.app.state, "config", None)
+    per_principal = int(getattr(config, "rate_limit_principal_per_minute", 120))
+    per_workspace = int(getattr(config, "rate_limit_workspace_per_minute", 600))
+    burst = float(getattr(config, "rate_limit_burst_multiplier", 1.0))
+    database_url = str(getattr(config, "database_url", ""))
+    if not database_url:
+        raise ProblemDetail(
+            ProblemCode.DEPENDENCY_UNAVAILABLE,
+            "the write rate limit cannot be evaluated because this process has no configured "
+            "database. Refusing rather than admitting an unlimited write: a limiter that fails "
+            "open is not a limiter.",
+            request_id=request_id,
+        )
+
+    try:
+        with workspace_connection(database_url, workspace_id) as limiter:
+            for scope_kind, scope_id, per_minute in (
+                ("PRINCIPAL", principal_id, per_principal),
+                ("WORKSPACE", workspace_id, per_workspace),
+            ):
+                decision = rate_limits.consume(
+                    limiter,
+                    scope_kind=scope_kind,
+                    scope_id=scope_id,
+                    capacity=max(1, int(per_minute * burst)),
+                    refill_per_second=per_minute / 60.0,
+                    now=moment,
+                )
+                if not decision.allowed:
+                    raise _Denied(decision)
+    except _Denied as denied:
+        decision = denied.decision
+        raise ProblemDetail(
+            ProblemCode.RATE_LIMITED,
+            f"too many writes: {decision.meaning} Retry-After says when, and it is a whole "
+            "number of seconds. This is not a quota -- nothing was consumed and no entitlement "
+            "was spent, so the same request succeeds once the rate allows it.",
+            extra={
+                "scope": decision.scope_kind,
+                # The sustained rate, and the burst, as two different numbers. They are the same
+                # only when the burst multiplier is one, and reporting the capacity as the
+                # per-minute limit told a caller on a 120/minute policy with a burst of two that
+                # their limit was 240 -- a rate they cannot sustain and a number nobody set.
+                "limitPerMinute": decision.limit_per_minute,
+                "burstCapacity": decision.burst_capacity,
+                # In the body as well as the header. The header is what intermediaries and SDK
+                # retry policies read; the body is what a person reading a log sees.
+                "retryAfterSeconds": decision.retry_after_seconds,
+            },
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+            request_id=request_id,
+        ) from denied
+
+
 def build_context(
     conn: psycopg.Connection[dict[str, Any]],
     request: Request,
@@ -152,6 +267,14 @@ def build_context(
         problem = not_found()
         problem.request_id = request_id
         raise problem from None
+
+    # After membership, before permission. See `enforce_write_rate_limit` for why that order.
+    enforce_write_rate_limit(
+        request,
+        principal_id=principal.user_id,
+        workspace_id=workspace_id,
+        request_id=request_id,
+    )
 
     try:
         require_permission(principal, permission)

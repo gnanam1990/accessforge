@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0021_patches_and_verification.sql"
+NEWEST = "0022_rate_limit_buckets.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -142,53 +142,92 @@ def test_data_written_under_the_previous_rules_survives_the_migration(disposable
 def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     disposable: str,
 ) -> None:
-    """The newest migration's actual effect, in both directions.
-
-    Asserting only that the new thing works afterwards would pass against a database where the
-    guard had been dropped entirely, or the table had always been there -- and "the guard is gone"
-    is a much worse outcome than "the feature is missing".
-    """
+    """The newest migration's actual effect, in both directions."""
     _apply_through(disposable, _previous())
     with connect(disposable) as conn:
         before = conn.execute(
             "SELECT 1 FROM information_schema.tables "
-            " WHERE table_schema = 'public' AND table_name = 'patch_verification'"
+            " WHERE table_schema = 'public' AND table_name = 'rate_limit_bucket'"
         ).fetchone()
-    assert before is None, "the verification table already existed, so this proves nothing"
+    assert before is None, "the bucket table already existed, so this proves nothing"
 
     migrate(disposable)
 
     with connect(disposable) as conn:
         after = conn.execute(
             "SELECT 1 FROM information_schema.tables "
-            " WHERE table_schema = 'public' AND table_name = 'patch_verification'"
+            " WHERE table_schema = 'public' AND table_name = 'rate_limit_bucket'"
         ).fetchone()
-        # The three constraints that make a conclusion auditable. Without them a verification could
-        # hold a verdict with no candidate, no reasons, or a state saying it was never concluded.
-        guards = {
-            str(row["conname"])
+        checks = {
+            str(row["conname"]): str(row["definition"])
             for row in conn.execute(
-                "SELECT conname FROM pg_constraint "
+                "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+                " WHERE conrelid = 'rate_limit_bucket'::regclass AND contype = 'c'"
+            ).fetchall()
+        }
+        policy = conn.execute(
+            "SELECT qual, with_check FROM pg_policies "
+            " WHERE tablename = 'rate_limit_bucket' AND policyname = 'workspace_isolation'"
+        ).fetchone()
+        forced = conn.execute(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+            " WHERE relname = 'rate_limit_bucket'"
+        ).fetchone()
+        # Fractional tokens. Integer tokens would round every partial refill down to nothing, so a
+        # caller arriving steadily just under the refill interval would be refused for ever.
+        token_type = conn.execute(
+            "SELECT data_type FROM information_schema.columns "
+            " WHERE table_name = 'rate_limit_bucket' AND column_name = 'tokens'"
+        ).fetchone()
+
+    assert after is not None
+    # The pairing of scope and workspace is exact, so a workspace bucket cannot be written as a
+    # global one -- which is what would let a tenant's allowance escape its own row.
+    assert "workspace_scope_is_exact" in checks, (
+        "a WORKSPACE bucket could be stored with no workspace, escaping tenant scoping"
+    )
+    assert "PRINCIPAL" in checks["workspace_scope_is_exact"]
+    # Matched on the operator rather than the whole rendering: PostgreSQL prints the literal as
+    # `(0)::double precision`, and an assertion on the exact text would fail for the wrong reason.
+    assert any("tokens >= " in definition for definition in checks.values()), (
+        "tokens could go negative, which is a bucket that can never be refilled to a usable state"
+    )
+    assert token_type is not None and token_type["data_type"] == "double precision"
+    assert forced is not None
+    # FORCE, not merely ENABLE: the application role owns this table and ENABLE does nothing for an
+    # owner.
+    assert bool(forced["relrowsecurity"]) and bool(forced["relforcerowsecurity"])
+    # The deliberate exception, asserted so it cannot widen by accident: global principal rows are
+    # admitted, and nothing else is.
+    assert policy is not None
+    for clause in (str(policy["qual"]), str(policy["with_check"])):
+        assert "current_workspace_id()" in clause, (
+            "the policy no longer scopes workspace buckets to their tenant"
+        )
+        assert "workspace_id IS NULL" in clause, (
+            "global principal buckets are no longer admitted, so a principal's allowance would "
+            "become per-workspace and multiply with every invitation"
+        )
+
+
+def test_the_patch_tables_from_an_earlier_migration_are_still_correct(
+    disposable: str,
+) -> None:
+    """Migration 0021's effect, kept as its own case now that it is no longer the newest.
+
+    Every assertion the tip test made when 0021 *was* the newest, not a weaker set. Weakening moved
+    coverage to a name check is how a guard quietly stops being checked: the test keeps passing
+    while the thing it named turns into something else.
+    """
+    migrate(disposable)
+    with connect(disposable) as conn:
+        verification_guards = {
+            str(row["conname"]): str(row["definition"])
+            for row in conn.execute(
+                "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
                 " WHERE conrelid = 'patch_verification'::regclass AND contype = 'c'"
             ).fetchall()
         }
-        forced = conn.execute(
-            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
-            " WHERE relname IN ('patch_proposal', 'patch_change', 'patch_verification', "
-            "                   'patch_proposal_transition', 'project_repair_surface')"
-        ).fetchall()
-        # The repair surface cannot be configured as empty. An empty surface is indistinguishable
-        # from no surface, and one of those two has to refuse every proposal -- so the database
-        # refuses the ambiguity rather than leaving it to whichever caller reads it.
-        surface_guard = conn.execute(
-            "SELECT 1 FROM pg_constraint "
-            " WHERE conrelid = 'project_repair_surface'::regclass AND contype = 'c' "
-            "   AND pg_get_constraintdef(oid) LIKE '%cardinality(paths)%'"
-        ).fetchone()
-        # The diff's own guards. Without `content_matches_operation` a DELETE could carry content
-        # and a MODIFY could carry none -- so "this file is removed" and "nobody recorded what this
-        # change was" would be the same row, and either would reach a candidate workspace as
-        # something nobody proposed.
         change_guards = {
             str(row["conname"]): str(row["definition"])
             for row in conn.execute(
@@ -196,41 +235,51 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
                 " WHERE conrelid = 'patch_change'::regclass AND contype IN ('c', 'u')"
             ).fetchall()
         }
-        # The finding reference is RESTRICT: a patch proposal outliving the finding it repairs would
-        # be a change to somebody's application that nothing explains.
+        surface_guard = conn.execute(
+            "SELECT 1 FROM pg_constraint "
+            " WHERE conrelid = 'project_repair_surface'::regclass AND contype = 'c' "
+            "   AND pg_get_constraintdef(oid) LIKE '%cardinality(paths)%'"
+        ).fetchone()
+        forced = conn.execute(
+            "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class "
+            " WHERE relname IN ('patch_proposal', 'patch_change', 'patch_verification', "
+            "                   'patch_proposal_transition', 'project_repair_surface')"
+        ).fetchall()
         finding_ref = conn.execute(
             "SELECT confdeltype FROM pg_constraint "
             " WHERE conrelid = 'patch_proposal'::regclass AND contype = 'f' "
             "   AND confrelid = 'finding'::regclass"
         ).fetchone()
 
-    assert after is not None
-    assert "verified_requires_a_candidate" in guards, (
-        "a verification could be VERIFIED with no candidate run"
-    )
-    assert "conclusion_is_explained" in guards, "a conclusion could carry no reasons"
-    assert "conclusion_is_complete" in guards, (
-        "a verification could hold a verdict while claiming it was never concluded"
-    )
-    assert "content_matches_operation" in change_guards, (
-        "a deletion could carry content, or a modification could carry none"
-    )
-    assert "DELETE" in change_guards["content_matches_operation"], (
-        "the constraint exists but no longer distinguishes a deletion from a lost record"
-    )
-    # One row per path and one per ordinal: a repeated path makes the reloaded patch ambiguous and
-    # its digest unreproducible, which is the digest an approval bound to.
-    uniques = {
-        definition for name, definition in change_guards.items() if definition.startswith("UNIQUE")
-    }
-    assert any("patch_id, path" in u for u in uniques), uniques
-    assert any("patch_id, ordinal" in u for u in uniques), uniques
+    # A verification could otherwise be VERIFIED with no candidate, carry no reasons, or hold a
+    # verdict while claiming it was never concluded.
+    assert "verified_requires_a_candidate" in verification_guards
+    assert "conclusion_is_explained" in verification_guards
+    assert "conclusion_is_complete" in verification_guards
+
+    # Not just the name: the constraint has to still distinguish a deletion from a lost record.
+    assert "content_matches_operation" in change_guards
+    assert "DELETE" in change_guards["content_matches_operation"]
+
+    # Both uniqueness constraints. A repeated path makes a reloaded patch ambiguous and its digest
+    # unreproducible -- and that digest is what an approval binds to. A repeated ordinal loses the
+    # order a reviewer reads the diff in.
+    uniques = [d for d in change_guards.values() if d.startswith("UNIQUE")]
+    assert any("patch_id, path" in d for d in uniques), uniques
+    assert any("patch_id, ordinal" in d for d in uniques), uniques
+
+    # A configured surface of nothing cannot be told from no surface at all, and one of those two
+    # has to refuse every proposal -- so the database refuses the ambiguity.
     assert surface_guard is not None, "a project could record a repair surface of no paths"
-    assert len(forced) == 5
+
+    # All five, FORCE and not merely ENABLE: the application role owns these tables and ENABLE does
+    # nothing for an owner. A proposal names source paths in a customer's repository.
+    assert len(forced) == 5, sorted(str(row["relname"]) for row in forced)
     for row in forced:
-        # FORCE, not merely ENABLE: the application role owns these tables, and ENABLE does nothing
-        # for an owner. A proposal names source paths in a customer repository.
-        assert bool(row["relrowsecurity"]) and bool(row["relforcerowsecurity"])
+        assert bool(row["relrowsecurity"]) and bool(row["relforcerowsecurity"]), row["relname"]
+
+    # 'r' is RESTRICT. A patch proposal outliving the finding it repairs would be a change to
+    # somebody's application that nothing explains.
     assert finding_ref is not None and finding_ref["confdeltype"] == "r"
 
 

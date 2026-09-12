@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from .config import ApiSettings
+from .dependencies import MUTATING_METHODS
 from .health import (
     check_database,
     check_evidence_store,
@@ -77,6 +78,12 @@ _UNAUTHENTICATED = frozenset({"/health/live", "/health/ready", "/diagnostics", "
 #: application that exists, and a documented error shape nobody can receive is worse than none --
 #: a client library generated from it would branch on a field that never arrives.
 _FASTAPI_DEFAULT_VALIDATION = "422"
+
+
+#: Every route under here resolves a workspace and a principal through `build_context`, which is
+#: where the write-rate limit is enforced. The two session routes sit outside it on purpose: sign-in
+#: has no principal yet, and sign-out has no workspace, so neither has a key a limit could trust.
+_RATE_LIMITED_PREFIX = "/v1/workspaces/"
 
 
 def _describe_contract(app: FastAPI) -> dict[str, Any]:
@@ -150,14 +157,51 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
         },
     }
 
+    # The 429 a write can receive carries Retry-After, and a client needs that before it writes its
+    # own retry policy. FastAPI cannot know: the header is attached by the problem handler, not
+    # declared on a route.
+    rate_limited_response = {
+        "description": (
+            "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED "
+            "means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED "
+            "means an entitlement is spent and will not return without a new one. Retrying a "
+            "QUOTA_EXHAUSTED on a timer never succeeds."
+        ),
+        "headers": {
+            "Retry-After": {
+                "description": (
+                    "Whole seconds after which the same request is admitted, present on "
+                    "RATE_LIMITED. Never zero: advising an immediate retry invites the loop the "
+                    "limit exists to stop. The same number appears in the body as "
+                    "`retryAfterSeconds`."
+                ),
+                "required": False,
+                "schema": {"type": "integer", "minimum": 1},
+            }
+        },
+        "content": problem_response["content"],
+    }
+
     for path, operations in schema.get("paths", {}).items():
-        for operation in operations.values():
+        for method, operation in operations.items():
             if not isinstance(operation, dict):
                 continue
             responses = operation.setdefault("responses", {})
             responses.pop(_FASTAPI_DEFAULT_VALIDATION, None)
             for status_code in ("400", "401", "403", "404", "409", "428", "429", "503"):
                 responses.setdefault(status_code, dict(problem_response))
+            # Only the operations the limiter actually reaches. Enforcement lives in
+            # `build_context`, which a route reaches through `authorize`, and the two session routes
+            # have neither a workspace nor (for sign-in) a principal to key a bucket on -- so they
+            # are not limited.
+            #
+            # Attaching this to every mutating operation promised RATE_LIMITED and a Retry-After on
+            # POST /v1/sessions and DELETE /v1/session, which can never send either. A contract that
+            # documents a refusal the server cannot produce is worse than one that omits it: a
+            # client writes a retry path for a response that never arrives, and the omission is
+            # invisible until something depends on it.
+            if method.upper() in MUTATING_METHODS and path.startswith(_RATE_LIMITED_PREFIX):
+                responses["429"] = dict(rate_limited_response)
             operation["security"] = (
                 []
                 if path in _UNAUTHENTICATED
