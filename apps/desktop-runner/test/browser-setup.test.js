@@ -221,3 +221,16 @@ test('native setup refuses an oversized candidate response before parsing or lau
     launch: async () => { throw new Error('must not launch'); },
   }), /exceeds 16 KiB/);
 });
+
+test('native setup aborts a stalled response body before browser launch', { timeout: 15_000 }, async (t) => {
+  const origin = await serve(t, (request, response) => {
+    if (request.url.endsWith('/reset')) { response.writeHead(204).end(); return; }
+    response.writeHead(201, { 'content-type': 'application/json' });
+    response.write('{"nonce":');
+    // Deliberately never finish the body. Headers alone must not end the setup deadline.
+  });
+  await assert.rejects(() => prepareReferenceApp({
+    ...options, permittedOrigin: origin,
+    launch: async () => { throw new Error('must not launch'); },
+  }), (error) => error.name === 'TimeoutError' || error.name === 'AbortError');
+});
