@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 
 from accessforge_build_worker.process import CommandStopped
-from accessforge_build_worker.sandbox import DockerSandbox, SandboxPolicy, SandboxRefused
+from accessforge_build_worker.sandbox import (
+    DockerSandbox,
+    SandboxPolicy,
+    SandboxRefused,
+    discover_daemon,
+)
 from accessforge_build_worker.snapshot import SnapshotRefused, SourceFile, SourceSnapshot
 
 pytestmark = pytest.mark.sandbox
@@ -21,11 +26,53 @@ def sandbox() -> DockerSandbox:
     image = os.environ.get("ACCESSFORGE_SANDBOX_IMAGE")
     if not image:
         pytest.skip("real sandbox proof unavailable: ACCESSFORGE_SANDBOX_IMAGE not provisioned")
-    return DockerSandbox(SandboxPolicy(image=image, wall_seconds=30, log_bytes=8192))
+    endpoint = os.environ.get("ACCESSFORGE_SANDBOX_ENDPOINT")
+    if not endpoint:
+        pytest.fail("sandbox image provisioned without an explicit Docker endpoint")
+    return DockerSandbox(
+        SandboxPolicy(image=image, wall_seconds=30, log_bytes=8192),
+        daemon=discover_daemon(endpoint),
+    )
 
 
 def _source(program: str) -> SourceSnapshot:
     return SourceSnapshot((SourceFile("build.js", program.encode()),))
+
+
+def test_ambient_context_and_proxy_credentials_cannot_redirect_or_enter_build(
+    sandbox: DockerSandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "currentContext": "nonexistent-context",
+                "proxies": {"default": {"httpProxy": "http://synthetic-secret@example.test:1"}},
+                "HttpHeaders": {"Authorization": "synthetic-header-canary"},
+            }
+        )
+    )
+    for key, value in {
+        "DOCKER_CONTEXT": "nonexistent-context",
+        "DOCKER_HOST": "tcp://127.0.0.1:1",
+        "DOCKER_CONFIG": str(tmp_path),
+        "DOCKER_TLS_VERIFY": "1",
+        "HTTP_PROXY": "http://synthetic-secret@example.test:1",
+    }.items():
+        monkeypatch.setenv(key, value)
+    result = sandbox.build(
+        _source("""
+const fs = require('fs'), assert = require('assert/strict');
+for (const value of Object.values(process.env)) assert.ok(!value.includes('synthetic-secret'));
+assert.equal(process.env.HTTP_PROXY, undefined);
+assert.equal(process.env.http_proxy, undefined);
+fs.writeFileSync('/work/out/binding.txt', 'explicit endpoint and empty config');
+"""),
+        command=("/usr/local/bin/node", "build.js"),
+    )
+    assert result.daemon == sandbox.daemon
+    assert result.cleanup_confirmed
 
 
 def test_real_build_exports_host_hashed_bytes_and_confirms_cleanup(sandbox: DockerSandbox) -> None:

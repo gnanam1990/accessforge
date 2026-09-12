@@ -156,6 +156,37 @@ The earlier source-broker head `1e8ff8f0facee18d248eeaed8f7821aef3b490d1` passed
 in run 34713664264, including the real Docker probes on Linux amd64. That is not yet CI proof for
 this new durable-attempt change. PR #37 remains draft; nothing here is merged.
 
+## Explicit daemon and isolated Docker client
+
+Docker execution now requires an immutable `DaemonBinding`: an operator-selected canonical local
+Unix socket plus its observed daemon ID. No ambient-context discovery or remote TCP/SSH fallback is
+accepted. Every command carries an explicit `--host`, a fresh empty `--config` directory, and only
+a minimal PATH environment. This also prevents the Docker client's automatic proxy-credential
+injection from user configuration; it does not merely remove DOCKER_HOST from the environment.
+Reference: https://docs.docker.com/reference/cli/docker/
+
+Daemon identity is checked before execution, after creation, and before/after cleanup (including
+the absent-container path). A replacement daemon cannot turn an empty listing into cleanup proof.
+The binding is part of the version-2 execution policy, persisted immutably in migration 0024's
+attempt columns, checked again at dispatch, and matched to the returned receipt. Recovery still
+needs to operate on this exact binding, not today's default context.
+
+Migration 0024 does not invent historical provenance. Unfinished legacy attempts without a binding
+become UNKNOWN with an incremented fence epoch and MISSING_DAEMON_BINDING; existing built receipts
+remain historical and unbound. The fresh-database drill seeds actual pre-0024 CLAIMED, DISPATCHED
+and BUILT rows and verifies these distinct outcomes. All prior 0023/0022 assertions remain covered.
+
+New tests cover endpoint validation, empty client configuration, restricted CLI environment,
+daemon replacement before/after an absent listing, changed persisted daemon identity, and a real
+Docker build with deliberately hostile ambient context/host/TLS/proxy settings. The real test uses
+synthetic credential canaries and does not modify the user's Docker context or configuration.
+Fresh forward-migration/recovery drill: 17 passed. Full Python suite with explicit endpoint and
+pinned toolchain: **2,023 passed, zero failures/skips**, 58 upstream deprecation warnings
+(155.25 seconds). Strict mypy: 210 files clean; Ruff and OpenAPI/schema/client drift checks pass.
+
+Earlier durable-pipeline head `41427b5c1e5ba8144ad57624a0b579d00208bbe3` passed all GitHub CI in run
+34714720918. The new endpoint-binding head requires its own CI; PR #37 stays draft.
+
 ## Required next work
 
 1. Retain captured artifact bytes durably with the build's actual resolved image/platform and
@@ -163,10 +194,10 @@ this new durable-attempt change. PR #37 remains draft; nothing here is merged.
    digest; a crash can lose those bytes. No public build endpoint or available-artifact claim exists.
    Retained dirty-artifact intake remains required if dirty E0 candidates are supported.
 2. Implement operator reconciliation and durable crash/recovery tests for UNKNOWN attempts using
-   the pre-recorded task identity and an explicitly pinned Docker endpoint/daemon identity. The
-   current primitive still uses the CLI's ambient context; context switching during execution or
-   cleanup is not covered by current proof and must be closed before a recovery/merge claim.
-   Fencing is implemented; safe reconciliation/resumption is not.
+   the pre-recorded task and explicit daemon binding. Fencing and endpoint binding are implemented;
+   safe reconciliation/resumption is not. In particular, an absent container alone cannot prove an
+   interrupted create request will not materialize later. Persist creation/process receipts and
+   distinguish observed absence from confirmed retirement; never automatically retry UNKNOWN.
 3. Provision the actual E0 reference-application toolchain and connect it to the new execution
    primitive. Docker daemon access is supervisor authority, never an author-selectable endpoint.
 4. Run protected functional regressions outside source-writable paths; independently collect and hash

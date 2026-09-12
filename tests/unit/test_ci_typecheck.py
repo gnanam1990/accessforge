@@ -38,6 +38,7 @@ def test_ci_requires_provisioned_real_sandbox_probes() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     job = workflow["jobs"]["python"]
     image = job["env"]["ACCESSFORGE_SANDBOX_IMAGE"]
+    assert job["env"]["ACCESSFORGE_SANDBOX_ENDPOINT"] == "unix:///var/run/docker.sock"
     assert "@sha256:" in image
     steps = job["steps"]
     provision = next(

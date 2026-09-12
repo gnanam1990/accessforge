@@ -10,12 +10,15 @@ Hosted hostile-customer builds remain unsupported: a shared kernel is not a tena
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import tempfile
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any
 
 from .process import CommandResult, CommandStopped, run_bounded
@@ -34,6 +37,72 @@ class SandboxRefused(RuntimeError):
 
 class CleanupUnconfirmed(SandboxRefused):
     """The exact task container requires reconciliation; never report success or blindly retry."""
+
+
+def _validate_endpoint(endpoint: str) -> None:
+    path = endpoint.removeprefix("unix://")
+    if (
+        not endpoint.startswith("unix:///")
+        or path.startswith("//")
+        or PurePosixPath(path).as_posix() != path
+        or ".." in PurePosixPath(path).parts
+        or len(path.encode()) > 1024
+        or any(ord(c) < 32 or ord(c) == 127 for c in path)
+        or any(c in path for c in ("?", "#", "%", "\\"))
+    ):
+        raise SandboxRefused("an explicit canonical local Unix Docker socket is required")
+
+
+@dataclass(frozen=True, slots=True)
+class DaemonBinding:
+    endpoint: str
+    daemon_id: str
+
+    def __post_init__(self) -> None:
+        _validate_endpoint(self.endpoint)
+        if not re.fullmatch(r"[A-Za-z0-9:-]{1,128}", self.daemon_id):
+            raise SandboxRefused("invalid Docker daemon identity")
+
+
+def _docker_command(
+    executable: str,
+    endpoint: str,
+    args: tuple[str, ...],
+    *,
+    deadline: float,
+    limit: int = 1024 * 1024,
+    input_bytes: bytes | None = None,
+    cancelled: Callable[[], bool] = lambda: False,
+) -> CommandResult:
+    # An empty config also prevents automatic proxy-credential injection into containers. Never
+    # read the user's context, registry credentials, custom headers or CLI plugin configuration.
+    with tempfile.TemporaryDirectory(prefix="accessforge-docker-config-") as config:
+        return run_bounded(
+            (executable, "--config", config, "--host", endpoint, *args),
+            deadline=deadline,
+            output_limit=limit,
+            input_bytes=input_bytes,
+            cancelled=cancelled,
+            env={"PATH": os.defpath},
+        )
+
+
+def discover_daemon(endpoint: str) -> DaemonBinding:
+    """Observe an operator-selected local endpoint. Never discover or follow an ambient context."""
+    _validate_endpoint(endpoint)
+    executable = shutil.which("docker")
+    if executable is None:
+        raise SandboxRefused("Docker is unavailable")
+    result = _docker_command(
+        executable,
+        endpoint,
+        ("info", "--format", "{{.ID}}"),
+        deadline=time.monotonic() + 10,
+        limit=1024,
+    )
+    if result.code:
+        raise SandboxRefused("the provisioned local Docker endpoint is unavailable")
+    return DaemonBinding(endpoint, result.stdout.decode().strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,16 +127,22 @@ class SandboxBuild:
     stdout: bytes
     stderr: bytes
     cleanup_confirmed: bool
+    daemon: DaemonBinding
     # Build completion is not an assertion outcome or a protected-regression attestation.
 
 
 class DockerSandbox:
-    def __init__(self, policy: SandboxPolicy) -> None:
+    def __init__(self, policy: SandboxPolicy, *, daemon: DaemonBinding) -> None:
         executable = shutil.which("docker")
         if executable is None:
             raise SandboxRefused("Docker is unavailable; no host-execution fallback")
         self.executable = executable
         self.policy = policy
+        self._daemon = daemon
+
+    @property
+    def daemon(self) -> DaemonBinding:
+        return self._daemon
 
     def _command(
         self,
@@ -77,10 +152,12 @@ class DockerSandbox:
         input_bytes: bytes | None = None,
         cancelled: Callable[[], bool] = lambda: False,
     ) -> CommandResult:
-        return run_bounded(
-            (self.executable, *args),
+        return _docker_command(
+            self.executable,
+            self.daemon.endpoint,
+            args,
             deadline=deadline,
-            output_limit=limit,
+            limit=limit,
             input_bytes=input_bytes,
             cancelled=cancelled,
         )
@@ -115,6 +192,7 @@ class DockerSandbox:
     def _cleanup(self, name: str, task_id: str) -> None:
         """Resolve only this generated name and its ownership label, then remove by immutable ID."""
         deadline = time.monotonic() + 15
+        self._assert_daemon(deadline=deadline)
         # Listing distinguishes an absent container from a failed inspect/daemon connection.
         result = self._checked(
             "container",
@@ -129,6 +207,7 @@ class DockerSandbox:
         )
         ids = result.stdout.decode().split()
         if not ids:
+            self._assert_daemon(deadline=deadline)
             return
         if len(ids) != 1:
             raise CleanupUnconfirmed(f"ambiguous cleanup target for {name}")
@@ -149,6 +228,14 @@ class DockerSandbox:
         )
         if remaining.stdout.strip():
             raise CleanupUnconfirmed(f"container removal not confirmed for {name}")
+        self._assert_daemon(deadline=deadline)
+
+    def _assert_daemon(self, *, deadline: float) -> None:
+        actual = self._checked("info", "--format", "{{.ID}}", deadline=deadline).stdout
+        if actual.decode().strip() != self.daemon.daemon_id:
+            raise CleanupUnconfirmed(
+                "Docker daemon identity changed; reconcile the original daemon"
+            )
 
     def build(
         self,
@@ -173,6 +260,8 @@ class DockerSandbox:
         archive = source.archive()
         deadline = time.monotonic() + self.policy.wall_seconds
         info = json.loads(self._checked("info", "--format", "{{json .}}", deadline=deadline).stdout)
+        if info.get("ID") != self.daemon.daemon_id:
+            raise SandboxRefused("the pinned Docker daemon identity changed before execution")
         if info.get("OSType") != "linux" or info.get("CgroupVersion") != "2":
             raise SandboxRefused("a Linux Docker daemon with cgroup v2 is required")
         if not any("name=seccomp" in option for option in info.get("SecurityOptions", [])):
@@ -243,6 +332,7 @@ class DockerSandbox:
             if not re.fullmatch(r"[a-f0-9]{64}", container):
                 raise SandboxRefused("creation did not return an immutable container ID")
             creation_confirmed = True
+            self._assert_daemon(deadline=deadline)
             self._assert_configuration(
                 self._inspect(container, deadline=deadline),
                 image_id=image_id,
@@ -308,6 +398,7 @@ class DockerSandbox:
                 result.stdout,
                 result.stderr,
                 True,
+                self.daemon,
             )
         finally:
             try:

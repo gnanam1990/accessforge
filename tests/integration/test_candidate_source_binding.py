@@ -14,7 +14,12 @@ from pathlib import Path
 import pytest
 
 from accessforge_build_worker.coordinator import execute_claim, prepare_and_claim
-from accessforge_build_worker.sandbox import DockerSandbox, SandboxPolicy, SandboxRefused
+from accessforge_build_worker.sandbox import (
+    DockerSandbox,
+    SandboxPolicy,
+    SandboxRefused,
+    discover_daemon,
+)
 from accessforge_build_worker.snapshot import SnapshotRefused, SourceFile, SourceSnapshot
 from accessforge_build_worker.source_broker import read_persisted_source
 from accessforge_domain.origins import normalize_origin
@@ -277,7 +282,11 @@ def test_real_source_claim_docker_capture_and_durable_receipt(
             actor_id=binding.owner,
             expires_at=expiry,
         )
-    sandbox = DockerSandbox(SandboxPolicy(image=image, wall_seconds=30))
+    endpoint = os.environ.get("ACCESSFORGE_SANDBOX_ENDPOINT")
+    assert endpoint is not None, "explicit local Docker endpoint required"
+    sandbox = DockerSandbox(
+        SandboxPolicy(image=image, wall_seconds=30), daemon=discover_daemon(endpoint)
+    )
     command: tuple[str, ...] = ("/usr/local/bin/node", "build.js")
     if exit_failure:
         command = ("/usr/local/bin/node", "-e", "console.log('PASS'); process.exit(23)")
@@ -322,7 +331,7 @@ def test_real_source_claim_docker_capture_and_durable_receipt(
     assert (binding.repository / "app.py").read_bytes() == b"print('owned')\n"
     with workspace_connection(binding.database, binding.workspace) as conn:
         receipt = conn.execute(
-            "SELECT state, artifact_digest, cleanup_confirmed "
+            "SELECT state, artifact_digest, cleanup_confirmed, daemon_endpoint, daemon_id "
             "FROM candidate_build_attempt WHERE id = %s",
             (claimed.claim.build_id,),
         ).fetchone()
@@ -330,4 +339,6 @@ def test_real_source_claim_docker_capture_and_durable_receipt(
             "state": "BUILT",
             "artifact_digest": result.artifact.archive_digest,
             "cleanup_confirmed": True,
+            "daemon_endpoint": result.daemon.endpoint,
+            "daemon_id": result.daemon.daemon_id,
         }
