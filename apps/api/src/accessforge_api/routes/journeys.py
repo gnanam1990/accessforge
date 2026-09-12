@@ -52,7 +52,7 @@ from accessforge_persistence import journeys
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["journeys"])
 
-Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope)]
+Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
 
 _JOURNEY_FIELDS = frozenset(
     {

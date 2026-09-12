@@ -28,7 +28,7 @@ from accessforge_persistence import budgets, retention
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["settings"])
 
-Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope)]
+Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
 
 
 @router.get("/usage")
