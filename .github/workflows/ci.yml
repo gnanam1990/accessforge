@@ -60,6 +60,7 @@ jobs:
           --health-retries 10
 
     env:
+      ACCESSFORGE_SANDBOX_IMAGE: node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
       # Deliberately NOT the container's POSTGRES_USER. That role is a superuser, and superusers
       # bypass row-level security entirely — including FORCE — so the whole tenant-isolation suite
       # would run against no isolation at all. A dedicated NOSUPERUSER NOBYPASSRLS role is created
@@ -122,6 +123,15 @@ jobs:
         # --frozen fails if uv.lock does not match pyproject.toml, so a dependency change cannot
         # land without its lockfile.
         run: uv sync --frozen
+
+      - name: Provision the pinned owned-build containment probe toolchain
+        # No implicit pull at dispatch. The registry index supports Linux amd64 and arm64.
+        run: >-
+          docker pull
+          node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+
+      - name: Real owned-build containment probes
+        run: uv run pytest -q tests/sandbox --tb=short
 
       - uses: pnpm/action-setup@v4
         with:
