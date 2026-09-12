@@ -371,6 +371,57 @@ does not solve or conceal this boundary.
 
 ## Required next work
 
+### Protected reference-app regressions checkpoint
+
+`reference_regressions.py` now exercises captured wheels through actual HTTP and PostgreSQL,
+without importing the candidate on the host or putting the harness in candidate-writable paths.
+The supervisor creates a task-specific PostgreSQL 17 container pinned to
+`postgres@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`.
+It has network=none; separate candidate and trusted-driver containers share only that exact
+private loopback network namespace. No ports are published, no host source/credential/socket
+mounts are used, and each role has resource limits, readonly root, no capabilities and no IPC.
+The image's declared data volume is shadowed by bounded tmpfs rather than allocating a host volume.
+
+The trusted supervisor creates the fixture schema as database administrator. Candidate credentials
+permit only SELECT/INSERT/DELETE/TRUNCATE on the two fixture tables, not schema/role administration.
+The administrator password/socket/filesystem and test-driver process remain outside the candidate.
+The trusted startup explicitly calls `create_app` on the captured wheel and does not invoke the
+candidate's schema initialization; protected schema changes are not accessibility repair scope.
+Actual driver probes must observe permission refusal for DROP TABLE, CREATE TABLE and reading
+pg_authid. Metadata/public TCP attempts must fail on the shared network-none namespace.
+
+Checks cover fixture creation, required-field/email/category/description validation, no durable
+write on invalid input, observer/setup identity separation, unauthorized fixture/reset no-write
+behavior, exact successful backend fields, duplicate submission conflict, unknown fixture refusal,
+and durability across a genuinely new candidate container/filesystem using the same captured wheel.
+The supervisor reads the real database directly; an application receipt endpoint is not its oracle.
+Before its final read it kills the candidate, revokes login, terminates outstanding candidate DB
+backends and observes none remaining. This closes the late-write window after merely killing a
+client. Exact task-owned cleanup is required before returning any result; cancellation after actual
+PostgreSQL startup is exercised, and ambiguous creation/cleanup still raises UNKNOWN-style refusal.
+
+Regression tests build real approved-template sabotage variants: removing validation, bypassing
+token comparisons, and persisting invalid data while still returning HTTP 422. The protected
+checks must reject each at its relevant boundary. Tests never execute those variants on the host.
+These are intentional local test mutations, not changes to the reference-app checkout.
+
+This result remains an in-memory trusted primitive. Durable candidate-run/lease/epoch registration,
+crash recovery, persisted regression attestation and actual matched-reader scheduling remain
+required. The existing verification gate stays false; no build or regression result alone makes
+a repair VERIFIED. No hosted arbitrary-tenant support or external deployment is added.
+
+Networking reference: [Docker container network sharing](https://docs.docker.com/engine/network/#container-networks).
+
+Validation: full Python suite with the actual Python and PostgreSQL runtime images passed
+**2,063 tests, zero failures/skips**, 58 upstream deprecation warnings, in 201.17 seconds.
+Strict mypy: 216 files. Ruff lint/format, live OpenAPI, six schema/enumeration bindings and
+74-operation client drift checks pass. No task regression containers remained after the suite.
+Packaging head `c50f513bca54853cab33bc89dc2ad8dcceddc557` passed all GitHub CI in run
+34718869094, including its actual amd64 wheel build. The new regression-runtime head must pass
+its own CI. Internal review is not an independent security audit or complete draft-PR approval.
+
+### Remaining integration
+
 1. Integrate the trusted build/retirement operations into bounded operator/job dispatch and implement
    legacy unbound-store reconciliation plus documented backup expiry. Policy-based active-store
    retirement and the candidate-byte encrypted backup/restore drill are implemented. No public
@@ -385,8 +436,9 @@ does not solve or conceal this boundary.
    separate logical fixture identity from repairable presentation. Docker daemon access is
    supervisor authority, never an author-selectable endpoint. Packaging/import proof is available;
    end-to-end reader repair proof is not.
-4. Run protected functional regressions outside source-writable paths; independently collect and hash
-   candidate output. Repository stdout and self-reported identities are never authority.
+4. Bind the implemented protected HTTP/database regression runner to durable candidate/run/lease
+   provenance and independent verification. The captured artifact is hashed independently;
+   repository stdout and self-reported identities remain non-authoritative.
 5. Exercise real containment canaries, metadata/egress refusal, resource exhaustion, cancellation,
    crash, durable recovery and exact task-owned cleanup. No blind retry after ambiguous execution.
 6. Connect the proven build to module 15's fresh matched actual-reader run. VERIFIED remains
