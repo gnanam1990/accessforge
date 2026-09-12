@@ -1,29 +1,30 @@
 /**
  * Desktop runner entrypoint.
  *
- * Module 07 implements the supervisor protocol: the local action gate, monotonic lease deadlines,
- * the durable action journal and restart inspection. All of that is real, tested and exported from
- * `./supervisor.js` and `./journal.js`.
- *
- * What is still absent is the half that touches a screen reader. There is no VoiceOver adapter
- * (module 08) and no NVDA adapter (module 09), so this binary has nothing to dispatch an admitted
- * action *to*. It therefore refuses to start rather than running: a runner that came up and reported
- * itself healthy would be enrollable, leasable, and incapable of producing a single reader
- * observation — which is precisely the shape of failure this product exists to refuse.
- *
- * It exits 78 (EX_CONFIG): the capability is absent by configuration, not crashed.
+ * The supervisor and Guidepup-backed VoiceOver adapter are implemented, but an implementation is
+ * not the same thing as a proven reader profile. Until a real VoiceOver trace completes on the
+ * pinned matrix, this binary exits EX_CONFIG and emits the full fail-closed preflight report.
  */
 
-export const NOT_IMPLEMENTED_MESSAGE =
-  'accessforge-runner: the supervisor protocol from module 07 is implemented (action gate, ' +
-  'monotonic lease deadlines, durable action journal, restart inspection) and is importable from ' +
-  'this package. No assistive-technology adapter exists yet: VoiceOver is owned by module 08 and ' +
-  'NVDA by module 09. With no adapter there is nothing to dispatch an admitted action to, so this ' +
-  'binary starts no runner and reports no screen-reader capability.';
+import {
+  hostEnvironment,
+  runPreflight,
+  type ProbeEnvironment,
+} from '@accessforge/at-voiceover';
 
-export function main(write: (line: string) => void = console.error): number {
-  write(NOT_IMPLEMENTED_MESSAGE);
-  return 78; // EX_CONFIG: the feature is absent by configuration, not crashed.
+export const READER_UNAVAILABLE_MESSAGE =
+  'accessforge-runner: the Guidepup VoiceOver adapter is implemented and wired to the durable ' +
+  'supervisor, but the verified matrix is empty. Until a real VoiceOver run proves the pinned ' +
+  'profile, no reader capability is advertised.';
+
+export function main(
+  write: (line: string) => void = console.error,
+  environment: ProbeEnvironment = hostEnvironment(),
+): number {
+  const report = runPreflight(environment);
+  write(READER_UNAVAILABLE_MESSAGE);
+  write(JSON.stringify(report));
+  return 78; // EX_CONFIG: code exists, but the real-reader capability remains unproven.
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

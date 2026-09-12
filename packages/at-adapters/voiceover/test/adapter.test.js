@@ -20,6 +20,7 @@ import {
   captureTimedOut,
   dispatch,
   probePermission,
+  probeBrowserVersion,
   probeReaderActive,
   probeReaderVersion,
   probeScreenUnlocked,
@@ -282,6 +283,56 @@ test('no check is silently reported TRUE by default', () => {
     ['MONOTONIC_CLOCK_HEALTHY'],
     'only the one check that genuinely needs no reader may be TRUE on a bare host',
   );
+});
+
+test('browser version is read from the host and must match the pinned profile exactly', () => {
+  assert.equal(
+    probeBrowserVersion(bareEnvironment({ browserVersion: () => '26.6' })).condition,
+    'TRUE',
+  );
+  const drifted = probeBrowserVersion(bareEnvironment({ browserVersion: () => '26.6.1' }));
+  assert.equal(drifted.condition, 'FALSE');
+  assert.match(drifted.detail, /26\.6\.1/);
+  assert.equal(probeBrowserVersion(bareEnvironment()).condition, 'UNKNOWN');
+});
+
+test('runtime setup evidence fills the seven non-host checks without weakening exact matches', () => {
+  const report = runPreflight(
+    bareEnvironment({ browserVersion: () => '26.6' }),
+    {
+      speechCaptureWorking: true,
+      permittedOrigin: 'http://127.0.0.1:8081',
+      observedOrigin: 'http://127.0.0.1:8081',
+      originReachable: true,
+      environmentResetSucceeded: true,
+      expectedBuildDigest: 'a'.repeat(64),
+      observedBuildDigest: 'a'.repeat(64),
+      staleInputSourceDetected: false,
+      journalWritable: true,
+      monotonicClockHealthy: true,
+    },
+  );
+
+  for (const name of [
+    'BROWSER_VERSION_MATCHES_PROFILE',
+    'SPEECH_CAPTURE_WORKING',
+    'PERMITTED_ORIGIN_REACHABLE',
+    'ENVIRONMENT_RESET_SUCCEEDED',
+    'BUILD_IDENTITY_MATCHES_MANIFEST',
+    'NO_STALE_INPUT_SOURCE',
+    'LOCAL_JOURNAL_WRITABLE',
+    'MONOTONIC_CLOCK_HEALTHY',
+  ]) {
+    assert.equal(report.checks[name].condition, 'TRUE', `${name} should be proven`);
+  }
+
+  const wrongOrigin = runPreflight(bareEnvironment(), {
+    permittedOrigin: 'http://127.0.0.1:8081',
+    observedOrigin: 'http://localhost:8081',
+    originReachable: true,
+  });
+  assert.equal(wrongOrigin.checks.PERMITTED_ORIGIN_REACHABLE.condition, 'FALSE');
+  assert.match(wrongOrigin.checks.PERMITTED_ORIGIN_REACHABLE.detail, /does not equal/);
 });
 
 // --- the navigator channel ----------------------------------------------------------------------
