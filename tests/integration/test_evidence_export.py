@@ -17,7 +17,7 @@ import json
 import os
 import uuid
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +29,7 @@ from accessforge_evidence import (
     KeyProvenance,
     SigningKey,
     TrustLevel,
+    VerificationReport,
     to_json,
     verify_archive,
     write_archive,
@@ -218,7 +219,7 @@ def _export(
     write_archive(str(path), members)
 
 
-def _outcomes(report) -> dict[str, CheckOutcome]:
+def _outcomes(report: VerificationReport) -> dict[str, CheckOutcome]:
     return {f.check: f.outcome for f in report.findings}
 
 
@@ -261,7 +262,7 @@ def test_the_report_says_what_it_does_not_establish(
 # --- tampering -----------------------------------------------------------------------------------
 
 
-def _repack(archive: Path, tmp_path: Path, mutate) -> Path:
+def _repack(archive: Path, tmp_path: Path, mutate: Callable[[dict[str, bytes]], None]) -> Path:
     """Rewrite one member of an archive. Used to construct every tampering case below."""
     with zipfile.ZipFile(archive) as source:
         members = {name: source.read(name) for name in source.namelist()}
@@ -473,11 +474,11 @@ def test_deleted_evidence_is_reported_as_deleted_rather_than_absent(
     from one that never existed."""
     run_id, attempt_id = _complete_run(db, store)
     with workspace_connection(db, WS) as conn:
-        artifact_id = str(
-            conn.execute(
-                "SELECT id FROM evidence_artifact WHERE attempt_id = %s", (attempt_id,)
-            ).fetchone()["id"]
-        )
+        artifact = conn.execute(
+            "SELECT id FROM evidence_artifact WHERE attempt_id = %s", (attempt_id,)
+        ).fetchone()
+        assert artifact is not None
+        artifact_id = str(artifact["id"])
         evidence.delete_artifact_bytes(
             conn, store, artifact_id=artifact_id, reason="retention policy"
         )

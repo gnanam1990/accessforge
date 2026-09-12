@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 
 import pytest
@@ -65,7 +65,7 @@ def _admit(
     producer: str = SUPERVISOR,
     seq: int = 1,
     record_id: str | None = None,
-    payload: dict | None = None,
+    payload: Mapping[str, object] | None = None,
     event_type: str = "READER_OBSERVATION",
 ) -> sequencer.AdmittedEvent:
     return sequencer.admit_record(
@@ -79,7 +79,7 @@ def _admit(
         producer_sequence=seq,
         event_type=event_type,
         manifest_digest=MANIFEST,
-        payload=payload if payload is not None else {"spoke": f"line {seq}"},
+        payload=dict(payload) if payload is not None else {"spoke": f"line {seq}"},
         source_time=SOURCE_TIME,
     )
 

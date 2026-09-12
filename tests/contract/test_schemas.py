@@ -6,7 +6,9 @@ Requirements: FR-002, FR-003, FR-016. Invariants: INV-03, INV-08.
 from __future__ import annotations
 
 import json
+from enum import StrEnum
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -37,8 +39,14 @@ def test_valid_fixtures_are_accepted(name: str) -> None:
     validate(name, FIXTURES["valid"][name])
 
 
+class InvalidCase(TypedDict):
+    schema: str
+    payload: object
+    why: str
+
+
 @pytest.mark.parametrize("case", FIXTURES["invalid"], ids=[c["why"] for c in FIXTURES["invalid"]])
-def test_invalid_fixtures_are_rejected(case: dict) -> None:
+def test_invalid_fixtures_are_rejected(case: InvalidCase) -> None:
     with pytest.raises(SchemaValidationError):
         validate(case["schema"], case["payload"])
 
@@ -70,7 +78,7 @@ def test_validation_reports_every_error_not_only_the_first() -> None:
     ],
 )
 def test_domain_enums_match_the_schema_derived_constants(
-    enum_type: type, generated: tuple[str, ...]
+    enum_type: type[StrEnum], generated: tuple[str, ...]
 ) -> None:
     """The Python enums are hand-written; the constants are generated from the schemas.
 

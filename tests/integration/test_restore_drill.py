@@ -51,13 +51,13 @@ def _with_database(url: str, name: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, f"/{name}", parts.query, parts.fragment))
 
 
-def _run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+def _run(command: list[str], *, input: str | None = None) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(  # noqa: S603 - fixed argv, no shell
         command,
         capture_output=True,
         text=True,
         check=False,
-        **kwargs,  # type: ignore[arg-type]
+        input=input,
     )
     if result.returncode != 0:
         raise AssertionError(f"{command[0]} failed: {result.stderr[-2000:]}")

@@ -8,6 +8,7 @@ from reference_app.validation import (
     ALLOWED_CATEGORIES,
     MAX_DESCRIPTION,
     MIN_DESCRIPTION,
+    FieldError,
     validate_service_request,
 )
 
@@ -19,7 +20,7 @@ VALID = {
 }
 
 
-def _fields(errors: list) -> set[str]:
+def _fields(errors: list[FieldError]) -> set[str]:
     return {e.field for e in errors}
 
 

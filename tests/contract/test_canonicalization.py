@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -27,13 +28,19 @@ VECTORS = json.loads(
 CASES = VECTORS["cases"]
 
 
+class CanonicalCase(TypedDict):
+    name: str
+    input: object
+    canonical: str
+
+
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
-def test_canonical_form_matches_shared_vector(case: dict) -> None:
+def test_canonical_form_matches_shared_vector(case: CanonicalCase) -> None:
     assert canonicalize(case["input"]) == case["canonical"]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
-def test_digest_matches_sha256_of_canonical_form(case: dict) -> None:
+def test_digest_matches_sha256_of_canonical_form(case: CanonicalCase) -> None:
     expected = hashlib.sha256(case["canonical"].encode("utf-8")).hexdigest()
     assert digest(case["input"]) == expected
     assert digest(case["input"]) == digest(case["input"]).lower()

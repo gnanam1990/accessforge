@@ -795,6 +795,15 @@ def test_a_purge_that_stops_at_its_limit_reports_the_backlog(
 class _RefusingStore:
     """An object store that is down, which is a delay and not a failed deletion."""
 
+    def put(self, *, key: str, payload: bytes, content_type: str) -> str:
+        raise AssertionError("a purge must not upload objects")
+
+    def get(self, *, key: str) -> bytes:
+        raise AssertionError("a purge must not read object bytes")
+
+    def exists(self, *, key: str) -> bool:
+        raise AssertionError("a purge must attempt deletion without an existence precheck")
+
     def delete(self, *, key: str) -> None:
         raise RuntimeError(f"connection refused while deleting {key}")
 
@@ -1394,7 +1403,7 @@ def test_a_second_purge_skips_rows_another_is_holding_rather_than_double_countin
         assert deletion.pending_purges(conn, deletion_id=report.deletion_id) == 1
 
 
-class _FailsOnTheLastKey:
+class _FailsOnTheLastKey(_RefusingStore):
     """A store that dies partway through, the way a killed worker does.
 
     `KeyboardInterrupt` rather than `Exception` on purpose: `purge_pending_objects` catches every
