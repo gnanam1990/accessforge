@@ -404,19 +404,28 @@ def _prepare_owned_build(
 @pytest.mark.sandbox
 @pytest.mark.parametrize("binding", ["reference"], indirect=True)
 @pytest.mark.parametrize(
-    ("sabotage", "failure"),
+    ("sabotage", "failure", "presentation_repair"),
     [
-        ("", None),
-        ("", "cancelled"),
-        ("", "fenced"),
+        ("", None, False),
+        ("", None, True),
+        ("", "cancelled", False),
+        ("", "fenced", False),
+        (
+            "\nfrom . import fixture_definition as _fixture\n"
+            "_fixture.REFERENCE_FIXTURE_DIGEST = '0' * 64\n",
+            "fixture_definition_identity",
+            False,
+        ),
         (
             "\nfrom . import validation as _validation\n"
             "_validation.validate_service_request = lambda **values: []\n",
             "reject_invalid_email",
+            False,
         ),
         (
             "\nimport secrets\nsecrets.compare_digest = lambda *args: True\n",
             "fixture_creation_authorization",
+            False,
         ),
         (
             "\nfrom . import validation as _validation\nimport os, psycopg\n"
@@ -431,12 +440,15 @@ def _prepare_owned_build(
             "    return _original_validate(**values)\n"
             "_validation.validate_service_request = _write_and_reject\n",
             "no_invalid_write_email",
+            False,
         ),
     ],
     ids=[
         "healthy",
+        "presentation-repaired",
         "cancelled",
         "fenced",
+        "fixture-declaration-tampered",
         "validation-removed",
         "authorization-bypassed",
         "writes-despite-error",
@@ -447,6 +459,7 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
     isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
     sabotage: str,
     failure: str | None,
+    presentation_repair: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image = os.environ.get("ACCESSFORGE_REFERENCE_TOOLCHAIN")
@@ -456,8 +469,11 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
         pytest.skip("real reference toolchain not provisioned")
     path = "src/reference_app/templates.py"
     original = next(file.content for file in binding.source.files if file.path == path)
-    # Deliberately a build-only approved edit, not an accessibility repair/reader attestation.
+    # Synthetic approved changes exercise packaging and backend regression, not actual AT proof.
     content = original.decode() + "\n# Owned candidate packaging probe.\n" + sabotage
+    if presentation_repair:
+        assert 'accessible = variant == "accessible"' in content
+        content = content.replace('accessible = variant == "accessible"', "accessible = True")
     claimed, sandbox, command = _prepare_owned_build(
         binding,
         image=image,
@@ -514,7 +530,15 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
             "import sys,pathlib; sys.path.insert(0, '/work/src/" + wheel.path + "'); "
             "import reference_app.app, reference_app.validation; "
             "assert reference_app.app.__file__.startswith('/work/src/'); "
-            "pathlib.Path('/work/out/import-ok.txt').write_text('imported captured wheel')",
+            + (
+                "from reference_app.templates import render_form, template_digest; "
+                "assert render_form(nonce='probe', variant='inaccessible') == "
+                "render_form(nonce='probe', variant='accessible'); "
+                "assert template_digest('inaccessible') == template_digest('accessible'); "
+                if presentation_repair
+                else ""
+            )
+            + "pathlib.Path('/work/out/import-ok.txt').write_text('imported captured wheel')",
         ),
     )
     assert smoke.artifact.files[0].content == b"imported captured wheel"
@@ -618,6 +642,8 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
     )
     assert regression.artifact_digest == retained.archive_digest
     assert "exact_independent_database_receipt" in regression.checks
+    assert "fixture_definition_identity" in regression.checks
+    assert "independent_fixture_definition" in regression.checks
     assert len(regression.containers) == 4
     assert "durable_receipt_after_stop" in regression.checks
     with workspace_connection(binding.database, binding.workspace) as conn:

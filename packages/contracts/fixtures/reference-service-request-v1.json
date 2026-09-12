@@ -1,0 +1,30 @@
+{
+  "identityVersion": "accessforge.reference-service-request/1",
+  "templateId": "service-request",
+  "freshNoncePerRun": true,
+  "fields": {
+    "full_name": {"required": true, "trim": true, "maxLength": 200},
+    "email": {"required": true, "trim": true, "pattern": "^[^@\\s]+@[^@\\s.]+\\.[^@\\s]+$"},
+    "category": {"values": ["access-request", "hardware", "software", "other"]},
+    "description": {"trim": true, "minLength": 10, "maxLength": 2000}
+  },
+  "submission": {
+    "method": "POST",
+    "path": "/form/{nonce}",
+    "encoding": "application/x-www-form-urlencoded",
+    "invalidStatus": 422,
+    "invalidCreatesRows": false,
+    "successStatus": 201,
+    "maximumRequestsPerNonce": 1,
+    "duplicateStatus": 409,
+    "unknownNonceStatus": 404,
+    "durableAcrossApplicationRestart": true
+  },
+  "authorization": {
+    "createFixture": "setup",
+    "reset": "setup",
+    "receipt": "observer",
+    "unauthorizedStatus": 403,
+    "unauthorizedMutation": false
+  }
+}

@@ -1,6 +1,7 @@
 /** Supervisor-only setup for the real local reference application and sealed browser target. */
 
 import type { RuntimeProbeEvidence } from '@accessforge/at-voiceover';
+import { REFERENCE_FIXTURE_DIGEST, REFERENCE_FIXTURE_VERSION } from '@accessforge/contracts';
 
 export type ReferenceVariant = 'accessible' | 'inaccessible';
 
@@ -12,7 +13,11 @@ interface FetchResponse {
 
 export type SetupFetch = (
   url: string,
-  init: { readonly method: 'POST'; readonly headers: Readonly<Record<string, string>> },
+  init: {
+    readonly method: 'POST';
+    readonly headers: Readonly<Record<string, string>>;
+    readonly redirect: 'error';
+  },
 ) => Promise<FetchResponse>;
 
 export interface BrowserLaunchResult {
@@ -30,6 +35,11 @@ export interface ReferenceAppSetupOptions {
   readonly variant: ReferenceVariant;
   readonly expectedBuildDigest: string;
   readonly observedBuildDigest: string;
+  /**
+   * Frozen template definition selected by the trusted controller, never by the candidate.
+   * Not the journey/manifest fixtureDigest, which also covers values and observer configuration.
+   */
+  readonly expectedFixtureDigest: string;
   readonly fetch?: SetupFetch;
   readonly launch: BrowserLauncher;
 }
@@ -40,6 +50,7 @@ export interface ReferenceAppSetupResult {
     readonly nonce: string;
     readonly variant: ReferenceVariant;
     readonly templateDigest: string;
+    readonly templateVersion: string;
   };
   readonly browserVersion: string;
   readonly evidence: RuntimeProbeEvidence;
@@ -57,22 +68,55 @@ function assertLoopbackOrigin(raw: string): URL {
   return url;
 }
 
-function readFixture(body: unknown, expectedVariant: ReferenceVariant): ReferenceAppSetupResult['fixture'] {
+const boundedLocalFetch: SetupFetch = async (url, init) => {
+  const response = await globalThis.fetch(url, { ...init, signal: AbortSignal.timeout(5_000) });
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  if (reader) {
+    try {
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        total += next.value.length;
+        if (total > 16_384) throw new Error('reference setup response exceeds 16 KiB');
+        chunks.push(next.value);
+      }
+    } finally {
+      await reader.cancel();
+      reader.releaseLock();
+    }
+  }
+  const payload = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    payload.set(chunk, offset);
+    offset += chunk.length;
+  }
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(payload);
+  return { ok: response.ok, status: response.status, json: async () => JSON.parse(text) as unknown };
+};
+
+function readFixture(
+  body: unknown, expectedVariant: ReferenceVariant, expectedDigest: string,
+): ReferenceAppSetupResult['fixture'] {
   if (typeof body !== 'object' || body === null) throw new Error('fixture response is not an object');
   const value = body as Record<string, unknown>;
   if (
     typeof value.nonce !== 'string' ||
-    value.nonce === '' ||
+    !/^[A-Za-z0-9_-]{16,64}$/.test(value.nonce) ||
     value.variant !== expectedVariant ||
     typeof value.template_digest !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(value.template_digest)
+    value.template_digest !== expectedDigest ||
+    value.template_version !== REFERENCE_FIXTURE_VERSION
   ) {
-    throw new Error('fixture response does not carry the expected nonce, variant and SHA-256 digest');
+    throw new Error('fixture response does not match the frozen nonce, variant, version and digest contract');
   }
   return {
     nonce: value.nonce,
     variant: expectedVariant,
     templateDigest: value.template_digest,
+    templateVersion: value.template_version,
   };
 }
 
@@ -81,12 +125,16 @@ export async function prepareReferenceApp(
 ): Promise<ReferenceAppSetupResult> {
   const origin = assertLoopbackOrigin(options.permittedOrigin);
   if (options.setupToken.trim() === '') throw new Error('reference setup token is empty');
-  const doFetch: SetupFetch = options.fetch ?? (globalThis.fetch as SetupFetch);
+  if (options.expectedFixtureDigest !== REFERENCE_FIXTURE_DIGEST) {
+    throw new Error('the sealed fixture definition is not the supported frozen reference contract');
+  }
+  const doFetch: SetupFetch = options.fetch ?? boundedLocalFetch;
   const headers = { 'x-setup-token': options.setupToken };
 
   const reset = await doFetch(new URL('/api/_test/reset', origin).href, {
     method: 'POST',
     headers,
+    redirect: 'error',
   });
   if (!reset.ok || reset.status !== 204) {
     throw new Error(`reference reset returned HTTP ${reset.status}; browser launch is refused`);
@@ -94,12 +142,12 @@ export async function prepareReferenceApp(
 
   const fixtureResponse = await doFetch(
     new URL(`/api/_test/fixtures?variant=${options.variant}`, origin).href,
-    { method: 'POST', headers },
+    { method: 'POST', headers, redirect: 'error' },
   );
   if (!fixtureResponse.ok || fixtureResponse.status !== 201) {
     throw new Error(`fixture creation returned HTTP ${fixtureResponse.status}; browser launch is refused`);
   }
-  const fixture = readFixture(await fixtureResponse.json(), options.variant);
+  const fixture = readFixture(await fixtureResponse.json(), options.variant, options.expectedFixtureDigest);
   const startUrl = new URL(`/form/${encodeURIComponent(fixture.nonce)}`, origin).href;
   const launched = await options.launch(startUrl);
   let observedOrigin: string | undefined;

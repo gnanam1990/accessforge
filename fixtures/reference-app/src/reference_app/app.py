@@ -12,6 +12,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import db, templates
 from .config import ReferenceAppSettings
+from .fixture_contract import REFERENCE_FIXTURE_VERSION
+from .fixture_definition import template_digest
 from .validation import validate_service_request
 
 
@@ -73,13 +75,18 @@ def create_app(settings: ReferenceAppSettings | None = None) -> FastAPI:
         if variant not in ("accessible", "inaccessible"):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown variant")
         nonce = secrets.token_urlsafe(16)
-        digest = templates.template_digest(variant)
+        digest = template_digest(variant)
         with db.transaction(config.database_url) as conn:
             conn.execute(
                 "INSERT INTO fixture_instance (nonce, template_digest, variant) VALUES (%s,%s,%s)",
                 (nonce, digest, variant),
             )
-        return {"nonce": nonce, "variant": variant, "template_digest": digest}
+        return {
+            "nonce": nonce,
+            "variant": variant,
+            "template_digest": digest,
+            "template_version": REFERENCE_FIXTURE_VERSION,
+        }
 
     @app.post(
         "/api/_test/reset",
