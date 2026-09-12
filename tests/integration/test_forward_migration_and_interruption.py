@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0024_candidate_daemon_binding.sql"
+NEWEST = "0025_candidate_artifact_receipts.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -142,8 +142,58 @@ def test_data_written_under_the_previous_rules_survives_the_migration(disposable
 def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     disposable: str,
 ) -> None:
-    """Legacy in-flight builds are fenced; no historical endpoint is invented."""
     _apply_through(disposable, _previous())
+    historical = _seed_legacy_candidate(disposable, "BUILT")
+    with connect(disposable) as conn:
+        assert conn.execute("SELECT to_regclass('candidate_archive') AS name").fetchone() == {
+            "name": None,
+        }
+    assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        # Migration cannot invent process provenance or available bytes for an old digest.
+        assert conn.execute("SELECT * FROM candidate_process_receipt").fetchall() == []
+        assert conn.execute("SELECT * FROM candidate_archive").fetchall() == []
+        assert conn.execute(
+            "SELECT state FROM candidate_build_attempt WHERE id = %s", (historical,)
+        ).fetchone() == {"state": "BUILT"}
+        for table in ("candidate_process_receipt", "candidate_archive"):
+            assert conn.execute(
+                "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE relname = %s",
+                (table,),
+            ).fetchone() == {"relrowsecurity": True, "relforcerowsecurity": True}
+            policy = conn.execute(
+                "SELECT qual,with_check FROM pg_policies WHERE tablename = %s",
+                (table,),
+            ).fetchone()
+            assert policy is not None
+            assert all("current_workspace_id()" in str(value) for value in policy.values())
+        # Real inserts through the new FK and byte-limit checks, explicitly synthetic provenance.
+        conn.execute(
+            "INSERT INTO candidate_process_receipt "
+            "(build_id,workspace_id,container_id,image_id,platform) "
+            "VALUES (%s,%s,repeat('a',64),'sha256:' || repeat('b',64),'linux/arm64')",
+            (historical, WS),
+        )
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_process_receipt SET platform = 'linux/amd64' WHERE build_id = %s",
+                (historical,),
+            )
+        with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+            conn.execute(
+                "INSERT INTO candidate_archive (build_id,workspace_id,content_digest,size_bytes,"
+                "object_key,stdout_digest,stderr_digest,state) "
+                "VALUES (%s,%s,repeat('a',64),41943041,'synthetic',"
+                "repeat('b',64),repeat('c',64),'QUARANTINED')",
+                (historical, WS),
+            )
+
+
+def test_daemon_binding_migration_fences_legacy_attempts(
+    disposable: str,
+) -> None:
+    """Legacy in-flight builds are fenced; no historical endpoint is invented."""
+    _apply_through(disposable, "0023_candidate_build_attempt.sql")
     ids = {
         state: _seed_legacy_candidate(disposable, state)
         for state in ("CLAIMED", "DISPATCHED", "BUILT")

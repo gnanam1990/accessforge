@@ -33,8 +33,10 @@ from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import (
     approvals,
     assert_row_level_security_enforced,
+    connect,
     migrate,
     patches,
+    restore,
     reviews,
     runs,
     unscoped_connection,
@@ -197,14 +199,14 @@ def test_candidate_claim_dispatch_and_receipt_are_not_a_verification_conclusion(
         dispatched = builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=inputs)
         assert dispatched.state == "DISPATCHED"
     with workspace_connection(db, WS) as conn:
-        built = builds.finish_build(
-            conn,
-            claim=claim,
-            artifact_digest="d" * 64,
-            candidate_archive_digest=inputs.candidate_archive_digest,
-            cleanup_confirmed=True,
-        )
-        assert built.state == "BUILT"
+        with pytest.raises(builds.BuildClaimRefused, match="durably retained"):
+            builds.finish_build(
+                conn,
+                claim=claim,
+                artifact_digest="d" * 64,
+                candidate_archive_digest=inputs.candidate_archive_digest,
+                cleanup_confirmed=True,
+            )
         verification = patches.load_verification(conn, verification_id=claim.verification_id)
         assert verification.state == "BUILDING" and verification.conclusion is None
         with pytest.raises(builds.BuildClaimRefused):
@@ -215,6 +217,38 @@ def test_candidate_claim_dispatch_and_receipt_are_not_a_verification_conclusion(
                 candidate_archive_digest=inputs.candidate_archive_digest,
                 cleanup_confirmed=True,
             )
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+def test_restore_fences_even_unexpired_candidate_claims(
+    db: str,
+    backup_database_url: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+    dispatched: bool,
+) -> None:
+    claim = _build_claim(db, build_ready)
+    if dispatched:
+        with workspace_connection(db, WS) as conn:
+            builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=build_ready[1])
+    with connect(backup_database_url) as conn:
+        report = restore.reconcile(
+            conn, operator="candidate-restore-test", restore_id=str(uuid.uuid4())
+        )
+        assert report.candidate_builds_fenced == 1
+    with workspace_connection(db, WS) as conn:
+        row = conn.execute(
+            "SELECT state, epoch, failure_code, cleanup_confirmed "
+            "FROM candidate_build_attempt WHERE id = %s",
+            (claim.build_id,),
+        ).fetchone()
+        assert row == {
+            "state": "UNKNOWN",
+            "epoch": claim.epoch + 1,
+            "failure_code": "RESTORED_DATABASE",
+            "cleanup_confirmed": False,
+        }
+        with pytest.raises(builds.BuildClaimRefused):
+            builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=build_ready[1])
 
 
 def test_candidate_source_mismatch_rolls_back_both_claim_and_verification(

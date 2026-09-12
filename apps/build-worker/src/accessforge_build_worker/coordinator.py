@@ -2,7 +2,8 @@
 
 Commit durable intent before Docker creation; commit only supervisor-captured results after exact
 cleanup. Crash recovery fences expired attempts; UNKNOWN needs operator reconciliation. Artifact
-bytes are returned to the trusted caller; durable artifact retention and protected tests are next.
+bytes are durably retained with bounded read-back before BUILT. Protected tests and reader proof
+are still separate, required work.
 """
 
 from __future__ import annotations
@@ -18,7 +19,17 @@ from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import approvals, patches, workspace_connection
 from accessforge_persistence import candidate_builds as builds
 
-from .sandbox import MEMORY, PIDS, SCRATCH, USER, CleanupUnconfirmed, DockerSandbox, SandboxBuild
+from .artifacts import CandidateArchiveStore, retain_candidate
+from .sandbox import (
+    MEMORY,
+    PIDS,
+    SCRATCH,
+    USER,
+    CleanupUnconfirmed,
+    DockerSandbox,
+    SandboxBuild,
+    SandboxCreation,
+)
 from .snapshot import PreparedCandidate, SnapshotRefused, prepare_candidate
 from .source_broker import read_persisted_source
 
@@ -118,6 +129,7 @@ def execute_claim(
     claimed: ClaimedCandidate,
     sandbox: DockerSandbox,
     command: tuple[str, ...],
+    store: CandidateArchiveStore,
     cancelled: Callable[[], bool] = lambda: False,
 ) -> SandboxBuild:
     """Dispatch once and fence late publication. Returned artifact bytes are not reader proof."""
@@ -132,10 +144,27 @@ def execute_claim(
         raise builds.BuildClaimRefused("prepared source or execution configuration changed")
     with workspace_connection(database_url, workspace_id) as conn:
         builds.authorize_dispatch(conn, workspace_id=workspace_id, claim=claim, inputs=inputs)
+
+    def created(process: SandboxCreation) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            builds.record_creation(
+                conn,
+                claim=claim,
+                container_id=process.container_id,
+                image_id=process.image_id,
+                platform=process.platform,
+                daemon_endpoint=process.daemon.endpoint,
+                daemon_id=process.daemon.daemon_id,
+            )
+
     # The attempt ID already exists durably and determines the Docker name even after a crash.
     try:
         result = sandbox.build(
-            candidate.source, command=command, task_id=claim.build_id, cancelled=cancelled
+            candidate.source,
+            command=command,
+            task_id=claim.build_id,
+            cancelled=cancelled,
+            on_created=created,
         )
     except Exception as exc:
         with workspace_connection(database_url, workspace_id) as conn:
@@ -146,17 +175,7 @@ def execute_claim(
             except builds.BuildClaimRefused:
                 builds.fence_expired(conn)
         raise
-    with workspace_connection(database_url, workspace_id) as conn:
-        if (
-            result.daemon.endpoint != inputs.daemon_endpoint
-            or result.daemon.daemon_id != inputs.daemon_id
-        ):
-            raise builds.BuildClaimRefused("build receipt belongs to another daemon")
-        builds.finish_build(
-            conn,
-            claim=claim,
-            artifact_digest=result.artifact.archive_digest,
-            candidate_archive_digest=result.source_archive_digest,
-            cleanup_confirmed=result.cleanup_confirmed,
-        )
+    retain_candidate(
+        database_url, workspace_id=workspace_id, claim=claim, result=result, store=store
+    )
     return result

@@ -323,6 +323,13 @@ def finish_build(
             raise BuildClaimRefused("attempt expired while waiting for receipt locks")
         if row["candidate_archive_digest"] != candidate_archive_digest:
             raise BuildClaimRefused("receipt is for a different candidate")
+        retained = conn.execute(
+            "SELECT 1 FROM candidate_archive WHERE build_id = %s AND state = 'RETAINED' "
+            "AND content_digest = %s",
+            (claim.build_id, artifact_digest),
+        ).fetchone()
+        if retained is None:
+            raise BuildClaimRefused("candidate bytes have not been durably retained")
         updated = conn.execute(
             "UPDATE candidate_build_attempt SET state = 'BUILT', artifact_digest = %s, "
             "cleanup_confirmed = true, finished_at = %s WHERE id = %s RETURNING *",
@@ -382,3 +389,26 @@ def record_failure(
                     expected_revision=patch.revision,
                     now=moment,
                 )
+
+
+def record_creation(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    claim: BuildClaim,
+    container_id: str,
+    image_id: str,
+    platform: str,
+    daemon_endpoint: str,
+    daemon_id: str,
+) -> None:
+    """Commit actual container identity before starting any repository process."""
+    with conn.transaction():
+        row = _owned(conn, claim, "DISPATCHED", None)
+        if row["daemon_endpoint"] != daemon_endpoint or row["daemon_id"] != daemon_id:
+            raise BuildClaimRefused("creation belongs to another daemon")
+        conn.execute(
+            "INSERT INTO candidate_process_receipt "
+            "(build_id,workspace_id,container_id,image_id,platform) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (claim.build_id, row["workspace_id"], container_id, image_id, platform),
+        )
