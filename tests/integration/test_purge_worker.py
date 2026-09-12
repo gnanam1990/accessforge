@@ -85,6 +85,15 @@ def db(test_database_url: str) -> Iterator[str]:
 class _Down:
     """The object store during an outage."""
 
+    def put(self, *, key: str, payload: bytes, content_type: str) -> str:
+        raise AssertionError("a purge must not upload objects")
+
+    def get(self, *, key: str) -> bytes:
+        raise AssertionError("a purge must not read object bytes")
+
+    def exists(self, *, key: str) -> bool:
+        raise AssertionError("a purge must attempt deletion without an existence precheck")
+
     def delete(self, *, key: str) -> None:
         raise RuntimeError(f"connection refused while deleting {key}")
 

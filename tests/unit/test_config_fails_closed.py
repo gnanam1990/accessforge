@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -16,31 +17,60 @@ REFAPP_VALID = {
     "observer_token": "o" * 32,
     "setup_token": "s" * 32,
 }
-API_VALID = {
-    "database_url": "postgresql://user:pw@localhost:5432/accessforge",
-    "evidence_endpoint_url": "http://localhost:9000",
-    "evidence_bucket": "bucket",
-    "evidence_access_key": "access-key-value",
-    "evidence_secret_key": "secret-key-value",
-}
+
+
+def _reference_app_settings(
+    *,
+    database_url: str = "postgresql://user:pw@localhost:5432/refapp",
+    observer_token: str = "o" * 32,
+    setup_token: str = "s" * 32,
+    host: str = "127.0.0.1",
+) -> ReferenceAppSettings:
+    """Construct the typed valid control, varying only the field a test is exercising."""
+    return ReferenceAppSettings(
+        database_url=database_url,
+        observer_token=observer_token,
+        setup_token=setup_token,
+        host=host,
+    )
+
+
+def _api_settings(
+    *,
+    database_url: str = "postgresql://user:pw@localhost:5432/accessforge",
+    evidence_endpoint_url: str = "http://localhost:9000",
+    evidence_bucket: str = "bucket",
+    evidence_access_key: str = "access-key-value",
+    evidence_secret_key: str = "secret-key-value",  # noqa: S107 - deliberately redacted test input.
+    environment: Literal["local", "test", "staging", "production"] = "local",
+) -> ApiSettings:
+    """Keep configuration tests at the real typed constructor boundary."""
+    return ApiSettings(
+        database_url=database_url,
+        evidence_endpoint_url=evidence_endpoint_url,
+        evidence_bucket=evidence_bucket,
+        evidence_access_key=evidence_access_key,
+        evidence_secret_key=evidence_secret_key,
+        environment=environment,
+    )
 
 
 def test_valid_configuration_is_accepted() -> None:
     # Allowed-path control: an always-reject validator must fail this test.
-    assert ReferenceAppSettings(**REFAPP_VALID).port == 8081
-    assert ApiSettings(**API_VALID).environment == "local"
+    assert _reference_app_settings().port == 8081
+    assert _api_settings().environment == "local"
 
 
 # S104 flags the all-interfaces literal; this test exists precisely to prove it is rejected.
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "example.com", "::"])  # noqa: S104
 def test_reference_app_refuses_non_loopback_binding(host: str) -> None:
     with pytest.raises(ValidationError, match="non-loopback"):
-        ReferenceAppSettings(**REFAPP_VALID, host=host)
+        _reference_app_settings(host=host)
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
 def test_reference_app_accepts_loopback(host: str) -> None:
-    assert ReferenceAppSettings(**REFAPP_VALID, host=host).host == host
+    assert _reference_app_settings(host=host).host == host
 
 
 @pytest.mark.parametrize(
@@ -53,7 +83,7 @@ def test_reference_app_accepts_loopback(host: str) -> None:
 )
 def test_reference_app_refuses_non_local_database(url: str) -> None:
     with pytest.raises(ValidationError):
-        ReferenceAppSettings(**{**REFAPP_VALID, "database_url": url})
+        _reference_app_settings(database_url=url)
 
 
 @pytest.mark.parametrize(
@@ -69,23 +99,23 @@ def test_reference_app_refuses_non_local_database(url: str) -> None:
 )
 def test_placeholder_tokens_are_refused(token: str) -> None:
     with pytest.raises(ValidationError):
-        ReferenceAppSettings(**{**REFAPP_VALID, "observer_token": token})
+        _reference_app_settings(observer_token=token)
 
 
 def test_example_file_placeholders_are_refused_for_credentials() -> None:
     with pytest.raises(ValidationError):
-        ApiSettings(**{**API_VALID, "evidence_secret_key": "REPLACE_ME"})
+        _api_settings(evidence_secret_key="REPLACE_ME")
 
 
 def test_short_tokens_are_refused() -> None:
     with pytest.raises(ValidationError):
-        ReferenceAppSettings(**{**REFAPP_VALID, "setup_token": "tooshort"})
+        _reference_app_settings(setup_token="tooshort")
 
 
 def test_unknown_configuration_keys_are_refused() -> None:
     # extra="forbid": a typo in an env var must not silently leave a default in place.
     with pytest.raises(ValidationError):
-        ReferenceAppSettings(**REFAPP_VALID, unexpected_option="x")
+        ReferenceAppSettings.model_validate({**REFAPP_VALID, "unexpected_option": "x"})
 
 
 def test_missing_required_configuration_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,8 +134,8 @@ def test_missing_required_configuration_is_refused(monkeypatch: pytest.MonkeyPat
 
 
 def test_secrets_never_appear_in_diagnostics() -> None:
-    refapp = ReferenceAppSettings(**REFAPP_VALID)
-    api = ApiSettings(**API_VALID)
+    refapp = _reference_app_settings()
+    api = _api_settings()
     rendered = repr(refapp.redacted()) + repr(api.redacted())
     for secret in ("o" * 32, "s" * 32, "pw", "access-key-value", "secret-key-value"):
         assert secret not in rendered, f"{secret!r} leaked into diagnostics"
@@ -130,7 +160,7 @@ def test_secrets_never_appear_in_diagnostics() -> None:
 )
 def test_non_local_database_cannot_be_smuggled_past_the_guard(url: str) -> None:
     with pytest.raises(ValidationError):
-        ReferenceAppSettings(**{**REFAPP_VALID, "database_url": url})
+        _reference_app_settings(database_url=url)
 
 
 @pytest.mark.parametrize(
@@ -145,38 +175,31 @@ def test_non_local_database_cannot_be_smuggled_past_the_guard(url: str) -> None:
 )
 def test_genuinely_local_databases_are_still_accepted(url: str) -> None:
     # Allowed-path control: a guard that rejected everything would fail here.
-    assert ReferenceAppSettings(**{**REFAPP_VALID, "database_url": url}).database_url == url
+    assert _reference_app_settings(database_url=url).database_url == url
 
 
 @pytest.mark.parametrize("environment", ["staging", "production"])
-def test_non_tls_evidence_endpoint_is_refused_outside_local(environment: str) -> None:
+def test_non_tls_evidence_endpoint_is_refused_outside_local(
+    environment: Literal["staging", "production"],
+) -> None:
     # Object-store credentials must not cross the network in plaintext.
     with pytest.raises(ValidationError, match="https"):
-        ApiSettings(
-            **{
-                **API_VALID,
-                "environment": environment,
-                "evidence_endpoint_url": "http://evidence.example.com",
-            }
-        )
+        _api_settings(environment=environment, evidence_endpoint_url="http://evidence.example.com")
 
 
 def test_production_refuses_a_loopback_database() -> None:
     # A production deployment pointing at its own loopback is a misconfiguration, not a choice.
     with pytest.raises(ValidationError, match="loopback"):
-        ApiSettings(
-            **{
-                **API_VALID,
-                "environment": "production",
-                "evidence_endpoint_url": "https://evidence.example.com",
-                "database_url": "postgresql://u:p@localhost:5432/db",
-            }
+        _api_settings(
+            environment="production",
+            evidence_endpoint_url="https://evidence.example.com",
+            database_url="postgresql://u:p@localhost:5432/db",
         )
 
 
 def test_local_development_is_unaffected_by_production_rules() -> None:
     # Allowed-path control for the environment-conditional rules.
-    s = ApiSettings(**API_VALID)  # environment defaults to "local"
+    s = _api_settings()  # environment defaults to "local"
     assert s.environment == "local"
     assert s.evidence_endpoint_url.startswith("http://")
 

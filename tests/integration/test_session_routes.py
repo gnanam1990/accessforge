@@ -166,6 +166,7 @@ def test_the_response_body_does_not_repeat_the_tokens(local_client: TestClient) 
     jar = {c.name: c.value for c in local_client.cookies.jar}
     serialised = response.text
     for token in (jar[SESSION_COOKIE], jar[CSRF_COOKIE]):
+        assert token is not None
         assert token not in serialised
 
 
@@ -284,7 +285,9 @@ def test_sign_out_revokes_the_session_in_the_database_not_only_the_cookie(
 ) -> None:
     local_client.post("/v1/sessions", json={"email": MEMBER_EMAIL})
     token = next(c.value for c in local_client.cookies.jar if c.name == SESSION_COOKIE)
+    assert token is not None
     csrf = next(c.value for c in local_client.cookies.jar if c.name == CSRF_COOKIE)
+    assert csrf is not None
 
     assert local_client.delete("/v1/session", headers={CSRF_HEADER: csrf}).status_code == 204
 
@@ -307,6 +310,7 @@ def test_sign_out_clears_both_cookies_and_not_just_the_last_one(
     """
     local_client.post("/v1/sessions", json={"email": MEMBER_EMAIL})
     csrf = next(c.value for c in local_client.cookies.jar if c.name == CSRF_COOKIE)
+    assert csrf is not None
     response = local_client.delete("/v1/session", headers={CSRF_HEADER: csrf})
 
     assert response.status_code == 204
@@ -340,6 +344,7 @@ def test_sign_out_is_recorded_in_the_operator_audit_trail(
 ) -> None:
     local_client.post("/v1/sessions", json={"email": MEMBER_EMAIL})
     csrf = next(c.value for c in local_client.cookies.jar if c.name == CSRF_COOKIE)
+    assert csrf is not None
     local_client.delete("/v1/session", headers={CSRF_HEADER: csrf})
     with unscoped_connection(db) as conn:
         rows = conn.execute(
@@ -356,4 +361,5 @@ def test_there_is_no_route_that_reads_a_session_token_back(local_client: TestCli
     """
     local_client.post("/v1/sessions", json={"email": MEMBER_EMAIL})
     token = next(c.value for c in local_client.cookies.jar if c.name == SESSION_COOKIE)
+    assert token is not None
     assert token not in local_client.get("/v1/session").text

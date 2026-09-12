@@ -19,6 +19,7 @@ from accessforge_domain.authority import ChildAuthorization, ExecutionGrant
 from accessforge_domain.canonical import digest
 from accessforge_domain.runners import (
     REQUIRED_PREFLIGHT_CHECKS,
+    AmbiguityReason,
     PhysicalSession,
     PreflightCheck,
     PreflightResult,
@@ -275,16 +276,16 @@ def test_a_zero_budget_is_not_an_unlimited_one(db: str) -> None:
 def test_a_quarantined_desktop_refuses_dispatch(db: str) -> None:
     runner_id, lease_id, run_id, epoch = _leased(db)
     with workspace_connection(db, WS) as conn:
+        lease = conn.execute(
+            "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
+        ).fetchone()
+        assert lease is not None
         runners.record_action_intent(
             conn,
             workspace_id=WS,
             lease_id=lease_id,
             run_id=run_id,
-            attempt_id=str(
-                conn.execute(
-                    "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
-                ).fetchone()["attempt_id"]
-            ),
+            attempt_id=str(lease["attempt_id"]),
             epoch=epoch,
             action_sequence=1,
             action="NEXT",
@@ -294,10 +295,11 @@ def test_a_quarantined_desktop_refuses_dispatch(db: str) -> None:
         action = conn.execute(
             "SELECT id FROM runner_action WHERE lease_id = %s", (lease_id,)
         ).fetchone()
+        assert action is not None
         runners.mark_action_ambiguous(
             conn,
             action_id=str(action["id"]),
-            reason=runners.AmbiguityReason.ACTION_RESULT_NEVER_ARRIVED,
+            reason=AmbiguityReason.ACTION_RESULT_NEVER_ARRIVED,
         )
     with pytest.raises(runners.DispatchRefused, match="quarantined"):
         _authorize(db, runner_id, lease_id, epoch, run_id)

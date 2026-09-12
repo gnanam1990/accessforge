@@ -185,6 +185,8 @@ def test_a_review_cannot_change_the_run_outcome(db: str) -> None:
         after = conn.execute(
             "SELECT status, outcome, revision FROM run WHERE id = %s", (run_id,)
         ).fetchone()
+    assert before is not None
+    assert after is not None
     assert dict(before) == dict(after)
 
 
@@ -364,7 +366,7 @@ def test_assistive_technology_detail_without_the_flag_is_refused(db: str) -> Non
 # --- the finding lifecycle ------------------------------------------------------------------------
 
 
-def _finished_run(conn, outcome: Outcome) -> str:
+def _finished_run(conn: psycopg.Connection[dict[str, object]], outcome: Outcome) -> str:
     """A run driven to a terminal state through the reducers.
 
     Not an UPDATE setting the outcome directly: the `run` table holds a check constraint pairing

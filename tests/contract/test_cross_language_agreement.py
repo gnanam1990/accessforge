@@ -24,7 +24,7 @@ TS_DIST = ROOT / "packages/contracts/ts/dist/index.js"
 ALL_C0 = "".join(chr(c) for c in range(0x20))
 DEL = chr(0x7F)
 
-PAYLOADS: list[dict] = [
+PAYLOADS: list[dict[str, object]] = [
     {},
     {"a": 1},
     {"b": 1, "a": 2, "C": 3, "A": 4},
@@ -56,7 +56,7 @@ def _require_built_ts() -> None:
         )
 
 
-def _typescript_results(payloads: list[dict]) -> list[dict[str, str]]:
+def _typescript_results(payloads: list[dict[str, object]]) -> list[dict[str, str]]:
     # Payloads arrive on stdin rather than argv: process.argv is indexed differently under
     # `node -e`, and stdin also avoids argument-length limits as the payload set grows.
     script = (

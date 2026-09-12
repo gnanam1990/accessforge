@@ -25,9 +25,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from accessforge_domain.canonical import digest
-from accessforge_domain.outcome import Outcome
 from accessforge_domain.patch_policy import ProposedChange
-from accessforge_domain.states import ApprovalScope, FindingStatus, PatchStatus
+from accessforge_domain.states import ApprovalScope, FindingStatus, Outcome, PatchStatus
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import (
     approvals,

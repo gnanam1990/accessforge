@@ -51,7 +51,7 @@ def _project(url: str, workspace: str) -> str:
 
 
 def _insert_version(
-    conn: psycopg.Connection[dict],
+    conn: psycopg.Connection[dict[str, object]],
     workspace: str,
     project_id: str,
     *,

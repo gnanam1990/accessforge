@@ -5,6 +5,7 @@ Requirements: FR-007, FR-015. Invariants: INV-09, INV-11, INV-13.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
@@ -25,12 +26,11 @@ from accessforge_domain.reducers import (
 from accessforge_domain.states import Outcome, RunStatus
 
 
-def running(**overrides: object) -> RunState:
+def running() -> RunState:
     state = RunState(run_id="r1")
     state = progress(state)  # LEASED
     state = progress(state)  # RUNNING
-    # RunState uses slots, so replace() rather than __dict__ manipulation.
-    return replace(state, **overrides) if overrides else state
+    return state
 
 
 # --- normal lifecycle -----------------------------------------------------------------------
@@ -65,13 +65,14 @@ def test_a_stale_expected_revision_is_refused() -> None:
 def test_terminal_records_are_immutable() -> None:
     """INV-11: a retry creates a new linked run; it never resumes a terminal one."""
     state = complete(progress(progress(progress(RunState(run_id="r1")))), outcome=Outcome.FAIL)
-    for attempt in (
+    attempts: tuple[Callable[[], RunState], ...] = (
         lambda: progress(state),
         lambda: admit_action(state),
         lambda: cancel(state),
         lambda: interrupt(state, reason="x"),
         lambda: complete(state, outcome=Outcome.PASS),
-    ):
+    )
+    for attempt in attempts:
         with pytest.raises(TransitionError, match="terminal"):
             attempt()
 
