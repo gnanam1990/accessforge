@@ -138,3 +138,10 @@ test('TYPE_TEXT must match an approved synthetic fixture value before the reader
   );
   assert.deepEqual(calls, []);
 });
+
+test('an empty action list cannot become a completed candidate proof', async () => {
+  const { calls, runner, sink } = harness();
+  await assert.rejects(() => runner.run([]), /requires at least one action/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(sink.lines, []);
+});

@@ -174,11 +174,20 @@ export class VoiceOverAdapter {
     context: ActionContext,
   ): Promise<RawObservation | UnknownObservation> {
     const started = this.monotonicNow();
+    const baseline = await this.client.lastSpokenPhrase();
     let last: string | undefined;
     let stable = 0;
+    let transitioned = false;
 
     while (this.monotonicNow() - started < this.idleTimeoutMs) {
       const phrase = await this.client.lastSpokenPhrase();
+      if (!transitioned) {
+        if (phrase === baseline) {
+          await this.sleep(this.idlePollMs);
+          continue;
+        }
+        transitioned = true;
+      }
       if (phrase === last) {
         stable += 1;
       } else {

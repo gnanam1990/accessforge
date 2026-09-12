@@ -71,9 +71,11 @@ class SealedNavigatorPolicy(_SealedModel):
 
     @model_validator(mode="after")
     def policy_is_complete_not_selectively_weakened(self) -> Self:
-        if {action.value for action in self.allowed_actions} != ALLOWED_ACTIONS:
+        action_values = {action.value for action in self.allowed_actions}
+        unsupported = action_values - ALLOWED_ACTIONS
+        if unsupported:
             raise ValueError(
-                "navigator action vocabulary must exactly match the sealed domain policy"
+                f"navigator actions {sorted(unsupported)} are outside the sealed domain policy"
             )
         required_forbidden = {
             "DOM",
