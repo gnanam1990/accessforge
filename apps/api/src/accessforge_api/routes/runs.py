@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -620,6 +622,24 @@ def _artifact_store(request: Request) -> evidence.S3ArtifactStore:
     )
 
 
+def _purge_connection(
+    request: Request, workspace_id: str
+) -> Callable[[], AbstractContextManager[psycopg.Connection[Any]]]:
+    """A fresh workspace-scoped connection per purge batch.
+
+    A factory rather than a connection because the drain commits per batch: a batch that released
+    bytes must stay released even if a later one fails. Reusing this request's connection would put
+    every batch in a transaction that has not committed, so a rollback would leave the store empty
+    and the queue still claiming those keys.
+    """
+    url = database_url(request)
+
+    def connect() -> AbstractContextManager[psycopg.Connection[Any]]:
+        return workspace_connection(url, workspace_id)
+
+    return connect
+
+
 @router.post("/runs/{run_id}/deletions", status_code=status.HTTP_201_CREATED)
 def delete_run_evidence(
     workspace_id: str,
@@ -627,6 +647,7 @@ def delete_run_evidence(
     request: Request,
     conn: Conn,
     payload: dict[str, Any],
+    response: Response,
 ) -> dict[str, Any]:
     """Delete named evidence classes for one run, and report what the deletion did not reach.
 
@@ -736,12 +757,13 @@ def delete_run_evidence(
         # Its own connection so the purge's own bookkeeping -- which keys were released, which
         # failed and why -- commits on the purge's terms rather than the request's. Work the store
         # has already done should not be forgotten because something later in the request failed.
-        with workspace_connection(database_url(request), workspace_id) as purger:
-            report = report.with_purge(
-                deletion.purge_until_drained(
-                    purger, _artifact_store(request), deletion_id=report.deletion_id
-                )
+        report = report.with_purge(
+            deletion.drain_purge_queue(
+                _purge_connection(request, workspace_id),
+                _artifact_store(request),
+                deletion_id=report.deletion_id,
             )
+        )
 
         return {
             "deletionId": report.deletion_id,
@@ -775,6 +797,12 @@ def delete_run_evidence(
     outcome = run_idempotently(
         conn, context, route="POST /runs/deletions", body=body, perform=perform
     )
+    if outcome.replayed:
+        # Said out loud, because the alternative is a caller who cannot tell whether their retry
+        # destroyed a second scope of evidence or was handed the first answer back. For an
+        # irreversible operation that is not a detail: without this header the only way to find out
+        # is to read the deletion listing and count.
+        response.headers["Idempotent-Replay"] = "true"
     return outcome.response or {}
 
 
@@ -811,10 +839,11 @@ def retry_deletion_purge(
 
     # Its own connection: the purge's bookkeeping -- which keys went, which failed and why --
     # belongs to the purge, not to whatever else this request might still do.
-    with workspace_connection(database_url(request), workspace_id) as purger:
-        outcome = deletion.purge_until_drained(
-            purger, _artifact_store(request), deletion_id=deletion_id
-        )
+    outcome = deletion.drain_purge_queue(
+        _purge_connection(request, workspace_id),
+        _artifact_store(request),
+        deletion_id=deletion_id,
+    )
 
     return {
         "deletionId": deletion_id,

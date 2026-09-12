@@ -139,6 +139,21 @@ findings fixed, one disagreed with evidence and recorded). CodeRabbit was rate-l
 and third passes, so only the middle head received a full external review. Devin's trial has
 expired and reviewed nothing.
 
+## Purge pipeline operations — 2026-09-12 (branch `feat/purge-queue-operations`, not yet reviewed)
+
+The four FR-020 debts above, closed. A maintenance worker now makes the report's promise true
+without a human: `sweep_once` discovers the workspaces holding pending keys on a role that can see
+across tenants, then drains each on a connection scoped to that workspace.
+
+The guard worth knowing about is `assert_can_sweep`. The queue is under `FORCE ROW LEVEL SECURITY`,
+so a sweeper on the application role sees an empty queue whatever is in it — it would report a clean
+run for ever while the bytes stayed in the store. That is refused outright, because a worker that
+silently does nothing is worse than no worker: the first looks finished.
+
+**1635 tests pass** against real PostgreSQL 17 and MinIO. Five mutation checks, each breaking one
+guard and naming the test that fails, restored byte-identically by SHA-256. **No external review
+yet, and nothing pushed** — this branch is for independent review before it goes anywhere.
+
 ## Outstanding debts
 
 - Executable negative-verification tests now exist for the fixture and configuration guards, proved
@@ -147,18 +162,19 @@ expired and reviewed nothing.
   Owed by module 08.
 - Test-first ordering was not followed in module 01; guards were mutated afterwards to prove the
   tests are falsifiable. See `docs/handoffs/01.md`.
-- No scheduled worker drains the object purge queue. A deletion the store could not finish waits for
-  an operator to call the retry route; nothing sweeps on its own, because no job runner exists yet
-  (`apps/orchestrator` is a README). Raised by the module 26 independent review, closed as far as a
-  request-driven system can close it.
-- `purge_pending_objects` holds one transaction across up to 200 blocking object-store calls. A
-  latency and lock-duration smell rather than a correctness bug; noted by review and not acted on.
-- `evidence_object_purge.artifact_id` has no foreign key to `evidence_artifact`, so nothing at the
-  database layer enforces that it names a real, same-workspace artifact. It is only ever written
-  from a row selected in the same transaction.
-- No test drives the deletion route with an `Idempotency-Key`. Phase one commits on its own
-  connection, so a request that fails after it leaves a deletion with no idempotency record and a
-  retry records a second, zero-effect deletion. Reasoned about and accepted; not exercised.
+- ~~No scheduled worker drains the object purge queue.~~ **Closed 2026-09-12** —
+  `accessforge-purge-worker` sweeps every workspace with pending keys on an interval. Runbook 8.
+- ~~One transaction across up to 200 blocking object-store calls.~~ **Closed 2026-09-12** —
+  `drain_purge_queue` takes a connection factory and commits per batch. This turned out to be a
+  correctness bug, not the latency smell it was recorded as: an interrupt mid-drain rolled back
+  every `purged_at` mark for bytes the store had already released, leaving the queue claiming keys
+  that no longer existed.
+- ~~`evidence_object_purge.artifact_id` has no foreign key.~~ **Closed 2026-09-12** — migration 0020,
+  composite `(artifact_id, workspace_id)`.
+- ~~No test drives the deletion route with an `Idempotency-Key`.~~ **Closed 2026-09-12** — and the
+  coverage found a real gap: the route never set `Idempotent-Replay`, so a client retrying an
+  irreversible deletion could not tell whether it had destroyed a second scope of evidence or been
+  handed the first answer back.
 - `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
   `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
   else, and it is untouched rather than unknown.

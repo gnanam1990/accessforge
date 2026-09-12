@@ -207,9 +207,56 @@ correctly — for as long as it stays missing.
 **Verify before resuming:** a real object round-trips, and `verify_stored_integrity` reports no
 mismatches for the affected window.
 
+**Afterwards, check the purge queue.** Deletions recorded during the outage marked their evidence
+`DELETED` and queued the object keys, but the store could not release the bytes. Until they are
+released, the database reports that evidence as deleted while the store still holds it. See
+runbook 8.
+
 ---
 
-## 8. Suspected compromise of a runner
+## 8. Purge backlog — evidence reported deleted whose bytes are still stored
+
+**Symptom:** `GET /runs/{runId}/deletions` reports `objectsStillPresent` above zero, and it is not
+going down.
+
+This is the safe side of FR-020's only inconsistency window, not a corruption: the database commits
+first, so the reachable state is "recorded as deleted, bytes still present" — never the reverse.
+But it is unfinished work, and somebody who reads only the deletion record will believe the bytes
+are gone.
+
+**Who removes them.** `accessforge-purge-worker` sweeps every workspace with pending keys on an
+interval (`ACCESSFORGE_PURGE_INTERVAL_SECONDS`, default 60). It needs two connections:
+
+| Variable | Role |
+|---|---|
+| `ACCESSFORGE_DATABASE_URL` | the ordinary application role; performs every deletion under row-level security |
+| `ACCESSFORGE_MAINTENANCE_DATABASE_URL` | a role with `BYPASSRLS`; used **only** to discover which workspaces have pending keys |
+
+**The maintenance role is not optional.** The queue is under `FORCE ROW LEVEL SECURITY`, so a
+sweeper on the application role sees an empty queue whatever is in it. The worker refuses to start
+a sweep in that case rather than reporting a clean run for ever — if the log says
+"bypasses row-level security", the discovery URL is wrong, and the queue has been growing
+unattended.
+
+**Do NOT:** delete rows from `evidence_object_purge` to clear the symptom. Each row is the record of
+a byte this product told somebody it had removed; dropping it leaves the object in the store with
+nothing pointing at it.
+
+**Do:**
+1. Check the worker is running and reading the right discovery URL (`still pending` per workspace
+   appears in its log each tick).
+2. If the store was the problem, fix it; the next tick retries. `last_error` and `attempts` on each
+   queue row say what has been failing.
+3. To finish one deletion immediately, call
+   `POST /runs/{runId}/deletions/{deletionId}/retry` (owner-only).
+
+**Verify before calling it resolved:** `objectsStillPresent` reaches zero for the affected
+deletions, and the objects themselves refuse a read-back. The queue count and the store must agree;
+a count of zero with bytes still present is the one state that would make the deletion report a lie.
+
+---
+
+## 9. Suspected compromise of a runner
 
 **Stop immediately.** Do not drain — a compromised runner holding a lease is a compromised runner
 driving a real machine.
