@@ -177,7 +177,16 @@ A second review round found the digest comparison on load was skipped when a pro
 rows, so deleting them all returned an empty patch that kept its digest, its APPROVED status and a
 valid approval. The comparison is now unconditional.
 
-**1729 tests pass** against real PostgreSQL 17 and MinIO. 22 mutation checks across the policy, the
+A third round, from an adversarial review, closed seven more: decision transitions now compare-and-swap
+on the revision inside the UPDATE (an approval and a rejection could both succeed); the base identity
+is bound to the finding's own run; proposal idempotency is namespaced by finding; duplicate paths are
+refused as invalid input rather than surfacing as a 500; **caller-supplied evidence can no longer
+produce VERIFIED** — every gate reads recorded rows, and with no runner attesting protected
+regressions the conclusion is conclusively non-VERIFIED; the repair surface is trusted project
+configuration an unconfigured project cannot widen; and `binary`, `mode` and
+`acknowledgeSeparateReview` are validated rather than coerced.
+
+**1739 tests pass** against real PostgreSQL 17 and MinIO. 22 mutation checks across the policy, the
 persistence gates and the schema, including ones that reinstate the self-referential revision
 comparison and the `changes and` short-circuit exactly as each shipped. Each restored
 byte-identically by SHA-256.

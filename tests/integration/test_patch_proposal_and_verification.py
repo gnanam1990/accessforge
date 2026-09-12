@@ -72,19 +72,19 @@ def db(test_database_url: str) -> Iterator[str]:
 
 
 @pytest.fixture()
-def manifest(db: str, seal_manifest: Callable[..., str]) -> str:
+def project(db: str) -> str:
     with workspace_connection(db, WS) as conn:
-        project_id = project_store.create_project(conn, workspace_id=WS, name="patched")
-    return seal_manifest(db, workspace_id=WS, project_id=project_id, authorized_by=OWNER)
+        return project_store.create_project(conn, workspace_id=WS, name="patched")
+
+
+@pytest.fixture()
+def manifest(db: str, project: str, seal_manifest: Callable[..., str]) -> str:
+    return seal_manifest(db, workspace_id=WS, project_id=project, authorized_by=OWNER)
 
 
 @pytest.fixture()
 def base_source(db: str, manifest: str) -> str:
-    """The source tree this manifest actually sealed.
-
-    Read from the seal rather than invented, because that is now checked: a proposal naming a tree
-    the manifest never built is refused.
-    """
+    """The source tree this manifest actually sealed, which is now checked."""
     with workspace_connection(db, WS) as conn:
         row = conn.execute(
             """
@@ -99,10 +99,27 @@ def base_source(db: str, manifest: str) -> str:
 
 
 @pytest.fixture()
-def finding(db: str, manifest: str) -> tuple[str, str]:
-    """A reproduced finding on a failed run: the only thing a repair can be proposed against."""
+def surface(db: str, project: str) -> tuple[str, ...]:
+    """A configured repair surface, without which no proposal is accepted at all."""
     with workspace_connection(db, WS) as conn:
-        run_id = runs.create_run(conn, workspace_id=WS, manifest_digest=manifest)
+        return patches.configure_repair_surface(
+            conn,
+            workspace_id=WS,
+            project_id=project,
+            # The lockfile sits at the repository root, so a project that wants dependency repairs
+            # has to say so explicitly -- which is the point of the surface being configuration.
+            paths=("src", "pnpm-lock.yaml"),
+            configured_by=OWNER,
+        )
+
+
+@pytest.fixture()
+def finding(db: str, manifest: str, project: str, surface: tuple[str, ...]) -> tuple[str, str]:
+    """A reproduced finding on a failed run of this project's sealed manifest."""
+    with workspace_connection(db, WS) as conn:
+        run_id = runs.create_run(
+            conn, workspace_id=WS, manifest_digest=manifest, project_id=project
+        )
         finding_id = reviews.create_finding(
             conn,
             workspace_id=WS,
@@ -188,9 +205,13 @@ def test_a_proposal_records_the_base_identity_in_both_halves(
 
 
 def test_a_proposal_against_an_unsealed_base_is_refused(db: str, finding: tuple[str, str]) -> None:
-    """An approval binding to inputs nothing recorded authorizes an identity matching nothing."""
+    """An approval binding to inputs nothing recorded authorizes an identity matching nothing.
+
+    The refusal now names the run's own manifest, because the base is checked against the finding's
+    run rather than against anything this workspace happened to seal.
+    """
     finding_id, _ = finding
-    with pytest.raises(patches.PatchError, match="no sealed manifest"):
+    with pytest.raises(patches.PatchError, match="not the manifest the finding's run used"):
         _propose(db, finding_id, str(digest({"never": "sealed"})))
 
 
@@ -547,33 +568,6 @@ def test_a_rejected_patch_is_terminal(db: str, finding: tuple[str, str], manifes
 
 # --- verification: what it takes to establish a repair --------------------------------------------
 
-BASELINE_IDENTITY = {
-    "browser": "chromium-132.0.6834.83",
-    "reader": "voiceover-macos-15.3",
-    "evaluator": "evaluator-4",
-    "fixture": "checkout-v7",
-    "locale": "en-US",
-}
-
-
-def _fabricated_complete_pair(candidate_run_id: str) -> patches.CandidateEvidence:
-    """Everything a matched pair requires, none of it produced by a real run.
-
-    Named for what it is. This deployment has no containment boundary for building a candidate and
-    no real screen reader to run one, so there is no honest way to reach VERIFIED here. Handing the
-    gates a fabricated complete pair proves the gates accept one; it proves nothing about this
-    product having ever produced one, and the handoff says so.
-    """
-    return patches.CandidateEvidence(
-        candidate_run_id=candidate_run_id,
-        candidate_identity=dict(BASELINE_IDENTITY),
-        baseline_outcome="FAIL",
-        candidate_outcome="PASS",
-        closing_watermarks=("supervisor", "observer"),
-        protected_regressions_passed=True,
-        frozen_assertions_unchanged=True,
-    )
-
 
 def _open(db: str, patch: patches.PatchProposal, baseline_run_id: str) -> str:
     with workspace_connection(db, WS) as conn:
@@ -582,70 +576,151 @@ def _open(db: str, patch: patches.PatchProposal, baseline_run_id: str) -> str:
             workspace_id=WS,
             patch_id=patch.patch_id,
             baseline_run_id=baseline_run_id,
-            baseline_identity=dict(BASELINE_IDENTITY),
+            baseline_identity={},
         )
     return record.verification_id
 
 
-def _candidate_run(db: str, manifest: str) -> str:
+def _completed_run(
+    db: str, manifest: str, project: str, outcome: str, status: str = "COMPLETED"
+) -> str:
+    """A run recorded as completed with an outcome, written the way the product writes one.
+
+    Straight to the `run` row rather than through a reducer: this suite is about the verification
+    gates, and the gates read recorded outcomes. What matters is that the outcome is *in the
+    database* rather than supplied to the function being tested -- which is exactly what the review
+    required.
+    """
     with workspace_connection(db, WS) as conn:
-        return runs.create_run(conn, workspace_id=WS, manifest_digest=manifest)
+        run_id = runs.create_run(
+            conn, workspace_id=WS, manifest_digest=manifest, project_id=project
+        )
+        # One statement: a terminal run is immutable, so a second update to change the status
+        # would be refused by the trigger that protects exactly that.
+        conn.execute(
+            "UPDATE run SET status = %s, outcome = %s, execution_began = true, "
+            "    ambiguity_reason = %s WHERE id = %s",
+            (
+                status,
+                outcome,
+                # An interrupted run must say why it is ambiguous; the schema refuses one that does
+                # not, which is the same rule a real interruption goes through.
+                "STOP_NOT_ACKNOWLEDGED" if status == "INTERRUPTED" else None,
+                run_id,
+            ),
+        )
+    return run_id
 
 
-def _conclude(
-    db: str, verification_id: str, evidence: patches.CandidateEvidence
-) -> patches.VerificationRecord:
+def _conclude(db: str, verification_id: str, **kwargs: object) -> patches.VerificationRecord:
     with workspace_connection(db, WS) as conn:
         return patches.conclude_verification(
-            conn, workspace_id=WS, verification_id=verification_id, evidence=evidence
+            conn,
+            workspace_id=WS,
+            verification_id=verification_id,
+            **kwargs,  # type: ignore[arg-type]
         )
 
 
-def test_conclude_verification_takes_no_verdict_argument(
+def test_conclude_verification_accepts_no_evidence_from_its_caller(
     db: str, finding: tuple[str, str], manifest: str
 ) -> None:
-    """The test that justifies the design.
+    """The design claim, tightened by review.
 
-    CONTRACTS says human review cannot convert an INCONCLUSIVE candidate to VERIFIED. A
-    `conclusion=` parameter is all it would take for a route, a retry or a sufficiently senior
-    reviewer to do exactly that, so there is none -- asserted against the signature, because a
-    future change that adds one should fail here rather than in a review.
+    It was already true that no caller could pass a *conclusion*. But the previous version took a
+    `CandidateEvidence` the caller filled in -- the baseline outcome, the candidate outcome, the
+    watermarks, the regression result -- and derived VERIFIED from it. Anything that could call it
+    could therefore assert a repair had been verified without a run having happened.
+
+    So the signature carries identifiers and nothing else. Asserted against the signature, because a
+    future parameter that reintroduces caller-supplied evidence should fail here rather than in a
+    review.
     """
     import inspect
 
-    parameters = inspect.signature(patches.conclude_verification).parameters
-    assert "conclusion" not in parameters
-    assert "verdict" not in parameters
-    assert "outcome" not in parameters
-    assert set(parameters) == {"conn", "workspace_id", "verification_id", "evidence", "now"}
+    parameters = set(inspect.signature(patches.conclude_verification).parameters)
+    assert parameters == {
+        "conn",
+        "workspace_id",
+        "verification_id",
+        "candidate_run_id",
+        "permitted_differences",
+        "now",
+    }
+    # And no type exists for a caller to fill in.
+    assert not hasattr(patches, "CandidateEvidence")
 
 
-def test_a_verification_cannot_open_on_an_unapproved_patch(
-    db: str, finding: tuple[str, str], manifest: str
+def test_verified_is_unreachable_while_no_runner_attests_regressions(
+    db: str, finding: tuple[str, str], manifest: str, project: str
 ) -> None:
-    """Building a candidate from an unapproved patch is work nobody authorized.
+    """A complete-looking pair still cannot reach VERIFIED here, and says why.
 
-    And the record of it would imply there had been some.
+    Baseline FAIL, candidate PASS, candidate COMPLETED, identical sealed identity, producers closed:
+    every gate the database can speak to is satisfied. It is still INCONCLUSIVE, because nothing in
+    this deployment executes the application's protected functional tests, so whether the repair
+    broke validation or authorization is unknown -- and an unknown gate is an unmet gate.
+
+    This is the honest state of FR-011 here, and it is asserted rather than described so that a
+    change which makes VERIFIED reachable without a runner fails this test.
     """
-    finding_id, run_id = finding
-    patch = _propose(db, finding_id, manifest)
+    finding_id, baseline = finding
     with workspace_connection(db, WS) as conn:
-        with pytest.raises(patches.VerificationError, match="begins from APPROVED"):
-            patches.open_verification(
-                conn,
-                workspace_id=WS,
-                patch_id=patch.patch_id,
-                baseline_run_id=run_id,
-                baseline_identity=dict(BASELINE_IDENTITY),
+        conn.execute(
+            "UPDATE run SET status = 'COMPLETED', outcome = 'FAIL', execution_began = true "
+            " WHERE id = %s",
+            (baseline,),
+        )
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    verification_id = _open(db, approved, baseline)
+    candidate = _completed_run(db, manifest, project, "PASS")
+    with workspace_connection(db, WS) as conn:
+        attempt = runs.start_attempt(conn, run_id=candidate, workspace_id=WS, lease_epoch=1)
+        for producer in ("supervisor:mac-01", "observer-1"):
+            conn.execute(
+                "INSERT INTO producer_stream (workspace_id, run_id, attempt_id, producer_id, "
+                "    admitted_through, closed_at_sequence, closed_at) "
+                "VALUES (%s, %s, %s, %s, 1, 1, now())",
+                (WS, candidate, attempt, producer),
             )
+
+    record = _conclude(db, verification_id, candidate_run_id=candidate)
+
+    assert record.conclusion == "INCONCLUSIVE"
+    assert any("protected functional regressions" in r for r in record.reasons)
+    assert any("unknown gate is an unmet gate" in r for r in record.reasons)
+    # Every other gate is quiet, which is what makes this the regression-only case.
+    assert not any("not FAIL" in r or "not PASS" in r for r in record.reasons)
+    with workspace_connection(db, WS) as conn:
+        assert patches.load_patch(conn, patch_id=approved.patch_id).status is PatchStatus.FAILED
+
+
+def test_a_caller_cannot_assert_a_baseline_failure_that_the_run_does_not_record(
+    db: str, finding: tuple[str, str], manifest: str, project: str
+) -> None:
+    """The baseline outcome is read from the run, not taken from the caller.
+
+    A baseline that never failed means a passing candidate proves the behaviour was never broken
+    (INV-02). Previously the caller simply said `baseline_outcome="FAIL"`.
+    """
+    finding_id, baseline = finding
+    # The baseline run is left as created: NOT_EVALUATED, not FAIL.
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    verification_id = _open(db, approved, baseline)
+    candidate = _completed_run(db, manifest, project, "PASS")
+
+    record = _conclude(db, verification_id, candidate_run_id=candidate)
+
+    assert record.conclusion == "INCONCLUSIVE"
+    assert any("not FAIL" in r for r in record.reasons)
 
 
 def test_an_open_verification_claims_nothing(
     db: str, finding: tuple[str, str], manifest: str
 ) -> None:
-    finding_id, run_id = finding
+    finding_id, baseline = finding
     approved, _ = _approve(db, _propose(db, finding_id, manifest))
-    verification_id = _open(db, approved, run_id)
+    verification_id = _open(db, approved, baseline)
 
     with workspace_connection(db, WS) as conn:
         record = patches.load_verification(conn, verification_id=verification_id)
@@ -653,169 +728,100 @@ def test_an_open_verification_claims_nothing(
     assert record.state == "BUILDING"
     assert record.conclusion is None
     assert "Nothing here says the repair works" in record.meaning
-    # The patch moved with it: a verification is underway, which is not the same as approved.
     assert patch.status is PatchStatus.BUILDING
+
+
+def test_a_verification_cannot_open_on_an_unapproved_patch(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """Building a candidate from an unapproved patch is work nobody authorized."""
+    finding_id, baseline = finding
+    patch = _propose(db, finding_id, manifest)
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(patches.VerificationError, match="begins from APPROVED"):
+            patches.open_verification(
+                conn,
+                workspace_id=WS,
+                patch_id=patch.patch_id,
+                baseline_run_id=baseline,
+                baseline_identity={},
+            )
 
 
 def test_a_candidate_that_never_ran_is_inconclusive_not_a_rejection(
     db: str, finding: tuple[str, str], manifest: str
 ) -> None:
-    """A run that produced no verdict has not shown the repair failed. It has shown nothing.
-
-    Recording those as the same thing would let an infrastructure problem read as a rejected repair,
-    and the next person would go looking for a better patch instead of a working runner.
-    """
-    finding_id, run_id = finding
+    """A run that produced no verdict has not shown the repair failed. It has shown nothing."""
+    finding_id, baseline = finding
     approved, _ = _approve(db, _propose(db, finding_id, manifest))
-    verification_id = _open(db, approved, run_id)
+    verification_id = _open(db, approved, baseline)
 
-    record = _conclude(db, verification_id, patches.CandidateEvidence(baseline_outcome="FAIL"))
+    record = _conclude(db, verification_id)
 
     assert record.conclusion == "INCONCLUSIVE"
     assert any("no candidate run" in r for r in record.reasons)
     assert "nothing about the repair is claimed" in record.meaning
 
 
-@pytest.mark.parametrize(
-    ("mutation", "expected"),
-    [
-        ({"baseline_outcome": "INCONCLUSIVE"}, "not FAIL"),
-        ({"candidate_outcome": "FAIL"}, "not PASS"),
-        ({"closing_watermarks": ("supervisor",)}, "missing closing watermarks"),
-        ({"protected_regressions_passed": False}, "protected functional regressions"),
-        ({"frozen_assertions_unchanged": False}, "frozen assertions"),
-    ],
-)
-def test_each_gate_alone_prevents_verified(
-    db: str,
-    finding: tuple[str, str],
-    manifest: str,
-    mutation: dict[str, object],
-    expected: str,
+def test_an_interrupted_candidate_carries_no_verdict_a_comparison_can_use(
+    db: str, finding: tuple[str, str], manifest: str, project: str
 ) -> None:
-    """One missing gate is enough, and the reason names which.
-
-    Parameterised rather than written once with several failures, because a single test asserting
-    "not verified" would pass if only one gate worked.
-    """
-    from dataclasses import replace
-
-    finding_id, run_id = finding
+    finding_id, baseline = finding
     approved, _ = _approve(db, _propose(db, finding_id, manifest))
-    verification_id = _open(db, approved, run_id)
-    candidate = _candidate_run(db, manifest)
+    verification_id = _open(db, approved, baseline)
+    candidate = _completed_run(db, manifest, project, "INCONCLUSIVE", status="INTERRUPTED")
 
-    evidence = replace(_fabricated_complete_pair(candidate), **mutation)  # type: ignore[arg-type]
-    record = _conclude(db, verification_id, evidence)
+    record = _conclude(db, verification_id, candidate_run_id=candidate)
 
-    assert record.conclusion != "VERIFIED"
-    assert any(expected in reason for reason in record.reasons), record.reasons
+    assert record.conclusion == "INCONCLUSIVE"
+    assert any("not COMPLETED" in r for r in record.reasons)
 
 
-def test_unexplained_identity_drift_disqualifies_the_pair(
-    db: str, finding: tuple[str, str], manifest: str
+def test_a_producer_that_left_its_stream_open_disqualifies_the_candidate(
+    db: str, finding: tuple[str, str], manifest: str, project: str
 ) -> None:
-    """INV-04. A candidate on a different reader answered a different question.
-
-    Swapping the reader profile is the most dangerous version: the candidate might genuinely pass on
-    NVDA while still failing on the VoiceOver profile the finding was about, and the comparison
-    would report a repair that nobody can reproduce.
-    """
-    from dataclasses import replace
-
-    finding_id, run_id = finding
+    """INV-06. A contiguous chain does not cover a producer that stopped halfway."""
+    finding_id, baseline = finding
     approved, _ = _approve(db, _propose(db, finding_id, manifest))
-    verification_id = _open(db, approved, run_id)
-    candidate = _candidate_run(db, manifest)
-
-    drifted = dict(BASELINE_IDENTITY) | {"reader": "nvda-windows-2024.4"}
-    evidence = replace(_fabricated_complete_pair(candidate), candidate_identity=drifted)
-    record = _conclude(db, verification_id, evidence)
-
-    assert record.conclusion == "NOT_ESTABLISHED"
-    assert any("unexplained identity drift in: reader" in r for r in record.reasons)
-
-
-def test_a_difference_recorded_as_permitted_does_not_disqualify_it(
-    db: str, finding: tuple[str, str], manifest: str
-) -> None:
-    """INV-04 allows the approved patch and differences explicitly recorded as legitimate.
-
-    A candidate build genuinely does differ -- a new bundle hash, for instance -- and refusing every
-    difference would make verification impossible. Refusing every *unrecorded* one is the rule.
-    """
-    from dataclasses import replace
-
-    finding_id, run_id = finding
-    approved, _ = _approve(db, _propose(db, finding_id, manifest))
-    verification_id = _open(db, approved, run_id)
-    candidate = _candidate_run(db, manifest)
-
-    rebuilt = dict(BASELINE_IDENTITY) | {"bundleHash": "candidate-bundle"}
-    evidence = replace(
-        _fabricated_complete_pair(candidate),
-        candidate_identity=rebuilt,
-        permitted_differences=(
-            {
-                "field": "bundleHash",
-                "candidate": "candidate-bundle",
-                "why": "the candidate is a fresh build of the patched tree",
-            },
-        ),
-    )
-    record = _conclude(db, verification_id, evidence)
-
-    assert record.conclusion == "VERIFIED", record.reasons
-
-
-def test_a_complete_fabricated_pair_satisfies_the_gates(
-    db: str, finding: tuple[str, str], manifest: str
-) -> None:
-    """Proves the gates accept a complete pair -- not that this product produced one.
-
-    No candidate has been built or run anywhere in this test. The evidence is constructed, and it is
-    the only way to exercise this path in a deployment with no containment boundary and no real
-    reader. Runtime proof is BLOCKED; see docs/handoffs/15.md.
-    """
-    finding_id, run_id = finding
-    approved, _ = _approve(db, _propose(db, finding_id, manifest))
-    verification_id = _open(db, approved, run_id)
-    candidate = _candidate_run(db, manifest)
-
-    record = _conclude(db, verification_id, _fabricated_complete_pair(candidate))
-
-    assert record.conclusion == "VERIFIED"
-    assert record.candidate_run_id == candidate
-    # The meaning refuses the inference somebody will want to make from the word VERIFIED.
-    assert "does not mean the application is accessible" in record.meaning
-    assert "not a compliance statement" in record.meaning
+    verification_id = _open(db, approved, baseline)
+    candidate = _completed_run(db, manifest, project, "PASS")
     with workspace_connection(db, WS) as conn:
-        assert patches.load_patch(conn, patch_id=approved.patch_id).status is PatchStatus.VERIFIED
+        attempt = runs.start_attempt(conn, run_id=candidate, workspace_id=WS, lease_epoch=1)
+        conn.execute(
+            "INSERT INTO producer_stream (workspace_id, run_id, attempt_id, producer_id, "
+            "    admitted_through) VALUES (%s, %s, %s, 'observer-1', 1)",
+            (WS, candidate, attempt),
+        )
+
+    record = _conclude(db, verification_id, candidate_run_id=candidate)
+
+    assert record.conclusion == "INCONCLUSIVE"
+    assert any("left their streams open" in r for r in record.reasons)
+
+
+def test_a_concluded_verification_is_not_rewritten(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """A frozen outcome a second call can overwrite is not frozen."""
+    finding_id, baseline = finding
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    verification_id = _open(db, approved, baseline)
+
+    _conclude(db, verification_id)
+    with pytest.raises(patches.VerificationError, match="already concluded"):
+        _conclude(db, verification_id)
 
 
 def test_a_failed_verification_leaves_the_finding_exactly_as_it_was(
     db: str, finding: tuple[str, str], manifest: str
 ) -> None:
-    """A repair that was not established removes nothing.
-
-    The finding and all of its evidence survive. The opposite -- a failed repair attempt quietly
-    downgrading the finding it failed to fix -- would make trying a patch a way to make a defect go
-    away.
-    """
-    from dataclasses import replace
-
-    finding_id, run_id = finding
+    """A repair that was not established removes nothing."""
+    finding_id, baseline = finding
     approved, _ = _approve(db, _propose(db, finding_id, manifest))
-    verification_id = _open(db, approved, run_id)
-    candidate = _candidate_run(db, manifest)
+    verification_id = _open(db, approved, baseline)
 
-    record = _conclude(
-        db,
-        verification_id,
-        replace(_fabricated_complete_pair(candidate), candidate_outcome="FAIL"),
-    )
-    assert record.conclusion == "NOT_ESTABLISHED"
-    assert "survive this unchanged" in record.meaning
+    record = _conclude(db, verification_id)
+    assert record.conclusion == "INCONCLUSIVE"
 
     with workspace_connection(db, WS) as conn:
         row = conn.execute("SELECT status FROM finding WHERE id = %s", (finding_id,)).fetchone()
@@ -824,48 +830,19 @@ def test_a_failed_verification_leaves_the_finding_exactly_as_it_was(
     assert patch.status is PatchStatus.FAILED
 
 
-def test_a_concluded_verification_is_not_rewritten(
-    db: str, finding: tuple[str, str], manifest: str
-) -> None:
-    """A frozen outcome that a second call can overwrite is not frozen.
-
-    Run another verification instead -- which is why every attempt is listed rather than the latest
-    one replacing the record.
-    """
-    from dataclasses import replace
-
-    finding_id, run_id = finding
-    approved, _ = _approve(db, _propose(db, finding_id, manifest))
-    verification_id = _open(db, approved, run_id)
-    candidate = _candidate_run(db, manifest)
-
-    _conclude(
-        db, verification_id, replace(_fabricated_complete_pair(candidate), candidate_outcome="FAIL")
-    )
-    with pytest.raises(patches.VerificationError, match="already concluded"):
-        _conclude(db, verification_id, _fabricated_complete_pair(candidate))
-
-
 def test_every_attempt_is_listed_rather_than_the_favourable_one(
     db: str, finding: tuple[str, str], manifest: str
 ) -> None:
     """Reporting all attempts is what separates a verification from a search for a good result."""
-    from dataclasses import replace
-
-    finding_id, run_id = finding
+    finding_id, baseline = finding
     approved, _ = _approve(db, _propose(db, finding_id, manifest))
-
-    first = _open(db, approved, run_id)
-    _conclude(
-        db,
-        first,
-        replace(_fabricated_complete_pair(_candidate_run(db, manifest)), candidate_outcome="FAIL"),
-    )
+    first = _open(db, approved, baseline)
+    _conclude(db, first)
 
     with workspace_connection(db, WS) as conn:
         listed = patches.verifications_for_patch(conn, patch_id=approved.patch_id)
     assert [r.verification_id for r in listed] == [first]
-    assert listed[0].conclusion == "NOT_ESTABLISHED"
+    assert listed[0].conclusion == "INCONCLUSIVE"
 
 
 # --- through the HTTP surface ---------------------------------------------------------------------
@@ -1068,7 +1045,7 @@ def test_opening_a_verification_says_runtime_proof_is_unavailable(
 
     response = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/patches/{created['patchId']}/verifications",
-        json={"baselineRunId": run_id, "baselineIdentity": dict(BASELINE_IDENTITY)},
+        json={"baselineRunId": run_id},
         headers={CSRF_HEADER: csrf},
     )
     assert response.status_code == 201, response.text
@@ -1115,17 +1092,18 @@ def test_a_reviewer_can_reject_a_patch_but_must_say_why(
     ).json()
 
     reviewer_csrf = _sign_in(db, api, user_id=REVIEWER)
+    match = {"If-Match": f'"{created["revision"]}"'}
     blank = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/patches/{created['patchId']}/rejection",
         json={"reason": "   "},
-        headers={CSRF_HEADER: reviewer_csrf},
+        headers={CSRF_HEADER: reviewer_csrf, **match},
     )
     assert blank.status_code == 400, blank.text
 
     rejected = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/patches/{created['patchId']}/rejection",
         json={"reason": "the label is associated but the error is still not announced"},
-        headers={CSRF_HEADER: reviewer_csrf},
+        headers={CSRF_HEADER: reviewer_csrf, **match},
     )
     assert rejected.status_code == 200, rejected.text
     assert rejected.json()["status"] == "REJECTED"
@@ -1376,7 +1354,364 @@ def test_the_route_refuses_to_serve_a_patch_stripped_of_its_changes(
     with workspace_connection(db, WS) as conn:
         conn.execute("DELETE FROM patch_change WHERE patch_id = %s", (created["patchId"],))
 
-    response = api.get(f"/v1/workspaces/{WS}/patches/{created['patchId']}")  # type: ignore[attr-defined]
+    patch_url = f"/v1/workspaces/{WS}/patches/{created['patchId']}"
+    response = api.get(patch_url)  # type: ignore[attr-defined]
     # 404 rather than a 200 with an empty diff. The proposal cannot be served at all, and a uniform
     # not-found is what every other unreadable record here answers.
     assert response.status_code == 404, response.text
+
+
+# --- the seven findings from adversarial review -------------------------------------------------
+
+
+def test_an_approval_and_a_rejection_cannot_both_succeed_on_one_patch(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """Finding 1. Two reviewers, one patch, two decisions -- exactly one may be recorded.
+
+    The revision check used to be a read followed by a write. Both callers read revision 1, both
+    passed the check, the second UPDATE waited on the row lock and then applied anyway: an approval
+    and a rejection both succeeded, the last writer deciding, and both in the history as though both
+    had been allowed. The revision is now a predicate in the UPDATE, so the loser is told.
+
+    Two real connections, so the second genuinely contends for the row rather than reusing a
+    transaction that already holds it.
+    """
+    finding_id, _ = finding
+    patch = _propose(db, finding_id, manifest)
+
+    with workspace_connection(db, WS) as first:
+        rejected = patches.transition_patch(
+            first,
+            workspace_id=WS,
+            patch_id=patch.patch_id,
+            to_status=PatchStatus.REJECTED,
+            actor_id=REVIEWER,
+            reason="not the right fix",
+            expected_revision=patch.revision,
+        )
+    assert rejected.status is PatchStatus.REJECTED
+
+    with workspace_connection(db, WS) as second:
+        with pytest.raises(patches.PatchError):
+            patches.approve_patch(
+                second,
+                workspace_id=WS,
+                patch_id=patch.patch_id,
+                actor_id=OWNER,
+                expires_at=to_rfc3339_utc(datetime.now(UTC) + timedelta(hours=1)),
+                expected_revision=patch.revision,
+            )
+
+    with workspace_connection(db, WS) as conn:
+        final = patches.load_patch(conn, patch_id=patch.patch_id)
+        history = conn.execute(
+            "SELECT to_status FROM patch_proposal_transition WHERE patch_id = %s ORDER BY id",
+            (patch.patch_id,),
+        ).fetchall()
+    assert final.status is PatchStatus.REJECTED
+    assert final.approval_id is None
+    # One decision in the history, not two. A rejected patch that also shows an approval would be
+    # unreadable afterwards: nobody could say which decision stood.
+    assert [str(r["to_status"]) for r in history] == ["PROPOSED", "REJECTED"]
+
+
+def test_the_revision_is_checked_by_the_update_not_by_a_read_before_it(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """Finding 1, at the level the race happens.
+
+    A stale revision must be refused by the statement that writes, so that a concurrent move between
+    the read and the write cannot be overwritten. Asserted by moving the patch underneath a caller
+    that is holding an older revision.
+    """
+    finding_id, _ = finding
+    patch = _propose(db, finding_id, manifest)
+    stale_revision = patch.revision
+
+    with workspace_connection(db, WS) as conn:
+        patches.transition_patch(
+            conn,
+            workspace_id=WS,
+            patch_id=patch.patch_id,
+            to_status=PatchStatus.REJECTED,
+            actor_id=REVIEWER,
+            reason="decided first",
+            expected_revision=stale_revision,
+        )
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(patches.PatchError, match="revision"):
+            patches.transition_patch(
+                conn,
+                workspace_id=WS,
+                patch_id=patch.patch_id,
+                to_status=PatchStatus.APPROVED,
+                actor_id=OWNER,
+                reason="decided second",
+                expected_revision=stale_revision,
+            )
+
+
+def test_a_patch_cannot_be_proposed_against_another_runs_manifest(
+    db: str,
+    finding: tuple[str, str],
+    manifest: str,
+    project: str,
+    seal_manifest: Callable[..., str],
+) -> None:
+    """Finding 2. The base must be the identity the finding's own run used.
+
+    Checking only that the workspace had sealed it meant a patch for a finding about run A could be
+    recorded against run B's manifest -- and then every later check agreed with itself: the approval
+    bound to B's digest, the stale-base check compared B's tree, and the verification compared a
+    candidate against a baseline it was never about.
+    """
+    finding_id, _ = finding
+    other_project = None
+    with workspace_connection(db, WS) as conn:
+        other_project = project_store.create_project(conn, workspace_id=WS, name="elsewhere")
+    other_manifest = seal_manifest(
+        db, workspace_id=WS, project_id=other_project, authorized_by=OWNER
+    )
+    assert other_manifest != manifest
+
+    with pytest.raises(patches.PatchError, match="not the manifest the finding's run used"):
+        _propose(db, finding_id, other_manifest)
+
+
+def test_the_same_idempotency_key_on_another_finding_is_not_a_replay(
+    db: str,
+    finding: tuple[str, str],
+    manifest: str,
+    base_source: str,
+    project: str,
+    api: object,
+) -> None:
+    """Finding 3. The route key is half of the idempotency identity.
+
+    Sharing one key across every finding meant the same Idempotency-Key on a *different* finding
+    replayed the first finding's proposal -- a caller asking to repair one defect and being handed
+    the patch for another, with a 201 and somebody else's patch id.
+    """
+    from accessforge_api.auth import CSRF_HEADER
+
+    first_finding, run_id = finding
+    with workspace_connection(db, WS) as conn:
+        second_finding = reviews.create_finding(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            assertion_id="focus-is-visible",
+            summary="the focus ring is not visible on the submit control",
+            status=FindingStatus.REPRODUCED,
+            run_outcome=Outcome.FAIL,
+            actor_id=OWNER,
+        )
+
+    csrf = _sign_in(db, api)
+    key = str(uuid.uuid4())
+    headers = {CSRF_HEADER: csrf, "Idempotency-Key": key}
+
+    first = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{first_finding}/patches",
+        json=_body(manifest, base_source),
+        headers=headers,
+    )
+    second = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{second_finding}/patches",
+        json=_body(manifest, base_source),
+        headers=headers,
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert second.json()["patchId"] != first.json()["patchId"]
+    assert second.json()["findingId"] == second_finding
+    assert second.headers.get("Idempotent-Replay") is None
+
+
+def test_a_duplicate_path_is_refused_as_invalid_input_not_a_database_error(
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
+) -> None:
+    """Finding 4. A caller sending one path twice was told the server broke.
+
+    The UNIQUE constraint caught it, as an integrity error the route turned into a 500. It is a
+    malformed request and it says so.
+    """
+    from accessforge_api.auth import CSRF_HEADER
+
+    finding_id, _ = finding
+    csrf = _sign_in(db, api)
+    response = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
+        json=_body(
+            manifest,
+            base_source,
+            changes=[
+                {"path": "src/a.tsx", "content": "first"},
+                {"path": "src/a.tsx", "content": "second"},
+            ],
+        ),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 400, response.text
+    assert "src/a.tsx" in response.json()["detail"]
+    assert "more than once" in response.json()["detail"]
+
+    # And at the persistence layer too, for a caller that is not the route.
+    with pytest.raises(patches.PatchError, match="more than once"):
+        _propose(
+            db,
+            finding_id,
+            manifest,
+            changes=(
+                ProposedChange(path="src/a.tsx", content="first"),
+                ProposedChange(path="src/a.tsx", content="second"),
+            ),
+        )
+
+
+def test_a_project_with_no_configured_surface_accepts_no_proposals(
+    db: str, manifest: str, project: str, seal_manifest: Callable[..., str]
+) -> None:
+    """Finding 6. Unconfigured must not mean unrestricted.
+
+    The surface used to arrive in the proposal body, so the agent proposing a change chose how far
+    it could reach -- and an omitted or empty list disabled confinement entirely, so the laziest
+    request got the widest surface.
+    """
+    with workspace_connection(db, WS) as conn:
+        run_id = runs.create_run(
+            conn, workspace_id=WS, manifest_digest=manifest, project_id=project
+        )
+        finding_id = reviews.create_finding(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            assertion_id="error-is-announced",
+            summary="no surface configured for this project",
+            status=FindingStatus.REPRODUCED,
+            run_outcome=Outcome.FAIL,
+            actor_id=OWNER,
+        )
+        conn.execute("DELETE FROM project_repair_surface WHERE project_id = %s", (project,))
+
+    with pytest.raises(patches.PatchError, match="no configured repair surface"):
+        _propose(db, finding_id, manifest)
+
+
+def test_the_surface_cannot_be_supplied_or_widened_by_the_proposal(
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
+) -> None:
+    """Finding 6, through HTTP. The field is gone, and sending it is rejected outright."""
+    from accessforge_api.auth import CSRF_HEADER
+
+    finding_id, _ = finding
+    csrf = _sign_in(db, api)
+    response = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
+        json=_body(manifest, base_source, applicationPaths=["/", "billing"]),
+        headers={CSRF_HEADER: csrf},
+    )
+    # Refused as an unexpected field rather than ignored: a caller that believes it widened the
+    # surface must not be told the request succeeded.
+    assert response.status_code == 400, response.text
+
+
+def test_a_repair_surface_prefix_that_escapes_the_tree_is_refused(db: str, project: str) -> None:
+    """A surface of `..` or `/` would authorize exactly what the policy refuses on sight."""
+    for bad in ("..", "../etc", "/", "~/keys"):
+        with workspace_connection(db, WS) as conn:
+            with pytest.raises(patches.PatchError, match="not a usable repair-surface prefix"):
+                patches.configure_repair_surface(
+                    conn,
+                    workspace_id=WS,
+                    project_id=project,
+                    paths=(bad,),
+                    configured_by=OWNER,
+                )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("binary", "true"),
+        ("binary", 1),
+        ("mode", "not-a-mode"),
+        ("mode", 100644),
+    ],
+)
+def test_change_fields_are_validated_rather_than_coerced(
+    db: str,
+    finding: tuple[str, str],
+    manifest: str,
+    base_source: str,
+    api: object,
+    field: str,
+    value: object,
+) -> None:
+    """Finding 7. `bool("false")` is True and `bool(0)` is False.
+
+    So a JSON string or number silently became a claim about the file: `"binary": "no"` would have
+    marked the change binary and refused it for the wrong reason, and a truthy mode became the text
+    of whatever was sent -- including a value that is not a file mode at all.
+    """
+    from accessforge_api.auth import CSRF_HEADER
+
+    finding_id, _ = finding
+    csrf = _sign_in(db, api)
+    change: dict[str, object] = {"path": "src/a.tsx", "content": "x", field: value}
+    response = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
+        json=_body(manifest, base_source, changes=[change]),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 400, response.text
+    detail = response.json()["detail"]
+    # The *validation* message, not merely some 400. Without this the test passed for the wrong
+    # reason: a raw "true" stays truthy, so the policy refused it as a binary replacement and the
+    # response still carried the word "binary" -- a mutation check that removed the validation
+    # entirely went unnoticed.
+    expected = {
+        "binary": "must be true or false",
+        "mode": "must be omitted or one of",
+    }[field]
+    assert expected in detail, detail
+
+
+def test_acknowledge_separate_review_must_be_a_boolean(
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
+) -> None:
+    """Finding 7. A truthy string must not stand in for a caller understanding the scope."""
+    from accessforge_api.auth import CSRF_HEADER
+
+    finding_id, _ = finding
+    csrf = _sign_in(db, api)
+    response = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
+        json=_body(manifest, base_source, acknowledgeSeparateReview="yes"),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 400, response.text
+    assert "acknowledgeSeparateReview" in response.json()["detail"]
+
+
+def test_a_valid_mode_is_accepted_and_kept(
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
+) -> None:
+    """The other direction: strictness must not refuse the modes a real patch carries."""
+    from accessforge_api.auth import CSRF_HEADER
+
+    finding_id, _ = finding
+    csrf = _sign_in(db, api)
+    response = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
+        json=_body(
+            manifest,
+            base_source,
+            changes=[{"path": "src/a.tsx", "content": "x", "mode": "100755", "binary": False}],
+        ),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["changes"][0]["mode"] == "100755"

@@ -11,6 +11,43 @@
 -- convert an INCONCLUSIVE candidate to VERIFIED" -- and a nullable `outcome` column that a route
 -- could write would be the hole that rule exists to close.
 
+-- The repair surface: the only paths a patch for this project may touch.
+--
+-- Configuration, not request input. It used to arrive in the proposal body as `applicationPaths`,
+-- which meant the agent proposing the change also chose how far it was allowed to reach -- and an
+-- omitted or empty list disabled confinement entirely, so the laziest possible request got the
+-- widest possible surface. A confinement boundary an untrusted caller can widen is decoration.
+--
+-- No row means no proposals. Refusing is the only safe default: "unconfigured" cannot mean
+-- "unrestricted" for the one setting that bounds what an agent may rewrite.
+CREATE TABLE IF NOT EXISTS project_repair_surface (
+    project_id     UUID PRIMARY KEY,
+    workspace_id   UUID NOT NULL REFERENCES workspace (id) ON DELETE CASCADE,
+
+    -- Path prefixes, relative to the repository root. Non-empty: a configured surface of nothing is
+    -- indistinguishable from no surface, and one of those must refuse proposals.
+    paths          TEXT[] NOT NULL CHECK (cardinality(paths) > 0),
+
+    configured_by  UUID NOT NULL REFERENCES app_user (id),
+    configured_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revision       BIGINT NOT NULL DEFAULT 1 CHECK (revision >= 1),
+
+    FOREIGN KEY (project_id, workspace_id)
+        REFERENCES project (id, workspace_id) ON DELETE CASCADE,
+    UNIQUE (project_id, workspace_id)
+);
+
+ALTER TABLE project_repair_surface ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_repair_surface FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS workspace_isolation ON project_repair_surface;
+CREATE POLICY workspace_isolation ON project_repair_surface
+    USING (workspace_id = current_workspace_id())
+    WITH CHECK (workspace_id = current_workspace_id());
+
+COMMENT ON TABLE project_repair_surface IS
+    'The paths a repair patch may touch, per project. Trusted configuration: a proposal cannot '
+    'supply or widen it, and a project with no row here accepts no patches.';
+
 CREATE TABLE IF NOT EXISTS patch_proposal (
     id                 UUID PRIMARY KEY,
     workspace_id       UUID NOT NULL REFERENCES workspace (id) ON DELETE CASCADE,

@@ -5045,6 +5045,148 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/repair-surface": {
+      "put": {
+        "description": "Set the only paths a repair patch for this project may touch.\n\n`PROJECT_CONFIGURE`, because this is configuration and not a request. It used to arrive in the\nproposal body, which meant the agent proposing a change also chose how far it was allowed to\nreach -- and an omitted list disabled confinement entirely, so the laziest request got the\nwidest surface.\n\nThere is no way to express \"anywhere\" here. A project with no surface accepts no proposals,\nwhich is the only safe reading of \"unconfigured\" for the setting that bounds what an agent may\nrewrite.",
+        "operationId": "configure_repair_surface",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Configure Repair Surface",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Configure Repair Surface",
+        "tags": [
+          "patches"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/projects/{project_id}/seals": {
       "post": {
         "description": "Seal a manifest over every input a run's identity depends on.\n\nThis is the route a run is requested against. `POST /runs` refuses a digest nothing sealed, so\nuntil this existed a manifest could only be produced by writing SQL \u2014 which meant the product's\ncentral identity step had no surface at all, and the check that would have revealed it was\nmissing.\n\nThe environment is validated first by `seal_run`: sealing against a revoked, expired or\nsuperseded environment would produce a manifest that looked authoritative and was never\nauthorized.\n\nA digest is deliberately **not** unique. Two seals over identical inputs share one, which is how\na baseline and a candidate are shown to differ only by an approved patch (INV-04). Sealing twice\nis therefore not an error, and a caller who wants one seal per attempt supplies an\n`Idempotency-Key`.",

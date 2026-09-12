@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -167,6 +167,66 @@ class PatchProposal:
         )
 
 
+def configure_repair_surface(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    workspace_id: str,
+    project_id: str,
+    paths: tuple[str, ...],
+    configured_by: str,
+) -> tuple[str, ...]:
+    """Record the only paths a repair for this project may touch.
+
+    Trusted configuration, written by someone with `PROJECT_CONFIGURE`. Deliberately not a field on
+    a proposal: an agent that chooses its own confinement boundary is not confined, and the previous
+    version let an omitted list mean "anywhere", so the least careful request got the widest reach.
+
+    A prefix that is absolute, traversing or home-relative is refused rather than cleaned up. Such a
+    surface would authorize exactly the paths the policy refuses on sight.
+    """
+    if not paths:
+        raise PatchError(
+            "name at least one path prefix. A surface of nothing cannot be told from no surface at "
+            "all, and one of those two has to refuse every proposal."
+        )
+    cleaned: list[str] = []
+    for raw in paths:
+        path = raw.strip().strip("/")
+        if not path or path.startswith("~") or ".." in path.split("/") or "\\" in path:
+            raise PatchError(
+                f"{raw!r} is not a usable repair-surface prefix. An absolute, traversing or "
+                "home-relative prefix would authorize the paths the policy refuses on sight."
+            )
+        cleaned.append(path)
+
+    conn.execute(
+        """
+        INSERT INTO project_repair_surface (project_id, workspace_id, paths, configured_by)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (project_id) DO UPDATE
+           SET paths = EXCLUDED.paths,
+               configured_by = EXCLUDED.configured_by,
+               configured_at = now(),
+               revision = project_repair_surface.revision + 1
+        """,
+        (project_id, workspace_id, cleaned, configured_by),
+    )
+    return tuple(cleaned)
+
+
+def repair_surface(conn: psycopg.Connection[dict[str, Any]], *, project_id: str) -> tuple[str, ...]:
+    """The configured surface, or empty when the project has none.
+
+    Empty means no proposals, never unrestricted. It is a separate function so that nothing can
+    accidentally treat "no row" as a permissive default -- the caller that enforces it is
+    `propose_patch`, loudly.
+    """
+    row = conn.execute(
+        "SELECT paths FROM project_repair_surface WHERE project_id = %s", (project_id,)
+    ).fetchone()
+    return () if row is None else tuple(str(path) for path in row["paths"])
+
+
 def propose_patch(
     conn: psycopg.Connection[dict[str, Any]],
     *,
@@ -177,7 +237,6 @@ def propose_patch(
     changes: tuple[ProposedChange, ...],
     rationale: str,
     proposed_by: str,
-    application_paths: tuple[str, ...] = (),
     acknowledge_separate_review: bool = False,
     now: datetime | None = None,
 ) -> PatchProposal:
@@ -200,13 +259,63 @@ def propose_patch(
             "a patch must change something. An empty proposal would appear in the finding's "
             "listing as a repair somebody offered."
         )
+
+    finding = conn.execute("SELECT run_id FROM finding WHERE id = %s", (finding_id,)).fetchone()
+    if finding is None:
+        raise PatchError(f"no finding {finding_id} is visible here")
+    finding_run_id = str(finding["run_id"])
     if not rationale.strip():
         raise PatchError(
             "state why this change repairs the finding. A patch nobody can explain is the one a "
             "reviewer has to reverse-engineer from the diff."
         )
 
-    # The source tree the seal actually names, not the one the caller says it is. Until this joined
+    # (4) Refused here rather than at the UNIQUE constraint. A duplicate path is a malformed
+    # request, and letting the database answer it produced an integrity error the route turned into
+    # a 500 -- a caller told the server broke when what happened is that they sent one path twice.
+    # It also matters for the digest: two rows for one path make a reloaded patch ambiguous.
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for change in changes:
+        if change.path in seen:
+            duplicates.add(change.path)
+        seen.add(change.path)
+    if duplicates:
+        raise PatchError(
+            f"these paths appear more than once: {', '.join(sorted(duplicates))}. A patch "
+            "changing one file twice has no single content for it, so neither a reviewer nor the "
+            "digest an approval binds to could say what was proposed."
+        )
+
+    # (2) The base must be the identity the finding's own run used -- not merely something this
+    # workspace sealed at some point. Checking the workspace only meant a patch for a finding about
+    # run A could be recorded against run B's manifest, and every later check would agree with
+    # itself: the approval would bind to B's digest, the stale-base check would compare B's tree,
+    # and the verification would compare a candidate against a baseline it was never about.
+    run = conn.execute(
+        "SELECT manifest_digest, project_id FROM run WHERE id = %s",
+        (finding_run_id,),
+    ).fetchone()
+    if run is None:
+        raise PatchError(
+            f"the run behind finding {finding_id} is not visible here, so there is no base "
+            "identity to patch against."
+        )
+    if base_manifest_digest != str(run["manifest_digest"]):
+        raise PatchError(
+            f"baseManifestDigest {base_manifest_digest} is not the manifest the finding's run "
+            f"used ({run['manifest_digest']}). A repair is proposed against the identity the "
+            "failure was observed under; anything else would be verified against a baseline it is "
+            "not about."
+        )
+    if run["project_id"] is None:
+        raise PatchError(
+            "the finding's run records no project, so no repair surface can be resolved for it. "
+            "Refusing rather than treating an unknown project as unconfined."
+        )
+    project_id = str(run["project_id"])
+
+    # The source tree that manifest sealed, not the one the caller says it is. Until this joined
     # through to `source_snapshot`, `base_source_digest` was any 64-character hex string the caller
     # chose: the proposal recorded a base identity nothing corroborated, and the stale-base check at
     # dispatch compared the current tree against a number somebody typed.
@@ -215,15 +324,15 @@ def propose_patch(
         SELECT DISTINCT s.tree_digest
           FROM sealed_manifest m
           JOIN source_snapshot s ON s.id = m.source_snapshot_id
-         WHERE m.manifest_digest = %s
+         WHERE m.manifest_digest = %s AND m.project_id = %s
         """,
-        (base_manifest_digest,),
+        (base_manifest_digest, project_id),
     ).fetchall()
     if not sealed:
         raise PatchError(
-            "no sealed manifest in this workspace has that digest, so there is no base identity to "
-            "patch against. A proposal against an unsealed base could never be approved: the "
-            "approval would bind to inputs nothing recorded."
+            "no sealed manifest for this run's project has that digest, so there is no base "
+            "identity to patch against. A proposal against an unsealed base could never be "
+            "approved: the approval would bind to inputs nothing recorded."
         )
     sealed_trees = {str(row["tree_digest"]) for row in sealed}
     if base_source_digest not in sealed_trees:
@@ -232,6 +341,15 @@ def propose_patch(
             f"({', '.join(sorted(sealed_trees))}). A patch is written against a tree; recording a "
             "different one would make the stale-base check at dispatch compare the current source "
             "against a digest nothing ever built."
+        )
+
+    # (6) The surface comes from configuration, and an unconfigured project accepts no patches.
+    surface = repair_surface(conn, project_id=project_id)
+    if not surface:
+        raise PatchError(
+            f"project {project_id} has no configured repair surface, so no path can be shown to "
+            "be inside it. Configure one before proposing a repair: an unconfigured project must "
+            "not mean an unrestricted one for the setting that bounds what an agent may rewrite."
         )
 
     oversized = [
@@ -253,7 +371,7 @@ def propose_patch(
             "separately reviewed scope."
         )
 
-    inspection = inspect_patch(changes, application_paths=application_paths)
+    inspection = inspect_patch(changes, application_paths=surface)
     if not inspection.acceptable:
         raise PatchRefused(
             "this patch touches paths no repair may change:\n" + inspection.explain(), inspection
@@ -447,15 +565,23 @@ def transition_patch(
 ) -> PatchProposal:
     """Move a patch, refusing any move the lifecycle does not permit.
 
-    `expected_revision` is the optimistic lock. Two reviewers acting on what they each read as a
-    PROPOSED patch must not both succeed: the second is told the patch moved, rather than silently
-    overwriting a decision made a moment earlier.
+    **The revision check is the UPDATE, not a read before it.** Reading the revision, validating it
+    and then writing leaves the gap every optimistic lock exists to close: two reviewers acting on
+    what each read as a PROPOSED patch both passed the check, the second UPDATE waited on the row
+    lock and then applied anyway, and an approval and a rejection both succeeded -- the last writer
+    deciding, with both recorded in the history as though both had been allowed.
+
+    So the revision is a predicate in the statement itself and the decision is whether it changed a
+    row. `expected_revision` defaults to the revision just loaded, so an internal transition is
+    compare-and-swap too: the caller did not name a revision, but it still must not overwrite a
+    decision made between its read and its write.
     """
     moment = now or datetime.now(UTC)
     current = load_patch(conn, patch_id=patch_id)
-    if expected_revision is not None and current.revision != expected_revision:
+    target_revision = current.revision if expected_revision is None else expected_revision
+    if current.revision != target_revision:
         raise PatchError(
-            f"patch {patch_id} is at revision {current.revision}, not {expected_revision}. "
+            f"patch {patch_id} is at revision {current.revision}, not {target_revision}. "
             "Somebody else acted on it since you read it."
         )
     permitted = ALLOWED_TRANSITIONS[current.status]
@@ -467,10 +593,21 @@ def transition_patch(
     if not reason.strip():
         raise PatchError("state a reason for the transition; the history is read by reviewers")
 
-    conn.execute(
-        "UPDATE patch_proposal SET status = %s, revision = revision + 1 WHERE id = %s",
-        (str(to_status), patch_id),
-    )
+    changed = conn.execute(
+        """
+        UPDATE patch_proposal SET status = %s, revision = revision + 1
+         WHERE id = %s AND revision = %s AND status = %s
+        """,
+        (str(to_status), patch_id, target_revision, str(current.status)),
+    ).rowcount
+    if changed != 1:
+        # Lost the race. The status is in the predicate as well as the revision, so a concurrent
+        # move that happened to leave the revision alone cannot slip through either.
+        raise PatchError(
+            f"patch {patch_id} changed while this decision was being recorded: it is no longer at "
+            f"revision {target_revision} with status {current.status}. Re-read it and decide again "
+            "-- two decisions must not both succeed on one patch."
+        )
     _record_transition(
         conn,
         workspace_id=workspace_id,
@@ -617,27 +754,143 @@ def assert_dispatchable(
 # --- FR-011: verification -------------------------------------------------------------------------
 
 
-#: Producers whose closing watermark a matched pair requires. Absent any one of them the candidate
-#: evidence has a tail nobody can account for, and a contiguous chain does not cover it (INV-06).
-REQUIRED_PRODUCER_ROLES: tuple[str, ...] = ("supervisor", "observer")
+#: Identity columns a matched pair must agree on, read from the sealed manifest of each run. Named
+#: here rather than inferred from a diff of the whole row, so that adding a column to
+#: `sealed_manifest` cannot silently widen what counts as "the same environment".
+COMPARED_IDENTITY: tuple[str, ...] = (
+    "environment_config_digest",
+    "journey_digest",
+    "assertion_set_digest",
+    "fixture_digest",
+    "runner_profile_digest",
+    "navigator_policy_digest",
+    "evaluator_version",
+)
 
 
 @dataclass(frozen=True, slots=True)
-class CandidateEvidence:
-    """What a caller claims about a candidate run, for the gates to disbelieve.
+class TrustedEvidence:
+    """What the database can actually establish about a baseline and a candidate.
 
-    Every field defaults to the unproven value. A caller that forgets to set one gets INCONCLUSIVE
-    rather than a pass, which is the direction a default has to fail in.
+    Constructed only by :func:`_derive_evidence`, from rows this product wrote: run outcomes, sealed
+    manifest identities, producer stream watermarks. There is no constructor a caller reaches.
+
+    That is the whole point. The previous version accepted a `CandidateEvidence` the caller filled
+    in -- `baseline_outcome="FAIL"`, `candidate_outcome="PASS"`, the watermarks, the regressions --
+    and derived VERIFIED from it. Which means anything that could call it could assert a repair had
+    been verified without a run having happened, and the only thing standing between a fabricated
+    pair and a VERIFIED record was the caller's honesty. For the one conclusion in this product that
+    a regulator might be shown, that is not a design.
     """
 
-    candidate_run_id: str | None = None
-    candidate_identity: dict[str, Any] = field(default_factory=dict)
-    baseline_outcome: str | None = None
-    candidate_outcome: str | None = None
-    closing_watermarks: tuple[str, ...] = ()
-    protected_regressions_passed: bool = False
-    frozen_assertions_unchanged: bool = False
-    permitted_differences: tuple[dict[str, Any], ...] = ()
+    candidate_run_id: str | None
+    baseline_outcome: str | None
+    candidate_outcome: str | None
+    baseline_status: str | None
+    candidate_status: str | None
+    baseline_identity: dict[str, Any]
+    candidate_identity: dict[str, Any]
+    closed_producers: tuple[str, ...]
+    unclosed_producers: tuple[str, ...]
+    regressions_attested: bool
+    regression_detail: str
+
+
+def _run_facts(
+    conn: psycopg.Connection[dict[str, Any]], run_id: str
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    """A run's recorded outcome, status and sealed identity -- or nothing if it is not visible."""
+    row = conn.execute(
+        "SELECT status, outcome, manifest_digest FROM run WHERE id = %s", (run_id,)
+    ).fetchone()
+    if row is None:
+        return None, None, {}
+    columns = ", ".join(COMPARED_IDENTITY)
+    sealed = conn.execute(
+        f"SELECT {columns} FROM sealed_manifest WHERE manifest_digest = %s LIMIT 1",  # noqa: S608
+        (str(row["manifest_digest"]),),
+    ).fetchone()
+    identity = {k: sealed[k] for k in COMPARED_IDENTITY} if sealed else {}
+    return str(row["status"]), str(row["outcome"]), identity
+
+
+def _producer_watermarks(
+    conn: psycopg.Connection[dict[str, Any]], run_id: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Which producers closed their streams for this run, and which did not.
+
+    Read from `producer_stream`, which only the sequencer writes. A contiguous event chain does not
+    cover this: a producer that stopped halfway leaves a perfect chain over half the attempt
+    (INV-06).
+    """
+    rows = conn.execute(
+        "SELECT producer_id, closed_at_sequence FROM producer_stream WHERE run_id = %s "
+        " ORDER BY producer_id",
+        (run_id,),
+    ).fetchall()
+    closed = tuple(str(r["producer_id"]) for r in rows if r["closed_at_sequence"] is not None)
+    unclosed = tuple(str(r["producer_id"]) for r in rows if r["closed_at_sequence"] is None)
+    return closed, unclosed
+
+
+def _regression_attestation(
+    conn: psycopg.Connection[dict[str, Any]], run_id: str
+) -> tuple[bool, str]:
+    """Whether protected functional regressions are attested for this run.
+
+    **Nothing attests them today, so this is always False.** There is no runner that executes the
+    application's protected tests and no table that records the result, which means the honest
+    answer
+    is "unknown" -- and for a gate, unknown is unmet.
+
+    A function rather than a constant because it is where that evidence will come from. When a
+    runner
+    exists it reports regression results as evidence bound to the attempt, and this reads them.
+    Until
+    then every verification is conclusively non-VERIFIED, which is the correct state for a
+    deployment
+    that cannot run a candidate at all.
+    """
+    return False, (
+        "no attested record of protected functional regressions exists for this run. Nothing in "
+        "this deployment executes the application's protected tests -- validation, authorization, "
+        "successful submission, failed-input handling -- so whether the repair broke any of them "
+        "is unknown. A repair cannot be established while that is unknown, and an unknown gate is "
+        "an unmet gate."
+    )
+
+
+def _derive_evidence(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    baseline_run_id: str,
+    candidate_run_id: str | None,
+) -> TrustedEvidence:
+    """Read everything the gates need from rows this product wrote."""
+    baseline_status, baseline_outcome, baseline_identity = _run_facts(conn, baseline_run_id)
+    if candidate_run_id is None:
+        candidate_status = candidate_outcome = None
+        candidate_identity: dict[str, Any] = {}
+        closed: tuple[str, ...] = ()
+        unclosed: tuple[str, ...] = ()
+        attested, detail = False, "no candidate run, so nothing is attested for one"
+    else:
+        candidate_status, candidate_outcome, candidate_identity = _run_facts(conn, candidate_run_id)
+        closed, unclosed = _producer_watermarks(conn, candidate_run_id)
+        attested, detail = _regression_attestation(conn, candidate_run_id)
+    return TrustedEvidence(
+        candidate_run_id=candidate_run_id,
+        baseline_outcome=baseline_outcome,
+        candidate_outcome=candidate_outcome,
+        baseline_status=baseline_status,
+        candidate_status=candidate_status,
+        baseline_identity=baseline_identity,
+        candidate_identity=candidate_identity,
+        closed_producers=closed,
+        unclosed_producers=unclosed,
+        regressions_attested=attested,
+        regression_detail=detail,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -756,14 +1009,12 @@ def load_verification(
     )
 
 
-def _unmet_gates(
-    patch: PatchProposal, evidence: CandidateEvidence, baseline_identity: dict[str, Any]
-) -> list[str]:
+def _unmet_gates(patch: PatchProposal, evidence: TrustedEvidence) -> list[str]:
     """Every reason this pair does not establish the repair.
 
-    Returned as a list rather than a boolean because the list *is* the product. "Not verified" tells
-    a reader nothing they can act on; "the candidate ran against a different reader profile" tells
-    them what to fix. Collected in full rather than short-circuiting, for the same reason.
+    A list rather than a boolean because the list *is* the product. "Not verified" tells a reader
+    nothing they can act on; "the candidate ran against a different reader profile" tells them what
+    to fix. Collected in full rather than short-circuiting, for the same reason.
     """
     unmet: list[str] = []
 
@@ -774,51 +1025,54 @@ def _unmet_gates(
         )
     if evidence.baseline_outcome != "FAIL":
         unmet.append(
-            f"the baseline outcome is {evidence.baseline_outcome or 'unrecorded'}, not FAIL. A "
-            "repair can only be established against a failure that was established first; "
-            "otherwise a passing candidate proves the behaviour was never broken (INV-02)."
+            f"the baseline run's recorded outcome is {evidence.baseline_outcome or 'unavailable'}, "
+            "not FAIL. A repair can only be established against a failure that was established "
+            "first; otherwise a passing candidate proves the behaviour was never broken (INV-02)."
         )
     if evidence.candidate_outcome != "PASS":
         unmet.append(
-            f"the candidate outcome is {evidence.candidate_outcome or 'unrecorded'}, not PASS. "
-            "Anything else -- including INCONCLUSIVE -- leaves the repair unestablished."
+            "the candidate run's recorded outcome is "
+            f"{evidence.candidate_outcome or 'unavailable'}, not PASS. Anything else -- including "
+            "INCONCLUSIVE -- leaves the repair unestablished."
         )
+    if evidence.candidate_run_id is not None and evidence.candidate_status != "COMPLETED":
+        unmet.append(
+            f"the candidate run is {evidence.candidate_status or 'unavailable'}, not COMPLETED. An "
+            "interrupted or cancelled run carries no verdict that a comparison could use."
+        )
+    if evidence.candidate_run_id is not None and not evidence.closed_producers:
+        unmet.append(
+            "no producer closed a stream on the candidate run, so there is no evidence tail at all "
+            "to account for. A candidate with no recorded producers is not a run this product "
+            "observed."
+        )
+    if evidence.unclosed_producers:
+        unmet.append(
+            f"producers left their streams open on the candidate run: "
+            f"{', '.join(evidence.unclosed_producers)}. A producer that stopped without closing "
+            "leaves a tail nobody can account for, and a contiguous chain does not cover that "
+            "(INV-06)."
+        )
+    if not evidence.regressions_attested:
+        unmet.append(evidence.regression_detail)
 
-    missing = [p for p in REQUIRED_PRODUCER_ROLES if p not in evidence.closing_watermarks]
-    if missing:
+    if not evidence.baseline_identity:
         unmet.append(
-            f"missing closing watermarks from: {', '.join(missing)}. A producer that stopped "
-            "without closing leaves a tail of the candidate run nobody can account for, and a "
-            "contiguous chain does not cover that (INV-06)."
+            "the baseline run's sealed identity could not be read, so there is nothing to compare "
+            "the candidate's environment against."
         )
-    if not evidence.protected_regressions_passed:
+    if evidence.candidate_run_id is not None and not evidence.candidate_identity:
         unmet.append(
-            "protected functional regressions did not pass, or were not run. Validation, "
-            "authorization, successful submission and failed-input handling must still work: a "
-            "patch that fixes an announcement by removing the thing announced passes the "
-            "accessibility assertion and breaks the application."
+            "the candidate run's sealed identity could not be read, so its environment cannot be "
+            "shown to match the baseline's."
         )
-    if not evidence.frozen_assertions_unchanged:
+    if evidence.baseline_identity.get("assertion_set_digest") != evidence.candidate_identity.get(
+        "assertion_set_digest"
+    ):
         unmet.append(
-            "the frozen assertions or the observer contract changed between the baseline and the "
-            "candidate. Then the candidate answered an easier question, and comparing the two "
-            "answers establishes nothing (INV-03)."
-        )
-
-    permitted = {
-        (str(d.get("field")), str(d.get("candidate"))) for d in evidence.permitted_differences
-    }
-    drift = sorted(
-        key
-        for key in set(baseline_identity) | set(evidence.candidate_identity)
-        if baseline_identity.get(key) != evidence.candidate_identity.get(key)
-        and (key, str(evidence.candidate_identity.get(key))) not in permitted
-    )
-    if drift:
-        unmet.append(
-            f"unexplained identity drift in: {', '.join(drift)}. INV-04 allows the baseline and "
-            "candidate to differ by the approved patch and by differences explicitly recorded as "
-            "permitted -- nothing else. An unrecorded difference means the two runs are not a pair."
+            "the frozen assertion set differs between the baseline and the candidate. Then the "
+            "candidate answered an easier question, and comparing the two answers establishes "
+            "nothing (INV-03)."
         )
     if patch.status is not PatchStatus.VERIFYING:
         unmet.append(
@@ -828,25 +1082,47 @@ def _unmet_gates(
     return unmet
 
 
+def _identity_drift(evidence: TrustedEvidence, permitted: tuple[dict[str, Any], ...]) -> list[str]:
+    """Identity fields that differ and were not recorded as permitted (INV-04)."""
+    allowed = {(str(d.get("field")), str(d.get("candidate"))) for d in permitted}
+    return sorted(
+        field
+        for field in COMPARED_IDENTITY
+        if evidence.baseline_identity.get(field) != evidence.candidate_identity.get(field)
+        and (field, str(evidence.candidate_identity.get(field))) not in allowed
+    )
+
+
 def conclude_verification(
     conn: psycopg.Connection[dict[str, Any]],
     *,
     workspace_id: str,
     verification_id: str,
-    evidence: CandidateEvidence,
+    candidate_run_id: str | None = None,
+    permitted_differences: tuple[dict[str, Any], ...] = (),
     now: datetime | None = None,
 ) -> VerificationRecord:
-    """Derive the conclusion from the evidence. There is no parameter for the answer.
+    """Derive the conclusion from recorded evidence. There is no parameter for the answer.
 
-    Deliberately: a `conclusion=` argument is all it would take for a route, a retry or a reviewer
-    to
-    write VERIFIED over an inconclusive candidate, and CONTRACTS forbids exactly that. The caller
-    supplies what it observed; the gates decide.
+    And, since the review that produced this version, no parameter for the *evidence* either. The
+    caller names a candidate run; everything the gates read -- both runs' outcomes and statuses,
+    both
+    sealed identities, the candidate's producer watermarks, whether protected regressions are
+    attested -- comes from rows this product wrote. Previously the caller supplied all of it, so any
+    caller could assert a complete matched pair and obtain a VERIFIED record without a run having
+    happened.
 
-    `candidate_outcome` being absent is INCONCLUSIVE, not NOT_ESTABLISHED. A run that did not
-    produce
-    a verdict has not shown the repair failed -- it has shown nothing -- and recording those as the
-    same thing would let an infrastructure problem read as a rejected repair.
+    **In this deployment the conclusion can never be VERIFIED.** Nothing attests protected
+    functional
+    regressions, so that gate is permanently unmet, and a permanently unmet gate is the correct
+    state
+    for a product that cannot build or run a candidate at all. Reaching VERIFIED requires a runner
+    that records regression results -- not a different argument to this function.
+
+    `candidate_run_id` absent is INCONCLUSIVE, not NOT_ESTABLISHED. A run that did not produce a
+    verdict has not shown the repair failed -- it has shown nothing -- and recording those as the
+    same
+    thing would let an infrastructure problem read as a rejected repair.
     """
     moment = now or datetime.now(UTC)
     record = load_verification(conn, verification_id=verification_id)
@@ -856,23 +1132,11 @@ def conclude_verification(
             "outcome is not rewritten; run another verification instead."
         )
 
-    row = conn.execute(
-        "SELECT baseline_identity FROM patch_verification WHERE id = %s", (verification_id,)
-    ).fetchone()
-    baseline_identity: dict[str, Any] = dict(row["baseline_identity"]) if row else {}
-
-    # Record the candidate and move to VERIFYING first, so that the patch state the gates read is
-    # the state a real verification would be in at this point.
-    if evidence.candidate_run_id is not None:
+    if candidate_run_id is not None:
         conn.execute(
-            "UPDATE patch_verification SET candidate_run_id = %s, candidate_identity = %s::jsonb, "
-            "    permitted_differences = %s::jsonb, state = 'VERIFYING' WHERE id = %s",
-            (
-                evidence.candidate_run_id,
-                json.dumps(evidence.candidate_identity),
-                json.dumps(list(evidence.permitted_differences)),
-                verification_id,
-            ),
+            "UPDATE patch_verification SET candidate_run_id = %s, state = 'VERIFYING' "
+            " WHERE id = %s",
+            (candidate_run_id, verification_id),
         )
         patch_now = load_patch(conn, patch_id=record.patch_id)
         if patch_now.status is PatchStatus.BUILDING:
@@ -882,24 +1146,54 @@ def conclude_verification(
                 patch_id=record.patch_id,
                 to_status=PatchStatus.VERIFYING,
                 actor_id=None,
-                reason=f"candidate {evidence.candidate_run_id} recorded",
+                reason=f"candidate {candidate_run_id} recorded",
                 now=moment,
             )
 
-    patch = load_patch(conn, patch_id=record.patch_id)
-    unmet = _unmet_gates(patch, evidence, baseline_identity)
+    evidence = _derive_evidence(
+        conn, baseline_run_id=record.baseline_run_id, candidate_run_id=candidate_run_id
+    )
+    # Recorded as observed, so a reader sees what differed rather than being told that something
+    # did.
+    conn.execute(
+        "UPDATE patch_verification SET candidate_identity = %s::jsonb, "
+        "    permitted_differences = %s::jsonb WHERE id = %s",
+        (
+            json.dumps(evidence.candidate_identity, default=str),
+            json.dumps(list(permitted_differences)),
+            verification_id,
+        ),
+    )
 
-    if not unmet:
+    patch = load_patch(conn, patch_id=record.patch_id)
+    unmet = _unmet_gates(patch, evidence)
+    drift = _identity_drift(evidence, permitted_differences)
+    if drift:
+        unmet.append(
+            f"unexplained identity drift in: {', '.join(drift)}. INV-04 allows the baseline and "
+            "candidate to differ by the approved patch and by differences explicitly recorded as "
+            "permitted -- nothing else. An unrecorded difference means the two runs are not a pair."
+        )
+
+    if not unmet:  # pragma: no cover - unreachable until a runner attests regressions
         conclusion = "VERIFIED"
         reasons = [
-            "a complete matched pair: the baseline failed, the candidate passed, every required "
-            "producer closed, protected regressions held and the frozen assertions were unchanged",
+            "a complete matched pair, every element read from recorded evidence: the baseline "
+            "failed, the candidate passed and completed, every producer closed, protected "
+            "regressions are attested and the frozen assertion set was unchanged",
             "identities differed only by the approved patch and the recorded permitted differences",
         ]
-    elif evidence.candidate_outcome in {"PASS", "FAIL"} and evidence.candidate_run_id is not None:
+    elif (
+        candidate_run_id is not None
+        and evidence.candidate_outcome in {"PASS", "FAIL"}
+        and evidence.regressions_attested
+    ):
         conclusion = "NOT_ESTABLISHED"
         reasons = unmet
     else:
+        # Including every case in this deployment: regressions are never attested, so a candidate
+        # that ran and failed still reports INCONCLUSIVE rather than claiming the repair was tried
+        # and rejected. Saying "not established" would imply the comparison was complete.
         conclusion = "INCONCLUSIVE"
         reasons = unmet
 

@@ -47,12 +47,16 @@ PROPOSE_FIELDS = frozenset(
         "baseSourceDigest",
         "changes",
         "rationale",
-        "applicationPaths",
         "acknowledgeSeparateReview",
     }
 )
 APPROVE_FIELDS = frozenset({"expiresInSeconds"})
 VERIFY_FIELDS = frozenset({"baselineRunId", "baselineIdentity"})
+
+#: The git file modes a proposal may name. A closed set, because `mode` exists to let the policy
+#: recognise a symlink (120000) -- and a value outside this set is either a mistake or an attempt to
+#: have the mode ignored.
+ALLOWED_MODES = frozenset({"100644", "100755", "120000", "160000"})
 
 #: How long a PATCH_APPLY approval lasts unless the caller shortens it. Bounded rather than
 #: open-ended: an approval that never expires is a standing permission to run somebody's patch, and
@@ -94,15 +98,29 @@ def _changes_from(body: dict[str, Any], *, request_id: str | None) -> tuple[Prop
                 f"the content for {path} must be a string, or null for a deletion.",
                 request_id=request_id,
             )
-        mode = entry.get("mode")
-        out.append(
-            ProposedChange(
-                path=path,
-                content=content,
-                mode=None if mode is None else str(mode),
-                binary=bool(entry.get("binary", False)),
+        # Strict, not coerced. `bool("false")` is True and `bool(0)` is False, so a JSON string or
+        # number here would silently become a claim about the file: "binary": "no" would have marked
+        # the change binary and refused it, and a truthy mode would have become the text of whatever
+        # was sent -- including a mode that is not a mode.
+        binary = entry.get("binary", False)
+        if not isinstance(binary, bool):
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT,
+                f"binary for {path} must be true or false, not {type(binary).__name__}. It decides "
+                "whether a reviewer is allowed to approve bytes they cannot read, so it is not "
+                "inferred from a truthy value.",
+                request_id=request_id,
             )
-        )
+        mode = entry.get("mode")
+        if mode is not None and (not isinstance(mode, str) or mode not in ALLOWED_MODES):
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT,
+                f"mode for {path} must be omitted or one of {', '.join(sorted(ALLOWED_MODES))}. "
+                "The mode is how a symlink is recognised, and an unrecognised value would be "
+                "stored as a mode nobody checks.",
+                request_id=request_id,
+            )
+        out.append(ProposedChange(path=path, content=content, mode=mode, binary=binary))
     return tuple(out)
 
 
@@ -156,6 +174,68 @@ def _verification_view(record: patches.VerificationRecord) -> dict[str, Any]:
     }
 
 
+@router.put("/projects/{project_id}/repair-surface")
+def configure_repair_surface(
+    workspace_id: str,
+    project_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Set the only paths a repair patch for this project may touch.
+
+    `PROJECT_CONFIGURE`, because this is configuration and not a request. It used to arrive in the
+    proposal body, which meant the agent proposing a change also chose how far it was allowed to
+    reach -- and an omitted list disabled confinement entirely, so the laziest request got the
+    widest surface.
+
+    There is no way to express "anywhere" here. A project with no surface accepts no proposals,
+    which is the only safe reading of "unconfigured" for the setting that bounds what an agent may
+    rewrite.
+    """
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.PROJECT_CONFIGURE,
+        body=body,
+        allowed_fields=frozenset({"paths"}),
+    )
+    as_identifier(project_id, what="projectId")
+    raw = body.get("paths")
+    if not isinstance(raw, list) or not raw or not all(isinstance(p, str) for p in raw):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "paths must be a non-empty array of path prefixes. A surface of nothing cannot be told "
+            "from no surface at all, and one of those two has to refuse every proposal.",
+            request_id=context.request_id,
+        )
+    if conn.execute("SELECT 1 FROM project WHERE id = %s", (project_id,)).fetchone() is None:
+        raise not_found()
+    try:
+        paths = patches.configure_repair_surface(
+            conn,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            paths=tuple(str(p) for p in raw),
+            configured_by=context.principal.user_id,
+        )
+    except patches.PatchError as exc:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
+        ) from exc
+    return {
+        "projectId": project_id,
+        "paths": list(paths),
+        "meaning": (
+            "A repair patch for this project may change only paths under these prefixes. The "
+            "protected list still applies on top: a surface cannot make this project's tests, "
+            "authorization or validation repairable."
+        ),
+    }
+
+
 @router.post("/findings/{finding_id}/patches", status_code=status.HTTP_201_CREATED)
 def propose_patch(
     workspace_id: str,
@@ -206,16 +286,20 @@ def propose_patch(
                 request_id=context.request_id,
             )
 
-    application_paths = body.get("applicationPaths") or []
-    if not isinstance(application_paths, list) or not all(
-        isinstance(p, str) for p in application_paths
-    ):
+    acknowledge = body.get("acknowledgeSeparateReview", False)
+    if not isinstance(acknowledge, bool):
         raise ProblemDetail(
             ProblemCode.INVALID_INPUT,
-            "applicationPaths must be an array of path prefixes naming the repair surface.",
+            "acknowledgeSeparateReview must be true or false. It is the caller saying they know "
+            "this patch changes what the candidate is built from, so a truthy string must not "
+            "stand in for it.",
             request_id=context.request_id,
         )
 
+    # Duplicate paths, empty patches and protected paths are all refused by `propose_patch` before
+    # it writes anything, and `PatchRefused`/`PatchError` become INVALID_INPUT below. A second copy
+    # of those checks here would be code no test can distinguish from its absence -- which is how a
+    # mutation check found it.
     changes = _changes_from(body, request_id=context.request_id)
 
     def perform() -> dict[str, Any]:
@@ -229,8 +313,7 @@ def propose_patch(
                 changes=changes,
                 rationale=rationale,
                 proposed_by=context.principal.user_id,
-                application_paths=tuple(str(p) for p in application_paths),
-                acknowledge_separate_review=bool(body.get("acknowledgeSeparateReview", False)),
+                acknowledge_separate_review=acknowledge,
             )
         except patches.PatchRefused as exc:
             # INVALID_INPUT, not a permission error. The caller's authority was fine; the change is
@@ -246,7 +329,14 @@ def propose_patch(
         return _patch_view(patch)
 
     outcome = run_idempotently(
-        conn, context, route="POST /findings/patches", body=body, perform=perform
+        conn,
+        context,
+        # Namespaced by finding. The route key is half of the idempotency identity, so a shared key
+        # meant the same Idempotency-Key on a *different* finding replayed the first finding's
+        # proposal -- a caller asking to repair one defect and being handed the patch for another.
+        route=f"POST /findings/{finding_id}/patches",
+        body=body,
+        perform=perform,
     )
     if outcome.replayed:
         response.headers["Idempotent-Replay"] = "true"
@@ -508,6 +598,10 @@ def reject_patch(
         body=body,
         allowed_fields=frozenset({"reason"}),
     )
+    # Required, like approval. A rejection is a decision about the patch as the reviewer read it,
+    # and without it an approval and a rejection racing on one patch could both be accepted -- the
+    # revision is what makes the two mutually exclusive.
+    expected = require_if_match(context)
     as_identifier(patch_id, what="patchId")
     reason = body.get("reason")
     if not isinstance(reason, str) or not reason.strip():
@@ -525,6 +619,7 @@ def reject_patch(
             to_status=PatchStatus.REJECTED,
             actor_id=context.principal.user_id,
             reason=reason,
+            expected_revision=expected,
         )
     except patches.PatchError as exc:
         raise ProblemDetail(ProblemCode.CONFLICT, str(exc), request_id=context.request_id) from exc

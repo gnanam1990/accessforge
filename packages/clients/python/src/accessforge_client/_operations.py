@@ -346,6 +346,14 @@ OPERATIONS: dict[str, Operation] = {
         mutating=False,
         authenticated=True,
     ),
+    "configure_repair_surface": Operation(
+        operation_id="configure_repair_surface",
+        method="PUT",
+        path="/v1/workspaces/{workspace_id}/projects/{project_id}/repair-surface",
+        parameters=("workspace_id", "project_id"),
+        mutating=True,
+        authenticated=True,
+    ),
     "seal_manifest": Operation(
         operation_id="seal_manifest",
         method="POST",
@@ -663,6 +671,7 @@ PATHS: frozenset[str] = frozenset(
         "/v1/workspaces/{workspace_id}/projects/{project_id}/environments",
         "/v1/workspaces/{workspace_id}/projects/{project_id}/journeys",
         "/v1/workspaces/{workspace_id}/projects/{project_id}/manifests",
+        "/v1/workspaces/{workspace_id}/projects/{project_id}/repair-surface",
         "/v1/workspaces/{workspace_id}/projects/{project_id}/seals",
         "/v1/workspaces/{workspace_id}/review-requests",
         "/v1/workspaces/{workspace_id}/reviews",
