@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0020_purge_queue_artifact_key.sql"
+NEWEST = "0021_patches_and_verification.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -145,58 +145,82 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     """The newest migration's actual effect, in both directions.
 
     Asserting only that the new thing works afterwards would pass against a database where the
-    guard had been dropped entirely, or the constraint had always been there -- and "the guard is
-    gone" is a much worse outcome than "the feature is missing".
+    guard had been dropped entirely, or the table had always been there -- and "the guard is gone"
+    is a much worse outcome than "the feature is missing".
     """
     _apply_through(disposable, _previous())
     with connect(disposable) as conn:
         before = conn.execute(
-            "SELECT 1 FROM pg_constraint "
-            " WHERE conrelid = 'evidence_object_purge'::regclass AND contype = 'f' "
-            "   AND confrelid = 'evidence_artifact'::regclass"
+            "SELECT 1 FROM information_schema.tables "
+            " WHERE table_schema = 'public' AND table_name = 'patch_verification'"
         ).fetchone()
-        # The key the reference will point at is already there, from migration 0009. Asserted
-        # before, because it is the reason this migration creates none: an earlier version added a
-        # second constraint over the same two columns, and every migrated database ended up
-        # maintaining two identical unique indexes on the busiest table in the schema.
-        existing = [
-            str(row["conname"]) for row in conn.execute(_COMPOSITE_ARTIFACT_KEYS).fetchall()
-        ]
-    assert before is None, "the artifact reference already existed, so this proves nothing"
-    assert existing == ["evidence_artifact_id_workspace_id_key"], (
-        f"expected exactly 0009's composite key before this migration, found {existing}"
-    )
+    assert before is None, "the verification table already existed, so this proves nothing"
 
     migrate(disposable)
 
     with connect(disposable) as conn:
+        after = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            " WHERE table_schema = 'public' AND table_name = 'patch_verification'"
+        ).fetchone()
+        # The three constraints that make a conclusion auditable. Without them a verification could
+        # hold a verdict with no candidate, no reasons, or a state saying it was never concluded.
+        guards = {
+            str(row["conname"])
+            for row in conn.execute(
+                "SELECT conname FROM pg_constraint "
+                " WHERE conrelid = 'patch_verification'::regclass AND contype = 'c'"
+            ).fetchall()
+        }
+        forced = conn.execute(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+            " WHERE relname IN ('patch_proposal', 'patch_verification', "
+            "                   'patch_proposal_transition')"
+        ).fetchall()
+        # The finding reference is RESTRICT: a patch proposal outliving the finding it repairs would
+        # be a change to somebody's application that nothing explains.
+        finding_ref = conn.execute(
+            "SELECT confdeltype FROM pg_constraint "
+            " WHERE conrelid = 'patch_proposal'::regclass AND contype = 'f' "
+            "   AND confrelid = 'finding'::regclass"
+        ).fetchone()
+
+    assert after is not None
+    assert "verified_requires_a_candidate" in guards, (
+        "a verification could be VERIFIED with no candidate run"
+    )
+    assert "conclusion_is_explained" in guards, "a conclusion could carry no reasons"
+    assert "conclusion_is_complete" in guards, (
+        "a verification could hold a verdict while claiming it was never concluded"
+    )
+    assert len(forced) == 3
+    for row in forced:
+        # FORCE, not merely ENABLE: the application role owns these tables, and ENABLE does nothing
+        # for an owner. A proposal names source paths in a customer repository.
+        assert bool(row["relrowsecurity"]) and bool(row["relforcerowsecurity"])
+    assert finding_ref is not None and finding_ref["confdeltype"] == "r"
+
+
+def test_the_purge_queue_artifact_key_from_an_earlier_migration_is_still_correct(
+    disposable: str,
+) -> None:
+    """Migration 0020's effect, kept as its own case now that it is no longer the newest."""
+    migrate(disposable)
+    with connect(disposable) as conn:
         key = conn.execute(
-            "SELECT conname, confdeltype, convalidated, "
-            "       pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            "SELECT confdeltype, convalidated, pg_get_constraintdef(oid) AS definition "
+            "  FROM pg_constraint "
             " WHERE conrelid = 'evidence_object_purge'::regclass AND contype = 'f' "
             "   AND confrelid = 'evidence_artifact'::regclass"
         ).fetchone()
-        after = [str(row["conname"]) for row in conn.execute(_COMPOSITE_ARTIFACT_KEYS).fetchall()]
-
-    assert key is not None, "a purge row could still name an artifact that does not exist"
-    # Still exactly one, and still 0009's. A duplicate here costs an index write on every insert
-    # and update of evidence_artifact and buys nothing, and it is invisible to every other test.
-    assert after == ["evidence_artifact_id_workspace_id_key"], (
-        f"this migration should add no unique key over (id, workspace_id), found {after}"
-    )
-    # Composite, not a bare reference to the primary key. Foreign key checks bypass row-level
-    # security, so a single-column reference would pass while naming another tenant's artifact.
-    definition = str(key["definition"])
-    assert "(artifact_id, workspace_id)" in definition
-    assert "(id, workspace_id)" in definition
-    # 'r' is RESTRICT. Artifacts are never deleted here -- deletion leaves a tombstone -- so this
-    # can only fire if a later migration removes one, and taking the record of an unfinished purge
-    # with it is what must not happen quietly.
+        keys = [str(row["conname"]) for row in conn.execute(_COMPOSITE_ARTIFACT_KEYS).fetchall()]
+    assert key is not None
+    assert "(artifact_id, workspace_id)" in str(key["definition"])
     assert key["confdeltype"] == "r"
-    # And validated. Added NOT VALID so the row scan runs under a lock that does not block writes
-    # to evidence_artifact, then validated in its own statement; leaving it NOT VALID would mean
-    # existing rows were never checked against it at all.
-    assert bool(key["convalidated"]), "the foreign key was added but never validated"
+    assert bool(key["convalidated"])
+    # Still exactly one composite key, and still 0009's. A duplicate costs an index write on every
+    # insert of evidence_artifact and buys nothing.
+    assert keys == ["evidence_artifact_id_workspace_id_key"], keys
 
 
 def test_the_navigator_checkpoints_from_an_earlier_migration_are_still_correct(

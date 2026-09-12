@@ -25,6 +25,7 @@ from .routes import (
     findings_router,
     grants_router,
     journeys_router,
+    patches_router,
     projects_router,
     runners_router,
     runs_router,
@@ -232,6 +233,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         schedules_router,
         settings_router,
         findings_router,
+        patches_router,
         exports_router,
         stream_router,
     ):

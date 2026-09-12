@@ -442,9 +442,16 @@ def test_the_cli_lists_only_operations_this_build_can_call(
     result = _cli(server, session_file, "operations")
     assert result.returncode == 0
     assert "create_execution_grant" in result.stdout
-    # Nothing from a module that does not exist.
+    # Nothing from a module that does not exist. `publish` is module 20, which needs GitHub App
+    # authorization nobody has granted; until those routes exist the CLI must not advertise them.
     assert "publish" not in result.stdout
-    assert "patch" not in result.stdout
+    # `patch` used to be listed here too. Modules 14 and 15 landed the proposal and verification
+    # routes, so these operations are real and the CLI is right to offer them -- asserted positively
+    # rather than removed, because "the list no longer mentions patches" would also pass if the
+    # routes had been dropped.
+    assert "propose_patch" in result.stdout
+    assert "approve_patch" in result.stdout
+    assert "get_verification" in result.stdout
 
 
 @pytest.fixture()

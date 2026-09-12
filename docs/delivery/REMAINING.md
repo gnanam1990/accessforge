@@ -28,10 +28,17 @@ The four debts `STATUS.md` records against FR-020, all still present on `7c9e0bf
 store outage, nothing removes them.
 </details>
 
-### P2 — Module 14/15 routes: constrained patch proposal and matched candidate verification
-`PLAN.md` row 18 says only modules 14/15/20 routes remain. 14 and 15 need no external service:
-a patch proposal is a diff against a sealed manifest, and matched verification re-runs the
-evaluator against a candidate. **Depends on:** 05, 13 (both landed). Largest remaining functional gap.
+### ~~P2 — Module 14/15 routes~~ — built, awaiting review
+Branch `feat/m14-m15-patch-and-verification`. Six routes, the patch path policy, `PATCH_APPLY`
+approval persistence with a dispatch recheck, and every gate that refuses VERIFIED. Handoffs in
+`docs/handoffs/14.md` and `15.md`.
+
+**What is deliberately not built:** module 14's sandbox and candidate build (needs a containment
+boundary), and module 15's rerun (needs a real reader). **Runtime proof is BLOCKED** and the VERIFIED
+path is exercised with evidence the tests name `_fabricated_`. Nothing is marked verified.
+
+Largest remaining hole: the gates trust what a caller reports about a candidate run. When a real
+runner exists those fields must come from evidence, not claims.
 
 ### P3 — Rate limiting (module 26 gap: "no telemetry or rate limits")
 Per-principal and per-workspace limits on the write routes, with RFC7807 `429` and a stated
