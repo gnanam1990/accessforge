@@ -1,0 +1,17 @@
+[project]
+name = "accessforge-build-worker"
+version = "0.0.0"
+description = "Immutable candidate preparation and isolated build execution."
+requires-python = ">=3.13,<3.14"
+dependencies = ["accessforge-domain", "accessforge-persistence"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/accessforge_build_worker"]
+
+[tool.uv.sources]
+accessforge-domain = { workspace = true }
+accessforge-persistence = { workspace = true }

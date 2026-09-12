@@ -84,12 +84,19 @@ it audits, and twelve mutation checks cover the ways the gate could go green whi
 markers), the input floor is a floor rather than an equality, and every advisory fails at every
 severity because pip-audit cannot grade many of them.
 
-### P6 — `mypy` over `tests/` — validated locally, awaiting PR/CI
+### ~~P6 — `mypy` over `tests/`~~ — merged (PR #36, `fa60a6f`)
 The refreshed baseline had 234 errors across 29 test files, not the previously recorded 139.
 CI now checks every Python workspace member, operator scripts and the complete test tree with
 strict mode unchanged. Typed helpers, explicit row/cookie preconditions and complete fault-store
 interfaces replace invalid annotations; negative tests remain. Two CI-configuration tests guard
 the target list and prevent test exemptions. See `docs/handoffs/test-suite-mypy.md`.
+
+### Module 14 continuation — candidate preparation and isolated build
+In progress on `feat/isolated-candidate-build`. The new build-worker package prepares bounded,
+immutable candidate source bytes without executing or extracting repository content on the host.
+Sandbox execution, durable dispatch/cleanup, protected regression execution and candidate artifact
+publication are still pending. See `docs/handoffs/14-candidate-build.md`; no build or containment
+success is claimed by source-preparation tests.
 
 ### P7 — `fixture_digest` offline-guess exposure
 An unkeyed SHA-256 over low-entropy fixture values; anyone holding an export can test guesses
