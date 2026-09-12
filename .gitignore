@@ -32,3 +32,8 @@ coverage/
 
 # OS
 .DS_Store
+
+# Written by scripts/audit_python_dependencies.py as the input it hands pip-audit. Derived from
+# uv.lock on every run, so committing it would create a second source of truth that goes stale
+# silently -- and a reviewer comparing the two would have no way to know which one the gate used.
+locked-requirements.txt

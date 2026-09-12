@@ -56,8 +56,8 @@ as RFC7807 `RATE_LIMITED` with `Retry-After`. Handoff in `docs/handoffs/26-rate-
 trustworthy key without a client address from a proxy. Limits are global configuration rather than
 per workspace. Neither is hidden: both are asserted or recorded.
 
-### ~~P4 — Structured telemetry~~ — built, awaiting review
-Branch `feat/m26-structured-telemetry`. One structured record per request from a single ASGI
+### ~~P4 — Structured telemetry~~ — merged (PR #34, `d2bd3c9`)
+ One structured record per request from a single ASGI
 middleware: route template (never a path), method, status, outcome, duration, request id and stable
 problem code. Handoff in `docs/handoffs/26-telemetry.md`.
 
@@ -71,8 +71,18 @@ Request and outcome telemetry with no evidence content and no object keys in it.
 **Depends on:** 18.
 </details>
 
-### P5 — Python dependency scanning in CI
-The Node side is covered by dependency review; Python is not. **Depends on:** 01.
+### ~~P5 — Python dependency scanning in CI~~ — built, awaiting review
+Branch `feat/ci-python-dependency-scanning`. `scripts/audit_python_dependencies.py` audits `uv.lock`
+rendered with `--frozen`, runs first in the security job, installs nothing and executes no package
+code. Handoff in `docs/handoffs/ci-python-dependency-scanning.md`.
+
+**Current result: 96 third-party packages, 0 advisories.** No remediation was needed and none was
+applied. The scanner is a locked dev dependency, so its version and hashes are pinned like everything
+it audits, and twelve mutation checks cover the ways the gate could go green while auditing nothing.
+
+**Limits:** the audited set is the one that resolves on Linux (eleven packages carry environment
+markers), the input floor is a floor rather than an equality, and every advisory fails at every
+severity because pip-audit cannot grade many of them.
 
 ### P6 — `mypy` over `tests/`
 139 strict errors, almost all bare `dict` annotations, in the suite that is the evidence for
