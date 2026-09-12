@@ -3,7 +3,12 @@
 Module 12 implements the bounded Strands planning worker in
 `accessforge_orchestrator.navigator`. Each invocation creates a fresh agent with one explicit tool,
 no directory discovery, session memory, background work, generic shell/browser/HTTP/repository
-tools, or outcome-verification capability. Module 13 diagnosis remains separate.
+tools, or outcome-verification capability.
+
+Module 13's first diagnosis slice is separate under `accessforge_orchestrator.diagnosis`: a
+zero-tool Strands worker consumes a closed privileged projection, validates every evidence/source
+reference after structured output, and reads only digest-pinned UTF-8 excerpts from the exact frozen
+commit. Finding persistence/deduplication and its real failed-reader acceptance run remain pending.
 
 The process receives a sealed navigator projection and a control-plane supplied durable checkpoint
 sink. The Bedrock credential chain belongs to this orchestrator process; desktop-runner, target,
