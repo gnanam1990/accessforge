@@ -78,7 +78,11 @@ def state(**overrides: object) -> NavigationRuntimeState:
     return replace(value, **overrides)
 
 
-def gateway(current: list[NavigationRuntimeState], dispatched: list[Any]) -> NavigationToolGateway:
+def gateway(
+    current: list[NavigationRuntimeState],
+    dispatched: list[Any],
+    raw_policy: dict[str, object] | None = None,
+) -> NavigationToolGateway:
     async def dispatch(request: object) -> DispatchResult:
         dispatched.append(request)
         return DispatchResult(status="SUCCEEDED", action_id="action-1")
@@ -87,7 +91,7 @@ def gateway(current: list[NavigationRuntimeState], dispatched: list[Any]) -> Nav
         run_ref="run-1:attempt-1:epoch-4",
         platform="darwin",
         permitted_origins=frozenset({"http://127.0.0.1:8081"}),
-        policy=SealedNavigatorPolicy.model_validate(policy()),
+        policy=SealedNavigatorPolicy.model_validate(raw_policy or policy()),
         state_provider=lambda: current[0],
         dispatch=dispatch,
     )
@@ -130,6 +134,20 @@ def test_announcement_instructions_remain_untrusted_data_not_policy() -> None:
     assert set(view.policy.allowed_actions) == ALLOWED_ACTIONS
 
 
+def test_projection_preserves_a_reviewed_action_subset() -> None:
+    view = projection(
+        policy(
+            allowedActions=["NEXT", "ACTIVATE", "TYPE_TEXT"],
+            allowedKeyChords=[],
+        )
+    )
+    assert {action.value for action in view.policy.allowed_actions} == {
+        "NEXT",
+        "ACTIVATE",
+        "TYPE_TEXT",
+    }
+
+
 @pytest.mark.asyncio
 async def test_only_a_sealed_action_with_the_current_run_reference_is_dispatched() -> None:
     current = [state()]
@@ -144,6 +162,28 @@ async def test_only_a_sealed_action_with_the_current_run_reference_is_dispatched
 
     with pytest.raises(ToolRefusal, match="sealed run reference"):
         await tool.submit(ProposedAction(run_ref="other", action=ActionName.NEXT))
+
+
+@pytest.mark.asyncio
+async def test_journey_action_and_chord_subsets_are_enforced_before_the_global_gate() -> None:
+    current = [state()]
+    dispatched: list[Any] = []
+    restricted = policy(allowedActions=["NEXT", "KEY_CHORD"], allowedKeyChords=["TAB"])
+    tool = gateway(current, dispatched, restricted)
+
+    with pytest.raises(ToolRefusal, match="journey's sealed action policy"):
+        await tool.submit(
+            ProposedAction(run_ref="run-1:attempt-1:epoch-4", action=ActionName.ACTIVATE)
+        )
+    with pytest.raises(ToolRefusal, match="journey's sealed chord policy"):
+        await tool.submit(
+            ProposedAction(
+                run_ref="run-1:attempt-1:epoch-4",
+                action=ActionName.KEY_CHORD,
+                key_chord="ENTER",
+            )
+        )
+    assert dispatched == []
 
 
 @pytest.mark.asyncio

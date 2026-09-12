@@ -68,6 +68,10 @@ export class CandidateProofRunner {
   constructor(private readonly options: CandidateProofOptions) {}
 
   async run(actions: readonly ActionRequest[]): Promise<CandidateProofResult> {
+    if (actions.length === 0) {
+      throw new Error('candidate proof requires at least one action');
+    }
+
     // Reject unbound typing before VoiceOver starts. The allowlist constrains commands, but the
     // fixture binding constrains what those commands are permitted to type.
     for (const action of actions) {

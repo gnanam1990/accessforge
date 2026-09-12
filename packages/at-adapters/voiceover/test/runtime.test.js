@@ -138,6 +138,43 @@ test('reader-idle timeout is unknown evidence, not empty speech', async () => {
   assert.equal('phrase' in result.observation, false);
 });
 
+test('reader-idle ignores a stable stale phrase until a new announcement stabilizes', async () => {
+  let now = 0;
+  const phrases = ['Email', 'Email', 'Email', 'Invalid email', 'Invalid email'];
+  const client = fakeClient({ lastSpokenPhrase: async () => phrases.shift() ?? 'Invalid email' });
+  const adapter = new VoiceOverAdapter(client, {
+    idlePollMs: 10,
+    idleTimeoutMs: 100,
+    idleStableSamples: 2,
+    monotonicNow: () => now,
+    sleep: async (ms) => {
+      now += ms;
+    },
+  });
+
+  const result = await adapter.perform({ action: 'WAIT_FOR_READER_IDLE' }, context());
+  assert.equal(result.status, 'SUCCEEDED');
+  assert.equal(result.observation.phrase, 'Invalid email');
+});
+
+test('reader-idle returns unknown when only the previous announcement is observable', async () => {
+  let now = 0;
+  const client = fakeClient({ lastSpokenPhrase: async () => 'Email' });
+  const adapter = new VoiceOverAdapter(client, {
+    idlePollMs: 10,
+    idleTimeoutMs: 25,
+    idleStableSamples: 2,
+    monotonicNow: () => now,
+    sleep: async (ms) => {
+      now += ms;
+    },
+  });
+
+  const result = await adapter.perform({ action: 'WAIT_FOR_READER_IDLE' }, context());
+  assert.equal(result.observation.provenance, 'CAPTURE_UNKNOWN');
+  assert.equal('phrase' in result.observation, false);
+});
+
 test('host probes use real command results and preserve unknowns', () => {
   const consoleState = JSON.stringify({
     IOConsoleUsers: [

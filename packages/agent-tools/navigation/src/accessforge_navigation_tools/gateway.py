@@ -81,6 +81,19 @@ class NavigationToolGateway:
             )
             raise ToolRefusal(detail)
 
+        if proposal.action not in self._policy.allowed_actions:
+            raise ToolRefusal(
+                f"{proposal.action.value} is not in this journey's sealed action policy"
+            )
+        if (
+            proposal.action is ActionName.KEY_CHORD
+            and proposal.key_chord not in self._policy.allowed_key_chords
+        ):
+            raise ToolRefusal(
+                f"key chord {proposal.key_chord!r} is not permitted by this journey's sealed "
+                "chord policy"
+            )
+
         text: str | None = None
         if proposal.action is ActionName.TYPE_TEXT:
             ref = proposal.text_value_ref
