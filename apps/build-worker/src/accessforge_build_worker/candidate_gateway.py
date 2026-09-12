@@ -18,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import CodeType, FunctionType
 from typing import Any
 
+from accessforge_domain.candidate_endpoint import CSP as CSP
+from accessforge_domain.candidate_endpoint import PROTOCOL
 from accessforge_domain.canonical import digest
 
 from .sandbox import CleanupUnconfirmed, DaemonBinding, SandboxRefused
@@ -26,12 +28,6 @@ MAX_BODY = 8192
 MAX_RESPONSE = 262144
 MAX_HEADERS = 16384
 MAX_REQUESTS = 128
-CSP = (
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'; "
-    "sandbox allow-forms allow-scripts allow-same-origin"
-)
-PROTOCOL = "owned-reference-loopback-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,10 +92,14 @@ class CandidateGateway:
         nonce: str,
         transport: Callable[[str, str, str], dict[str, Any]],
         wall_seconds: int = 30,
+        on_planned: Callable[[dict[str, Any]], None] = lambda identity: None,
+        on_bound: Callable[[dict[str, Any]], None] = lambda receipt: None,
+        on_admit: Callable[[], None] = lambda: None,
+        on_closed: Callable[[bool], None] = lambda clean: None,
     ) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", nonce):
             raise SandboxRefused("gateway requires the exact seeded fixture nonce")
-        if not 1 <= wall_seconds <= 60:
+        if type(wall_seconds) is not int or not 1 <= wall_seconds <= 60:
             raise SandboxRefused("gateway lifetime must be between 1 and 60 seconds")
         self.binding = binding
         self.path = "/form/" + nonce
@@ -112,6 +112,9 @@ class CandidateGateway:
         self._requests = 0
         self._deadline = 0.0
         self._expiry: threading.Timer | None = None
+        self._on_planned, self._on_bound = on_planned, on_bound
+        self._on_admit, self._on_closed = on_admit, on_closed
+        self._planned = self._cleanup_reported = False
 
     @property
     def origin(self) -> str:
@@ -123,12 +126,10 @@ class CandidateGateway:
     def start_url(self) -> str:
         return self.origin + self.path
 
-    def receipt(self) -> dict[str, Any]:
-        # Presence of this receipt is not proof the browser actually navigated here.
+    def plan(self) -> dict[str, Any]:
         b = self.binding
-        identity = {
+        return {
             "protocol": PROTOCOL,
-            "origin": self.origin,
             "path": self.path,
             "taskId": b.task_id,
             "artifactDigest": b.artifact_digest,
@@ -139,7 +140,12 @@ class CandidateGateway:
             "daemonEndpoint": b.daemon.endpoint,
             "daemonId": b.daemon.daemon_id,
             "contentSecurityPolicy": CSP,
+            "wallSeconds": self.wall_seconds,
         }
+
+    def receipt(self) -> dict[str, Any]:
+        # Presence of this receipt is not proof the browser actually navigated here.
+        identity = {**self.plan(), "origin": self.origin}
         return {**identity, "bindingDigest": digest(identity)}
 
     def __enter__(self) -> CandidateGateway:
@@ -260,15 +266,21 @@ class CandidateGateway:
             def handle_error(self, request: Any, client_address: Any) -> None:
                 pass  # Malformed/closed sockets never dump private requests into host logs.
 
-        self._server = Server(("127.0.0.1", 0), Handler)
-        self._server.timeout = 0.05
-        self._deadline = time.monotonic() + self.wall_seconds
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-        self._expiry = threading.Timer(self.wall_seconds, self._expire)
-        self._expiry.daemon = True
+        self._on_planned(self.plan())
+        self._planned = True
         try:
-            self._thread.start()
+            self._server = Server(("127.0.0.1", 0), Handler)
+            self._server.timeout = 0.05
+            self._deadline = time.monotonic() + self.wall_seconds
+            self._expiry = threading.Timer(self.wall_seconds, self._expire)
+            self._expiry.daemon = True
             self._expiry.start()
+            self._on_bound(self.receipt())
+            self._on_admit()
+            if self._closed or time.monotonic() >= self._deadline:
+                raise SandboxRefused("candidate endpoint expired before admission")
+            self._thread = threading.Thread(target=self._serve, daemon=True)
+            self._thread.start()
         except Exception:
             self.__exit__()
             raise
@@ -287,7 +299,16 @@ class CandidateGateway:
     def _expire(self) -> None:
         self._closed = True
         self._disconnect()
+        self._close_listener()
+
+    def _close_listener(self) -> None:
         if self._server is not None:
+            # Linux select/accept can retain the underlying listening socket after another
+            # thread closes its descriptor. Shutdown wakes that syscall and stops new connects.
+            try:
+                self._server.socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             self._server.server_close()
 
     def _disconnect(self) -> None:
@@ -298,12 +319,26 @@ class CandidateGateway:
                 pass
 
     def __exit__(self, *exc: Any) -> None:
+        clean = False
+        try:
+            self._close_resources()
+            clean = True
+        finally:
+            if self._planned and not self._cleanup_reported:
+                try:
+                    self._on_closed(clean)
+                    self._cleanup_reported = True
+                except Exception as error:
+                    raise CleanupUnconfirmed(
+                        "endpoint cleanup receipt was not confirmed"
+                    ) from error
+
+    def _close_resources(self) -> None:
         self._closed = True
         if self._expiry is not None:
             self._expiry.cancel()
         self._disconnect()
-        if self._server is not None:
-            self._server.server_close()
+        self._close_listener()
         if self._thread is not None and self._thread.ident is not None:
             # No new thread is needed to stop: resource exhaustion may be the reason for cleanup.
             self._thread.join(6)

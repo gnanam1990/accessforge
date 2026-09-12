@@ -17,7 +17,7 @@ from accessforge_build_worker.candidate_gateway import (
     CandidateEndpointBinding,
     CandidateGateway,
 )
-from accessforge_build_worker.sandbox import DaemonBinding, SandboxRefused
+from accessforge_build_worker.sandbox import CleanupUnconfirmed, DaemonBinding, SandboxRefused
 from accessforge_domain.canonical import digest
 
 
@@ -48,6 +48,92 @@ def request(
         return response.status, response.read(), dict(response.getheaders())
     finally:
         client.close()
+
+
+@pytest.mark.parametrize("fail_at", [None, "plan", "bound", "admit", "cleanup"])
+def test_committed_lifecycle_precedes_admission_and_confirms_actual_close(
+    fail_at: str | None,
+) -> None:
+    events: list[str] = []
+
+    def planned(identity: dict[str, Any]) -> None:
+        assert gateway._server is None
+        assert identity == gateway.plan()
+        events.append("plan")
+        if fail_at == "plan":
+            raise RuntimeError("plan failure")
+
+    def bound(receipt: dict[str, Any]) -> None:
+        assert gateway._server is not None and gateway._thread is None
+        assert receipt == gateway.receipt()
+        events.append("bound")
+        if fail_at == "bound":
+            raise RuntimeError("bound failure")
+
+    def admit() -> None:
+        assert events == ["plan", "bound"] and gateway._thread is None
+        events.append("admit")
+        if fail_at == "admit":
+            raise RuntimeError("admit failure")
+
+    def closed(clean: bool) -> None:
+        assert clean and gateway._closed
+        assert gateway._server is not None and gateway._server.socket.fileno() == -1
+        assert gateway._thread is None or not gateway._thread.is_alive()
+        events.append("cleanup")
+        if fail_at == "cleanup":
+            raise RuntimeError("cleanup failure")
+
+    gateway = CandidateGateway(
+        binding=binding(),
+        nonce="test-fixture-nonce",
+        transport=lambda *args: {"status": 200, "body": "ok"},
+        on_planned=planned,
+        on_bound=bound,
+        on_admit=admit,
+        on_closed=closed,
+    )
+    if fail_at:
+        expected = CleanupUnconfirmed if fail_at == "cleanup" else RuntimeError
+        with pytest.raises(expected):
+            with gateway:
+                assert fail_at == "cleanup"
+    else:
+        with gateway:
+            assert request(gateway)[0] == 200
+        gateway.__exit__()
+    assert (
+        events
+        == {
+            None: ["plan", "bound", "admit", "cleanup"],
+            "plan": ["plan"],
+            "bound": ["plan", "bound", "cleanup"],
+            "admit": ["plan", "bound", "admit", "cleanup"],
+            "cleanup": ["plan", "bound", "admit", "cleanup"],
+        }[fail_at]
+    )
+
+
+def test_binding_persistence_cannot_delay_listener_expiry() -> None:
+    def stalled(receipt: dict[str, Any]) -> None:
+        port = int(receipt["origin"].rsplit(":", 1)[1])
+        assert gateway._expiry is not None
+        gateway._expiry.join(2)
+        assert not gateway._expiry.is_alive()
+        with pytest.raises(OSError):
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                pass
+
+    gateway = CandidateGateway(
+        binding=binding(),
+        nonce="test-fixture-nonce",
+        wall_seconds=1,
+        transport=lambda *args: {},
+        on_bound=stalled,
+    )
+    with pytest.raises(SandboxRefused, match="expired"):
+        with gateway:
+            pytest.fail("expired binding was admitted")
 
 
 def test_exact_route_has_trusted_binding_and_no_candidate_response_headers() -> None:
@@ -211,6 +297,8 @@ def test_real_expiry_closes_listener_without_waiting_for_callback() -> None:
         transport=lambda *args: {"status": 200, "body": "unused"},
     ) as g:
         port = int(g.origin.rsplit(":", 1)[1])
+        assert g._server is not None
+        g._server.timeout = 5  # Linux select can retain a closed descriptor until it wakes.
         assert g._expiry is not None
         g._expiry.join(2)
         assert not g._expiry.is_alive()
@@ -268,7 +356,10 @@ def test_failed_server_or_timer_start_closes_listener(
     assert gateway._server is not None
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", gateway._server.server_port), timeout=1)
-    assert gateway._thread is not None and not gateway._thread.is_alive()
+    if stage == 1:  # Expiry timer failure prevents even creating the serving thread.
+        assert gateway._thread is None
+    else:
+        assert gateway._thread is not None and not gateway._thread.is_alive()
 
 
 def test_duplicate_lengths_are_rejected_even_when_equal() -> None:

@@ -163,6 +163,10 @@ class ReferenceRegressions:
         on_removed: Callable[[str], None] = lambda role: None,
         on_candidate_endpoint: Callable[[CandidateGateway], None] | None = None,
         assert_endpoint_authority: Callable[[], None] = lambda: None,
+        assert_endpoint_live: Callable[[], None] = lambda: None,
+        on_endpoint_planned: Callable[[dict[str, Any]], None] = lambda identity: None,
+        on_endpoint_bound: Callable[[dict[str, Any]], None] = lambda receipt: None,
+        on_endpoint_closed: Callable[[bool], None] = lambda clean: None,
     ) -> ReferenceRegressionResult:
         wheel = "out/accessforge_reference_app-0.0.0-py3-none-any.whl"
         if len(artifact.files) != 1 or artifact.files[0].path != wheel:
@@ -494,7 +498,7 @@ class ReferenceRegressions:
 
                 def transport(method: str, path: str, body: str) -> dict[str, Any]:
                     end = min(deadline, time.monotonic() + 5)
-                    assert_endpoint_authority()
+                    assert_endpoint_live()
                     sandbox._assert_daemon(deadline=end)
                     for container in (candidate, driver):
                         item = sandbox._inspect(container, deadline=end)
@@ -507,7 +511,7 @@ class ReferenceRegressions:
                         normalized = copy.deepcopy(item)
                         normalized["HostConfig"]["NetworkMode"] = "none"
                         sandbox._assert_configuration(normalized, image_id=self.image, task_id=task)
-                    assert_endpoint_authority()
+                    assert_endpoint_live()
                     return http(
                         method,
                         path,
@@ -530,6 +534,10 @@ class ReferenceRegressions:
                     ),
                     nonce=declaration["nonce"],
                     transport=transport,
+                    on_planned=on_endpoint_planned,
+                    on_bound=on_endpoint_bound,
+                    on_admit=assert_endpoint_live,
+                    on_closed=on_endpoint_closed,
                 ) as gateway:
                     on_candidate_endpoint(gateway)
                 assert_endpoint_authority()
