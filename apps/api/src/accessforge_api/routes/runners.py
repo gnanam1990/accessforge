@@ -24,7 +24,7 @@ from accessforge_persistence import runners
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runners"])
 
-Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope)]
+Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
 
 
 @router.post("/runners/enrollment-tokens", status_code=status.HTTP_201_CREATED)

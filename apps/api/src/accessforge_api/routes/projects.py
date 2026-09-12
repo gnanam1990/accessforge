@@ -19,7 +19,7 @@ from ._common import as_body, as_identifier, authorize, workspace_scope
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["projects"])
 
-Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope)]
+Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
 
 
 @router.post("/projects", status_code=status.HTTP_201_CREATED)
