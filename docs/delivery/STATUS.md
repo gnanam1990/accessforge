@@ -229,7 +229,7 @@ All three fixed, each mutation-checked.
 enforcement point and both schemas; 24 caught, and the survivor is recorded in the handoff as defence
 in depth rather than covered behaviour.
 
-## Structured request telemetry — 2026-09-12 (branch `feat/m26-structured-telemetry`, not yet reviewed)
+## Structured request telemetry — merged 2026-09-12 (PR #34, main `d2bd3c9`)
 
 Module 26's remaining gap. One record per request from a single ASGI middleware, on the
 `accessforge.telemetry` logger with a JSON formatter: route template, method, status, outcome,
@@ -263,6 +263,26 @@ the product's unbounded event stream and hung for five minutes instead of failin
 `X-Request-Id` was emitted despite the privacy contract; and the test for the JSON handler installed
 the handler itself, so it never proved `create_app` does.
 
+## Python dependency scanning — 2026-09-12 (branch `feat/ci-python-dependency-scanning`, not yet reviewed)
+
+The JavaScript tree has been audited since module 01; the Python tree had nothing. A fail-closed gate
+now audits `uv.lock` rendered with `--frozen`, as the first step of the security job, installing
+nothing and executing no package code (`--no-deps`, `--disable-pip`) — the Python equivalent of the
+`--ignore-scripts` the pnpm install already uses.
+
+**96 third-party packages audited, 0 known vulnerabilities.** No remediation was needed and none was
+applied: no pin moved and nothing was suppressed. There is no ignore list, not an empty one.
+
+The scanner is a locked dev dependency, so `uv.lock` fixes its version and artifact hashes like
+everything it audits. **22 tests and 12 mutation checks**, one per way the gate could go green while
+auditing nothing — a deleted step, a swallowed exit status, each of the four flags, advisories
+ignored, a truncated export, an unpinned requirement, missing hashes, an unparseable report, a
+suppression flag, an unpinned scanner.
+
+The workflow self-check's first version matched itself: its own source names the script and every
+pattern it searches for. Second time this project has made that mistake with a check over raw workflow
+text, and it is recorded in the handoff rather than quietly fixed.
+
 ## Outstanding debts
 
 - Executable negative-verification tests now exist for the fixture and configuration guards, proved
@@ -291,6 +311,9 @@ the handler itself, so it never proved `create_app` does.
 - `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
   `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
   else, and it is untouched rather than unknown.
+- Python dependency scanning audits the set that resolves on Linux; eleven locked packages carry
+  environment markers and a platform-only dependency is therefore not audited. The input floor is a
+  floor, not an equality, so an export that lost a few packages would still pass.
 - Telemetry has no per-tenant attribution, no metrics backend and no traces; `streamed` describes the
   response headers rather than whether the stream completed.
 - A caller who supplies their own `X-Request-Id` cannot find that value in the log: it is excluded on
