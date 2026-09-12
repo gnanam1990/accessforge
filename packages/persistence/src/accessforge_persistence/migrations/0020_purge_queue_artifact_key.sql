@@ -16,14 +16,12 @@
 -- (INV-15) -- so this can only fire if some future migration tries to remove one, and taking the
 -- record of an unfinished purge with it is exactly what must not happen silently.
 
--- The composite key the reference needs. `id` is already the primary key, so this adds no new
--- uniqueness; it gives the foreign key something to point at.
-ALTER TABLE evidence_artifact
-    DROP CONSTRAINT IF EXISTS evidence_artifact_id_workspace_key;
-
-ALTER TABLE evidence_artifact
-    ADD CONSTRAINT evidence_artifact_id_workspace_key UNIQUE (id, workspace_id);
-
+-- The key this points at already exists: migration 0009 declares `UNIQUE (id, workspace_id)` inline
+-- on evidence_artifact, which PostgreSQL named evidence_artifact_id_workspace_id_key. Nothing here
+-- creates one. An earlier version of this migration added a second constraint over the same two
+-- columns, which left every migrated database carrying two identical unique indexes -- paid for on
+-- every insert and update of the busiest table in the schema, to no effect.
+--
 -- NOT VALID first, then validated as its own statement. ADD CONSTRAINT on its own scans every
 -- existing row while holding SHARE ROW EXCLUSIVE on both tables, so writes to evidence_artifact --
 -- which every running attempt performs -- wait for the scan. NOT VALID holds that lock only long
