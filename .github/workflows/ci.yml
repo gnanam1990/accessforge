@@ -161,6 +161,7 @@ jobs:
         # matters and the code where a TypeError is most expensive.
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
+          apps/orchestrator/src packages/agent-tools/navigation/src
           packages/domain/src packages/contracts/python/src
           packages/persistence/src packages/evidence/src scripts
 

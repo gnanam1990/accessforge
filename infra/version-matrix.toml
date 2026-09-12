@@ -45,6 +45,18 @@ probe = ["psql", "--version"]
 min = "17"
 probe = ["pg_dump", "--version"]
 
+[sdk.strands_agents]
+exact = "1.55.1"
+distribution = "strands-agents"
+
+[model.navigator]
+provider = "amazon-bedrock"
+model_id = "global.anthropic.claude-sonnet-4-6"
+region = "us-east-1"
+temperature = 0
+status = "TARGET_UNVERIFIED"
+note = "Pinned construction target only; no billable model invocation has been authorized or run."
+
 # ------------------------------------------------------------------------------------------------
 # Platform capabilities that no version number can establish.
 #
