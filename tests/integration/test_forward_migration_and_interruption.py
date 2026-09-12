@@ -174,9 +174,20 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
         }
         forced = conn.execute(
             "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
-            " WHERE relname IN ('patch_proposal', 'patch_verification', "
+            " WHERE relname IN ('patch_proposal', 'patch_change', 'patch_verification', "
             "                   'patch_proposal_transition')"
         ).fetchall()
+        # The diff's own guards. Without `content_matches_operation` a DELETE could carry content
+        # and a MODIFY could carry none -- so "this file is removed" and "nobody recorded what this
+        # change was" would be the same row, and either would reach a candidate workspace as
+        # something nobody proposed.
+        change_guards = {
+            str(row["conname"]): str(row["definition"])
+            for row in conn.execute(
+                "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+                " WHERE conrelid = 'patch_change'::regclass AND contype IN ('c', 'u')"
+            ).fetchall()
+        }
         # The finding reference is RESTRICT: a patch proposal outliving the finding it repairs would
         # be a change to somebody's application that nothing explains.
         finding_ref = conn.execute(
@@ -193,7 +204,20 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     assert "conclusion_is_complete" in guards, (
         "a verification could hold a verdict while claiming it was never concluded"
     )
-    assert len(forced) == 3
+    assert "content_matches_operation" in change_guards, (
+        "a deletion could carry content, or a modification could carry none"
+    )
+    assert "DELETE" in change_guards["content_matches_operation"], (
+        "the constraint exists but no longer distinguishes a deletion from a lost record"
+    )
+    # One row per path and one per ordinal: a repeated path makes the reloaded patch ambiguous and
+    # its digest unreproducible, which is the digest an approval bound to.
+    uniques = {
+        definition for name, definition in change_guards.items() if definition.startswith("UNIQUE")
+    }
+    assert any("patch_id, path" in u for u in uniques), uniques
+    assert any("patch_id, ordinal" in u for u in uniques), uniques
+    assert len(forced) == 4
     for row in forced:
         # FORCE, not merely ENABLE: the application role owns these tables, and ENABLE does nothing
         # for an owner. A proposal names source paths in a customer repository.

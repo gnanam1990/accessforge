@@ -79,6 +79,26 @@ def manifest(db: str, seal_manifest: Callable[..., str]) -> str:
 
 
 @pytest.fixture()
+def base_source(db: str, manifest: str) -> str:
+    """The source tree this manifest actually sealed.
+
+    Read from the seal rather than invented, because that is now checked: a proposal naming a tree
+    the manifest never built is refused.
+    """
+    with workspace_connection(db, WS) as conn:
+        row = conn.execute(
+            """
+            SELECT s.tree_digest FROM sealed_manifest m
+              JOIN source_snapshot s ON s.id = m.source_snapshot_id
+             WHERE m.manifest_digest = %s LIMIT 1
+            """,
+            (manifest,),
+        ).fetchone()
+    assert row is not None
+    return str(row["tree_digest"])
+
+
+@pytest.fixture()
 def finding(db: str, manifest: str) -> tuple[str, str]:
     """A reproduced finding on a failed run: the only thing a repair can be proposed against."""
     with workspace_connection(db, WS) as conn:
@@ -105,13 +125,22 @@ def _propose(
     source_digest: str | None = None,
     **kwargs: object,
 ) -> patches.PatchProposal:
+    if source_digest is None:
+        with workspace_connection(db, WS) as conn:
+            row = conn.execute(
+                "SELECT s.tree_digest FROM sealed_manifest m "
+                "  JOIN source_snapshot s ON s.id = m.source_snapshot_id "
+                " WHERE m.manifest_digest = %s LIMIT 1",
+                (manifest,),
+            ).fetchone()
+        source_digest = str(row["tree_digest"]) if row else str(digest({"source": "unsealed"}))
     with workspace_connection(db, WS) as conn:
         return patches.propose_patch(
             conn,
             workspace_id=WS,
             finding_id=finding_id,
             base_manifest_digest=manifest,
-            base_source_digest=source_digest or str(digest({"source": "base"})),
+            base_source_digest=source_digest,
             changes=changes,
             rationale="associate the label with the input so the error is announced",
             proposed_by=OWNER,
@@ -122,25 +151,18 @@ def _propose(
 def _approve(
     db: str, patch: patches.PatchProposal, *, seconds: int = 3600
 ) -> tuple[patches.PatchProposal, str]:
+    """Approve through the real path, which mints the approval after the transition."""
     with workspace_connection(db, WS) as conn:
-        approval_id = approvals.record_approval(
-            conn,
-            workspace_id=WS,
-            scope=ApprovalScope.PATCH_APPLY,
-            actor_id=OWNER,
-            target_id=patch.patch_id,
-            target_digest=patch.patch_digest,
-            expected_revision=patch.revision,
-            expires_at=to_rfc3339_utc(datetime.now(UTC) + timedelta(seconds=seconds)),
-        )
         approved = patches.approve_patch(
             conn,
             workspace_id=WS,
             patch_id=patch.patch_id,
-            approval_id=approval_id,
             actor_id=OWNER,
+            expires_at=to_rfc3339_utc(datetime.now(UTC) + timedelta(seconds=seconds)),
+            expected_revision=patch.revision,
         )
-    return approved, approval_id
+    assert approved.approval_id is not None
+    return approved, approved.approval_id
 
 
 # --- proposing ----------------------------------------------------------------------------------
@@ -264,84 +286,117 @@ def test_every_proposal_for_a_finding_is_listed_including_the_failures(
 # --- approving ----------------------------------------------------------------------------------
 
 
-def test_an_approval_for_a_different_scope_does_not_authorize_a_patch(
+def _attach_bogus_approval(db: str, patch: patches.PatchProposal, **overrides: object) -> str:
+    """Record an approval that does not authorize this patch, and attach it by hand.
+
+    `approve_patch` mints its own approval and cannot be handed a wrong one, which is the point --
+    but it means the only way to exercise the dispatch check is to write the row some other code
+    path could one day produce. The UPDATE is deliberate and is the whole reason this helper is
+    ugly: it simulates a corrupted or maliciously written proposal, which is exactly what
+    `assert_dispatchable` exists to refuse.
+    """
+    fields: dict[str, object] = {
+        "scope": ApprovalScope.PATCH_APPLY,
+        "target_id": patch.patch_id,
+        "target_digest": patch.patch_digest,
+        "expected_revision": patch.revision,
+        "expires_at": to_rfc3339_utc(datetime.now(UTC) + timedelta(hours=1)),
+    }
+    fields.update(overrides)
+    with workspace_connection(db, WS) as conn:
+        approval_id = approvals.record_approval(
+            conn,
+            workspace_id=WS,
+            actor_id=OWNER,
+            **fields,  # type: ignore[arg-type]
+        )
+        conn.execute(
+            "UPDATE patch_proposal SET approval_id = %s, status = 'APPROVED' WHERE id = %s",
+            (approval_id, patch.patch_id),
+        )
+    return approval_id
+
+
+def _dispatch_refusal(db: str, patch: patches.PatchProposal, match: str) -> None:
+    with workspace_connection(db, WS) as conn:
+        current = patches.load_patch(conn, patch_id=patch.patch_id)
+        with pytest.raises(patches.PatchError, match=match):
+            patches.assert_dispatchable(
+                conn,
+                workspace_id=WS,
+                patch_id=patch.patch_id,
+                current_source_digest=current.base_source_digest,
+            )
+
+
+def test_an_approval_for_a_different_scope_does_not_authorize_dispatch(
     db: str, finding: tuple[str, str], manifest: str
 ) -> None:
     """RUN_EFFECTS is not a weaker PATCH_APPLY. Scopes do not imply one another."""
     finding_id, _ = finding
     patch = _propose(db, finding_id, manifest)
-    with workspace_connection(db, WS) as conn:
-        wrong = approvals.record_approval(
-            conn,
-            workspace_id=WS,
-            scope=ApprovalScope.RUN_EFFECTS,
-            actor_id=OWNER,
-            target_id=patch.patch_id,
-            target_digest=patch.patch_digest,
-            expected_revision=patch.revision,
-            expires_at=to_rfc3339_utc(datetime.now(UTC) + timedelta(hours=1)),
-        )
-        with pytest.raises(patches.PatchError, match="scope"):
-            patches.approve_patch(
-                conn,
-                workspace_id=WS,
-                patch_id=patch.patch_id,
-                approval_id=wrong,
-                actor_id=OWNER,
-            )
+    _attach_bogus_approval(db, patch, scope=ApprovalScope.RUN_EFFECTS)
+    _dispatch_refusal(db, patch, "scope")
 
 
-def test_an_approval_bound_to_other_bytes_does_not_authorize_this_patch(
+def test_an_approval_bound_to_other_bytes_does_not_authorize_dispatch(
     db: str, finding: tuple[str, str], manifest: str
 ) -> None:
     """A changed digest is not a weaker authorization. It is not an authorization."""
     finding_id, _ = finding
     patch = _propose(db, finding_id, manifest)
-    with workspace_connection(db, WS) as conn:
-        stale = approvals.record_approval(
-            conn,
-            workspace_id=WS,
-            scope=ApprovalScope.PATCH_APPLY,
-            actor_id=OWNER,
-            target_id=patch.patch_id,
-            target_digest=str(digest({"different": "patch"})),
-            expected_revision=patch.revision,
-            expires_at=to_rfc3339_utc(datetime.now(UTC) + timedelta(hours=1)),
-        )
-        with pytest.raises(patches.PatchError, match="digest has changed"):
-            patches.approve_patch(
-                conn,
-                workspace_id=WS,
-                patch_id=patch.patch_id,
-                approval_id=stale,
-                actor_id=OWNER,
-            )
+    _attach_bogus_approval(db, patch, target_digest=str(digest({"different": "patch"})))
+    _dispatch_refusal(db, patch, "digest has changed")
 
 
-def test_an_expired_approval_does_not_authorize_anything(
+def test_an_expired_approval_does_not_authorize_dispatch(
     db: str, finding: tuple[str, str], manifest: str
 ) -> None:
     finding_id, _ = finding
     patch = _propose(db, finding_id, manifest)
+    _attach_bogus_approval(
+        db, patch, expires_at=to_rfc3339_utc(datetime.now(UTC) - timedelta(seconds=1))
+    )
+    _dispatch_refusal(db, patch, "expired")
+
+
+def test_an_approval_for_an_older_revision_does_not_authorize_dispatch(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """The check the previous version could not make.
+
+    `assert_dispatchable` compared the approval's `expected_revision` against itself, which is a
+    check that can never fail -- so a patch whose revision had moved since approval stayed
+    dispatchable. The approval now binds to the revision the patch has once approved, and anything
+    that moves it afterwards voids the approval here.
+    """
+    finding_id, _ = finding
+    patch = _propose(db, finding_id, manifest)
+    _attach_bogus_approval(db, patch, expected_revision=patch.revision - 1)
+    _dispatch_refusal(db, patch, "expects revision")
+
+
+def test_a_legitimate_approval_remains_dispatchable(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """The other half, and the reason the ordering had to be repaired rather than the check removed.
+
+    Approving bumps the patch's revision, so an approval minted before the transition records the
+    old number and a correct dispatch check would reject every real approval. Minting after the
+    transition is what makes a genuine approval survive a genuine check.
+    """
+    finding_id, _ = finding
+    approved, approval_id = _approve(db, _propose(db, finding_id, manifest))
     with workspace_connection(db, WS) as conn:
-        expired = approvals.record_approval(
+        stored = approvals.load_for_check(conn, approval_id=approval_id)
+        assert stored.expected_revision == approved.revision
+        dispatched = patches.assert_dispatchable(
             conn,
             workspace_id=WS,
-            scope=ApprovalScope.PATCH_APPLY,
-            actor_id=OWNER,
-            target_id=patch.patch_id,
-            target_digest=patch.patch_digest,
-            expected_revision=patch.revision,
-            expires_at=to_rfc3339_utc(datetime.now(UTC) - timedelta(seconds=1)),
+            patch_id=approved.patch_id,
+            current_source_digest=approved.base_source_digest,
         )
-        with pytest.raises(patches.PatchError, match="expired"):
-            patches.approve_patch(
-                conn,
-                workspace_id=WS,
-                patch_id=patch.patch_id,
-                approval_id=expired,
-                actor_id=OWNER,
-            )
+    assert dispatched.status is PatchStatus.APPROVED
 
 
 def test_a_revoked_approval_blocks_the_next_application(
@@ -853,10 +908,10 @@ def _sign_in(db: str, client: object, user_id: str = OWNER) -> str:
     return issued.csrf_token
 
 
-def _body(manifest: str, **overrides: object) -> dict[str, object]:
+def _body(manifest: str, base_source: str, **overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "baseManifestDigest": manifest,
-        "baseSourceDigest": str(digest({"source": "base"})),
+        "baseSourceDigest": base_source,
         "changes": [{"path": "src/components/EmailField.tsx", "content": "<label for='email'>"}],
         "rationale": "associate the label with the input so the error is announced",
     }
@@ -865,7 +920,7 @@ def _body(manifest: str, **overrides: object) -> dict[str, object]:
 
 
 def test_the_route_records_a_proposal_that_claims_nothing(
-    db: str, finding: tuple[str, str], manifest: str, api: object
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
 ) -> None:
     """A 201 means recorded and policy-clean. It does not mean anybody agreed to apply it."""
     from accessforge_api.auth import CSRF_HEADER
@@ -874,7 +929,7 @@ def test_the_route_records_a_proposal_that_claims_nothing(
     csrf = _sign_in(db, api)
     response = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
-        json=_body(manifest),
+        json=_body(manifest, base_source),
         headers={CSRF_HEADER: csrf},
     )
     assert response.status_code == 201, response.text
@@ -886,7 +941,7 @@ def test_the_route_records_a_proposal_that_claims_nothing(
 
 
 def test_the_route_refuses_a_protected_path_and_names_it(
-    db: str, finding: tuple[str, str], manifest: str, api: object
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
 ) -> None:
     """A refusal a caller cannot act on becomes a caller trying variations until one passes."""
     from accessforge_api.auth import CSRF_HEADER
@@ -895,7 +950,11 @@ def test_the_route_refuses_a_protected_path_and_names_it(
     csrf = _sign_in(db, api)
     response = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
-        json=_body(manifest, changes=[{"path": "tests/test_email.py", "content": "assert True"}]),
+        json=_body(
+            manifest,
+            base_source,
+            changes=[{"path": "tests/test_email.py", "content": "assert True"}],
+        ),
         headers={CSRF_HEADER: csrf},
     )
     # 400 INVALID_INPUT, this product's code for a well-formed request it will not carry out. Not
@@ -907,7 +966,7 @@ def test_the_route_refuses_a_protected_path_and_names_it(
 
 
 def test_a_reviewer_cannot_approve_a_patch(
-    db: str, finding: tuple[str, str], manifest: str, api: object
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
 ) -> None:
     """Assessing evidence is not authorizing the execution of a patch author's code."""
     from accessforge_api.auth import CSRF_HEADER
@@ -916,7 +975,7 @@ def test_a_reviewer_cannot_approve_a_patch(
     owner_csrf = _sign_in(db, api)
     created = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
-        json=_body(manifest),
+        json=_body(manifest, base_source),
         headers={CSRF_HEADER: owner_csrf},
     ).json()
 
@@ -930,7 +989,7 @@ def test_a_reviewer_cannot_approve_a_patch(
 
 
 def test_approval_requires_the_revision_the_approver_read(
-    db: str, finding: tuple[str, str], manifest: str, api: object
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
 ) -> None:
     """An approval binds to bytes. If the patch moved, the approver never saw what they approved."""
     from accessforge_api.auth import CSRF_HEADER
@@ -939,7 +998,7 @@ def test_approval_requires_the_revision_the_approver_read(
     csrf = _sign_in(db, api)
     created = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
-        json=_body(manifest),
+        json=_body(manifest, base_source),
         headers={CSRF_HEADER: csrf},
     ).json()
 
@@ -964,7 +1023,7 @@ def test_approval_requires_the_revision_the_approver_read(
 
 
 def test_an_approval_cannot_be_issued_without_an_expiry_bound(
-    db: str, finding: tuple[str, str], manifest: str, api: object
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
 ) -> None:
     """An approval that never expires is a standing permission to run somebody's patch."""
     from accessforge_api.auth import CSRF_HEADER
@@ -973,7 +1032,7 @@ def test_an_approval_cannot_be_issued_without_an_expiry_bound(
     csrf = _sign_in(db, api)
     created = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
-        json=_body(manifest),
+        json=_body(manifest, base_source),
         headers={CSRF_HEADER: csrf},
     ).json()
     response = api.post(  # type: ignore[attr-defined]
@@ -985,7 +1044,7 @@ def test_an_approval_cannot_be_issued_without_an_expiry_bound(
 
 
 def test_opening_a_verification_says_runtime_proof_is_unavailable(
-    db: str, finding: tuple[str, str], manifest: str, api: object
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
 ) -> None:
     """The response refuses to imply a candidate exists.
 
@@ -998,7 +1057,7 @@ def test_opening_a_verification_says_runtime_proof_is_unavailable(
     csrf = _sign_in(db, api)
     created = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
-        json=_body(manifest),
+        json=_body(manifest, base_source),
         headers={CSRF_HEADER: csrf},
     ).json()
     api.post(  # type: ignore[attr-defined]
@@ -1039,7 +1098,7 @@ def test_no_route_in_the_contract_accepts_a_verification_conclusion(api: object)
 
 
 def test_a_reviewer_can_reject_a_patch_but_must_say_why(
-    db: str, finding: tuple[str, str], manifest: str, api: object
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
 ) -> None:
     """Declining a change is assessment, which is a reviewer's job.
 
@@ -1051,7 +1110,7 @@ def test_a_reviewer_can_reject_a_patch_but_must_say_why(
     owner_csrf = _sign_in(db, api)
     created = api.post(  # type: ignore[attr-defined]
         f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
-        json=_body(manifest),
+        json=_body(manifest, base_source),
         headers={CSRF_HEADER: owner_csrf},
     ).json()
 
@@ -1073,9 +1132,172 @@ def test_a_reviewer_can_reject_a_patch_but_must_say_why(
 
 
 def test_a_patch_in_another_workspace_is_not_found_rather_than_forbidden(
-    db: str, finding: tuple[str, str], manifest: str, api: object
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
 ) -> None:
     """Uniform 404, so the API is not an oracle for which patch ids exist elsewhere."""
     _sign_in(db, api)
     response = api.get(f"/v1/workspaces/{WS}/patches/{uuid.uuid4()}")  # type: ignore[attr-defined]
     assert response.status_code == 404, response.text
+
+
+# --- the proposal is a durable diff -------------------------------------------------------------
+
+
+def test_a_reloaded_proposal_carries_the_exact_bytes_modes_and_deletions(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """A proposal that stored only filenames was not a patch.
+
+    Nothing could reload what was proposed, a reviewer could not read the change they were
+    approving, and the bytes an approval bound to existed only in the request that created it. This
+    asserts the round trip element by element, including the two things a naive schema loses: the
+    file mode, and the difference between a deletion and a file whose content nobody recorded.
+    """
+    finding_id, _ = finding
+    proposed = (
+        ProposedChange(path="src/a.tsx", content="<label for='email'>", mode="100644"),
+        ProposedChange(path="src/gone.tsx", content=None),
+        ProposedChange(path="src/b.tsx", content="line one\nline two\n"),
+    )
+    patch = _propose(db, finding_id, manifest, changes=proposed)
+
+    with workspace_connection(db, WS) as conn:
+        reloaded = patches.load_patch(conn, patch_id=patch.patch_id)
+
+    assert reloaded.changes == proposed
+    # Order is the proposal's own, so a reviewer reads the diff as it was written.
+    assert [c.path for c in reloaded.changes] == ["src/a.tsx", "src/gone.tsx", "src/b.tsx"]
+    # And the digest still matches after the round trip, which is what the approval binds to.
+    assert patches.patch_digest(reloaded.changes) == reloaded.patch_digest
+
+
+def test_a_proposal_whose_stored_bytes_no_longer_match_its_digest_refuses_to_load(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """Whatever was approved is not what is stored, so there is nothing safe to return.
+
+    The digest is recomputed on every load precisely so this is detectable. Returning the proposal
+    with a note would leave a caller free to apply bytes nobody authorized.
+    """
+    finding_id, _ = finding
+    patch = _propose(db, finding_id, manifest)
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE patch_change SET content = %s WHERE patch_id = %s",
+            ("<input aria-hidden='true'>", patch.patch_id),
+        )
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(patches.PatchError, match="does not match its recorded digest"):
+            patches.load_patch(conn, patch_id=patch.patch_id)
+
+
+def test_the_separately_reviewed_list_is_derived_from_the_rulings(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """A stored copy could disagree with the rulings it summarises, invisibly.
+
+    A reviewer would be shown an empty list for a patch that moved a lockfile.
+    """
+    finding_id, _ = finding
+    patch = _propose(
+        db,
+        finding_id,
+        manifest,
+        changes=(
+            ProposedChange(path="src/a.tsx", content="x"),
+            ProposedChange(path="pnpm-lock.yaml", content="lockfileVersion: 9"),
+        ),
+        acknowledge_separate_review=True,
+    )
+    with workspace_connection(db, WS) as conn:
+        reloaded = patches.load_patch(conn, patch_id=patch.patch_id)
+    assert reloaded.separately_reviewed_paths == ("pnpm-lock.yaml",)
+    assert dict(reloaded.verdicts) == {
+        "src/a.tsx": "ALLOWED",
+        "pnpm-lock.yaml": "SEPARATELY_REVIEWED",
+    }
+
+
+def test_a_base_source_digest_the_manifest_never_sealed_is_refused(
+    db: str, finding: tuple[str, str], manifest: str, base_source: str
+) -> None:
+    """The base was previously any 64-character hex string the caller chose.
+
+    Which made the stale-base check at dispatch compare the current source tree against a number
+    somebody typed -- so a patch could be approved against a tree that was never built, and the
+    check that exists to catch a moved base would pass for the wrong reason.
+    """
+    finding_id, _ = finding
+    with pytest.raises(patches.PatchError, match="not the source tree this manifest sealed"):
+        _propose(db, finding_id, manifest, source_digest=str(digest({"source": "invented"})))
+
+    # The tree the seal actually names is accepted, and it is what gets recorded.
+    patch = _propose(db, finding_id, manifest, source_digest=base_source)
+    assert patch.base_source_digest == base_source
+
+
+def test_a_change_larger_than_the_limit_is_refused(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """An approval over bytes nobody read is not an approval.
+
+    A repair diff is small by construction; this is the limit that keeps "reviewable" true rather
+    than aspirational.
+    """
+    finding_id, _ = finding
+    with pytest.raises(patches.PatchError, match="exceed"):
+        _propose(
+            db,
+            finding_id,
+            manifest,
+            changes=(
+                ProposedChange(path="src/huge.tsx", content="x" * (patches.MAX_CHANGE_BYTES + 1)),
+            ),
+        )
+
+
+def test_the_route_returns_the_change_bytes_a_reviewer_has_to_read(
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
+) -> None:
+    """A response listing only filenames asks somebody to authorize a change they cannot see."""
+    from accessforge_api.auth import CSRF_HEADER
+
+    finding_id, _ = finding
+    csrf = _sign_in(db, api)
+    created = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
+        json=_body(
+            manifest,
+            base_source,
+            changes=[
+                {"path": "src/a.tsx", "content": "<label for='email'>", "mode": "100644"},
+                {"path": "src/gone.tsx", "content": None},
+            ],
+        ),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert created.status_code == 201, created.text
+    changes = created.json()["changes"]
+    assert changes == [
+        {
+            "path": "src/a.tsx",
+            "operation": "MODIFY",
+            "content": "<label for='email'>",
+            "mode": "100644",
+            "binary": False,
+        },
+        {
+            "path": "src/gone.tsx",
+            "operation": "DELETE",
+            "content": None,
+            "mode": None,
+            "binary": False,
+        },
+    ]
+
+    # And reading it back gives the same bytes, which is the point of persisting them.
+    fetched = api.get(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/patches/{created.json()['patchId']}"
+    )
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["changes"] == changes
