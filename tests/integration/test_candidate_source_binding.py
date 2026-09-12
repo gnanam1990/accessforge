@@ -24,6 +24,7 @@ from accessforge_build_worker.artifacts import read_retained_candidate, retire_e
 from accessforge_build_worker.coordinator import ClaimedCandidate, execute_claim, prepare_and_claim
 from accessforge_build_worker.process import CommandResult, CommandStopped
 from accessforge_build_worker.reference_regressions import ReferenceRegressions
+from accessforge_build_worker.regression_coordinator import execute_regressions
 from accessforge_build_worker.sandbox import (
     DockerSandbox,
     SandboxPolicy,
@@ -33,6 +34,7 @@ from accessforge_build_worker.sandbox import (
 from accessforge_build_worker.snapshot import SnapshotRefused, SourceFile, SourceSnapshot
 from accessforge_build_worker.source_broker import read_persisted_source
 from accessforge_build_worker.toolchain import REFERENCE_BUILD_COMMAND
+from accessforge_domain.authority import AuthorityError
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.patch_policy import ProposedChange
 from accessforge_domain.states import FindingStatus, Outcome
@@ -54,6 +56,7 @@ from accessforge_persistence import (
 from accessforge_persistence import (
     candidate_builds as builds,
 )
+from accessforge_persistence import candidate_regressions as regressions
 from accessforge_persistence.source_intake import SourceIdentity
 
 pytestmark = pytest.mark.integration
@@ -404,6 +407,8 @@ def _prepare_owned_build(
     ("sabotage", "failure"),
     [
         ("", None),
+        ("", "cancelled"),
+        ("", "fenced"),
         (
             "\nfrom . import validation as _validation\n"
             "_validation.validate_service_request = lambda **values: []\n",
@@ -428,7 +433,14 @@ def _prepare_owned_build(
             "no_invalid_write_email",
         ),
     ],
-    ids=["healthy", "validation-removed", "authorization-bypassed", "writes-despite-error"],
+    ids=[
+        "healthy",
+        "cancelled",
+        "fenced",
+        "validation-removed",
+        "authorization-bypassed",
+        "writes-despite-error",
+    ],
 )
 def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
     binding: BoundFixture,
@@ -507,15 +519,128 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
     )
     assert smoke.artifact.files[0].content == b"imported captured wheel"
     runner = ReferenceRegressions(image=image, daemon=sandbox.daemon)
+    if failure == "fenced":
+        record_created = regressions.created
+
+        def fence_after_creation(
+            conn: psycopg.Connection[dict[str, Any]],
+            *,
+            claim: regressions.RegressionClaim,
+            role: str,
+            container_id: str,
+            image_id: str,
+        ) -> None:
+            record_created(
+                conn, claim=claim, role=role, container_id=container_id, image_id=image_id
+            )
+            assert regressions.fence_expired(conn, now=datetime.now(UTC) + timedelta(hours=1)) == 1
+
+        monkeypatch.setattr(regressions, "created", fence_after_creation)
+        with pytest.raises(builds.BuildClaimRefused, match="fenced"):
+            execute_regressions(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                runner=runner,
+                store=store,
+            )
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            assert conn.execute(
+                "SELECT state,epoch FROM candidate_regression_attempt WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone() == {"state": "UNKNOWN", "epoch": 2}
+            assert conn.execute(
+                "SELECT state FROM candidate_regression_process WHERE attempt_id="
+                "(SELECT id FROM candidate_regression_attempt WHERE build_id=%s)",
+                (claimed.claim.build_id,),
+            ).fetchall() == [{"state": "REMOVED"}]
+        return
+    if failure == "cancelled":
+        checked = runner.sandbox._checked
+        stop_requested = False
+
+        def cancel_after_pg(*args: str, **kwargs: Any) -> CommandResult:
+            nonlocal stop_requested
+            result = checked(*args, **kwargs)
+            if any(arg.endswith("/pg_ctl") for arg in args):
+                stop_requested = True
+            return result
+
+        monkeypatch.setattr(runner.sandbox, "_checked", cancel_after_pg)
+        with pytest.raises(CommandStopped, match="cancelled"):
+            execute_regressions(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                runner=runner,
+                store=store,
+                cancelled=lambda: stop_requested,
+            )
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            assert conn.execute(
+                "SELECT state,cleanup_confirmed,failure_code FROM candidate_regression_attempt "
+                "WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone() == {
+                "state": "FAILED",
+                "cleanup_confirmed": True,
+                "failure_code": "CANCELLED_CONFIRMED",
+            }
+            assert conn.execute(
+                "SELECT state FROM candidate_regression_process WHERE attempt_id="
+                "(SELECT id FROM candidate_regression_attempt WHERE build_id=%s)",
+                (claimed.claim.build_id,),
+            ).fetchall() == [{"state": "REMOVED"}]
+        return
     if failure is not None:
         with pytest.raises(SandboxRefused, match=failure):
-            runner.run(retained)
+            execute_regressions(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                runner=runner,
+                store=store,
+            )
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            record = conn.execute(
+                "SELECT state,cleanup_confirmed FROM candidate_regression_attempt "
+                "WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone()
+            assert record == {"state": "FAILED", "cleanup_confirmed": True}
         return
-    regression = runner.run(retained)
+    regression = execute_regressions(
+        binding.database,
+        workspace_id=binding.workspace,
+        build_id=claimed.claim.build_id,
+        runner=runner,
+        store=store,
+    )
     assert regression.artifact_digest == retained.archive_digest
     assert "exact_independent_database_receipt" in regression.checks
     assert len(regression.containers) == 4
     assert "durable_receipt_after_stop" in regression.checks
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        record = conn.execute(
+            "SELECT state,artifact_digest,checks FROM candidate_regression_attempt WHERE id=%s",
+            (regression.task_id,),
+        ).fetchone()
+        assert record is not None and record["state"] == "PASSED"
+        assert record["artifact_digest"] == retained.archive_digest
+        assert tuple(record["checks"]) == regression.checks
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_regression_attempt SET state='UNKNOWN' WHERE id=%s",
+                (regression.task_id,),
+            )
+    with pytest.raises(builds.BuildClaimRefused, match="already exists"):
+        execute_regressions(
+            binding.database,
+            workspace_id=binding.workspace,
+            build_id=claimed.claim.build_id,
+            runner=runner,
+            store=store,
+        )
     # Cancel only after an actual PostgreSQL process was started, then verify exact cleanup.
     original_checked = runner.sandbox._checked
     stop = False
@@ -559,6 +684,116 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
 class IsolatedArchiveStore:
     settings: evidence.S3Settings
     store: evidence.S3ArtifactStore
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize(
+    "invalid", ["artifact", "image", "daemon", "workspace", "revision", "revoked"]
+)
+def test_regression_claim_rechecks_exact_authority_and_fences_late_receipts(
+    binding: BoundFixture,
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+    invalid: str,
+) -> None:
+    claimed, sandbox, command = _prepare_owned_build(binding)
+    built = execute_claim(
+        binding.database,
+        workspace_id=binding.workspace,
+        claimed=claimed,
+        sandbox=sandbox,
+        command=command,
+        store=isolated_archives[0].store,
+    )
+    arguments = {
+        "workspace_id": binding.workspace,
+        "build_id": claimed.claim.build_id,
+        "artifact_digest": built.artifact.archive_digest,
+        "policy_digest": "e" * 64,
+        "image_id": built.image_id,
+        "daemon_endpoint": sandbox.daemon.endpoint,
+        "daemon_id": sandbox.daemon.daemon_id,
+    }
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        with conn.transaction(force_rollback=True):
+            bad = dict(arguments)
+            if invalid == "artifact":
+                bad["artifact_digest"] = "0" * 64
+            elif invalid == "image":
+                bad["image_id"] = "sha256:" + "0" * 64
+            elif invalid == "daemon":
+                bad["daemon_id"] = "different"
+            elif invalid == "workspace":
+                bad["workspace_id"] = str(uuid.uuid4())
+            elif invalid == "revision":
+                conn.execute(
+                    "UPDATE patch_proposal SET revision=revision+1 WHERE id=%s",
+                    (claimed.claim.patch_id,),
+                )
+            elif invalid == "revoked":
+                conn.execute(
+                    "UPDATE approval SET revoked_at=clock_timestamp() WHERE id="
+                    "(SELECT approval_id FROM candidate_build_attempt WHERE id=%s)",
+                    (claimed.claim.build_id,),
+                )
+            with pytest.raises((builds.BuildClaimRefused, AuthorityError)):
+                # Domain approval refusals are also expected; none may insert a claim.
+                regressions.claim(conn, **bad)
+        assert (
+            conn.execute(
+                "SELECT id FROM candidate_regression_attempt WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone()
+            is None
+        )
+        intent = regressions.claim(conn, **arguments)
+    with workspace_connection(binding.database, str(uuid.uuid4())) as conn:
+        assert (
+            conn.execute(
+                "SELECT * FROM candidate_regression_attempt WHERE id=%s", (intent.attempt_id,)
+            ).fetchone()
+            is None
+        )
+        with pytest.raises(builds.BuildClaimRefused):
+            regressions.dispatch(
+                conn,
+                claim=intent,
+                policy_digest="e" * 64,
+                artifact_digest=built.artifact.archive_digest,
+            )
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+            regressions.dispatch(
+                conn,
+                claim=intent,
+                policy_digest="f" * 64,
+                artifact_digest=built.artifact.archive_digest,
+            )
+        regressions.dispatch(
+            conn,
+            claim=intent,
+            policy_digest="e" * 64,
+            artifact_digest=built.artifact.archive_digest,
+        )
+        with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+            regressions.finish(
+                conn,
+                claim=intent,
+                policy_digest="e" * 64,
+                artifact_digest=built.artifact.archive_digest,
+                checks=("forged_pass",),
+                containers=(),
+            )
+        assert regressions.fence_expired(conn, now=datetime.now(UTC) + timedelta(hours=1)) == 1
+        with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+            regressions.dispatch(
+                conn,
+                claim=intent,
+                policy_digest="e" * 64,
+                artifact_digest=built.artifact.archive_digest,
+            )
+        assert conn.execute(
+            "SELECT state,epoch FROM candidate_regression_attempt WHERE id=%s", (intent.attempt_id,)
+        ).fetchone() == {"state": "UNKNOWN", "epoch": 2}
 
 
 @pytest.fixture()
@@ -910,6 +1145,25 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
             (claimed.claim.build_id,),
         ).fetchone()
         assert archive_row is not None and process_row is not None
+        if archive_state == "retained":
+            # Durable dispatch intent over actual retained bytes; no regression execution is
+            # fabricated. A restored intent cannot establish what ran on the original daemon.
+            regression_claim = regressions.claim(
+                conn,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                artifact_digest=str(archive_row["content_digest"]),
+                policy_digest="d" * 64,
+                image_id=str(process_row["image_id"]),
+                daemon_endpoint=sandbox.daemon.endpoint,
+                daemon_id=sandbox.daemon.daemon_id,
+            )
+            regressions.dispatch(
+                conn,
+                claim=regression_claim,
+                policy_digest="d" * 64,
+                artifact_digest=str(archive_row["content_digest"]),
+            )
     key = str(archive_row["object_key"])
     captured = source.store.get_bounded(key=key, max_bytes=int(archive_row["size_bytes"]))
     directory = tmp_path_factory.mktemp("candidate-encrypted-backup")
@@ -966,6 +1220,19 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
         binding.database, urlsplit(candidate_restore_target).path.lstrip("/")
     )
     with workspace_connection(restored_app_url, binding.workspace) as conn:
+        if archive_state == "retained":
+            assert conn.execute(
+                "SELECT state,epoch,failure_code FROM candidate_regression_attempt "
+                "WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone() == {"state": "UNKNOWN", "epoch": 2, "failure_code": "RESTORED_DATABASE"}
+            with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+                regressions.dispatch(
+                    conn,
+                    claim=regression_claim,
+                    policy_digest="d" * 64,
+                    artifact_digest=str(archive_row["content_digest"]),
+                )
         location = conn.execute(
             "SELECT store_endpoint,store_bucket FROM candidate_archive_restore_location "
             "WHERE build_id = %s ORDER BY revision DESC LIMIT 1",

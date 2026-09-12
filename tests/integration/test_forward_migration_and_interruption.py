@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0028_candidate_archive_location.sql"
+NEWEST = "0029_candidate_regressions.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -145,9 +145,29 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     _apply_through(disposable, _previous())
     with connect(disposable) as conn:
         assert conn.execute(
-            "SELECT to_regclass('candidate_archive_restore_location') AS name"
+            "SELECT to_regclass('candidate_regression_attempt') AS name"
         ).fetchone() == {"name": None}
     assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        for table in ("candidate_regression_attempt", "candidate_regression_process"):
+            assert conn.execute(
+                "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE relname=%s", (table,)
+            ).fetchone() == {
+                "relrowsecurity": True,
+                "relforcerowsecurity": True,
+            }
+        assert conn.execute("SELECT * FROM candidate_regression_attempt").fetchall() == []
+
+
+def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
+    disposable: str,
+) -> None:
+    _apply_through(disposable, "0027_candidate_archive_retirement.sql")
+    with connect(disposable) as conn:
+        assert conn.execute(
+            "SELECT to_regclass('candidate_archive_restore_location') AS name"
+        ).fetchone() == {"name": None}
+    assert migrate(disposable) == ["0028_candidate_archive_location.sql", NEWEST]
     with connect(disposable) as conn:
         assert conn.execute(
             "SELECT relrowsecurity,relforcerowsecurity FROM pg_class "
@@ -187,6 +207,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
     assert migrate(disposable) == [
         "0027_candidate_archive_retirement.sql",
         "0028_candidate_archive_location.sql",
+        "0029_candidate_regressions.sql",
     ]
     with connect(disposable) as conn:
         assert conn.execute(
@@ -244,6 +265,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0026_nonterminal_run_delete.sql",
         "0027_candidate_archive_retirement.sql",
         "0028_candidate_archive_location.sql",
+        "0029_candidate_regressions.sql",
     ]
     with connect(disposable) as conn:
         assert conn.execute("DELETE FROM workspace WHERE id = %s", (WS,)).rowcount == 1
@@ -285,6 +307,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0026_nonterminal_run_delete.sql",
         "0027_candidate_archive_retirement.sql",
         "0028_candidate_archive_location.sql",
+        "0029_candidate_regressions.sql",
     ]
     with connect(disposable) as conn:
         # Migration cannot invent process provenance or available bytes for an old digest.

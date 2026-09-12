@@ -420,6 +420,47 @@ Packaging head `c50f513bca54853cab33bc89dc2ad8dcceddc557` passed all GitHub CI i
 34718869094, including its actual amd64 wheel build. The new regression-runtime head must pass
 its own CI. Internal review is not an independent security audit or complete draft-PR approval.
 
+### Durable regression execution checkpoint
+
+Migration 0029 adds workspace-RLS protected regression attempts and process records. The trusted
+coordinator reads actual retained bytes, binds their digest to the completed build and its original
+image/daemon, rechecks patch revision/digest/approval/source/repair surface/retention, and commits
+one claim and one dispatch. Claim inputs, ownership and terminal outcomes are immutable; lease
+expiry increments epoch and records UNKNOWN instead of retrying.
+
+The task ID determines role names before Docker side effects. Each plan commits before creation;
+each actual immutable process/image receipt commits before start. Exact removal facts are recorded
+after cleanup, including observations arriving after a fence. PASSED requires all four roles
+removed and matching captured artifact/policy/check/process records. Policy identity binds the
+executing harness bytecode/typed constants plus schema/HTTP driver/images/daemon/limits, not a
+mutable source file read after execution. A raw marshal-based first draft changed its hash during
+a healthy real run; deterministic code-attribute hashing fixed the demonstrated rejection.
+
+Failed execution with confirmed cleanup is FAILED; unconfirmed creation/cleanup remains UNKNOWN.
+Confirmed cancellation and other interrupted observation use distinct failure codes. No stale
+worker can publish after fencing, no duplicate dispatch consumes another execution, and no caller
+supplies a verification conclusion. The existing module 15 gate remains closed: these are durable
+build-linked protected results, not fresh matched-reader run attestations.
+
+Restore now fences active regression claims to UNKNOWN/RESTORED_DATABASE and reports their count.
+The encrypted backup and genuinely separate database/bucket restore drill includes a committed
+regression dispatch intent and proves it cannot be redispatched after restore. This preserves
+history; it does not prove a hard-crashed worker's live container was stopped. Operator
+reconciliation of that original daemon remains required.
+
+Focused migration/source/runtime/restore checks passed 62 tests before the additional durable
+cancellation/fence cases. The final full suite passed **2,072 tests, zero failures/skips** with
+58 upstream deprecation warnings in 219.61 seconds. Strict mypy passed 218 files; Ruff lint/format
+and OpenAPI/six-schema/74-operation client drift checks pass. All integration tests use owned
+temporary fixtures; protected specification documents remain unchanged. Regression-runtime head
+`0fca82494b5b405fcced883a674200e2476234e4` passed all GitHub CI in run 34719676683.
+The new durable-regression head must pass separately.
+
+Creation observations now commit independently of permission to start: if a lease fence lands
+after Docker creates a container, its ID is still recorded, activation is refused by a fresh
+authority check, and its removal is retained without reopening UNKNOWN. Time-based approval and
+retention are checked after blocking reads, not against a clock captured before them.
+
 ### Remaining integration
 
 1. Integrate the trusted build/retirement operations into bounded operator/job dispatch and implement
@@ -436,9 +477,9 @@ its own CI. Internal review is not an independent security audit or complete dra
    separate logical fixture identity from repairable presentation. Docker daemon access is
    supervisor authority, never an author-selectable endpoint. Packaging/import proof is available;
    end-to-end reader repair proof is not.
-4. Bind the implemented protected HTTP/database regression runner to durable candidate/run/lease
-   provenance and independent verification. The captured artifact is hashed independently;
-   repository stdout and self-reported identities remain non-authoritative.
+4. Link the implemented durable build-bound protected regression receipts to a fresh, matched
+   candidate reader run/lease and independent verification. Actual-reader evidence is not yet
+   bound; repository stdout and self-reported identities remain non-authoritative.
 5. Exercise real containment canaries, metadata/egress refusal, resource exhaustion, cancellation,
    crash, durable recovery and exact task-owned cleanup. No blind retry after ambiguous execution.
 6. Connect the proven build to module 15's fresh matched actual-reader run. VERIFIED remains

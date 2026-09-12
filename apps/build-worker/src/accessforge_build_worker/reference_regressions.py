@@ -16,8 +16,11 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import CodeType
 from typing import Any
 from urllib.parse import urlencode
+
+from accessforge_domain.canonical import digest
 
 from .sandbox import (
     MEMORY,
@@ -69,6 +72,37 @@ client.close()
 """
 
 
+def _code_identity(code: CodeType) -> dict[str, Any]:
+    """Stable executable identity without marshal reference flags or debug filenames."""
+
+    def constant(value: Any) -> Any:
+        if isinstance(value, CodeType):
+            return _code_identity(value)
+        if isinstance(value, (tuple, frozenset)):
+            entries = [constant(item) for item in value]
+            if isinstance(value, frozenset):
+                entries.sort(key=lambda item: json.dumps(item, sort_keys=True))
+            return {"type": type(value).__name__, "items": entries}
+        if value is None or isinstance(value, (str, bytes, int, float, complex, bool)):
+            return {"type": type(value).__name__, "value": repr(value)}
+        raise SandboxRefused("unsupported trusted harness code constant")
+
+    return {
+        "bytecode": code.co_code.hex(),
+        "exceptions": code.co_exceptiontable.hex(),
+        "constants": [constant(value) for value in code.co_consts],
+        "names": list(code.co_names),
+        "variables": list(code.co_varnames),
+        "free": list(code.co_freevars),
+        "cells": list(code.co_cellvars),
+        "flags": code.co_flags,
+        "args": code.co_argcount,
+        "positionalOnly": code.co_posonlyargcount,
+        "keywordOnly": code.co_kwonlyargcount,
+        "stack": code.co_stacksize,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ReferenceRegressionResult:
     artifact_digest: str
@@ -86,15 +120,48 @@ class ReferenceRegressions:
         self.sandbox = DockerSandbox(SandboxPolicy(image=image, wall_seconds=120), daemon=daemon)
         self.image = image
 
+    def policy_digest(self) -> str:
+        # Bind the executing code object (including nested harness functions), not just the
+        # mutable source file on disk. This is a local Python-runtime identity, not a wire ABI.
+        return digest(
+            {
+                "version": "owned-reference-regressions-v1",
+                "code": _code_identity(ReferenceRegressions.run.__code__),
+                "schema": _SCHEMA,
+                "httpDriver": _HTTP,
+                "postgres": POSTGRES_IMAGE,
+                "postgresBinaries": _PG,
+                "image": self.image,
+                "daemonEndpoint": self.sandbox.daemon.endpoint,
+                "daemonId": self.sandbox.daemon.daemon_id,
+                "memory": MEMORY,
+                "pids": PIDS,
+                "scratch": SCRATCH,
+                "dbScratch": _DB_SCRATCH,
+                "unusedVolume": _DB_UNUSED,
+                "user": USER,
+                "ownerLabel": OWNER_LABEL,
+            }
+        )
+
     def run(
-        self, artifact: SourceSnapshot, *, cancelled: Callable[[], bool] = lambda: False
+        self,
+        artifact: SourceSnapshot,
+        *,
+        cancelled: Callable[[], bool] = lambda: False,
+        task_id: str | None = None,
+        on_planned: Callable[[str, str, str], None] = lambda role, name, image: None,
+        on_created: Callable[[str, str, str], None] = lambda role, container, image: None,
+        on_removed: Callable[[str], None] = lambda role: None,
     ) -> ReferenceRegressionResult:
         wheel = "out/accessforge_reference_app-0.0.0-py3-none-any.whl"
         if len(artifact.files) != 1 or artifact.files[0].path != wheel:
             raise SandboxRefused("regressions require the captured owned reference wheel")
         sandbox = self.sandbox
         deadline = time.monotonic() + 120
-        task = str(uuid.uuid4())
+        task = task_id or str(uuid.uuid4())
+        if str(uuid.UUID(task)) != task:
+            raise SandboxRefused("regression task ID must be canonical")
         owned: list[tuple[str, str, bool]] = []
         receipts: list[tuple[str, str, str]] = []
 
@@ -110,6 +177,7 @@ class ReferenceRegressions:
             if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
                 raise SandboxRefused("runtime image has no immutable identity")
             name = f"accessforge-regression-{task}-{role}"
+            on_planned(role, name, image_id)
             owned.append((name, role, False))
             tmpfs = {"/work": _DB_SCRATCH if database else SCRATCH}
             if database:
@@ -182,6 +250,7 @@ class ReferenceRegressions:
             normalized["Config"]["User"] = USER
             sandbox._assert_configuration(normalized, image_id=image_id, task_id=task)
             sandbox._assert_daemon(deadline=deadline)
+            on_created(role, container, image_id)
             checked("container", "start", container)
             receipts.append((role, container, image_id))
             return container
@@ -520,6 +589,8 @@ class ReferenceRegressions:
                     sandbox._cleanup(name, task)
                     if not confirmed:
                         failures.append(role + " create outcome unknown")
+                    else:
+                        on_removed(role)
                 except Exception:
                     failures.append(role + " cleanup unconfirmed")
             if failures:

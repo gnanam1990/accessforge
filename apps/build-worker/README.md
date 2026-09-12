@@ -57,10 +57,16 @@ handling and fresh-container restart durability. Late DB writers are fenced befo
 All containers are removed before a result is returned; ambiguous cleanup raises rather than
 passing. Actual metadata/public-network and denied-DDL/admin canaries must pass.
 
-This is currently a bounded local primitive, not a durable verification worker. No regression
-attestation is written to a candidate run, and no API consumer may infer VERIFIED from its result.
-Hard supervisor-crash reconciliation, a real accessibility repair and matched actual-reader proof
-remain incomplete. Hostile multi-tenant execution remains unsupported.
+`regression_coordinator.execute_regressions` now records a durable one-time claim for the exact
+retained build, rechecks patch/approval/source/surface/daemon authority, commits each role's plan
+before creation, and records actual process identity before start. PASSED requires matching
+artifact/policy and all four exact process-removal receipts. Expiry and restore fence active
+attempts to UNKNOWN without retry. Confirmed cancellation is distinct from unconfirmed cleanup.
+
+This is not yet an actual-reader verification worker. The protected result is linked to its
+candidate build/verification record, not to a fresh actual-reader run/lease; no API consumer may
+infer VERIFIED from it. Explicit hard-crash/UNKNOWN reconciliation, a real accessibility repair
+and matched actual-reader proof remain incomplete. Hostile multi-tenant execution is unsupported.
 
 See `docs/handoffs/14-candidate-build.md` for the current evidence and remaining work. The older
 `14.md` describes the historical policy-only checkpoint, not the current worker implementation.
