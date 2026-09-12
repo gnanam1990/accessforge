@@ -319,6 +319,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: false,
     authenticated: true,
   },
+  'configure_repair_surface': {
+    operationId: 'configure_repair_surface',
+    method: 'PUT',
+    path: '/v1/workspaces/{workspace_id}/projects/{project_id}/repair-surface',
+    parameters: ['workspace_id', 'project_id'],
+    mutating: true,
+    authenticated: true,
+  },
   'seal_manifest': {
     operationId: 'seal_manifest',
     method: 'POST',
@@ -634,6 +642,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/projects/{project_id}/environments',
   '/v1/workspaces/{workspace_id}/projects/{project_id}/journeys',
   '/v1/workspaces/{workspace_id}/projects/{project_id}/manifests',
+  '/v1/workspaces/{workspace_id}/projects/{project_id}/repair-surface',
   '/v1/workspaces/{workspace_id}/projects/{project_id}/seals',
   '/v1/workspaces/{workspace_id}/review-requests',
   '/v1/workspaces/{workspace_id}/reviews',

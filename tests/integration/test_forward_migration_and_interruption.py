@@ -175,8 +175,16 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
         forced = conn.execute(
             "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
             " WHERE relname IN ('patch_proposal', 'patch_change', 'patch_verification', "
-            "                   'patch_proposal_transition')"
+            "                   'patch_proposal_transition', 'project_repair_surface')"
         ).fetchall()
+        # The repair surface cannot be configured as empty. An empty surface is indistinguishable
+        # from no surface, and one of those two has to refuse every proposal -- so the database
+        # refuses the ambiguity rather than leaving it to whichever caller reads it.
+        surface_guard = conn.execute(
+            "SELECT 1 FROM pg_constraint "
+            " WHERE conrelid = 'project_repair_surface'::regclass AND contype = 'c' "
+            "   AND pg_get_constraintdef(oid) LIKE '%cardinality(paths)%'"
+        ).fetchone()
         # The diff's own guards. Without `content_matches_operation` a DELETE could carry content
         # and a MODIFY could carry none -- so "this file is removed" and "nobody recorded what this
         # change was" would be the same row, and either would reach a candidate workspace as
@@ -217,7 +225,8 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     }
     assert any("patch_id, path" in u for u in uniques), uniques
     assert any("patch_id, ordinal" in u for u in uniques), uniques
-    assert len(forced) == 4
+    assert surface_guard is not None, "a project could record a repair surface of no paths"
+    assert len(forced) == 5
     for row in forced:
         # FORCE, not merely ENABLE: the application role owns these tables, and ENABLE does nothing
         # for an owner. A proposal names source paths in a customer repository.
