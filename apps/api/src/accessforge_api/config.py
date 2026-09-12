@@ -61,6 +61,22 @@ class ApiSettings(BaseSettings):
     # is an authentication bypass by construction -- see the validator below and the docstring of
     # `routes/session.py`.
     identity_provider: Literal["none", "local-development"] = "none"
+    # Write-rate limits, one bucket per principal and one per workspace, both enforced. Environment
+    # configuration rather than a request field or a per-workspace row: the value has to be trusted,
+    # and the two things a caller controls are exactly the two that must not set it.
+    #
+    # The defaults are generous enough that a person driving the UI never meets them and tight
+    # enough that a loop does within a second or two. A deployment under real load tunes them;
+    # a deployment that wants them off has to say so by raising them, because there is no way to
+    # express "unlimited" here.
+    rate_limit_principal_per_minute: int = Field(default=120, ge=1, le=100_000)
+    rate_limit_workspace_per_minute: int = Field(default=600, ge=1, le=1_000_000)
+
+    # The burst a caller may spend at once, as a multiple of one minute's allowance. A burst of
+    # exactly one minute's worth is what a token bucket gives by default and is what makes a page
+    # that fires six requests on load work at a limit of 120/minute.
+    rate_limit_burst_multiplier: float = Field(default=1.0, ge=1.0, le=10.0)
+
     host: str = "127.0.0.1"
     port: int = Field(default=8080, ge=1024, le=65535)
 

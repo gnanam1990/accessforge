@@ -66,6 +66,14 @@ class ProblemCode(StrEnum):
     a journey requiring a capability no runner has."""
 
     QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
+
+    RATE_LIMITED = "RATE_LIMITED"
+    """Too fast, not too much. Distinct from QUOTA_EXHAUSTED although both are 429.
+
+    A quota is spent and does not come back without a new entitlement; a rate limit returns on
+    its own after `retryAfterSeconds`. A client that cannot tell them apart either retries a
+    request that will never succeed, or gives up on one that would have succeeded a second later.
+    """
     DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
 
 
@@ -87,6 +95,7 @@ _STATUS: dict[ProblemCode, int] = {
     # UNPROCESSABLE_CONTENT is the current name for 422; the old alias is deprecated.
     ProblemCode.UNSUPPORTED_CAPABILITY: status.HTTP_422_UNPROCESSABLE_CONTENT,
     ProblemCode.QUOTA_EXHAUSTED: status.HTTP_429_TOO_MANY_REQUESTS,
+    ProblemCode.RATE_LIMITED: status.HTTP_429_TOO_MANY_REQUESTS,
     ProblemCode.DEPENDENCY_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 
@@ -105,6 +114,7 @@ class ProblemDetail(Exception):
         *,
         extra: dict[str, Any] | None = None,
         request_id: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(detail)
         self.code = code
@@ -117,11 +127,16 @@ class ProblemDetail(Exception):
         self.extra = {
             k: v for k, v in (extra or {}).items() if isinstance(v, str | int | bool | float)
         }
+        # Response headers a refusal needs to carry. `Retry-After` is the reason this exists: it is
+        # the standard place a client and every HTTP intermediary look for "how long", and a value
+        # only in the body is one that proxies, SDK retry policies and curl all ignore.
+        self.headers = {k: str(v) for k, v in (headers or {}).items()}
 
     def to_response(self) -> JSONResponse:
         return JSONResponse(
             status_code=self.status_code,
             media_type=PROBLEM_CONTENT_TYPE,
+            headers=self.headers or None,
             content={
                 "type": f"https://accessforge.invalid/problems/{self.code.lower()}",
                 "title": _TITLES[self.code],
@@ -149,6 +164,7 @@ _TITLES: dict[ProblemCode, str] = {
     ProblemCode.CONFLICT: "Conflict",
     ProblemCode.UNSUPPORTED_CAPABILITY: "Unsupported capability",
     ProblemCode.QUOTA_EXHAUSTED: "Quota exhausted",
+    ProblemCode.RATE_LIMITED: "Rate limited",
     ProblemCode.DEPENDENCY_UNAVAILABLE: "Dependency unavailable",
 }
 
