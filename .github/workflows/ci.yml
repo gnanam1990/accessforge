@@ -163,6 +163,7 @@ jobs:
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
           apps/orchestrator/src packages/agent-tools/navigation/src
+          apps/build-worker/src
           packages/domain/src packages/contracts/python/src
           packages/persistence/src packages/evidence/src packages/clients/python/src scripts tests
 

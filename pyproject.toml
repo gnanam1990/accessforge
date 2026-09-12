@@ -13,6 +13,7 @@ dependencies = [
   "accessforge-client",
   "accessforge-navigation-tools",
   "accessforge-orchestrator",
+  "accessforge-build-worker",
 ]
 
 [tool.uv.sources]
@@ -25,6 +26,7 @@ accessforge-evidence = { workspace = true }
 accessforge-client = { workspace = true }
 accessforge-navigation-tools = { workspace = true }
 accessforge-orchestrator = { workspace = true }
+accessforge-build-worker = { workspace = true }
 
 [tool.uv.workspace]
 members = [
@@ -37,6 +39,7 @@ members = [
   "packages/clients/python",
   "packages/agent-tools/navigation",
   "apps/orchestrator",
+  "apps/build-worker",
 ]
 
 [tool.uv]
@@ -73,6 +76,7 @@ src = [
   "packages/persistence/src",
   "packages/agent-tools/navigation/src",
   "apps/orchestrator/src",
+  "apps/build-worker/src",
   "scripts",
   "tests",
 ]
@@ -96,7 +100,7 @@ ignore = ["S101"]  # assert is how pytest expresses expectations
 [tool.mypy]
 python_version = "3.13"
 strict = true
-mypy_path = "apps/api/src:apps/orchestrator/src:fixtures/reference-app/src:packages/agent-tools/navigation/src:packages/domain/src:packages/contracts/python/src:packages/persistence/src:packages/evidence/src:packages/clients/python/src:scripts"
+mypy_path = "apps/api/src:apps/orchestrator/src:apps/build-worker/src:fixtures/reference-app/src:packages/agent-tools/navigation/src:packages/domain/src:packages/contracts/python/src:packages/persistence/src:packages/evidence/src:packages/clients/python/src:scripts"
 namespace_packages = true
 explicit_package_bases = true
 

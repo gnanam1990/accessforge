@@ -1,7 +1,10 @@
 # P6 — Strict type-checking for the test suite
 
 Baseline: main `49747cbe8cf79dbc416b6028224dd4bdcc641ba6` (PR #35).
-Branch: `feat/test-suite-mypy`. Local validation passed; GitHub CI and merge are pending.
+Merged through PR #36 at `fa60a6fd87afd770a708141b81d9067ef7e217dc`.
+The exact reviewed head was `a29c65ad44a4bf6be0f78484c8a3de3f37eae455`.
+GitHub CI run `34711397735` passed. Devin found no issues and CodeRabbit generated no actionable
+comments on that head; its docstring-coverage warning was not a repository-required gate.
 
 ## Scope
 
