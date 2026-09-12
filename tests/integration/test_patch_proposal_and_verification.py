@@ -1715,3 +1715,243 @@ def test_a_valid_mode_is_accepted_and_kept(
     )
     assert response.status_code == 201, response.text
     assert response.json()["changes"][0]["mode"] == "100755"
+
+
+# --- residual blockers from the final review
+# -------------------------------------------------------
+
+
+def test_a_verification_cannot_open_under_a_revoked_approval(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """A status saying APPROVED is not an approval that still authorizes anything.
+
+    `open_verification` checked only the status, so a revoked approval still produced a verification
+    record and moved the patch to BUILDING: a candidate begun under an authorization that no longer
+    existed, with a row afterwards implying somebody had granted one. Asserted on both effects --
+    nothing inserted and the patch not moved -- because either alone would be the damage.
+    """
+    finding_id, baseline = finding
+    approved, approval_id = _approve(db, _propose(db, finding_id, manifest))
+
+    with workspace_connection(db, WS) as conn:
+        assert approvals.revoke_approval(conn, approval_id=approval_id) is True
+        with pytest.raises(patches.VerificationError, match="revoked"):
+            patches.open_verification(
+                conn,
+                workspace_id=WS,
+                patch_id=approved.patch_id,
+                baseline_run_id=baseline,
+                baseline_identity={},
+            )
+
+    with workspace_connection(db, WS) as conn:
+        assert patches.verifications_for_patch(conn, patch_id=approved.patch_id) == []
+        assert patches.load_patch(conn, patch_id=approved.patch_id).status is PatchStatus.APPROVED
+
+
+def test_a_verification_cannot_open_under_an_expired_approval(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """Expiry is the same class of failure as revocation, and was equally unchecked here."""
+    finding_id, baseline = finding
+    patch = _propose(db, finding_id, manifest)
+    with workspace_connection(db, WS) as conn:
+        approved = patches.approve_patch(
+            conn,
+            workspace_id=WS,
+            patch_id=patch.patch_id,
+            actor_id=OWNER,
+            expires_at=to_rfc3339_utc(datetime.now(UTC) + timedelta(seconds=1)),
+            expected_revision=patch.revision,
+        )
+        with pytest.raises(patches.VerificationError, match="expired"):
+            patches.open_verification(
+                conn,
+                workspace_id=WS,
+                patch_id=approved.patch_id,
+                baseline_run_id=baseline,
+                baseline_identity={},
+                # An hour later, without waiting for one.
+                now=datetime.now(UTC) + timedelta(hours=1),
+            )
+    with workspace_connection(db, WS) as conn:
+        assert patches.verifications_for_patch(conn, patch_id=approved.patch_id) == []
+
+
+def test_a_verification_cannot_open_when_the_patch_moved_after_approval(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """The approval binds to a revision. A patch that moved since is not the one approved."""
+    finding_id, baseline = finding
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    with workspace_connection(db, WS) as conn:
+        # Any later move bumps the revision. A status change is the honest way to cause one.
+        conn.execute(
+            "UPDATE patch_proposal SET revision = revision + 1 WHERE id = %s",
+            (approved.patch_id,),
+        )
+        with pytest.raises(patches.VerificationError, match="expects revision"):
+            patches.open_verification(
+                conn,
+                workspace_id=WS,
+                patch_id=approved.patch_id,
+                baseline_run_id=baseline,
+                baseline_identity={},
+            )
+
+
+def test_two_conclusions_racing_do_not_both_succeed(
+    db: str, finding: tuple[str, str], manifest: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A frozen outcome that the second finisher overwrites is not frozen.
+
+    The read at the top of `conclude_verification` was not the check: two callers both passed it,
+    both computed their own gates, and both wrote. State and revision are now predicates in the
+    statement that writes, so the loser is told and the first verdict stands.
+
+    The loser of a real race is a caller that read the record *before* the winner committed and
+    reaches its UPDATE afterwards. That is reproduced by making this caller's entry read return the
+    pre-conclusion row -- the read is the double, the function under test is untouched, and it
+    genuinely arrives at the production UPDATE holding a stale revision.
+    """
+    finding_id, baseline = finding
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    verification_id = _open(db, approved, baseline)
+
+    with workspace_connection(db, WS) as conn:
+        stale = patches.load_verification(conn, verification_id=verification_id)
+    assert stale.state == "BUILDING"
+
+    first = _conclude(db, verification_id)
+    assert first.conclusion == "INCONCLUSIVE"
+
+    real_load = patches.load_verification
+    calls = {"n": 0}
+
+    def stale_first(*args: object, **kwargs: object) -> patches.VerificationRecord:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # What the losing caller is holding: open, at the revision before the winner wrote.
+            return stale
+        return real_load(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(patches, "load_verification", stale_first)
+    with pytest.raises(patches.VerificationError, match="concluded by somebody else"):
+        _conclude(db, verification_id)
+    monkeypatch.undo()
+
+    with workspace_connection(db, WS) as conn:
+        final = patches.load_verification(conn, verification_id=verification_id)
+    # The first verdict stands, unchanged, and was not bumped by the loser's attempt.
+    assert final.conclusion == "INCONCLUSIVE"
+    assert final.revision == first.revision
+
+
+def test_concluding_twice_through_the_function_is_refused(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """The same guarantee through the real entry point rather than a hand-written UPDATE."""
+    finding_id, baseline = finding
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    verification_id = _open(db, approved, baseline)
+
+    _conclude(db, verification_id)
+    with pytest.raises(patches.VerificationError, match="already concluded"):
+        _conclude(db, verification_id)
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ({"field": "runner_profile_digest"}, "no `candidate` key"),
+        ({"candidate": "anything"}, "non-empty string `field`"),
+        ({"field": "", "candidate": "x"}, "non-empty string `field`"),
+        ({"field": 7, "candidate": "x"}, "non-empty string `field`"),
+        ("runner_profile_digest", "not an object"),
+    ],
+)
+def test_a_malformed_permitted_difference_is_refused(
+    db: str,
+    finding: tuple[str, str],
+    manifest: str,
+    entry: object,
+    expected: str,
+) -> None:
+    """These are the only things allowed to excuse a difference, so a malformed one cannot pass.
+
+    `dict.get` collapses "absent" and "null", and `str(None)` is the string "None" -- so an entry
+    that forgot to say what the candidate value was could waive a drift whose candidate value
+    happened to be absent, which is most of them.
+    """
+    finding_id, baseline = finding
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    verification_id = _open(db, approved, baseline)
+
+    with pytest.raises(patches.VerificationError, match=expected):
+        _conclude(db, verification_id, permitted_differences=(entry,))
+
+    # And nothing was written: the validation happens before the record is touched.
+    with workspace_connection(db, WS) as conn:
+        assert patches.load_verification(conn, verification_id=verification_id).state == "BUILDING"
+
+
+def test_a_permitted_difference_missing_its_candidate_cannot_waive_real_drift(
+    db: str,
+    finding: tuple[str, str],
+    manifest: str,
+    project: str,
+    seal_manifest: Callable[..., str],
+) -> None:
+    """The specific waiver that used to work.
+
+    `{"field": "runner_profile_digest"}` with no candidate value stringified to ("…", "None") and
+    matched any candidate whose value the comparison also stringified to "None". Now it is refused
+    outright, and the drift it was aimed at is still reported.
+    """
+    finding_id, baseline = finding
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE run SET status = 'COMPLETED', outcome = 'FAIL', execution_began = true "
+            " WHERE id = %s",
+            (baseline,),
+        )
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    verification_id = _open(db, approved, baseline)
+
+    # A candidate sealed separately, so its identity genuinely differs from the baseline's.
+    other_manifest = seal_manifest(db, workspace_id=WS, project_id=project, authorized_by=OWNER)
+    candidate = _completed_run(db, other_manifest, project, "PASS")
+
+    with pytest.raises(patches.VerificationError, match="no `candidate` key"):
+        _conclude(
+            db,
+            verification_id,
+            candidate_run_id=candidate,
+            permitted_differences=({"field": "fixture_digest"},),
+        )
+
+    # Concluded without the malformed waiver, the drift is named.
+    record = _conclude(db, verification_id, candidate_run_id=candidate)
+    assert record.conclusion == "INCONCLUSIVE"
+    assert any("unexplained identity drift" in r for r in record.reasons)
+
+
+def test_an_explicit_null_candidate_is_accepted_and_waives_only_a_null(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """The sentinel distinguishes absent from null, so stating null is allowed.
+
+    Otherwise the strictness would refuse a legitimate waiver for a field the candidate genuinely
+    does not have.
+    """
+    finding_id, baseline = finding
+    approved, _ = _approve(db, _propose(db, finding_id, manifest))
+    verification_id = _open(db, approved, baseline)
+
+    record = _conclude(
+        db, verification_id, permitted_differences=({"field": "fixture_digest", "candidate": None},)
+    )
+    assert record.conclusion == "INCONCLUSIVE"
+    # Accepted: the refusals are about the missing key, not about the value being null.
+    assert not any("candidate` key" in r for r in record.reasons)
