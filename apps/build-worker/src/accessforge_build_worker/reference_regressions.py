@@ -26,6 +26,7 @@ from accessforge_contracts.reference_fixture import (
 )
 from accessforge_domain.canonical import digest
 
+from .candidate_gateway import CandidateEndpointBinding, CandidateGateway, gateway_policy
 from .sandbox import (
     MEMORY,
     OWNER_LABEL,
@@ -137,6 +138,7 @@ class ReferenceRegressions:
                 "postgresBinaries": _PG,
                 "fixtureDigest": REFERENCE_FIXTURE_DIGEST,
                 "fixtureVersion": REFERENCE_FIXTURE_VERSION,
+                "browserBridge": gateway_policy(_code_identity),
                 "image": self.image,
                 "daemonEndpoint": self.sandbox.daemon.endpoint,
                 "daemonId": self.sandbox.daemon.daemon_id,
@@ -159,6 +161,8 @@ class ReferenceRegressions:
         on_planned: Callable[[str, str, str], None] = lambda role, name, image: None,
         on_created: Callable[[str, str, str], None] = lambda role, container, image: None,
         on_removed: Callable[[str], None] = lambda role: None,
+        on_candidate_endpoint: Callable[[CandidateGateway], None] | None = None,
+        assert_endpoint_authority: Callable[[], None] = lambda: None,
     ) -> ReferenceRegressionResult:
         wheel = "out/accessforge_reference_app-0.0.0-py3-none-any.whl"
         if len(artifact.files) != 1 or artifact.files[0].path != wheel:
@@ -427,7 +431,12 @@ class ReferenceRegressions:
             candidate = start_candidate("candidate")
 
             def http(
-                method: str, path: str, *, headers: dict[str, str] | None = None, body: str = ""
+                method: str,
+                path: str,
+                *,
+                headers: dict[str, str] | None = None,
+                body: str = "",
+                request_deadline: float | None = None,
             ) -> dict[str, Any]:
                 request = json.dumps(
                     {"method": method, "path": path, "headers": headers or {}, "body": body}
@@ -435,7 +444,7 @@ class ReferenceRegressions:
                 if len(request) > 16384:
                     raise SandboxRefused("protected request exceeds bound")
                 response = json.loads(
-                    checked(
+                    sandbox._checked(
                         "exec",
                         "-i",
                         driver,
@@ -443,8 +452,10 @@ class ReferenceRegressions:
                         "-I",
                         "-c",
                         _HTTP,
-                        payload=request,
-                    )
+                        input_bytes=request,
+                        deadline=min(deadline, request_deadline or time.monotonic() + 5),
+                        cancelled=cancelled,
+                    ).stdout
                 )
                 if not isinstance(response, dict):
                     raise SandboxRefused("invalid trusted driver response")
@@ -461,6 +472,70 @@ class ReferenceRegressions:
                 raise SandboxRefused("captured candidate did not become ready")
 
             ready()
+
+            if on_candidate_endpoint is not None:
+                # An opt-in trusted capability probe, not an automatically exposed browser port
+                # or matched-reader attestation. No setup/observer routes enter the bridge.
+                assert_endpoint_authority()
+                seeded = http(
+                    "POST",
+                    "/api/_test/fixtures?variant=inaccessible",
+                    headers={"x-setup-token": setup},
+                )
+                declaration = json.loads(seeded["body"])
+                if (
+                    seeded["status"] != 201
+                    or declaration.get("template_digest") != REFERENCE_FIXTURE_DIGEST
+                    or declaration.get("template_version") != REFERENCE_FIXTURE_VERSION
+                    or sql("SELECT template_digest FROM fixture_instance")
+                    != REFERENCE_FIXTURE_DIGEST
+                ):
+                    raise SandboxRefused("browser candidate fixture identity differs")
+
+                def transport(method: str, path: str, body: str) -> dict[str, Any]:
+                    end = min(deadline, time.monotonic() + 5)
+                    assert_endpoint_authority()
+                    sandbox._assert_daemon(deadline=end)
+                    for container in (candidate, driver):
+                        item = sandbox._inspect(container, deadline=end)
+                        if (
+                            item["Id"] != container
+                            or not item["State"]["Running"]
+                            or item["HostConfig"].get("NetworkMode") != "container:" + database
+                        ):
+                            raise SandboxRefused("served candidate process identity changed")
+                        normalized = copy.deepcopy(item)
+                        normalized["HostConfig"]["NetworkMode"] = "none"
+                        sandbox._assert_configuration(normalized, image_id=self.image, task_id=task)
+                    assert_endpoint_authority()
+                    return http(
+                        method,
+                        path,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        body=body,
+                        request_deadline=end,
+                    )
+
+                with CandidateGateway(
+                    binding=CandidateEndpointBinding(
+                        task_id=task,
+                        artifact_digest=artifact.archive_digest,
+                        # Runtime policy, not an unverified application-reported environment.
+                        # Matching it to a sealed reader environment remains controller work.
+                        runtime_policy_digest=self.policy_digest(),
+                        candidate_id=candidate,
+                        driver_id=driver,
+                        image_id=self.image,
+                        daemon=sandbox.daemon,
+                    ),
+                    nonce=declaration["nonce"],
+                    transport=transport,
+                ) as gateway:
+                    on_candidate_endpoint(gateway)
+                assert_endpoint_authority()
+                # Protected regressions get a fresh fixture after the separate browser probe;
+                # callback results never count as assertion or backend regression evidence.
+                sql("TRUNCATE service_request, fixture_instance CASCADE")
 
             checks: list[str] = ["private_network_canary", "candidate_ddl_and_admin_denied"]
 

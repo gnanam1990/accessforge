@@ -473,11 +473,12 @@ retention are checked after blocking reads, not against a clock captured before 
    safe reconciliation/resumption is not. In particular, an absent container alone cannot prove an
    interrupted create request will not materialize later. Use the now-persisted creation receipt
    to distinguish observed absence from confirmed retirement; never automatically retry UNKNOWN.
-3. Connect the now-proven reference-app package toolchain to bounded operator E0 dispatch and
-   independently bind the served browser endpoint to that exact retained artifact. Logical
-   reference fixture identity is now separate from repairable presentation (see below), but is
-   not deployment provenance. Docker daemon access is supervisor authority, never an
-   author-selectable endpoint. End-to-end reader repair proof is not available.
+3. Connect the now-proven reference-app package toolchain and opt-in loopback candidate bridge
+   to bounded operator E0 dispatch. The live bridge selects the exact retained artifact and
+   isolated container (see below); persist that deployment binding and match the actual runtime
+   to the sealed reader environment. Logical fixture identity alone is not deployment provenance.
+   Docker daemon access is supervisor authority, never an author-selectable endpoint.
+   End-to-end reader repair proof is not available.
 4. Link the implemented durable build-bound protected regression receipts to a fresh, matched
    candidate reader run/lease and independent verification. Actual-reader evidence is not yet
    bound; repository stdout and self-reported identities remain non-authoritative.
@@ -536,3 +537,68 @@ Ruff: 325 files clean; OpenAPI, six schema/enumeration bindings, 74-operation cl
 fixture binding drift checks pass. All Node workspace typecheck/build/test commands pass; the
 final desktop suite has 56 passing tests, including real loopback HTTP redirect, oversized-body
 and stalled-body refusal. No actual-reader or production deployment result is implied.
+
+### Opt-in contained candidate browser bridge
+
+The trusted regression coordinator can now opt into a short, owned browser capability probe.
+After the captured wheel is loaded into its exact isolated process, the supervisor seeds and
+independently checks the logical fixture. It opens an ephemeral IPv4 loopback socket that serves
+only that nonce's form. Browser requests traverse a trusted Docker-exec HTTP driver in the
+candidate's private network namespace; there are still no published container ports, host mounts
+or outbound candidate network access. The candidate cannot select the upstream host or process.
+
+Every forwarded request rechecks current durable regression authority, original daemon identity,
+both immutable process IDs, running state, exact images/network and containment configuration.
+Docker I/O shares a five-second request deadline. The live binding records artifact/task/origin/
+nonce path/driver/candidate/image/daemon and the trusted runtime policy digest. It does **not**
+pretend that this policy digest is a sealed reader-environment manifest. Neither the binding
+object nor the callback can attest a reader result. No public API or default unattended dispatch
+enables this hook, and there is no new path to VERIFIED.
+
+The gateway permits only exact GET/POST form paths, rejects wrong/duplicate Host, cross-site
+navigation and missing/wrong POST Origin, and refuses ambiguous Content-Length or chunked framing.
+Headers are capped at 16 KiB, form bodies at 8 KiB, responses at 256 KiB, with 128 request admissions.
+An absolute two-second framing timer closes slow clients. The normal lifetime is 30 seconds
+(trusted maximum 60); expiry closes the listener even if the callback is still busy. Candidate
+redirects and response headers are not forwarded. A fixed CSP, no-store, no-referrer and nosniff
+policy accompanies form responses. Setup/reset/receipt/diagnostics and alternate fixture paths
+never reach the driver through this socket; browser cookies/auth headers are discarded.
+
+Cleanup closes the listener and joins started threads without allocating another shutdown
+thread. Unconfirmed handler termination remains CleanupUnconfirmed/UNKNOWN, never a clean close.
+Review reproduced a listener leak when Thread.start failed; server-thread and timer-start failure
+tests now cover its correction. A second lifecycle test caught a stopped serve loop with a still
+bound listener; unconditional listener close on loop exit corrected it. The interrupted first
+full-suite run (222 tests before SIGINT) is not claimed as a complete validation.
+
+The owned real-wheel tests exercise both original and presentation-repaired candidates through
+the bridge, inspect the actual HTML/validation response, refuse setup access and compare the
+route's artifact/process identities with the retained build. A durable fence during the callback
+must prevent the next request reaching any container and preserve UNKNOWN plus exact removals.
+Backend protected regressions receive a fresh fixture after the separate browser window closes.
+Browser callbacks never contribute protected-check or assertion PASS evidence.
+
+A disposable observer plugin also held the presentation-repair endpoint for native inspection:
+the Codex in-app browser rendered the Service request form with labelled name/email/category/
+description controls and submit button. The owned integration case completed successfully after
+closing the endpoint. This was a synthetic fixture/browser-render capability proof, **not**
+VoiceOver/NVDA interaction, a canonical run, a reproduced finding, or a verified repair.
+The final browser empty-submit attempt did not establish an interaction result: the local
+endpoint was unavailable and the browser tool refused its generated error-page navigation.
+The owned preview test itself ended cleanly (1 passed in 31.51 seconds); no safety warning was
+bypassed. Native browser POST/error-focus proof remains pending, separately from the successful
+real HTTP POST/validation tests. Temporary preview tabs are not deployed deliverables.
+
+This intentionally short local E0 bridge is not a production web server or a hostile-browser
+certification. Python explicitly cautions against production use of its standard HTTP server:
+[Python HTTP server documentation](https://docs.python.org/3/library/http.server.html).
+CSP is a content restriction, not a substitute for the remaining browser/desktop isolation and
+continuous-origin checks: [CSP sandbox reference](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/sandbox).
+
+Final local runtime validation: **2,118 passed, zero failures/skips**, 58 upstream deprecation
+warnings, in 241.83 seconds. This includes the live endpoint fence race plus all prior actual
+Git/PostgreSQL/Docker/object-store/backup/restore paths. Focused gateway suite: 30 passed.
+Strict mypy: 225 files; Ruff lint/format: 327 files. OpenAPI, six schema/enumeration bindings,
+74-operation client and frozen fixture drift checks pass; Node workspace typecheck passes.
+The preceding fixture-identity head `bdeb4f4e57c5ce1d7909af1d4dffa6b2b93f8681` passed all
+GitHub CI jobs in run 34721876262. This bridge continuation requires separate current-head CI.
