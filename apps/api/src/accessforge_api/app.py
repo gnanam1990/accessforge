@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -11,6 +12,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from starlette.responses import Response
 
 from .config import ApiSettings
 from .dependencies import MUTATING_METHODS
@@ -34,6 +36,18 @@ from .routes import (
     session_router,
     settings_router,
     stream_router,
+)
+from .telemetry import (
+    SCOPE_CORRELATION_ID,
+    SCOPE_PROBLEM_CODE,
+    SCOPE_REQUEST_ID,
+    configure_telemetry_logging,
+    emit,
+    is_streaming,
+    record_for,
+    resolve_correlation_id,
+    resolve_request_id,
+    route_template,
 )
 
 _log = logging.getLogger("accessforge.api")
@@ -242,29 +256,122 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         generate_unique_id_function=_operation_id,
     )
     app.state.config = config
+    # Installed here so the default deployment emits machine-readable records. Idempotent, because
+    # this function runs once per process in production and once per test app in the suite.
+    configure_telemetry_logging()
+
+    @app.middleware("http")
+    async def _telemetry(request: Request, call_next: Any) -> Response:
+        """Exactly one structured record per request, whatever the request did.
+
+        Middleware rather than the handlers, for three reasons a handler cannot satisfy. It sees
+        requests that never reach a route at all -- an unmatched path, a validation failure -- which
+        is where an attack looks like traffic. It sees the *final* status, after the problem handler
+        has converted a refusal. And it runs once, so there is no arrangement of handlers that
+        produces two records for one request or none for the requests nobody anticipated.
+
+        The correlation id is resolved here and put on the scope, so the id in this record is the
+        same id in the document the caller received. Generating it per call site is how they end up
+        different, and a record that cannot be matched to the response a customer is complaining
+        about is a record with no operational use.
+
+        An exception that escapes is recorded as a 500 and re-raised unchanged. Letting it past
+        unrecorded would leave the one outcome an operator most needs to see as the only one
+        missing,
+        and swallowing it would turn a crash into a silent 200.
+        """
+        request.scope[SCOPE_REQUEST_ID] = resolve_request_id(request)
+        request.scope[SCOPE_CORRELATION_ID] = resolve_correlation_id(request)
+        started = time.perf_counter()
+        try:
+            response: Response = await call_next(request)
+        except Exception:
+            elapsed = (time.perf_counter() - started) * 1000
+            # The same silence applies here. Quieting a route on its success path only meant a
+            # crashing health probe emitted a record a second -- from the one route an operator
+            # silenced precisely because it is polled constantly, and in the situation where the log
+            # is least readable. Silence that depends on the outcome is not silence.
+            if route_template(request) not in config.telemetry_quiet_routes:
+                emit(record_for(request, status_code=500, duration_ms=elapsed))
+            raise
+        elapsed = (time.perf_counter() - started) * 1000
+        if route_template(request) not in config.telemetry_quiet_routes:
+            emit(
+                record_for(
+                    request,
+                    status_code=response.status_code,
+                    duration_ms=elapsed,
+                    streamed=is_streaming(response),
+                )
+            )
+        # Echoed so a caller can quote the id without having to provoke a refusal to learn it. Two
+        # headers, because they are two different things: `X-Request-Id` may be the caller's own
+        # value, and `X-Correlation-Id` is the server's -- the one that appears in the log.
+        response.headers["X-Request-Id"] = str(request.scope[SCOPE_REQUEST_ID])
+        response.headers["X-Correlation-Id"] = str(request.scope[SCOPE_CORRELATION_ID])
+        return response
 
     @app.exception_handler(ProblemDetail)
-    def _problem(_: Request, exc: ProblemDetail) -> JSONResponse:
+    def _problem(request: Request, exc: ProblemDetail) -> JSONResponse:
         """Every refusal becomes an RFC7807 document.
 
         One handler, so no route can answer with a bare string or an unhandled exception's message.
         The exception messages in this codebase deliberately carry the specifics that help an
         operator, and an anonymous caller is not an operator.
+
+        The stable code is left on the scope for the telemetry middleware to read, and nothing is
+        logged here. Two writers for one request is how a log acquires a duplicate that nobody
+        notices until they are counting -- and `detail` is deliberately not passed along, because
+        the
+        prose that helps an operator at the point of failure is the prose that names a workspace, a
+        digest or a phrase a screen reader announced.
         """
+        request.scope[SCOPE_PROBLEM_CODE] = str(exc.code)
+        # The resolved id, not whatever the refusal happened to carry. `ProblemDetail` mints a fresh
+        # UUID when no `request_id` is passed, and twenty-eight construction sites pass none --
+        # every
+        # early refusal in the session routes among them. Each of those answered with an id that
+        # matched neither the `X-Request-Id` header on the same response nor anything else, so a
+        # caller quoting it was quoting a number that existed for one response and then nowhere.
+        #
+        # Overridden rather than defaulted: a route that passed `context.request_id` passed this
+        # same
+        # value, so this is a no-op there, and making it unconditional means no construction site
+        # can
+        # reintroduce the divergence.
+        resolved = request.scope.get(SCOPE_REQUEST_ID)
+        if resolved:
+            exc.request_id = str(resolved)
+        # The server's identifier alongside the caller's. `requestId` may be the value the client
+        # supplied -- an established contract -- and that value is deliberately absent from
+        # telemetry, so without this a customer could quote an id that appears in no log.
+        correlation = request.scope.get(SCOPE_CORRELATION_ID)
+        if correlation:
+            exc.extra.setdefault("correlationId", str(correlation))
         return exc.to_response()
 
     @app.exception_handler(RequestValidationError)
-    def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
+    def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
         """FastAPI's own validation errors, reshaped into the same document.
 
         The count is reported and the individual messages are not. A validation error names the
         field and often echoes the value, and echoing a value back is how a body that carried a
         token ends up in a response, a log and a bug report.
         """
+        request.scope[SCOPE_PROBLEM_CODE] = str(ProblemCode.INVALID_INPUT)
+        correlation = request.scope.get(SCOPE_CORRELATION_ID)
+        resolved = request.scope.get(SCOPE_REQUEST_ID)
         return ProblemDetail(
             ProblemCode.INVALID_INPUT,
             "the request body or parameters did not match this route's contract",
-            extra={"errorCount": len(exc.errors())},
+            extra={
+                "errorCount": len(exc.errors()),
+                **({"correlationId": str(correlation)} if correlation else {}),
+            },
+            # Validation runs before any route body, so there is no `RequestContext` to take an id
+            # from. Without this the document minted its own and disagreed with the header beside
+            # it.
+            request_id=str(resolved) if resolved else None,
         ).to_response()
 
     for router in (

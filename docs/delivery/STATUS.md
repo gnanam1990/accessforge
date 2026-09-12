@@ -139,7 +139,7 @@ findings fixed, one disagreed with evidence and recorded). CodeRabbit was rate-l
 and third passes, so only the middle head received a full external review. Devin's trial has
 expired and reviewed nothing.
 
-## Purge pipeline operations — 2026-09-12 (branch `feat/purge-queue-operations`, not yet reviewed)
+## Purge pipeline operations — merged 2026-09-12 (PR #31, main `42d83cc`)
 
 The four FR-020 debts above, closed. A maintenance worker now makes the report's promise true
 without a human: `sweep_once` discovers the workspaces holding pending keys on a role that can see
@@ -151,10 +151,9 @@ run for ever while the bytes stayed in the store. That is refused outright, beca
 silently does nothing is worse than no worker: the first looks finished.
 
 **1635 tests pass** against real PostgreSQL 17 and MinIO. Five mutation checks, each breaking one
-guard and naming the test that fails, restored byte-identically by SHA-256. **No external review
-yet, and nothing pushed** — this branch is for independent review before it goes anywhere.
+guard and naming the test that fails, restored byte-identically by SHA-256.
 
-## Patch proposal and candidate verification — 2026-09-12 (branch `feat/m14-m15-patch-and-verification`, not yet reviewed)
+## Patch proposal and candidate verification — merged 2026-09-12 (PR #32, main `3ed20db`)
 
 FR-010 and FR-011's API surface: six routes, a pure patch path policy, `PATCH_APPLY` approval
 persistence with a recheck at dispatch, and the verification record with every gate that refuses to
@@ -203,9 +202,9 @@ built or run: there is no containment boundary for executing an application's bu
 reader attached. The VERIFIED path is exercised with evidence the tests name `_fabricated_`. Module
 14's sandbox (prompt tasks 5–9) is not implemented and no containment claim is made. The gates
 currently trust what a caller reports about a candidate run; when a real runner exists those fields
-must be read from evidence instead. **Nothing pushed; no external review.**
+must be read from evidence instead.
 
-## Write rate limits — 2026-09-12 (branch `feat/m26-rate-limits`, not yet reviewed)
+## Write rate limits — merged 2026-09-12 (PR #33, main `ea0aa4e`)
 
 Module 26's rate-limiting gap. Entitlements bounded how much a workspace consumes over a period;
 nothing bounded how fast anyone could ask. Per-principal and per-workspace token buckets now do,
@@ -228,7 +227,41 @@ All three fixed, each mutation-checked.
 
 **1786 tests pass** against real PostgreSQL 17 and MinIO. 25 mutation checks across the limiter, the
 enforcement point and both schemas; 24 caught, and the survivor is recorded in the handoff as defence
-in depth rather than covered behaviour. **Nothing pushed; no external review.**
+in depth rather than covered behaviour.
+
+## Structured request telemetry — 2026-09-12 (branch `feat/m26-structured-telemetry`, not yet reviewed)
+
+Module 26's remaining gap. One record per request from a single ASGI middleware, on the
+`accessforge.telemetry` logger with a JSON formatter: route template, method, status, outcome,
+duration, request id and the stable problem code on refusals.
+
+The record is a whitelist rather than a redacted dump — nothing is collected that is not a field of
+`RequestRecord` — and it excludes request and response bodies, headers, cookies, tokens, evidence
+content, object-store keys, exception text, and every tenant identifier. That last exclusion is a
+deliberate cost: a record cannot be attributed to a workspace, so this answers what the API is doing
+and not what a customer is doing.
+
+Independent review then found two release blockers, both fixed: the emitted identifier was the
+client-supplied `X-Request-Id`, which a caller can fill with a secret and which the leakage tests had
+not probed; and `JsonFormatter` was never installed by `create_app`, so the default deployment emitted
+prose rather than machine-readable records. Telemetry now emits a separate server-generated
+`correlation_id`, returned as `X-Correlation-Id` and as `correlationId` in every problem document so
+support still has an identifier present in both places.
+
+A second external review, on PR #34, found two more: problem documents could mint a `requestId` that
+disagreed with the `X-Request-Id` header beside it (twenty-eight construction sites pass none, so this
+reached every early session refusal and every validation failure), and the quiet-route list was applied
+only after a normal response, so a silenced route emitted a record per request when it crashed. Both
+fixed at their single points.
+
+**43 tests pass** against real PostgreSQL 17. 19 mutation checks over the middleware, the record, the
+logging configuration and the problem handlers, all caught.
+
+Four defects found in my own work, all recorded in the handoff: the `streamed` flag was true for
+every request because `BaseHTTPMiddleware` re-wraps every response; the test meant to catch that drove
+the product's unbounded event stream and hung for five minutes instead of failing; the client's
+`X-Request-Id` was emitted despite the privacy contract; and the test for the JSON handler installed
+the handler itself, so it never proved `create_app` does.
 
 ## Outstanding debts
 
@@ -258,6 +291,10 @@ in depth rather than covered behaviour. **Nothing pushed; no external review.**
 - `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
   `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
   else, and it is untouched rather than unknown.
+- Telemetry has no per-tenant attribution, no metrics backend and no traces; `streamed` describes the
+  response headers rather than whether the stream completed.
+- A caller who supplies their own `X-Request-Id` cannot find that value in the log: it is excluded on
+  purpose, and `correlationId` is the identifier present in both the response and the record.
 - The two session routes are not rate limited and cannot be by the current mechanism: neither has a
   trustworthy key without a client address supplied by a proxy. Asserted as an uncovered set so it
   cannot grow silently.
