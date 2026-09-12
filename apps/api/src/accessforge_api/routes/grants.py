@@ -29,7 +29,7 @@ from accessforge_persistence import grants
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["execution-grants"])
 
-Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope)]
+Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
 
 CREATE_FIELDS = frozenset(
     {

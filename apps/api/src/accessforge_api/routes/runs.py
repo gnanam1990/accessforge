@@ -34,7 +34,7 @@ from accessforge_persistence.evidence import artifacts as artifacts_module
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runs"])
 
-Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope)]
+Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
 
 
 def _run_view(row: dict[str, Any]) -> dict[str, Any]:

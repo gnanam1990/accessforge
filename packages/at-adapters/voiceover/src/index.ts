@@ -32,7 +32,9 @@ export type { PlatformMatrix, ProfileStatus } from './profile.js';
 
 export {
   PREFLIGHT_CHECKS,
+  createHostEnvironment,
   hostEnvironment,
+  probeBrowserVersion,
   probeDesktopOwned,
   probePermission,
   probeReaderActive,
@@ -43,10 +45,14 @@ export {
 } from './preflight.js';
 export type {
   Condition,
+  CommandResult,
+  CommandRunner,
+  HostEnvironmentOptions,
   PreflightCheck,
   PreflightReport,
   ProbeEnvironment,
   ProbeResult,
+  RuntimeProbeEvidence,
 } from './preflight.js';
 
 export {
@@ -67,3 +73,15 @@ export {
   projectForNavigator,
 } from './projection.js';
 export type { NavigatorObservation, RawObservation, UnknownObservation } from './projection.js';
+
+export {
+  GUIDEPUP_CHORDS,
+  VoiceOverAdapter,
+  createGuidepupVoiceOverAdapter,
+} from './runtime.js';
+export type {
+  ActionContext,
+  AdapterDispatchResult,
+  VoiceOverAdapterOptions,
+  VoiceOverClient,
+} from './runtime.js';

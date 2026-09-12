@@ -23,7 +23,7 @@ from accessforge_persistence import evidence
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["exports"])
 
-Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope)]
+Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
 
 
 def _store(request: Request) -> evidence.S3ArtifactStore:
