@@ -27,10 +27,17 @@ from accessforge_build_worker.snapshot import SourceFile, SourceSnapshot
 IMAGE = "node@sha256:" + "a" * 64
 
 
-@pytest.mark.parametrize("image", ["node:22", "node:latest", "node@sha256:123", "../bad"])
+@pytest.mark.parametrize(
+    "image", ["node:22", "node:latest", "node@sha256:123", "../bad", "sha256:123"]
+)
 def test_mutable_or_invalid_toolchain_reference_is_refused(image: str) -> None:
     with pytest.raises(SandboxRefused, match="digest-pinned"):
         SandboxPolicy(image=image)
+
+
+def test_full_immutable_local_image_id_is_accepted() -> None:
+    image = "sha256:" + "a" * 64
+    assert SandboxPolicy(image=image).image == image
 
 
 @pytest.mark.parametrize("seconds", [0, -1, 601, float("inf"), float("nan")])

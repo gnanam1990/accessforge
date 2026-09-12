@@ -19,7 +19,11 @@ def test_ci_typechecks_the_test_suite_and_all_python_workspace_members() -> None
     assert argv[:3] == ["uv", "run", "mypy"]
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     sources = {f"{member}/src" for member in project["tool"]["uv"]["workspace"]["members"]}
-    assert set(argv[3:]) == sources | {"scripts", "tests"}
+    assert set(argv[3:]) == sources | {
+        "scripts",
+        "tests",
+        "apps/build-worker/toolchain/build_reference.py",
+    }
     assert not step.get("continue-on-error", False)
     assert "if" not in step
 

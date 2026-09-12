@@ -328,6 +328,47 @@ wrong-store defect was reproduced and fixed before commit; no evidence-backed de
 this reviewed delta. This is not an independent security audit or full draft-PR approval, and
 new-head GitHub CI remains a separate gate. No formal forge review was published.
 
+## Actual owned-reference packaging checkpoint
+
+The reference-app toolchain is now provisioned from a four-file trusted context, with Docker
+Official Python 3.13.15 slim-bookworm pinned to
+`python@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e`.
+Hatchling 1.32.0 and its transitive build dependencies are hash-locked separately; runtime
+requirements are an exact frozen export of the existing workspace lock. Installation permits
+only prebuilt wheels, hashes and no dependency resolution. Provisioning is networked trusted
+operator work; target source is not in its context. The actual candidate frontend uses offline
+PEP 517 wheel building inside the existing restricted sandbox.
+
+Local arm64 provisioning returned immutable image
+`sha256:207326fe923c570016e21864aee26842dbef19c8e48243f465613c301c0a441c`.
+Dispatch now accepts a full immutable local image ID as well as a pinned registry digest;
+mutable tags and short IDs remain refused. The toolchain receipt includes its canonical context
+digest and observed daemon binding. No image was published to a registry.
+
+The integration fixture derives a standalone repository from exact committed
+`fixtures/reference-app` package bytes, records that parent commit/subdirectory provenance, then
+uses the real persisted Git/source/approval/claim pipeline. Its baseline finding and approved
+comment-only edit are explicitly synthetic build inputs, not an actual reproduced reader finding.
+It creates and retains the real Python wheel, compares every packaged source member against the
+approved candidate, and imports that captured wheel in a fresh no-network container. No candidate
+module is imported or installed on the host. Protected backend source bytes are unchanged, but
+that equality and the import smoke do NOT establish protected functional/security regression proof.
+
+CI now provisions its own platform toolchain, exports its immutable ID to the tests, audits the
+backend hash lock and checks runtime-lock drift. Missing reference provisioning fails in CI.
+Focused provisioning/image/CI/actual-reference checks passed 20 tests. The complete Python suite
+with both actual provisioned toolchains passed **2,060 tests, zero failures/skips**, with 58 upstream
+deprecation warnings in 180.22 seconds. Strict mypy passed 215 files; Ruff lint/format and live
+OpenAPI/six-schema/74-operation client drift checks pass. Both the six-package backend lock audit
+and the 96-package workspace audit report no known vulnerabilities. Retirement/location head
+`8122be6360bca9ae007a75e39e8e63e67dd0bc2a` passed GitHub CI run 34717972253; the new Python
+toolchain's amd64 CI remains a separate gate. No new migrations or public API were needed.
+
+Important follow-up: `template_digest` currently hashes rendered frontend HTML. A real frontend
+repair changes that digest, so logical fixture identity must be separated from the patchable UI
+before claiming a matched baseline/candidate reader comparison. The comment-only packaging test
+does not solve or conceal this boundary.
+
 ## Required next work
 
 1. Integrate the trusted build/retirement operations into bounded operator/job dispatch and implement
@@ -340,8 +381,10 @@ new-head GitHub CI remains a separate gate. No formal forge review was published
    safe reconciliation/resumption is not. In particular, an absent container alone cannot prove an
    interrupted create request will not materialize later. Use the now-persisted creation receipt
    to distinguish observed absence from confirmed retirement; never automatically retry UNKNOWN.
-3. Provision the actual E0 reference-application toolchain and connect it to the new execution
-   primitive. Docker daemon access is supervisor authority, never an author-selectable endpoint.
+3. Connect the now-proven reference-app package toolchain to bounded operator E0 dispatch and
+   separate logical fixture identity from repairable presentation. Docker daemon access is
+   supervisor authority, never an author-selectable endpoint. Packaging/import proof is available;
+   end-to-end reader repair proof is not.
 4. Run protected functional regressions outside source-writable paths; independently collect and hash
    candidate output. Repository stdout and self-reported identities are never authority.
 5. Exercise real containment canaries, metadata/egress refusal, resource exhaustion, cancellation,
