@@ -21,7 +21,6 @@ response returned without that check is a cached authorization decision.
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -72,14 +71,16 @@ class RequestContext:
 def _request_id(request: Request) -> str:
     """A correlation id for this request.
 
-    Generated when the client did not supply one, and echoed in every problem document. It is the
-    only identifier that appears in an error response, which is why it is random rather than derived
-    from anything about the resource.
+    Resolved by the telemetry middleware and read from the scope, so the id in a problem document is
+    the same id in the emitted record. Generating one here independently is how the two ended up
+    different, which leaves an operator holding a customer's request id that matches nothing.
+
+    Falls back to the header and then to a fresh id for the cases that never pass through the
+    middleware -- notably a direct `build_context` call in a test.
     """
-    supplied = request.headers.get("X-Request-Id")
-    if supplied and len(supplied) <= 128 and supplied.isprintable():
-        return supplied
-    return str(uuid.uuid4())
+    from .telemetry import resolve_request_id
+
+    return resolve_request_id(request)
 
 
 def _parse_if_match(request: Request) -> int | None:

@@ -1,5 +1,7 @@
 # Module 26 addendum — write rate limits
 
+**Merged** as PR #33, `main` at `ea0aa4e`.
+
 Closes the gap `STATUS.md` recorded as "no telemetry or rate limits", on the rate-limit half.
 Telemetry remains open (P4).
 
