@@ -14,7 +14,7 @@ import time
 import uuid
 import zipfile
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -37,8 +37,9 @@ from accessforge_build_worker.coordinator import (
 )
 from accessforge_build_worker.process import CommandResult, CommandStopped
 from accessforge_build_worker.reference_regressions import ReferenceRegressions
-from accessforge_build_worker.regression_coordinator import execute_regressions
+from accessforge_build_worker.regression_coordinator import CandidateSession, execute_regressions
 from accessforge_build_worker.sandbox import (
+    CleanupUnconfirmed,
     DockerSandbox,
     SandboxPolicy,
     SandboxRefused,
@@ -47,6 +48,7 @@ from accessforge_build_worker.sandbox import (
 from accessforge_build_worker.snapshot import SnapshotRefused, SourceFile, SourceSnapshot
 from accessforge_build_worker.source_broker import read_persisted_source
 from accessforge_build_worker.toolchain import REFERENCE_BUILD_COMMAND
+from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_domain.authority import AuthorityError
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.patch_policy import ProposedChange
@@ -54,14 +56,17 @@ from accessforge_domain.states import FindingStatus, Outcome
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import (
     assert_row_level_security_enforced,
+    candidate_runs,
     connect,
     evidence,
+    fixtures,
     migrate,
     patches,
     projects,
     restore,
     retention,
     reviews,
+    runners,
     runs,
     unscoped_connection,
     workspace_connection,
@@ -132,9 +137,37 @@ class FaultStore:
 
 
 @pytest.fixture()
+def candidate_run_database(test_database_url: str, backup_database_url: str) -> Iterator[str]:
+    """Terminal baselines are immutable; dispose the exact test database, never bypass triggers."""
+    name = "accessforge_candidate_run_" + uuid.uuid4().hex[:12]
+    owner = urlsplit(test_database_url).username
+    assert owner is not None
+    with connect(_database_at(backup_database_url, "postgres")) as conn:
+        conn.autocommit = True
+        conn.execute(
+            psycopg.sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                psycopg.sql.Identifier(name), psycopg.sql.Identifier(owner)
+            )
+        )
+    try:
+        yield _database_at(test_database_url, name)
+    finally:
+        with connect(_database_at(backup_database_url, "postgres")) as conn:
+            conn.autocommit = True
+            conn.execute(
+                psycopg.sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
+                    psycopg.sql.Identifier(name)
+                )
+            )
+
+
+@pytest.fixture()
 def binding(
     test_database_url: str, tmp_path: Path, request: pytest.FixtureRequest
 ) -> Iterator[BoundFixture]:
+    isolated_terminal = getattr(request, "param", None) == "reference-session"
+    if isolated_terminal:
+        test_database_url = str(request.getfixturevalue("candidate_run_database"))
     assert_row_level_security_enforced(test_database_url)
     migrate(test_database_url)
     executable = shutil.which("git")
@@ -149,7 +182,7 @@ def binding(
             ),
         )
     )
-    if getattr(request, "param", None) == "reference":
+    if getattr(request, "param", None) in ("reference", "reference-session"):
         # Read exact committed bytes, never a dirty working copy or repository build script.
         root = Path(__file__).resolve().parents[2]
 
@@ -226,6 +259,8 @@ def binding(
             requested_revision="HEAD",
         )
     yield BoundFixture(test_database_url, workspace, project, snapshot, tmp_path, source, user)
+    if isolated_terminal:
+        return  # The owning fixture drops only this generated disposable database.
     with workspace_connection(test_database_url, workspace) as conn:
         # Exact synthetic test workspace, in FK dependency order. Other tests/data are untouched.
         conn.execute("DELETE FROM candidate_build_attempt WHERE workspace_id = %s", (workspace,))
@@ -923,6 +958,294 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
 class IsolatedArchiveStore:
     settings: evidence.S3Settings
     store: evidence.S3ArtifactStore
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("binding", ["reference-session"], indirect=True)
+@pytest.mark.parametrize("reader_exit", ["released", "returned-active", "raised-active"])
+def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
+    binding: BoundFixture,
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+    reader_exit: str,
+) -> None:
+    """Actual candidate/runtime, synthetic baseline/desktop metadata; NOT actual-reader proof."""
+    image = os.environ.get("ACCESSFORGE_REFERENCE_TOOLCHAIN")
+    assert image is not None
+    path = "src/reference_app/templates.py"
+    original = next(file.content for file in binding.source.files if file.path == path)
+    claimed, sandbox, command = _prepare_owned_build(
+        binding,
+        image=image,
+        command=REFERENCE_BUILD_COMMAND,
+        change=ProposedChange(path, original.decode() + "\n# Candidate session binding probe.\n"),
+    )
+    store = isolated_archives[0].store
+    execute_claim(
+        binding.database,
+        workspace_id=binding.workspace,
+        claimed=claimed,
+        sandbox=sandbox,
+        command=command,
+        store=store,
+    )
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        base = builds._baseline(conn, claimed.claim.patch_id, binding.workspace)
+        baseline_id = str(base["baseline_run_id"])
+        baseline_fixture = fixtures.create_instance(
+            conn,
+            workspace_id=binding.workspace,
+            run_id=baseline_id,
+            template_id="reference-service-request",
+            template_digest=REFERENCE_FIXTURE_DIGEST,
+            navigator_values={"email": "fixture@example.test"},
+            observer_config={"effect": "CREATE_TEST_REQUEST"},
+        )
+    prepared: list[dict[str, Any]] = []
+
+    def controller(session: CandidateSession) -> None:
+        gateway = session.gateway
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            endpoint = conn.execute(
+                "SELECT * FROM candidate_endpoint WHERE attempt_id=%s", (gateway.binding.task_id,)
+            ).fetchone()
+            assert endpoint is not None
+            base_env = conn.execute(
+                "SELECT * FROM environment_manifest WHERE id=%s", (base["environment_manifest_id"],)
+            ).fetchone()
+            assert base_env is not None
+            spec = projects.EnvironmentSpec(
+                name=base_env["name"],
+                allowed_origins=frozenset({normalize_origin(gateway.origin)}),
+                fixture_reset_strategy=base_env["fixture_reset_strategy"],
+                observer_credential_ref=base_env["observer_credential_ref"],
+                reset_credential_ref=base_env["reset_credential_ref"],
+                permitted_effects=frozenset(base_env["permitted_effects"]),
+                expires_at=to_rfc3339_utc(endpoint["expires_at"] - timedelta(seconds=1)),
+            )
+            environment_id = projects.register_environment(
+                conn,
+                workspace_id=binding.workspace,
+                project_id=binding.project,
+                spec=spec,
+                authorized_by=binding.owner,
+            )
+        with pytest.raises(builds.BuildClaimRefused, match="baseline"):
+            session.prepare_run(environment_id)
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            # Synthetic control-plane baseline facts, never labelled as actual AT observations.
+            conn.execute(
+                "UPDATE run SET status='COMPLETED',outcome='FAIL',execution_began=true WHERE id=%s",
+                (baseline_id,),
+            )
+            attempt = runs.start_attempt(
+                conn, workspace_id=binding.workspace, run_id=baseline_id, lease_epoch=1
+            )
+            conn.execute(
+                "INSERT INTO producer_stream(workspace_id,run_id,attempt_id,producer_id,"
+                "admitted_through,closed_at_sequence,closed_at) "
+                "VALUES (%s,%s,%s,'synthetic-baseline',1,1,clock_timestamp())",
+                (binding.workspace, baseline_id, attempt),
+            )
+            wrong = projects.register_environment(
+                conn,
+                workspace_id=binding.workspace,
+                project_id=binding.project,
+                spec=replace(
+                    spec, allowed_origins=frozenset({normalize_origin("http://127.0.0.1:1")})
+                ),
+                authorized_by=binding.owner,
+            )
+        with pytest.raises(builds.BuildClaimRefused, match="endpoint"):
+            session.prepare_run(wrong)
+        result = session.prepare_run(environment_id)
+        prepared.append(result)
+        run_id = str(result["run_id"])
+        assert result["fixture_nonce"] != baseline_fixture.nonce
+        assert result["fixture_nonce"] == gateway.path.removeprefix("/form/")
+        with pytest.raises(builds.BuildClaimRefused, match="already"):
+            session.prepare_run(environment_id)
+        with workspace_connection(binding.database, str(uuid.uuid4())) as conn:
+            assert conn.execute("SELECT * FROM candidate_run_binding").fetchall() == []
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            assert candidate_runs.assert_live(conn, run_id=run_id) is not None
+            sealed = conn.execute(
+                "SELECT * FROM sealed_manifest WHERE id=%s", (result["sealed_manifest_id"],)
+            ).fetchone()
+            assert sealed is not None
+            for field in projects.SealInputs.__dataclass_fields__:
+                assert sealed[field] == base[field]
+            material = conn.execute(
+                "SELECT * FROM candidate_materialization WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone()
+            assert material is not None
+            assert sealed["source_snapshot_id"] == material["source_snapshot_id"]
+            assert sealed["build_artifact_id"] == material["build_artifact_id"]
+            assert conn.execute(
+                "SELECT status,authorization_id FROM run WHERE id=%s", (run_id,)
+            ).fetchone() == {"status": "QUEUED", "authorization_id": None}
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(
+                    "UPDATE run_fixture_instance SET observer_config='{}'::jsonb WHERE run_id=%s",
+                    (run_id,),
+                )
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(
+                    "UPDATE patch_verification SET candidate_run_id=%s WHERE id=%s",
+                    (baseline_id, claimed.claim.verification_id),
+                )
+            with pytest.raises(patches.VerificationError), conn.transaction():
+                patches.conclude_verification(
+                    conn,
+                    workspace_id=binding.workspace,
+                    verification_id=claimed.claim.verification_id,
+                    candidate_run_id=baseline_id,
+                )
+            with pytest.raises(patches.VerificationError), conn.transaction():
+                patches.conclude_verification(
+                    conn,
+                    workspace_id=binding.workspace,
+                    verification_id=claimed.claim.verification_id,
+                    permitted_differences=(
+                        {"field": "runner_profile_digest", "candidate": "0" * 64},
+                    ),
+                )
+            runner_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO runner(id,workspace_id,name,status,session_key,platform,device_id,"
+                "interactive_session_id,console,profile_digest,profile) "
+                "VALUES (%s,%s,'synthetic-metadata-only','READY',repeat('1',64),'darwin',"
+                "'synthetic','synthetic',true,%s,'{}'::jsonb)",
+                (runner_id, binding.workspace, base["runner_profile_digest"]),
+            )
+            candidate_attempt = runs.start_attempt(
+                conn, workspace_id=binding.workspace, run_id=run_id, lease_epoch=1
+            )
+            with pytest.raises(runners.RunnerError, match="lifetime"), conn.transaction():
+                runners.admit_lease(
+                    conn,
+                    workspace_id=binding.workspace,
+                    runner_id=runner_id,
+                    run_id=run_id,
+                    attempt_id=candidate_attempt,
+                    ttl_seconds=60,
+                )
+            lease = runners.admit_lease(
+                conn,
+                workspace_id=binding.workspace,
+                runner_id=runner_id,
+                run_id=run_id,
+                attempt_id=candidate_attempt,
+                ttl_seconds=5,
+            )
+            candidate_runs.assert_lease(
+                conn, run_id=run_id, lease_id=lease.lease_id, epoch=lease.epoch
+            )
+            # Each fault rolls back its own savepoint, preserving the actual endpoint for the
+            # next probe. Neither an environment nor a lease is continuing authority by itself.
+            for statement, identifier in (
+                (
+                    "UPDATE environment_manifest SET revoked_at=clock_timestamp() WHERE id=%s",
+                    environment_id,
+                ),
+                ("UPDATE runner SET profile_digest=repeat('0',64) WHERE id=%s", runner_id),
+                (
+                    "UPDATE desktop_lease SET deadline_at=clock_timestamp()+interval '1 hour' "
+                    "WHERE id=%s",
+                    lease.lease_id,
+                ),
+                (
+                    "UPDATE desktop_lease SET cancel_requested_at=clock_timestamp(),"
+                    "cancellation_revision=0 WHERE id=%s",
+                    lease.lease_id,
+                ),
+                (
+                    "UPDATE run SET cancel_requested_at=clock_timestamp(),"
+                    "cancellation_revision=0 WHERE id=%s",
+                    run_id,
+                ),
+            ):
+                with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+                    conn.execute(statement, (identifier,))
+                    candidate_runs.assert_request(
+                        conn, attempt_id=gateway.binding.task_id, method="GET"
+                    )
+            for table in ("candidate_run_binding", "candidate_reader_lease"):
+                with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                    conn.execute(
+                        psycopg.sql.SQL(
+                            "UPDATE {} SET created_at=clock_timestamp() WHERE run_id=%s"
+                        ).format(psycopg.sql.Identifier(table)),
+                        (run_id,),
+                    )
+            with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+                candidate_runs.assert_lease(
+                    conn, run_id=run_id, lease_id=lease.lease_id, epoch=lease.epoch + 1
+                )
+            with pytest.raises(builds.BuildClaimRefused, match="unresolved"), conn.transaction():
+                candidate_runs.assert_reader_released(conn, attempt_id=gateway.binding.task_id)
+            with pytest.raises(builds.BuildClaimRefused, match="RUN_EFFECTS"), conn.transaction():
+                candidate_runs.assert_request(
+                    conn, attempt_id=gateway.binding.task_id, method="POST"
+                )
+        target = urlsplit(gateway.origin)
+        assert target.hostname is not None
+        http_client = http.client.HTTPConnection(target.hostname, target.port, timeout=5)
+        http_client.request("GET", gateway.path)
+        response = http_client.getresponse()
+        assert response.status == 200
+        response.read()
+        http_client.close()
+        if reader_exit == "returned-active":
+            return
+        if reader_exit == "raised-active":
+            raise RuntimeError("injected controller failure with unresolved reader lease")
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            # No OS dispatch occurs. Release synthetic admission before leaving the live endpoint.
+            conn.execute(
+                "UPDATE desktop_lease SET released_at=clock_timestamp(),"
+                "release_reason='OPERATOR_RESET' WHERE id=%s",
+                (lease.lease_id,),
+            )
+            with pytest.raises(builds.BuildClaimRefused, match="released"), conn.transaction():
+                candidate_runs.assert_lease(
+                    conn, run_id=run_id, lease_id=lease.lease_id, epoch=lease.epoch
+                )
+        http_client = http.client.HTTPConnection(target.hostname, target.port, timeout=5)
+        http_client.request("GET", gateway.path)
+        response = http_client.getresponse()
+        assert response.status == 502
+        response.read()
+        http_client.close()
+
+    def execute() -> Any:
+        return execute_regressions(
+            binding.database,
+            workspace_id=binding.workspace,
+            build_id=claimed.claim.build_id,
+            runner=ReferenceRegressions(image=image, daemon=sandbox.daemon),
+            store=store,
+            on_candidate_session=controller,
+        )
+
+    if reader_exit != "released":
+        with pytest.raises(CleanupUnconfirmed, match="reader cleanup"):
+            execute()
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            assert conn.execute(
+                "SELECT state,cleanup_confirmed FROM candidate_regression_attempt"
+            ).fetchall() == [{"state": "UNKNOWN", "cleanup_confirmed": False}]
+            assert conn.execute(
+                "SELECT count(*) AS n FROM desktop_lease WHERE released_at IS NULL"
+            ).fetchone() == {"n": 1}
+        return
+    regression = execute()
+    assert len(prepared) == 1
+    assert prepared[0]["regression_attempt_id"] == uuid.UUID(regression.task_id)
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+            candidate_runs.assert_live(conn, run_id=str(prepared[0]["run_id"]))
+        assert patches._regression_attestation(conn, str(prepared[0]["run_id"]))[0] is False
 
 
 @pytest.mark.sandbox

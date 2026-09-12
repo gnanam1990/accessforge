@@ -164,6 +164,7 @@ class ReferenceRegressions:
         on_candidate_endpoint: Callable[[CandidateGateway], None] | None = None,
         assert_endpoint_authority: Callable[[], None] = lambda: None,
         assert_endpoint_live: Callable[[], None] = lambda: None,
+        assert_candidate_request: Callable[[str], None] = lambda method: None,
         on_endpoint_planned: Callable[[dict[str, Any]], None] = lambda identity: None,
         on_endpoint_bound: Callable[[dict[str, Any]], None] = lambda receipt: None,
         on_endpoint_closed: Callable[[bool], None] = lambda clean: None,
@@ -499,6 +500,7 @@ class ReferenceRegressions:
                 def transport(method: str, path: str, body: str) -> dict[str, Any]:
                     end = min(deadline, time.monotonic() + 5)
                     assert_endpoint_live()
+                    assert_candidate_request(method)
                     sandbox._assert_daemon(deadline=end)
                     for container in (candidate, driver):
                         item = sandbox._inspect(container, deadline=end)
@@ -512,6 +514,7 @@ class ReferenceRegressions:
                         normalized["HostConfig"]["NetworkMode"] = "none"
                         sandbox._assert_configuration(normalized, image_id=self.image, task_id=task)
                     assert_endpoint_live()
+                    assert_candidate_request(method)
                     return http(
                         method,
                         path,

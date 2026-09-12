@@ -686,3 +686,53 @@ drift checks pass. The preceding endpoint-lifecycle head
 `6149426c098322a238edbc472126dff66b2bd286` passed all GitHub CI jobs in run 34724314684,
 including the Linux expiry regressions and real backup/restore. This materialization head requires
 its own CI and remains an incomplete draft, not a verified repair.
+
+### Exact live candidate run and first lease (continuation)
+
+Migration 0032 and the trusted `CandidateSession.prepare_run(environment_id)` callback now bind
+the current regression/endpoint to a canonical run and seal, using the actual materialized
+candidate source/build records. The environment must be separately authorized by a current named
+workspace member, match only the exact live loopback origin, and expire no later than that
+endpoint. Patch approval does not create environment or RUN_EFFECTS authority. Baseline environment
+settings other than origin/expiry, every sealed evaluator/model/profile/journey/policy input, and
+fixture logical values/oracle contract remain frozen. The baseline must be completed FAIL with
+closed recorded producers; no synthetic baseline is manufactured by the implementation.
+
+New fixture instances capture an immutable creation-time contract digest. Existing fixture rows
+retain NULL and cannot be backfilled into historical proof. Candidate preparation refuses those
+rows and reuses neither the baseline nonce nor another run's nonce: its fresh nonce must be the
+actual gateway fixture path. Preparation commits the run, fixture, seal and exact verification
+binding atomically. Conclusion cannot substitute another run or widen the derived environment-only
+comparison allowance. No run is executed or implicitly authorized merely by being prepared.
+
+The first admitted desktop lease is bound once, with exact run/profile/epoch and a deadline within
+the endpoint lifetime. Admission, dispatch revalidation and live gateway requests recheck current
+candidate authority. Changed profiles, revocation, cancellation, lease release/expiry or a deadline
+extended beyond the endpoint fail closed. The trusted setup GET is available before lease admission;
+after binding a lease, even GET requires that original live lease. Bound-session POST deliberately
+refuses until the canonical controller supplies independent RUN_EFFECTS transport authorization.
+The older unsealed preview callback remains a separate backend probe, not a reader run.
+
+Both callback return and callback exception require resolution of any bound reader lease. An
+unresolved lease or unavailable cleanup state leaves the regression UNKNOWN, even after the owned
+containers/listener are removed. Expiry is not a stop acknowledgement. The controller does not mark
+a candidate reader run completed, invent observer events, or enable `_regression_attestation`.
+
+Real-container integration tests use explicitly synthetic baseline/desktop metadata to exercise
+the control-plane binding, live GET, released-lease HTTP502 refusal, immutable identity guards,
+independent authority boundaries and unresolved-reader return/error paths. This is not actual
+VoiceOver, browser focus/navigation, canonical observer closure, or a verified repair. A disposable
+in-memory mutation restoring the pre-fix normal-return-only cleanup check makes the raised-active
+regression fail; the fixed path passes and retains UNKNOWN. Tests with terminal baseline seeds
+drop their exact generated database rather than bypass terminal immutability.
+
+Still required: canonical authorized controller/reader/observer execution and finalization,
+original-daemon UNKNOWN reconciliation, actual matched failure-to-repair proof, and current-head CI.
+PR #37 stays draft. Preceding materialization commit a80b112 passed all CI in run 34724965751.
+
+Final local validation for this continuation: **2,138 passed, zero failures/skips**, 58 upstream
+deprecation warnings, 285.38 seconds, using a fresh disposable PostgreSQL database and the explicit
+pinned local Docker toolchains. Focused live-binding/forward-upgrade run: four passed in 20.37
+seconds. Strict mypy: 229 files; Ruff lint/format: 331 files. OpenAPI, contract bindings, logical
+fixture identity, generated clients and internal documentation links pass. This does not claim
+current-head GitHub CI or actual-reader acceptance.

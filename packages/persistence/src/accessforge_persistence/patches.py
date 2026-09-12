@@ -1197,6 +1197,17 @@ def conclude_verification(
         )
     # Validated before anything is written, so a malformed waiver cannot reach the comparison and
     # cannot leave a half-updated record behind.
+    bound = conn.execute(
+        "SELECT run_id,permitted_differences FROM candidate_run_binding WHERE verification_id=%s",
+        (verification_id,),
+    ).fetchone()
+    if bound is not None:
+        if candidate_run_id is not None and candidate_run_id != str(bound["run_id"]):
+            raise VerificationError("verification is bound to another exact candidate run")
+        if permitted_differences and list(permitted_differences) != bound["permitted_differences"]:
+            raise VerificationError("bound candidate differences cannot be widened at conclusion")
+        candidate_run_id = str(bound["run_id"])
+        permitted_differences = tuple(bound["permitted_differences"])
     allowances = _validate_permitted_differences(permitted_differences)
 
     if candidate_run_id is not None:

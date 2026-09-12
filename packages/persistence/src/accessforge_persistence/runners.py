@@ -58,7 +58,7 @@ from accessforge_domain.runners import (
 from accessforge_domain.states import ApprovalScope, RunnerStatus
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
-from . import runs
+from . import candidate_runs, runs
 
 #: A desktop lease is short. A long lease is a long window in which a partitioned supervisor can
 #: still be typing while the server has moved on, and the cost of a short one is a heartbeat.
@@ -594,6 +594,10 @@ def admit_lease(
     moment = _now(now)
     if ttl_seconds < 1 or ttl_seconds > 3600:
         raise RunnerError("a desktop lease lives between one second and one hour")
+    try:
+        candidate_runs.assert_live(conn, run_id=run_id)
+    except (candidate_runs.Refused, AuthorityError) as exc:
+        raise RunnerError(str(exc)) from exc
 
     runner = conn.execute(
         "SELECT id, status, session_key, lease_epoch, revoked_at, quarantine_reason "
@@ -696,6 +700,10 @@ def admit_lease(
         audit_action="DESKTOP_LEASE_ADMITTED",
         now=parse_rfc3339_utc(moment, field="now"),
     )
+    try:
+        candidate_runs.record_lease(conn, run_id=run_id, lease_id=lease_id, epoch=epoch)
+    except (candidate_runs.Refused, AuthorityError) as exc:
+        raise RunnerError(str(exc)) from exc
     return AdmittedLease(
         lease_id=lease_id,
         runner_id=runner_id,
@@ -1253,6 +1261,11 @@ def assert_dispatch_authorized(
             f"this authorization has scope {child.scope}, not RUN_EFFECTS. Scopes do not nest "
             "and do not imply one another; nothing but RUN_EFFECTS authorizes executing a run."
         )
+
+    try:
+        candidate_runs.assert_lease(conn, run_id=run_id, lease_id=lease_id, epoch=epoch)
+    except (candidate_runs.Refused, AuthorityError) as exc:
+        raise DispatchRefused(str(exc)) from exc
 
     # 2. The desktop. A quarantined or revoked runner is refused before anything else is inspected,
     #    because no amount of valid authorization makes an unfenced desktop safe.

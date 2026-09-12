@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
+from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_persistence import candidate_endpoints as endpoints
 from accessforge_persistence import candidate_regressions as regressions
-from accessforge_persistence import workspace_connection
+from accessforge_persistence import candidate_runs, workspace_connection
 
 from .artifacts import CandidateArchiveStore, read_retained_candidate
 from .candidate_gateway import CandidateGateway
 from .process import CommandStopped
 from .reference_regressions import ReferenceRegressionResult, ReferenceRegressions
 from .sandbox import CleanupUnconfirmed
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSession:
+    """Trusted controller capability, never exposed to the navigator or patch author."""
+
+    gateway: CandidateGateway
+    prepare_run: Callable[[str], dict[str, Any]]
 
 
 def execute_regressions(
@@ -25,12 +35,15 @@ def execute_regressions(
     store: CandidateArchiveStore,
     cancelled: Callable[[], bool] = lambda: False,
     on_candidate_endpoint: Callable[[CandidateGateway], None] | None = None,
+    on_candidate_session: Callable[[CandidateSession], None] | None = None,
 ) -> ReferenceRegressionResult:
     """One trusted attempt per immutable retained build; never resume an ambiguous execution.
 
     PASSED is a build-linked protected test receipt, not an actual candidate-run attestation or
     VERIFIED repair. The future matched-reader dispatcher must bind its run to this exact build.
     """
+    if on_candidate_endpoint is not None and on_candidate_session is not None:
+        raise regressions.Refused("choose a preview or a candidate session, never both")
     artifact = read_retained_candidate(
         database_url,
         workspace_id=workspace_id,
@@ -48,7 +61,7 @@ def execute_regressions(
             image_id=runner.image,
             daemon_endpoint=runner.sandbox.daemon.endpoint,
             daemon_id=runner.sandbox.daemon.daemon_id,
-            endpoint_required=on_candidate_endpoint is not None,
+            endpoint_required=on_candidate_endpoint is not None or on_candidate_session is not None,
         )
     with workspace_connection(database_url, workspace_id) as conn:
         regressions.dispatch(
@@ -83,6 +96,10 @@ def execute_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             endpoints.assert_live(conn, claim=claim)
 
+    def candidate_request(method: str) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            candidate_runs.assert_request(conn, attempt_id=claim.attempt_id, method=method)
+
     def endpoint_planned(identity: dict[str, Any]) -> None:
         with workspace_connection(database_url, workspace_id) as conn:
             endpoints.plan(conn, claim=claim, identity=identity)
@@ -95,6 +112,32 @@ def execute_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             endpoints.closed(conn, claim=claim, cleanup_confirmed=clean)
 
+    def session(gateway: CandidateGateway) -> None:
+        def prepare_run(environment_id: str) -> dict[str, Any]:
+            gateway.receipt()
+            current = read_retained_candidate(
+                database_url, workspace_id=workspace_id, build_id=build_id, store=store
+            )
+            with workspace_connection(database_url, workspace_id) as conn:
+                return candidate_runs.prepare(
+                    conn,
+                    claim=claim,
+                    environment_id=environment_id,
+                    observed_artifact_digest=current.archive_digest,
+                    observed_fixture_digest=REFERENCE_FIXTURE_DIGEST,
+                )
+
+        assert on_candidate_session is not None
+        try:
+            on_candidate_session(CandidateSession(gateway, prepare_run))
+        finally:
+            # Callback failure is not evidence that a previously admitted reader stopped.
+            try:
+                with workspace_connection(database_url, workspace_id) as conn:
+                    candidate_runs.assert_reader_released(conn, attempt_id=claim.attempt_id)
+            except Exception as exc:
+                raise CleanupUnconfirmed("candidate reader cleanup could not be confirmed") from exc
+
     try:
         result = runner.run(
             artifact,
@@ -103,9 +146,12 @@ def execute_regressions(
             on_planned=planned,
             on_created=created,
             on_removed=removed,
-            on_candidate_endpoint=on_candidate_endpoint,
+            on_candidate_endpoint=session
+            if on_candidate_session is not None
+            else on_candidate_endpoint,
             assert_endpoint_authority=endpoint_authority,
             assert_endpoint_live=endpoint_live,
+            assert_candidate_request=candidate_request,
             on_endpoint_planned=endpoint_planned,
             on_endpoint_bound=endpoint_bound,
             on_endpoint_closed=endpoint_closed,
