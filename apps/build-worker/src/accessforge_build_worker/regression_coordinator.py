@@ -8,6 +8,7 @@ from accessforge_persistence import candidate_regressions as regressions
 from accessforge_persistence import workspace_connection
 
 from .artifacts import CandidateArchiveStore, read_retained_candidate
+from .candidate_gateway import CandidateGateway
 from .process import CommandStopped
 from .reference_regressions import ReferenceRegressionResult, ReferenceRegressions
 from .sandbox import CleanupUnconfirmed
@@ -21,6 +22,7 @@ def execute_regressions(
     runner: ReferenceRegressions,
     store: CandidateArchiveStore,
     cancelled: Callable[[], bool] = lambda: False,
+    on_candidate_endpoint: Callable[[CandidateGateway], None] | None = None,
 ) -> ReferenceRegressionResult:
     """One trusted attempt per immutable retained build; never resume an ambiguous execution.
 
@@ -70,6 +72,10 @@ def execute_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             regressions.removed(conn, claim=claim, role=role)
 
+    def endpoint_authority() -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            regressions.assert_active(conn, claim=claim)
+
     try:
         result = runner.run(
             artifact,
@@ -78,6 +84,8 @@ def execute_regressions(
             on_planned=planned,
             on_created=created,
             on_removed=removed,
+            on_candidate_endpoint=on_candidate_endpoint,
+            assert_endpoint_authority=endpoint_authority,
         )
         if result.task_id != claim.attempt_id or result.daemon != runner.sandbox.daemon:
             raise regressions.Refused("regression task or daemon identity changed")

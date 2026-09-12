@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import os
 import shutil
@@ -21,6 +22,7 @@ import psycopg
 import pytest
 
 from accessforge_build_worker.artifacts import read_retained_candidate, retire_expired_candidate
+from accessforge_build_worker.candidate_gateway import CSP, CandidateGateway
 from accessforge_build_worker.coordinator import ClaimedCandidate, execute_claim, prepare_and_claim
 from accessforge_build_worker.process import CommandResult, CommandStopped
 from accessforge_build_worker.reference_regressions import ReferenceRegressions
@@ -410,6 +412,7 @@ def _prepare_owned_build(
         ("", None, True),
         ("", "cancelled", False),
         ("", "fenced", False),
+        ("", "endpoint-fenced", False),
         (
             "\nfrom . import fixture_definition as _fixture\n"
             "_fixture.REFERENCE_FIXTURE_DIGEST = '0' * 64\n",
@@ -448,6 +451,7 @@ def _prepare_owned_build(
         "presentation-repaired",
         "cancelled",
         "fenced",
+        "endpoint-fenced",
         "fixture-declaration-tampered",
         "validation-removed",
         "authorization-bypassed",
@@ -616,7 +620,7 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
                 (claimed.claim.build_id,),
             ).fetchall() == [{"state": "REMOVED"}]
         return
-    if failure is not None:
+    if failure is not None and failure != "endpoint-fenced":
         with pytest.raises(SandboxRefused, match=failure):
             execute_regressions(
                 binding.database,
@@ -633,13 +637,95 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
             ).fetchone()
             assert record == {"state": "FAILED", "cleanup_confirmed": True}
         return
+    endpoint_receipts: list[dict[str, Any]] = []
+
+    def browser_endpoint_probe(gateway: CandidateGateway) -> None:
+        receipt = gateway.receipt()
+        assert receipt["artifactDigest"] == retained.archive_digest
+        assert receipt["imageId"] == image
+        assert receipt["daemonId"] == sandbox.daemon.daemon_id
+        assert receipt["runtimePolicyDigest"] == runner.policy_digest()
+        endpoint_receipts.append(receipt)
+        connection = http.client.HTTPConnection(gateway.origin.removeprefix("http://"), timeout=10)
+        try:
+            connection.request("GET", gateway.path)
+            response = connection.getresponse()
+            assert response.status == 200
+            assert response.getheader("Content-Security-Policy") == CSP
+            assert b"Service request" in response.read()
+            connection.request(
+                "POST",
+                gateway.path,
+                body="email=not-an-email",
+                headers={
+                    "Origin": gateway.origin,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            response = connection.getresponse()
+            assert response.status == 422
+            page = response.read()
+            assert (b'aria-invalid="true"' in page) is presentation_repair
+            connection.request("POST", "/api/_test/reset", headers={"Origin": gateway.origin})
+            response = connection.getresponse()
+            assert response.status == 403
+            response.read()
+            if failure == "endpoint-fenced":
+                with workspace_connection(binding.database, binding.workspace) as conn:
+                    assert (
+                        regressions.fence_expired(conn, now=datetime.now(UTC) + timedelta(hours=1))
+                        == 1
+                    )
+                original_checked = runner.sandbox._checked
+
+                def no_dispatch_after_fence(*args: str, **kwargs: Any) -> CommandResult:
+                    assert args[0] != "exec", "fenced browser request reached a container"
+                    return original_checked(*args, **kwargs)
+
+                with monkeypatch.context() as context:
+                    context.setattr(runner.sandbox, "_checked", no_dispatch_after_fence)
+                    connection.request("GET", gateway.path)
+                    response = connection.getresponse()
+                    assert response.status == 502
+                    response.read()
+        finally:
+            connection.close()
+
+    if failure == "endpoint-fenced":
+        with pytest.raises(builds.BuildClaimRefused):
+            execute_regressions(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                runner=runner,
+                store=store,
+                on_candidate_endpoint=browser_endpoint_probe,
+            )
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            assert conn.execute(
+                "SELECT state,epoch FROM candidate_regression_attempt WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone() == {"state": "UNKNOWN", "epoch": 2}
+            assert (
+                conn.execute(
+                    "SELECT state FROM candidate_regression_process WHERE attempt_id="
+                    "(SELECT id FROM candidate_regression_attempt WHERE build_id=%s)",
+                    (claimed.claim.build_id,),
+                ).fetchall()
+                == [{"state": "REMOVED"}] * 3
+            )
+        return
+
     regression = execute_regressions(
         binding.database,
         workspace_id=binding.workspace,
         build_id=claimed.claim.build_id,
         runner=runner,
         store=store,
+        on_candidate_endpoint=browser_endpoint_probe,
     )
+    assert len(endpoint_receipts) == 1
+    assert endpoint_receipts[0]["taskId"] == regression.task_id
     assert regression.artifact_digest == retained.archive_digest
     assert "exact_independent_database_receipt" in regression.checks
     assert "fixture_definition_identity" in regression.checks
