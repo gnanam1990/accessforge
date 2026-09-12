@@ -54,7 +54,8 @@ CLASS_DEFINITIONS: dict[str, tuple[int, bool, bool, str]] = {
         90,
         False,
         True,
-        "Customer source at an exact revision. Deleting it means a run's manifest names a tree "
+        "Customer source and source-derived candidate build archives at an exact revision. "
+        "Deleting them means a run's manifest names a tree or candidate "
         "nobody can reproduce, so the run's identity can no longer be checked.",
     ),
     "FIXTURE_REFERENCE": (

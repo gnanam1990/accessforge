@@ -273,11 +273,67 @@ recovery and post-upload read-back faults. No evidence-backed defects remain in 
 scope. It is an internal change review, not an independent security audit or approval of the
 entire draft PR. No third-party integration changed. New-head GitHub CI remains a separate gate.
 
+## Source-class expiry, permanent tombstones and storage binding
+
+The trusted `retire_expired_candidate` operation now uses the workspace's SOURCE_SNAPSHOT policy
+for source-derived candidate archives. Missing policy classes fail closed. The retained reader
+checks expiry before and after its bounded read; build/archive locks order the read before a
+concurrent retirement intent. No new public endpoint or unattended sweep is enabled by this change.
+
+Migration 0027 records a create-only upload protocol and a durable retirement intent. The upload
+intent is consumed once, and candidate PUTs use `If-None-Match: *`, including the candidate-object
+restore path. Expiry first commits retirement intent, making reads/promotion unavailable, and
+fences unfinished attempts as UNKNOWN. It then replaces the active-store payload with a permanent
+empty object, verifies that empty body, and commits DELETED plus a completion receipt. A response
+lost after the object write leaves a pending intent; repeating retirement completes the same
+operation. Historical build/process/digest records are not rewritten into a different build result.
+
+The key must remain present. Deleting it would permit a delayed create-only upload to recreate
+bytes. A zero-byte tombstone blocks those uploads; it is not an S3 delete marker. The primitive
+refuses versioned or suspended-versioning buckets, any bucket lifecycle/replication configuration,
+and unreadable configuration, both before and after the write. Operators must preserve those
+constraints and exclude tombstones from any external cleanup. Runtime retirement does not call
+DeleteObject. This is active-store payload retirement, **not erasure of prior backups, exported
+copies, provider replicas outside the declared store, or a guarantee against a privileged operator
+overwriting data**. Automatic sweep dispatch and documented backup-expiry enforcement remain work.
+
+Protocol reference: [AWS conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
+The existing boto3/S3 integration now needs conditional PutObject plus GetObject, GetBucketVersioning,
+GetLifecycleConfiguration and GetReplicationConfiguration permissions for retirement. No new SDK,
+provider, paid service or cloud deployment was added. Tests use disposable local MinIO buckets.
+
+The internal review found a reachable storage-identity flaw in the first local draft: retiring into
+the wrong bucket reported success while 10,240 original bytes survived. Migration 0028 and the
+corrected paths bind capture immutably to the exact logical endpoint/bucket and reject mismatched
+stores before retirement intent or storage I/O. An isolated restore appends an immutable,
+revisioned location record only for transferred objects, verifies retained bytes against database
+digests (or verifies an empty deleted tombstone), and preserves original capture provenance.
+Location registration and restore reconciliation commit together. A restored reader cannot
+silently fall back to the original bucket. Legacy records with unknown protocol/location remain
+unbound and require operator reconciliation; no historical safety claim is fabricated.
+
+Tests cover expiry, wrong workspace/store refusal, lost retirement responses, delayed uploads
+before and after PUT, late promotion fencing, permanent marker restore, source-bucket fallback
+refusal, immutable location/retirement records, and real versioning/lifecycle/permission failures.
+The latest focused source/migration run passed 51 tests. A separate disposable review probe raced
+20 actual uploads against retirement: initial uploads won 10 and retirement won 10; all 20 final
+objects were empty and all 20 later rewrites were refused. Its generated bucket was removed.
+The tests do not claim control over an arbitrary remote provider's internal in-flight requests.
+
+Recovery head `35deffdb08e01ebcba90f193e8fe2672c3052023` passed all GitHub CI in run
+34716804109. The final retirement/location full Python suite passed **2,053 tests, zero failures/
+skips**, 58 upstream deprecation warnings (180.88 seconds). Strict mypy: 211 files clean. Ruff
+lint/format and OpenAPI/schema/74-operation client drift checks pass. The internal review's
+wrong-store defect was reproduced and fixed before commit; no evidence-backed defects remain in
+this reviewed delta. This is not an independent security audit or full draft-PR approval, and
+new-head GitHub CI remains a separate gate. No formal forge review was published.
+
 ## Required next work
 
-1. Integrate archive expiry/deletion and quarantined-object cleanup with retention policy.
-   The dedicated candidate-byte encrypted backup/restore drill is implemented. Durable artifact bytes
-   and actual resolved process receipts are implemented; no public build endpoint is exposed.
+1. Integrate the trusted build/retirement operations into bounded operator/job dispatch and implement
+   legacy unbound-store reconciliation plus documented backup expiry. Policy-based active-store
+   retirement and the candidate-byte encrypted backup/restore drill are implemented. No public
+   build endpoint or unattended sweep is exposed.
    Retained dirty-artifact intake remains required if dirty E0 candidates are supported.
 2. Implement operator reconciliation and durable crash/recovery tests for UNKNOWN attempts using
    the pre-recorded task and explicit daemon binding. Fencing and endpoint binding are implemented;

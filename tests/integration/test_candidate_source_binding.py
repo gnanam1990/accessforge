@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import pytest
 
-from accessforge_build_worker.artifacts import read_retained_candidate
+from accessforge_build_worker.artifacts import read_retained_candidate, retire_expired_candidate
 from accessforge_build_worker.coordinator import ClaimedCandidate, execute_claim, prepare_and_claim
 from accessforge_build_worker.sandbox import (
     DockerSandbox,
@@ -38,6 +38,7 @@ from accessforge_persistence import (
     patches,
     projects,
     restore,
+    retention,
     reviews,
     runs,
     unscoped_connection,
@@ -85,11 +86,15 @@ class FaultStore:
     fault: str
     keys: list[str]
 
-    def put(self, *, key: str, payload: bytes, content_type: str) -> str:
+    @property
+    def storage_identity(self) -> tuple[str, str]:
+        return self.store.storage_identity
+
+    def put_create_only(self, *, key: str, payload: bytes, content_type: str) -> str:
         self.keys.append(key)
         if self.fault == "upload_failure":
             raise evidence.ObjectStoreUnavailable("injected upload outage")
-        self.store.put(key=key, payload=payload, content_type=content_type)
+        self.store.put_create_only(key=key, payload=payload, content_type=content_type)
         if self.fault == "tamper":
             self.store.put(key=key, payload=b"x" * len(payload), content_type=content_type)
         if self.fault == "fenced":
@@ -373,14 +378,234 @@ def isolated_archives() -> Iterator[tuple[IsolatedArchiveStore, IsolatedArchiveS
     finally:
         # Only freshly generated, isolated drill buckets; never the configured evidence bucket.
         for bucket in buckets:
-            for key in bucket.store.iter_keys():
-                bucket.store.delete(key=key)
+            for page in bucket.store._client.get_paginator("list_object_versions").paginate(
+                Bucket=bucket.settings.bucket
+            ):
+                for version in [*page.get("Versions", []), *page.get("DeleteMarkers", [])]:
+                    bucket.store._client.delete_object(
+                        Bucket=bucket.settings.bucket,
+                        Key=version["Key"],
+                        VersionId=version["VersionId"],
+                    )
             bucket.store._client.delete_bucket(Bucket=bucket.settings.bucket)
 
 
 def _database_at(url: str, name: str) -> str:
     parts = urlsplit(url)
     return urlunsplit((parts.scheme, parts.netloc, f"/{name}", parts.query, parts.fragment))
+
+
+@pytest.mark.parametrize("configuration", ["versioning", "lifecycle", "denied"])
+def test_retirement_refuses_unprovable_store_configuration_without_changing_bytes(
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+    monkeypatch: pytest.MonkeyPatch,
+    configuration: str,
+) -> None:
+    from botocore.exceptions import ClientError
+
+    bucket = isolated_archives[0]
+    store = bucket.store
+    key = "synthetic-config-guard"
+    store.put_create_only(key=key, payload=b"original", content_type="application/octet-stream")
+    if configuration == "versioning":
+        store._client.put_bucket_versioning(
+            Bucket=bucket.settings.bucket, VersioningConfiguration={"Status": "Enabled"}
+        )
+    elif configuration == "lifecycle":
+        store._client.put_bucket_lifecycle_configuration(
+            Bucket=bucket.settings.bucket,
+            LifecycleConfiguration={
+                "Rules": [
+                    {
+                        "ID": "test-only",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": "unrelated/"},
+                        "Expiration": {"Days": 1},
+                    }
+                ]
+            },
+        )
+    else:
+
+        def denied(*, Bucket: str) -> None:  # noqa: N803 - exact boto3 keyword.
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "injected configuration denial"}},
+                "GetBucketVersioning",
+            )
+
+        monkeypatch.setattr(store._client, "get_bucket_versioning", denied)
+    with pytest.raises(evidence.ArtifactStoreError):
+        store.retire_create_only(key=key)
+    assert store.get_bounded(key=key, max_bytes=8) == b"original"
+
+
+def test_restore_cannot_overwrite_a_retirement_tombstone(
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+) -> None:
+    store = isolated_archives[0].store
+    key = f"workspaces/{uuid.uuid4()}/candidate-builds/{uuid.uuid4()}/archives/" + "a" * 64
+    store.retire_create_only(key=key)
+    with pytest.raises(evidence.ObjectStoreUnavailable):
+        restore.restore_object_bytes(store, key=key, payload=b"old backup bytes")
+    assert store.get_bounded(key=key, max_bytes=1) == b""
+    restore.restore_object_bytes(store, key=key, payload=b"")
+    assert store.get_bounded(key=key, max_bytes=1) == b""
+
+
+def _expire_candidate_policy(binding: BoundFixture) -> None:
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        policy = retention.current_policy(conn, workspace_id=binding.workspace)
+        retention.configure_policy(
+            conn,
+            workspace_id=binding.workspace,
+            configured_by=binding.owner,
+            expected_revision=policy.revision,
+            entries=[
+                {
+                    "evidenceClass": entry.evidence_class,
+                    "retainDays": 0
+                    if entry.evidence_class == "SOURCE_SNAPSHOT"
+                    else entry.retain_days,
+                    "consentRequired": entry.consent_required,
+                }
+                for entry in policy.entries
+            ],
+        )
+
+
+@pytest.mark.sandbox
+def test_expired_candidate_retirement_is_fenced_durable_and_retryable(
+    binding: BoundFixture,
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+) -> None:
+    source = isolated_archives[0].store
+    claimed, sandbox, command = _prepare_owned_build(binding)
+    built = execute_claim(
+        binding.database,
+        workspace_id=binding.workspace,
+        claimed=claimed,
+        sandbox=sandbox,
+        command=command,
+        store=source,
+    )
+    args = {"workspace_id": binding.workspace, "build_id": claimed.claim.build_id}
+    assert not retire_expired_candidate(binding.database, **args, store=source)
+    with pytest.raises(builds.BuildClaimRefused, match="no candidate"):
+        retire_expired_candidate(
+            binding.database,
+            workspace_id=str(uuid.uuid4()),
+            build_id=claimed.claim.build_id,
+            store=source,
+        )
+    _expire_candidate_policy(binding)
+    with pytest.raises(builds.BuildClaimRefused, match="storage location"):
+        retire_expired_candidate(binding.database, **args, store=isolated_archives[1].store)
+    assert list(isolated_archives[1].store.iter_keys()) == []
+    with pytest.raises(builds.BuildClaimRefused, match="expired"):
+        read_retained_candidate(binding.database, **args, store=source)
+
+    class LostRetirementResponse:
+        @property
+        def storage_identity(self) -> tuple[str, str]:
+            return source.storage_identity
+
+        def retire_create_only(self, *, key: str) -> None:
+            source.retire_create_only(key=key)
+            raise evidence.ObjectStoreUnavailable("injected lost retirement response")
+
+    with pytest.raises(evidence.ObjectStoreUnavailable):
+        retire_expired_candidate(binding.database, **args, store=LostRetirementResponse())
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        row = conn.execute(
+            "SELECT a.state,a.object_key,r.completed_at FROM candidate_archive a "
+            "JOIN candidate_archive_retirement r USING(build_id,workspace_id) "
+            "WHERE a.build_id = %s",
+            (claimed.claim.build_id,),
+        ).fetchone()
+        assert row is not None and row["state"] == "RETAINED" and row["completed_at"] is None
+        key = str(row["object_key"])
+    assert source.get_bounded(key=key, max_bytes=1) == b""
+    with pytest.raises(builds.BuildClaimRefused, match="no retained"):
+        read_retained_candidate(binding.database, **args, store=source)
+    assert retire_expired_candidate(binding.database, **args, store=source)
+    assert retire_expired_candidate(binding.database, **args, store=source)
+    # A delayed uploader or SDK retry cannot recreate bytes after retirement.
+    with pytest.raises(evidence.ObjectStoreUnavailable):
+        source.put_create_only(
+            key=key, payload=built.artifact.archive(), content_type="application/x-tar"
+        )
+    assert source.get_bounded(key=key, max_bytes=1) == b""
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        row = conn.execute(
+            "SELECT a.state,a.content_digest,b.state AS build_state,r.completed_at "
+            "FROM candidate_archive a JOIN candidate_build_attempt b ON b.id = a.build_id "
+            "JOIN candidate_archive_retirement r ON r.build_id = a.build_id "
+            "WHERE a.build_id = %s",
+            (claimed.claim.build_id,),
+        ).fetchone()
+        assert row is not None and row["state"] == "DELETED"
+        assert row["build_state"] == "BUILT" and row["completed_at"] is not None
+        assert row["content_digest"] == built.artifact.archive_digest
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_archive_retirement SET completed_at = NULL WHERE build_id = %s",
+                (claimed.claim.build_id,),
+            )
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("before_upload", [True, False])
+def test_quarantine_retirement_blocks_late_upload_and_late_promotion(
+    binding: BoundFixture,
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+    before_upload: bool,
+) -> None:
+    source = isolated_archives[0].store
+    claimed, sandbox, command = _prepare_owned_build(binding)
+    keys: list[str] = []
+
+    class DelayedUploader:
+        @property
+        def storage_identity(self) -> tuple[str, str]:
+            return source.storage_identity
+
+        def put_create_only(self, *, key: str, payload: bytes, content_type: str) -> str:
+            keys.append(key)
+            if not before_upload:
+                source.put_create_only(key=key, payload=payload, content_type=content_type)
+            _expire_candidate_policy(binding)
+            assert retire_expired_candidate(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                store=source,
+            )
+            if before_upload:
+                source.put_create_only(key=key, payload=payload, content_type=content_type)
+            return key
+
+        def get_bounded(self, *, key: str, max_bytes: int) -> bytes:
+            return source.get_bounded(key=key, max_bytes=max_bytes)
+
+    with pytest.raises((builds.BuildClaimRefused, evidence.ObjectStoreUnavailable)):
+        execute_claim(
+            binding.database,
+            workspace_id=binding.workspace,
+            claimed=claimed,
+            sandbox=sandbox,
+            command=command,
+            store=DelayedUploader(),
+        )
+    assert source.get_bounded(key=keys[0], max_bytes=1) == b""
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        assert conn.execute(
+            "SELECT state,epoch,failure_code FROM candidate_build_attempt WHERE id = %s",
+            (claimed.claim.build_id,),
+        ).fetchone() == {"state": "UNKNOWN", "epoch": 2, "failure_code": "ARCHIVE_EXPIRED"}
+        assert conn.execute(
+            "SELECT state FROM candidate_archive WHERE build_id = %s",
+            (claimed.claim.build_id,),
+        ).fetchone() == {"state": "DELETED"}
 
 
 @pytest.mark.parametrize("replacement", [b"wrong!!", b"short", b"oversized", None])
@@ -435,15 +660,16 @@ def _operator_script(
 
 
 @pytest.mark.sandbox
-@pytest.mark.parametrize("retained", [True, False])
+@pytest.mark.parametrize("archive_state", ["retained", "quarantined", "deleted"])
 def test_actual_candidate_encrypted_backup_and_isolated_restore(
     binding: BoundFixture,
     backup_database_url: str,
     candidate_restore_target: str,
     isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
     tmp_path_factory: pytest.TempPathFactory,
-    retained: bool,
+    archive_state: str,
 ) -> None:
+    retained = archive_state != "quarantined"
     source, target = isolated_archives
     claimed, sandbox, command = _prepare_owned_build(binding)
     store = FaultStore(source.store, binding, "none" if retained else "tamper", [])
@@ -466,6 +692,14 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
                 command=command,
                 store=store,
             )
+    if archive_state == "deleted":
+        _expire_candidate_policy(binding)
+        assert retire_expired_candidate(
+            binding.database,
+            workspace_id=binding.workspace,
+            build_id=claimed.claim.build_id,
+            store=source.store,
+        )
     with workspace_connection(binding.database, binding.workspace) as conn:
         archive_row = conn.execute(
             "SELECT * FROM candidate_archive WHERE build_id = %s", (claimed.claim.build_id,)
@@ -526,11 +760,26 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
     assert restored.returncode == 0, restored.stderr
     assert "reconciled:" in restored.stdout
     assert not source.store.exists(key=key)
-    assert target.store.get_bounded(key=key, max_bytes=len(captured)) == captured
+    assert target.store.get_bounded(key=key, max_bytes=max(1, len(captured))) == captured
     restored_app_url = _database_at(
         binding.database, urlsplit(candidate_restore_target).path.lstrip("/")
     )
     with workspace_connection(restored_app_url, binding.workspace) as conn:
+        location = conn.execute(
+            "SELECT store_endpoint,store_bucket FROM candidate_archive_restore_location "
+            "WHERE build_id = %s ORDER BY revision DESC LIMIT 1",
+            (claimed.claim.build_id,),
+        ).fetchone()
+        assert location == {
+            "store_endpoint": target.store.storage_identity[0],
+            "store_bucket": target.store.storage_identity[1],
+        }
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_archive_restore_location SET store_bucket = 'wrong' "
+                "WHERE build_id = %s",
+                (claimed.claim.build_id,),
+            )
         assert (
             conn.execute(
                 "SELECT * FROM candidate_archive WHERE build_id = %s", (claimed.claim.build_id,)
@@ -557,7 +806,14 @@ def test_actual_candidate_encrypted_backup_and_isolated_restore(
             builds.authorize_dispatch(
                 conn, workspace_id=binding.workspace, claim=claimed.claim, inputs=claimed.inputs
             )
-    if retained:
+    if archive_state == "retained":
+        with pytest.raises(builds.BuildClaimRefused, match="storage location"):
+            read_retained_candidate(
+                restored_app_url,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                store=source.store,
+            )
         candidate = read_retained_candidate(
             restored_app_url,
             workspace_id=binding.workspace,
