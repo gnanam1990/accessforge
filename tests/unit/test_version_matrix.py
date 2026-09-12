@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[2]
 MATRIX = tomllib.loads((ROOT / "infra" / "version-matrix.toml").read_text(encoding="utf-8"))
 PACKAGE_JSON = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+ORCHESTRATOR = tomllib.loads(
+    (ROOT / "apps" / "orchestrator" / "pyproject.toml").read_text(encoding="utf-8")
+)
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
 
@@ -56,6 +59,28 @@ def test_postgres_matches_the_image_ci_runs() -> None:
     images = re.findall(r"image:\s*postgres:(\d+)", CI)
     assert images, "could not find the postgres image CI runs"
     assert set(images) == {MATRIX["service"]["postgresql"]["min"]}
+
+
+def test_strands_sdk_and_model_profile_match_the_orchestrator_pins() -> None:
+    dependency = next(
+        item
+        for item in ORCHESTRATOR["project"]["dependencies"]
+        if item.startswith("strands-agents==")
+    )
+    assert dependency == f"strands-agents=={MATRIX['sdk']['strands_agents']['exact']}"
+
+    config = (
+        ROOT
+        / "apps"
+        / "orchestrator"
+        / "src"
+        / "accessforge_orchestrator"
+        / "navigator"
+        / "config.py"
+    ).read_text(encoding="utf-8")
+    assert f'PINNED_STRANDS_VERSION = "{MATRIX["sdk"]["strands_agents"]["exact"]}"' in config
+    assert MATRIX["model"]["navigator"]["model_id"] in config
+    assert MATRIX["model"]["navigator"]["region"] in config
 
 
 def test_every_blocked_capability_says_what_would_unblock_it() -> None:

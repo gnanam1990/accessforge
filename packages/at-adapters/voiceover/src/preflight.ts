@@ -19,6 +19,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { BLOCKED_REASON, TARGET_MACOS_VERSION, TARGET_MATRIX } from './profile.js';
 
@@ -66,6 +67,95 @@ export interface ProbeEnvironment {
   readonly screenLocked: () => boolean | undefined;
   /** Whether this process holds the named TCC permission; undefined when unknown. */
   readonly hasPermission: (permission: 'Accessibility' | 'Automation') => boolean | undefined;
+  /** Exact Safari marketing version reported by the installed application bundle. */
+  readonly browserVersion?: () => string | undefined;
+}
+
+/** Observations produced by the supervisor's owned setup phase, never by the navigator. */
+export interface RuntimeProbeEvidence {
+  readonly speechCaptureWorking?: boolean;
+  readonly permittedOrigin?: string;
+  readonly observedOrigin?: string;
+  readonly originReachable?: boolean;
+  readonly environmentResetSucceeded?: boolean;
+  readonly expectedBuildDigest?: string;
+  readonly observedBuildDigest?: string;
+  readonly staleInputSourceDetected?: boolean;
+  readonly journalWritable?: boolean;
+  readonly monotonicClockHealthy?: boolean;
+}
+
+export interface CommandResult {
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+export type CommandRunner = (
+  executable: string,
+  args: readonly string[],
+  input?: string,
+) => CommandResult;
+
+export interface HostEnvironmentOptions {
+  readonly run?: CommandRunner;
+  readonly pathExists?: (path: string) => boolean;
+}
+
+const systemRun: CommandRunner = (executable, args, input) => {
+  const result = spawnSync(executable, [...args], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    ...(input !== undefined ? { input } : {}),
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+};
+
+interface ConsoleSession {
+  readonly kCGSSessionOnConsoleKey?: boolean;
+  readonly kCGSessionLoginDoneKey?: boolean;
+  readonly kCGSSessionAuditIDKey?: number;
+  readonly CGSSessionScreenIsLocked?: boolean;
+}
+
+function readConsoleSession(run: CommandRunner): ConsoleSession | undefined {
+  const raw = run('/usr/sbin/ioreg', ['-n', 'Root', '-d1', '-a']);
+  if (raw.status !== 0 || raw.stdout === '') return undefined;
+
+  const converted = run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], raw.stdout);
+  if (converted.status !== 0) return undefined;
+
+  try {
+    const root = JSON.parse(converted.stdout) as { readonly IOConsoleUsers?: ConsoleSession[] };
+    return root.IOConsoleUsers?.find(
+      (session) =>
+        session.kCGSSessionOnConsoleKey === true && session.kCGSessionLoginDoneKey === true,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+const ACCESSIBILITY_PROBE =
+  'import ApplicationServices; print(AXIsProcessTrusted() ? "TRUE" : "FALSE")';
+
+// `false` is the important fourth argument: Apple documents that it returns -1744 when consent
+// would be required instead of opening a permission dialog from a health check.
+const AUTOMATION_PROBE =
+  'import Cocoa; import Carbon; ' +
+  'let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.VoiceOver"); ' +
+  'print(AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, false))';
+
+function readBoolean(output: CommandResult): boolean | undefined {
+  if (output.status !== 0) return undefined;
+  const value = output.stdout.trim();
+  if (value === 'TRUE' || value === 'true' || value === '1') return true;
+  if (value === 'FALSE' || value === 'false' || value === '0') return false;
+  return undefined;
 }
 
 /**
@@ -163,6 +253,20 @@ export function probeReaderVersion(env: ProbeEnvironment): ProbeResult {
   return ok;
 }
 
+export function probeBrowserVersion(env: ProbeEnvironment): ProbeResult {
+  const version = env.browserVersion?.();
+  if (version === undefined || version === '') {
+    return unknown('the installed Safari version could not be read');
+  }
+  if (version !== TARGET_MATRIX.browserVersion) {
+    return no(
+      `this host reports ${TARGET_MATRIX.browser} ${version} and the pinned profile is ` +
+        `${TARGET_MATRIX.browser} ${TARGET_MATRIX.browserVersion}`,
+    );
+  }
+  return ok;
+}
+
 export function probeScreenUnlocked(env: ProbeEnvironment): ProbeResult {
   const locked = env.screenLocked();
   if (locked === undefined) {
@@ -227,31 +331,93 @@ export interface PreflightReport {
  * become ready, and a check this adapter fails to implement is reported UNKNOWN rather than omitted,
  * because module 07 treats an omitted check as a readiness failure and an UNKNOWN one as the same.
  */
-export function runPreflight(env: ProbeEnvironment): PreflightReport {
+function observedBoolean(
+  value: boolean | undefined,
+  trueDetail: string,
+  falseDetail: string,
+): ProbeResult {
+  if (value === undefined) return unknown(trueDetail);
+  return value ? ok : no(falseDetail);
+}
+
+function probeOrigin(evidence: RuntimeProbeEvidence): ProbeResult {
+  if (
+    evidence.permittedOrigin === undefined ||
+    evidence.observedOrigin === undefined ||
+    evidence.originReachable === undefined
+  ) {
+    return unknown(
+      'the supervisor has not supplied the permitted origin, observed browser origin and ' +
+        'reachability result together',
+    );
+  }
+  if (evidence.observedOrigin !== evidence.permittedOrigin) {
+    return no(
+      `observed origin ${evidence.observedOrigin} does not equal the sealed permitted origin ` +
+        evidence.permittedOrigin,
+    );
+  }
+  return evidence.originReachable
+    ? ok
+    : no(`the sealed permitted origin ${evidence.permittedOrigin} is not reachable`);
+}
+
+function probeBuildIdentity(evidence: RuntimeProbeEvidence): ProbeResult {
+  if (
+    evidence.expectedBuildDigest === undefined ||
+    evidence.observedBuildDigest === undefined
+  ) {
+    return unknown('the expected and observed build digests were not both supplied');
+  }
+  return evidence.expectedBuildDigest === evidence.observedBuildDigest
+    ? ok
+    : no(
+        `observed build digest ${evidence.observedBuildDigest} does not equal manifest digest ` +
+          evidence.expectedBuildDigest,
+      );
+}
+
+export function runPreflight(
+  env: ProbeEnvironment,
+  evidence: RuntimeProbeEvidence = {},
+): PreflightReport {
   const checks = {
     READER_ACTIVE: probeReaderActive(env),
     READER_VERSION_MATCHES_PROFILE: probeReaderVersion(env),
-    BROWSER_VERSION_MATCHES_PROFILE: unknown(
-      'the browser is launched by the supervisor setup phase, which has not run',
+    BROWSER_VERSION_MATCHES_PROFILE: probeBrowserVersion(env),
+    SPEECH_CAPTURE_WORKING: observedBoolean(
+      evidence.speechCaptureWorking,
+      'speech capture has not been exercised by the supervisor setup phase',
+      'the VoiceOver speech-capture probe failed or timed out; this is unknown evidence, not silence',
     ),
-    SPEECH_CAPTURE_WORKING: unknown(
-      'speech capture cannot be probed without a running, AppleScript-controllable VoiceOver. A ' +
-        'capture timeout is unknown evidence, never empty success.',
+    PERMITTED_ORIGIN_REACHABLE: probeOrigin(evidence),
+    ENVIRONMENT_RESET_SUCCEEDED: observedBoolean(
+      evidence.environmentResetSucceeded,
+      'the supervisor has not supplied a reset result',
+      'the owned reference environment reset failed',
     ),
-    PERMITTED_ORIGIN_REACHABLE: unknown('reachability is checked by the supervisor setup phase'),
-    ENVIRONMENT_RESET_SUCCEEDED: unknown('reset is performed by the supervisor, not the adapter'),
-    BUILD_IDENTITY_MATCHES_MANIFEST: unknown('the manifest is supplied by the control plane'),
+    BUILD_IDENTITY_MATCHES_MANIFEST: probeBuildIdentity(evidence),
     DESKTOP_SESSION_OWNED: probeDesktopOwned(env),
     SCREEN_UNLOCKED: probeScreenUnlocked(env),
     ACCESSIBILITY_PERMISSION_GRANTED: probePermission(env, 'Accessibility'),
     AUTOMATION_PERMISSION_GRANTED: probePermission(env, 'Automation'),
-    NO_STALE_INPUT_SOURCE: unknown(
-      'no stale-input probe exists yet: establishing that no previous automation can still send ' +
-        'input requires observing a real reader, and is one of the boundaries module 08 leaves ' +
-        'UNVERIFIED',
+    NO_STALE_INPUT_SOURCE: observedBoolean(
+      evidence.staleInputSourceDetected === undefined
+        ? undefined
+        : !evidence.staleInputSourceDetected,
+      'the supervisor has not supplied a stale-input-source result',
+      'a previous automation input source is still active',
     ),
-    LOCAL_JOURNAL_WRITABLE: unknown('the journal path is supplied by the supervisor'),
-    MONOTONIC_CLOCK_HEALTHY: ok,
+    LOCAL_JOURNAL_WRITABLE: observedBoolean(
+      evidence.journalWritable,
+      'the supervisor has not supplied a durable-journal write result',
+      'the local action journal could not be written and fsynced',
+    ),
+    MONOTONIC_CLOCK_HEALTHY: observedBoolean(
+      evidence.monotonicClockHealthy ?? true,
+      'the monotonic clock has not been sampled',
+      'the monotonic clock moved backwards or could not be trusted',
+    ),
   } satisfies Record<PreflightCheck, ProbeResult>;
 
   const operatorActions = PREFLIGHT_CHECKS.flatMap((name) => {
@@ -267,18 +433,65 @@ export function runPreflight(env: ProbeEnvironment): PreflightReport {
   };
 }
 
-/** A probe environment backed by the real host, for use on a configured desktop. */
-export function hostEnvironment(): ProbeEnvironment {
+/**
+ * A probe environment backed by explicit, read-only macOS commands.
+ *
+ * None of these commands grants a permission, starts VoiceOver, changes a preference, or prompts.
+ * In particular, the Automation API is called with `askUserIfNeeded=false`.
+ */
+export function createHostEnvironment(options: HostEnvironmentOptions = {}): ProbeEnvironment {
+  const run = options.run ?? systemRun;
+  const pathExists = options.pathExists ?? existsSync;
   return {
-    pathExists: (p) => existsSync(p),
-    // These four are intentionally unimplemented rather than faked. Each needs a real macOS probe --
-    // `defaults read`, `CGSessionCopyCurrentDictionary`, a TCC query -- and a stub returning a
-    // plausible value would make preflight pass on a machine where nothing had been checked, which
-    // is the exact failure this whole module exists to refuse.
-    readPreference: () => undefined,
-    processRunning: () => false,
-    auditSessionId: () => undefined,
-    screenLocked: () => undefined,
-    hasPermission: () => undefined,
+    pathExists,
+    readPreference: (domain, key) => {
+      const result = run('/usr/bin/defaults', ['read', domain, key]);
+      return result.status === 0 ? result.stdout.trim() : undefined;
+    },
+    processRunning: (name) => {
+      const result =
+        name === 'VoiceOver'
+          ? run('/usr/bin/pgrep', ['-f', 'VoiceOver launchd -s'])
+          : run('/usr/bin/pgrep', ['-x', name]);
+      return result.status === 0 && result.stdout.trim() !== '';
+    },
+    auditSessionId: () => {
+      const session = readConsoleSession(run);
+      return session?.kCGSSessionAuditIDKey?.toString();
+    },
+    screenLocked: () => {
+      const session = readConsoleSession(run);
+      if (session === undefined) return undefined;
+      // The key is present and true while macOS has locked this console. Its absence on the active,
+      // completed console session is the unlocked state; an inactive/incomplete session was already
+      // rejected by readConsoleSession rather than interpreted as unlocked.
+      return session.CGSSessionScreenIsLocked ?? false;
+    },
+    hasPermission: (permission) => {
+      if (permission === 'Accessibility') {
+        return readBoolean(run('/usr/bin/xcrun', ['swift', '-e', ACCESSIBILITY_PROBE]));
+      }
+      const result = run('/usr/bin/xcrun', ['swift', '-e', AUTOMATION_PROBE]);
+      if (result.status !== 0) return undefined;
+      const status = Number.parseInt(result.stdout.trim(), 10);
+      if (status === 0) return true;
+      // -1743: denied. -1744: would require consent, and no prompt was shown.
+      if (status === -1743 || status === -1744) return false;
+      // -600 means VoiceOver is not running, so macOS cannot answer about that target yet.
+      return undefined;
+    },
+    browserVersion: () => {
+      const result = run('/usr/bin/defaults', [
+        'read',
+        '/Applications/Safari.app/Contents/Info',
+        'CFBundleShortVersionString',
+      ]);
+      return result.status === 0 ? result.stdout.trim() : undefined;
+    },
   };
+}
+
+/** Backwards-compatible name used by the original module handoff. */
+export function hostEnvironment(): ProbeEnvironment {
+  return createHostEnvironment();
 }
