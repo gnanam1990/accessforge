@@ -349,15 +349,29 @@ def load_patch(conn: psycopg.Connection[dict[str, Any]], *, patch_id: str) -> Pa
         for r in change_rows
     )
     stored = str(row["patch_digest"])
-    # Recomputed on every load and compared. The digest is what an approval bound to, so if the
-    # stored bytes no longer produce it then either the rows were altered or the digest function
-    # changed -- and in both cases the approval authorizes something other than what is here.
-    # Refusing to return the proposal at all is the only answer that cannot be acted on by mistake.
-    if changes and patch_digest(changes) != stored:
+    # Recomputed on every load and compared, unconditionally. The digest is what an approval bound
+    # to, so if the stored bytes no longer produce it then either the rows were altered or the
+    # digest function changed -- and in both cases the approval authorizes something other than what
+    # is here. Refusing to return the proposal at all is the only answer that cannot be acted on by
+    # mistake.
+    #
+    # This was written `if changes and ...`, which skipped the comparison when there were no rows at
+    # all. Deleting every `patch_change` row then produced an empty patch that kept its recorded
+    # digest, its APPROVED status and a valid approval -- the one shape a caller would read as an
+    # authorized change and apply as nothing. A guard that stops guarding when the thing it guards
+    # is missing is not a guard, and the empty case is the one that cannot arise honestly:
+    # `propose_patch` refuses a patch that changes nothing, so zero rows means they were removed.
+    recomputed = patch_digest(changes)
+    if recomputed != stored:
+        detail = (
+            "it has no changes at all, so the rows were removed after it was recorded"
+            if not changes
+            else f"the stored changes hash to {recomputed}"
+        )
         raise PatchError(
-            f"patch {patch_id} does not match its recorded digest. The stored changes hash to "
-            f"{patch_digest(changes)} and the proposal records {stored}, so whatever was approved "
-            "is not what is stored. Refusing to load it rather than letting it be applied."
+            f"patch {patch_id} does not match its recorded digest: {detail}, and the proposal "
+            f"records {stored}. Whatever was approved is not what is stored. Refusing to load it "
+            "rather than letting it be applied."
         )
     return PatchProposal(
         patch_id=str(row["id"]),

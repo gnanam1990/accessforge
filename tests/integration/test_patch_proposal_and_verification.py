@@ -1301,3 +1301,82 @@ def test_the_route_returns_the_change_bytes_a_reviewer_has_to_read(
     )
     assert fetched.status_code == 200, fetched.text
     assert fetched.json()["changes"] == changes
+
+
+def test_a_patch_stripped_of_every_change_refuses_to_load_or_dispatch(
+    db: str, finding: tuple[str, str], manifest: str
+) -> None:
+    """Deleting all the rows must not produce an authorized patch that changes nothing.
+
+    The digest comparison was written `if changes and ...`, so zero rows skipped it entirely. What
+    came back was the worst available shape: a proposal with its recorded digest, its APPROVED
+    status and a live approval, and no changes at all -- something a caller would read as an
+    authorized change and apply as nothing, with the approval still vouching for it.
+
+    Both doors are asserted. `load_patch` is the one that detects it, and `assert_dispatchable` is
+    the one an applying caller actually goes through; a fix that only closed the first would leave
+    the path that matters open if dispatch ever stopped loading the patch.
+    """
+    finding_id, _ = finding
+    approved, approval_id = _approve(db, _propose(db, finding_id, manifest))
+
+    with workspace_connection(db, WS) as conn:
+        deleted = conn.execute(
+            "DELETE FROM patch_change WHERE patch_id = %s", (approved.patch_id,)
+        ).rowcount
+        assert deleted == 1
+        # The proposal row is untouched: same digest, same status, same approval. That is precisely
+        # why the emptiness has to be caught here rather than inferred from anything else.
+        row = conn.execute(
+            "SELECT patch_digest, status, approval_id FROM patch_proposal WHERE id = %s",
+            (approved.patch_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["patch_digest"]) == approved.patch_digest
+    assert str(row["status"]) == "APPROVED"
+    assert str(row["approval_id"]) == approval_id
+
+    with workspace_connection(db, WS) as conn:
+        # And the approval is still perfectly valid in its own right, which is the point: nothing
+        # about the authorization is wrong, so only the patch can notice it has been emptied.
+        approval = approvals.load_for_check(conn, approval_id=approval_id)
+        assert approval.revoked is False
+        assert approval.target_digest == approved.patch_digest
+
+        with pytest.raises(patches.PatchError, match="no changes at all"):
+            patches.load_patch(conn, patch_id=approved.patch_id)
+
+        with pytest.raises(patches.PatchError, match="no changes at all"):
+            patches.assert_dispatchable(
+                conn,
+                workspace_id=WS,
+                patch_id=approved.patch_id,
+                current_source_digest=approved.base_source_digest,
+            )
+
+
+def test_the_route_refuses_to_serve_a_patch_stripped_of_its_changes(
+    db: str, finding: tuple[str, str], manifest: str, base_source: str, api: object
+) -> None:
+    """Through the HTTP surface, because that is where a reviewer would have seen it.
+
+    A 200 carrying an empty `changes` list and an `approvalId` is the response that would get a
+    change waved through: it looks like a patch somebody already approved.
+    """
+    from accessforge_api.auth import CSRF_HEADER
+
+    finding_id, _ = finding
+    csrf = _sign_in(db, api)
+    created = api.post(  # type: ignore[attr-defined]
+        f"/v1/workspaces/{WS}/findings/{finding_id}/patches",
+        json=_body(manifest, base_source),
+        headers={CSRF_HEADER: csrf},
+    ).json()
+
+    with workspace_connection(db, WS) as conn:
+        conn.execute("DELETE FROM patch_change WHERE patch_id = %s", (created["patchId"],))
+
+    response = api.get(f"/v1/workspaces/{WS}/patches/{created['patchId']}")  # type: ignore[attr-defined]
+    # 404 rather than a 200 with an empty diff. The proposal cannot be served at all, and a uniform
+    # not-found is what every other unreadable record here answers.
+    assert response.status_code == 404, response.text
