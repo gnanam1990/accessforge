@@ -32,3 +32,23 @@ def test_strict_config_does_not_exempt_the_test_suite() -> None:
     assert config["overrides"] == [
         {"module": ["boto3.*", "botocore.*"], "ignore_missing_imports": True}
     ]
+
+
+def test_ci_requires_provisioned_real_sandbox_probes() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    job = workflow["jobs"]["python"]
+    image = job["env"]["ACCESSFORGE_SANDBOX_IMAGE"]
+    assert "@sha256:" in image
+    steps = job["steps"]
+    provision = next(
+        s
+        for s in steps
+        if s.get("name") == "Provision the pinned owned-build containment probe toolchain"
+    )
+    probe = next(s for s in steps if s.get("name") == "Real owned-build containment probes")
+    assert shlex.split(provision["run"]) == ["docker", "pull", image]
+    assert shlex.split(probe["run"]) == ["uv", "run", "pytest", "-q", "tests/sandbox", "--tb=short"]
+    assert steps.index(provision) < steps.index(probe)
+    for step in (provision, probe):
+        assert "if" not in step
+        assert not step.get("continue-on-error", False)

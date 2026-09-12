@@ -140,6 +140,14 @@ class SourceSnapshot:
 
 def read_snapshot(payload: bytes, *, expected_tree_digest: str) -> SourceSnapshot:
     """Reject unsafe archives before extraction; compressed input is intentionally unsupported."""
+    snapshot = read_artifact(payload)
+    if snapshot.tree_digest != expected_tree_digest:
+        raise SnapshotRefused("source bytes differ from the persisted source-tree identity")
+    return snapshot
+
+
+def read_artifact(payload: bytes) -> SourceSnapshot:
+    """Collect untrusted output bytes and compute identity ourselves, never from build stdout."""
     if len(payload) > MAX_ARCHIVE_BYTES:
         raise SnapshotRefused("source archive exceeds the byte limit")
     files: list[SourceFile] = []
@@ -175,10 +183,7 @@ def read_snapshot(payload: bytes, *, expected_tree_digest: str) -> SourceSnapsho
                 files.append(SourceFile(name, content, member.mode))
     except (tarfile.TarError, OSError, EOFError) as exc:
         raise SnapshotRefused("source is not a readable uncompressed tar archive") from exc
-    snapshot = SourceSnapshot(tuple(files))
-    if snapshot.tree_digest != expected_tree_digest:
-        raise SnapshotRefused("source bytes differ from the persisted source-tree identity")
-    return snapshot
+    return SourceSnapshot(tuple(files))
 
 
 @dataclass(frozen=True, slots=True)

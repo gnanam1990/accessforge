@@ -116,6 +116,7 @@ testpaths = ["tests"]
 markers = [
   "integration: requires a real PostgreSQL server",
   "fake: uses a labelled in-process fake, never actual-AT or real-service evidence",
+  "sandbox: requires the explicitly provisioned local Docker sandbox toolchain",
 ]
 # A global timeout so a database deadlock fails loudly instead of hanging CI until the job limit.
 # A fixture that nested a scoped connection inside a TRUNCATE transaction did exactly that.
