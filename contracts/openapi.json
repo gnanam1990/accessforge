@@ -18,6 +18,7 @@
               "NOT_AUTHENTICATED",
               "PERMISSION_DENIED",
               "QUOTA_EXHAUSTED",
+              "RATE_LIMITED",
               "RESOURCE_NOT_FOUND",
               "STALE_REVISION",
               "UNEXPECTED_FIELD",
@@ -1196,7 +1197,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -1454,7 +1465,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -1584,7 +1605,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -1717,7 +1748,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -2460,7 +2501,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -2602,7 +2653,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -2855,7 +2916,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -3520,7 +3591,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -3680,7 +3761,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -3962,7 +4053,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -4243,7 +4344,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -4513,7 +4624,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -4814,7 +4935,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5290,7 +5421,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5432,7 +5573,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5717,7 +5868,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6128,7 +6289,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6261,7 +6432,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6532,7 +6713,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6674,7 +6865,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6956,7 +7157,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -7355,7 +7566,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -7762,7 +7983,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -7901,7 +8132,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -8633,7 +8874,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -9036,7 +9287,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -9166,7 +9427,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -9296,7 +9567,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -9546,7 +9827,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -9796,7 +10087,17 @@
                 }
               }
             },
-            "description": "An RFC7807 problem document."
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {

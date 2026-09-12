@@ -35,9 +35,14 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from accessforge_persistence import deletion, unscoped_connection, workspace_connection
+from accessforge_persistence import (
+    deletion,
+    rate_limits,
+    unscoped_connection,
+    workspace_connection,
+)
 from accessforge_persistence.evidence import S3ArtifactStore, S3Settings
 from accessforge_persistence.evidence.objectstore import ArtifactStore
 
@@ -62,6 +67,12 @@ class WorkspaceSweep:
         )
 
 
+#: How long a rate-limit bucket may sit untouched before the sweep removes it. Comfortably longer
+#: than any bucket takes to refill completely, because pruning a bucket mid-refill would hand its
+#: caller a fresh allowance -- which is the one thing a limiter must not do under load.
+IDLE_BUCKET_RETENTION = timedelta(hours=1)
+
+
 @dataclass(frozen=True, slots=True)
 class SweepReport:
     """What one tick achieved, in numbers an operator can check.
@@ -74,6 +85,9 @@ class SweepReport:
 
     started_at: str
     workspaces: tuple[WorkspaceSweep, ...] = field(default_factory=tuple)
+    idle_buckets_pruned: int = 0
+    """Rate-limit buckets removed. Pure derived state: the next request recreates one, full, which
+    is exactly what an idle bucket already was."""
 
     @property
     def purged(self) -> int:
@@ -85,11 +99,12 @@ class SweepReport:
 
     @property
     def summary(self) -> str:
+        buckets = f"; pruned {self.idle_buckets_pruned} idle rate-limit bucket(s)"
         if not self.workspaces:
-            return "nothing was queued for removal"
+            return f"nothing was queued for removal{buckets}"
         return (
             f"released {self.purged} object(s) across {len(self.workspaces)} workspace(s); "
-            f"{self.still_pending} still pending"
+            f"{self.still_pending} still pending{buckets}"
         )
 
 
@@ -141,7 +156,14 @@ def sweep_once(
         )
         log.info("purge sweep %s", sweeps[-1].summary)
 
-    report = SweepReport(started_at=moment.isoformat(), workspaces=tuple(sweeps))
+    # Bucket rows are not workspace-scoped for principals, so the sweep connection -- which already
+    # has to see across tenants to find work -- is the one that can remove them.
+    with unscoped_connection(sweep_url or database_url) as conn:
+        pruned = rate_limits.prune_idle_buckets(conn, idle_for=IDLE_BUCKET_RETENTION, now=moment)
+
+    report = SweepReport(
+        started_at=moment.isoformat(), workspaces=tuple(sweeps), idle_buckets_pruned=pruned
+    )
     log.info("purge sweep finished: %s", report.summary)
     return report
 
