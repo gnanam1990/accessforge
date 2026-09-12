@@ -13,6 +13,10 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+from accessforge_contracts.reference_fixture import (
+    REFERENCE_FIXTURE_DIGEST,
+    REFERENCE_FIXTURE_VERSION,
+)
 from reference_app import db
 from reference_app.app import create_app
 from reference_app.config import ReferenceAppSettings
@@ -87,6 +91,19 @@ def test_full_journey_creates_exactly_one_request(client: TestClient) -> None:
     ).json()
     assert receipt["request_count"] == 1
     assert receipt["requests"][0]["email"] == VALID_SUBMISSION["email"]
+
+
+def test_fresh_variants_declare_one_versioned_logical_fixture(client: TestClient) -> None:
+    first = client.post(
+        "/api/_test/fixtures", params={"variant": "accessible"}, headers={"x-setup-token": SETUP}
+    ).json()
+    second = client.post(
+        "/api/_test/fixtures", params={"variant": "inaccessible"}, headers={"x-setup-token": SETUP}
+    ).json()
+    assert first["nonce"] != second["nonce"]
+    for record in (first, second):
+        assert record["template_digest"] == REFERENCE_FIXTURE_DIGEST
+        assert record["template_version"] == REFERENCE_FIXTURE_VERSION
 
 
 def test_resubmission_is_a_visible_conflict(client: TestClient) -> None:

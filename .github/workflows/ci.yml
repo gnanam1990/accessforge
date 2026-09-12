@@ -273,6 +273,9 @@ jobs:
         # regenerating them would otherwise ship two disagreeing definitions of the vocabulary.
         run: uv run python scripts/generate_contract_bindings.py --check
 
+      - name: Frozen logical reference fixture bindings
+        run: uv run python scripts/generate_reference_fixture.py --check
+
       - name: The generated clients match the contract
         # Third link in the same chain: the app generates the contract, the contract generates the
         # client. A route that changed shape without its client changing with it is a diff here,

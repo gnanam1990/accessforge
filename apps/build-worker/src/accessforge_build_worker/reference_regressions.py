@@ -20,6 +20,10 @@ from types import CodeType
 from typing import Any
 from urllib.parse import urlencode
 
+from accessforge_contracts.reference_fixture import (
+    REFERENCE_FIXTURE_DIGEST,
+    REFERENCE_FIXTURE_VERSION,
+)
 from accessforge_domain.canonical import digest
 
 from .sandbox import (
@@ -131,6 +135,8 @@ class ReferenceRegressions:
                 "httpDriver": _HTTP,
                 "postgres": POSTGRES_IMAGE,
                 "postgresBinaries": _PG,
+                "fixtureDigest": REFERENCE_FIXTURE_DIGEST,
+                "fixtureVersion": REFERENCE_FIXTURE_VERSION,
                 "image": self.image,
                 "daemonEndpoint": self.sandbox.daemon.endpoint,
                 "daemonId": self.sandbox.daemon.daemon_id,
@@ -467,10 +473,20 @@ class ReferenceRegressions:
                 "POST", "/api/_test/fixtures?variant=inaccessible", headers={"x-setup-token": setup}
             )
             expect(fixture["status"] == 201, "fixture_creation")
-            nonce = json.loads(fixture["body"])["nonce"]
+            declared = json.loads(fixture["body"])
+            expect(
+                declared.get("template_digest") == REFERENCE_FIXTURE_DIGEST
+                and declared.get("template_version") == REFERENCE_FIXTURE_VERSION,
+                "fixture_definition_identity",
+            )
+            nonce = declared["nonce"]
             if not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", nonce):
                 raise SandboxRefused("invalid candidate fixture nonce")
             expect(sql("SELECT count(*) FROM fixture_instance") == "1", "durable_fixture")
+            expect(
+                sql("SELECT template_digest FROM fixture_instance") == REFERENCE_FIXTURE_DIGEST,
+                "independent_fixture_definition",
+            )
             for headers in ({}, {"x-setup-token": observer}, {"x-setup-token": "wrong"}):
                 expect(
                     http("POST", "/api/_test/fixtures?variant=inaccessible", headers=headers)[

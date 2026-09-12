@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from reference_app.templates import render_form, template_digest
+from reference_app.templates import presentation_digest, render_form, template_digest
 from reference_app.validation import FieldError
 
 ERRORS = [
@@ -72,9 +72,10 @@ def test_inaccessible_variant_is_labelled_as_a_seeded_defect() -> None:
     assert "SEEDED DEFECT" not in _render("accessible")
 
 
-def test_template_digest_distinguishes_variants_and_is_stable() -> None:
+def test_logical_fixture_digest_is_stable_across_presentational_variants() -> None:
     a, i = template_digest("accessible"), template_digest("inaccessible")
-    assert a != i
+    assert a == i
+    assert presentation_digest("accessible") != presentation_digest("inaccessible")
     assert a == template_digest("accessible")  # stable across calls
     assert len(a) == 64
 
