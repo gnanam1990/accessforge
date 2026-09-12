@@ -48,9 +48,14 @@ minting reordered after the transition so a legitimate approval stays dispatchab
 Round 2 closed a fourth: the digest check on load was conditional on there being changes, so an
 emptied proposal passed it while keeping its approval.
 
-### P3 — Rate limiting (module 26 gap: "no telemetry or rate limits")
-Per-principal and per-workspace limits on the write routes, with RFC7807 `429` and a stated
-retry-after. **Depends on:** 18. Security-relevant and self-contained.
+### ~~P3 — Rate limiting~~ — built, awaiting review
+Branch `feat/m26-rate-limits`. Per-principal and per-workspace token buckets in PostgreSQL, enforced
+at the single `build_context` chokepoint for authenticated mutating `/v1/workspaces/` routes, refused
+as RFC7807 `RATE_LIMITED` with `Retry-After`. Handoff in `docs/handoffs/26-rate-limits.md`.
+
+**Not covered:** the two session routes (`POST /v1/sessions`, `DELETE /v1/session`), which have no
+trustworthy key without a client address from a proxy. Limits are global configuration rather than
+per workspace. Neither is hidden: both are asserted or recorded.
 
 ### P4 — Structured telemetry (module 26 gap)
 Request and outcome telemetry with no evidence content and no object keys in it.

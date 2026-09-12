@@ -205,6 +205,31 @@ reader attached. The VERIFIED path is exercised with evidence the tests name `_f
 currently trust what a caller reports about a candidate run; when a real runner exists those fields
 must be read from evidence instead. **Nothing pushed; no external review.**
 
+## Write rate limits — 2026-09-12 (branch `feat/m26-rate-limits`, not yet reviewed)
+
+Module 26's rate-limiting gap. Entitlements bounded how much a workspace consumes over a period;
+nothing bounded how fast anyone could ask. Per-principal and per-workspace token buckets now do,
+in PostgreSQL rather than in a process — an in-process counter is correct only while there is exactly
+one API process, and a limit that loosens as you add capacity is not a limit.
+
+Enforced in `build_context`, the one place every route reaches through `authorize`, keyed on the
+principal the session resolved and the workspace in the path. Nothing a caller can set reaches the
+bucket key.
+
+External review found a fourth, and it was the serious one: the limiter's decrements ran inside the
+request's own transaction, so any later failure rolled them back — a permission-denied or otherwise
+failing write was never charged, and could be retried for ever. The limiter now commits on its own
+connection before the route can fail, with both buckets still atomic with respect to each other.
+
+Maintainer review found three: `limitPerMinute` reported the burst capacity rather than the
+sustained rate; the generated 429 promised `RATE_LIMITED` on the two session routes, which cannot
+send it; and moving migration 0021's coverage had weakened its assertions to names and existence.
+All three fixed, each mutation-checked.
+
+**1786 tests pass** against real PostgreSQL 17 and MinIO. 25 mutation checks across the limiter, the
+enforcement point and both schemas; 24 caught, and the survivor is recorded in the handoff as defence
+in depth rather than covered behaviour. **Nothing pushed; no external review.**
+
 ## Outstanding debts
 
 - Executable negative-verification tests now exist for the fixture and configuration guards, proved
@@ -233,6 +258,11 @@ must be read from evidence instead. **Nothing pushed; no external review.**
 - `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
   `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
   else, and it is untouched rather than unknown.
+- The two session routes are not rate limited and cannot be by the current mechanism: neither has a
+  trustworthy key without a client address supplied by a proxy. Asserted as an uncovered set so it
+  cannot grow silently.
+- Rate limits are global configuration, not per workspace: a noisy tenant is limited at the same rate
+  as a quiet one.
 - The verification gates accept `closing_watermarks` and `protected_regressions_passed` as reported
   by the caller rather than reading them from evidence. Today the only caller is a test. This is the
   largest remaining hole in FR-011 and it is open, not closed.
