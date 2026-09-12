@@ -45,6 +45,9 @@ bytes, modes and deletions; `baseSourceDigest` is verified against the source sn
 sealed; and the dispatch approval check compares against the patch's current revision, with approval
 minting reordered after the transition so a legitimate approval stays dispatchable.
 
+Round 2 closed a fourth: the digest check on load was conditional on there being changes, so an
+emptied proposal passed it while keeping its approval.
+
 ### P3 — Rate limiting (module 26 gap: "no telemetry or rate limits")
 Per-principal and per-workspace limits on the write routes, with RFC7807 `429` and a stated
 retry-after. **Depends on:** 18. Security-relevant and self-contained.

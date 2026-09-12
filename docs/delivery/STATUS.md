@@ -173,9 +173,14 @@ current tree against a number somebody typed. And the dispatch check compared th
 dispatchable; repairing it meant reordering approval so the approval binds to the revision the patch
 has once approved.
 
-**1727 tests pass** against real PostgreSQL 17 and MinIO. 20 mutation checks across the policy, the
-persistence gates and the schema, including one that reinstates the self-referential revision
-comparison exactly as it shipped. Each restored byte-identically by SHA-256.
+A second review round found the digest comparison on load was skipped when a proposal had no change
+rows, so deleting them all returned an empty patch that kept its digest, its APPROVED status and a
+valid approval. The comparison is now unconditional.
+
+**1729 tests pass** against real PostgreSQL 17 and MinIO. 22 mutation checks across the policy, the
+persistence gates and the schema, including ones that reinstate the self-referential revision
+comparison and the `changes and` short-circuit exactly as each shipped. Each restored
+byte-identically by SHA-256.
 
 **Runtime proof is BLOCKED, and this is not acceptance of FR-010 or FR-011.** No candidate has been
 built or run: there is no containment boundary for executing an application's build and no real screen
