@@ -211,8 +211,8 @@ Raw producer logs are not retained here; stdout/stderr digests accompany the arc
 Restore reconciliation fences every CLAIMED/DISPATCHED candidate, including unexpired leases,
 as UNKNOWN with a new epoch and RESTORED_DATABASE. It does not assert container retirement or
 redispatch. The existing backup enumerates all bucket keys (including this new namespace);
-its object reads are now bounded before allocation. A dedicated full candidate-byte encrypted
-backup/restore drill and archive retention/deletion policy integration are still outstanding.
+its object reads are now bounded before allocation. The dedicated candidate-byte encrypted
+backup/restore drill is described below. Archive retention/deletion policy integration is outstanding.
 Historical BUILT rows remain historical: migration does not invent process receipts or bytes.
 
 The new connected tests use real Git, PostgreSQL, Docker and S3-compatible storage. Injected
@@ -230,10 +230,53 @@ the fresh 0025 upgrade drill, retained 0024/0023 assertions, and unexpired-claim
 The earlier focused source/patch/migration/restore run passed 144 tests before the last new cases.
 The new committed head still requires its own GitHub CI; PR #37 remains draft and unmerged.
 
+## Actual candidate-byte encrypted recovery drill
+
+The connected source test now runs the actual Node candidate build, retains its canonical output,
+invokes the operator's backup script with evidence included, removes the source object's bytes,
+and invokes the restore script into a fresh database and a separately generated bucket. It then
+uses the application-role retained reader to compare recovered bytes and checks the original
+process/archive records. Nothing is restored into the source bucket or source database.
+
+A second case starts from actual uploaded but substituted bytes: the upload remains quarantined
+and the worker claim is still DISPATCHED. Restoring that archive preserves quarantine but fences
+the claim as UNKNOWN with a new epoch and RESTORED_DATABASE. Neither restored case is redispatched;
+the retained case is still a build receipt, not a VERIFIED repair. Missing/source-bucket choices
+are refused before any target tables exist. Owned drill databases and buckets are removed afterward.
+
+The restore script now verifies each uploaded object's exact bytes with a bounded read-back
+before restoring PostgreSQL. Storage errors return failure with the database untouched and warn
+that partial objects may remain in the isolated bucket. Real S3 fault-injection cases substitute
+equal-size, truncated, oversized or missing objects after upload; none is accepted.
+
+This drill exposed an older database defect: the terminal-run immutability trigger returned NEW
+for a nonterminal DELETE. NEW is NULL in that operation, so it silently cancelled deletion even
+during a workspace FK cascade. The parent disappeared but the run survived; the resulting dump
+could not restore its foreign key. Migration 0026 returns OLD for a nonterminal DELETE while still
+rejecting UPDATE/DELETE of all terminal states. The forward drill demonstrates the old orphan
+inside a rolled-back transaction, proves the cascade after migration, and preserves terminal guards.
+
+Migration does not fabricate historical workspaces or delete existing orphaned records. Backup
+preflight now refuses known orphan runs using an all-workspace connection and directs the operator
+to recover parent records from trusted history. That read-only check detects this specific legacy
+defect; it is not a claim that every possible form of database corruption has been audited.
+
+Preceding retention head `550674c68276bbb62e1837f80a0482fdadd23710` passed all GitHub CI in
+run 34716225101. The source/forward-migration/backup focused run passed 50 tests before the final
+read-back fault cases were added. The final full Python suite passed **2,043 tests, zero failures/
+skips**, 58 upstream deprecation warnings (165.86 seconds), using the explicit Docker endpoint
+and pinned toolchain. Strict mypy: 211 files clean; Ruff and OpenAPI/schema/client drift checks pass.
+
+Local evidence-first review covered this recovery delta against 550674c, including the failing
+pre-migration cascade, terminal-state preservation, restored quarantine fencing, actual byte
+recovery and post-upload read-back faults. No evidence-backed defects remain in that reviewed
+scope. It is an internal change review, not an independent security audit or approval of the
+entire draft PR. No third-party integration changed. New-head GitHub CI remains a separate gate.
+
 ## Required next work
 
-1. Integrate archive expiry/deletion and quarantined-object cleanup with retention policy, and run
-   the dedicated candidate-byte encrypted backup/restore drill. Durable successful artifact bytes
+1. Integrate archive expiry/deletion and quarantined-object cleanup with retention policy.
+   The dedicated candidate-byte encrypted backup/restore drill is implemented. Durable artifact bytes
    and actual resolved process receipts are implemented; no public build endpoint is exposed.
    Retained dirty-artifact intake remains required if dirty E0 candidates are supported.
 2. Implement operator reconciliation and durable crash/recovery tests for UNKNOWN attempts using

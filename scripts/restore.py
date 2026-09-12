@@ -35,8 +35,17 @@ from urllib.parse import urlsplit
 
 from accessforge_evidence.envelope import KEY_BYTES, EnvelopeError, open_sealed, read_header
 from accessforge_persistence import connect, expected_migrations, migrate
-from accessforge_persistence.evidence.objectstore import S3ArtifactStore, S3Settings
-from accessforge_persistence.restore import reconcile, restore_is_forward_compatible
+from accessforge_persistence.evidence.objectstore import (
+    ArtifactStoreError,
+    S3ArtifactStore,
+    S3Settings,
+)
+from accessforge_persistence.restore import (
+    RestoreError,
+    reconcile,
+    restore_is_forward_compatible,
+    restore_object_bytes,
+)
 
 #: Members a backup may contain. Everything else is refused rather than ignored -- an archive is
 #: untrusted input even when you took it yourself, because "you took it yourself" is exactly what
@@ -297,13 +306,17 @@ def main(argv: list[str] | None = None) -> int:
                 bucket=args.target_bucket,
             )
         )
-        store.ensure_bucket()
-        for name, payload in sorted(object_members.items()):
-            store.put(
-                key=name.removeprefix("evidence/"),
-                payload=payload,
-                content_type="application/octet-stream",
+        try:
+            store.ensure_bucket()
+            for name, payload in sorted(object_members.items()):
+                restore_object_bytes(store, key=name.removeprefix("evidence/"), payload=payload)
+        except (RestoreError, ArtifactStoreError):
+            print(
+                "object restore/read-back failed; database untouched. "
+                "The isolated target bucket may contain partial objects.",
+                file=sys.stderr,
             )
+            return 2
         print(f"restored {len(object_members)} evidence object(s) into {args.target_bucket}")
 
     _restore_postgres(members["postgres.dump"], args.target_database_url)
