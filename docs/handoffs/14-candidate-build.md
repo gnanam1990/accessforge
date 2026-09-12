@@ -114,19 +114,59 @@ warnings (144.41 seconds). Ruff lint/format and live OpenAPI/schema/client drift
 
 Protocol references: https://git-scm.com/docs/git-cat-file and https://git-scm.com/docs/git
 
+## Durable attempt and connected execution
+
+Migration 0023 adds a workspace-isolated `candidate_build_attempt` with same-workspace foreign
+keys, immutable source/approval/policy/ownership identities, one attempt per patch, a worker token
+and epoch, and explicit CLAIMED/DISPATCHED/BUILT/FAILED/UNKNOWN states. This is intentionally not
+the generic job queue: expiry never authorizes automatic replay.
+
+`prepare_and_claim` selects the baseline through the patch's finding/run/sealed manifest, recovers
+its persisted commit, prepares the exact approved patch and atomically opens verification plus the
+build claim. The original approved revision and the incremented BUILDING revision are recorded
+separately. Source, repair-surface revision, patch revision/digest, canonical archive and execution
+policy identities are bound before dispatch. The durable attempt UUID determines the container
+name before any Docker request.
+
+`execute_claim` commits the one-time DISPATCHED transition only after reloading current approval,
+source, project, patch and policy state. Database time is refreshed after row-lock waits so a
+blocked worker cannot dispatch using an earlier pre-expiry timestamp. The coordinator then calls
+the actual sandbox, and persists a captured artifact digest only after exact cleanup and fresh
+worker-token/epoch/lease/patch checks. Failed builds with confirmed cleanup become FAILED;
+unconfirmed cleanup or an expired attempt becomes UNKNOWN/fenced. No automatic retry/resume path
+exists. Unknown attempts still need an operator reconciliation workflow.
+
+The connected PostgreSQL/Git/Docker tests perform a real approved source edit and actual Node build
+over owned synthetic source, assert the original checkout is unchanged, and compare captured bytes
+with the durable receipt. A second real build prints PASS but exits 23; it records FAILED with no
+artifact digest. These tests fabricate the *baseline finding* to exercise dispatch; they do not
+claim a real accessibility failure, reference-app build, protected regression pass or reader result.
+
+Additional database tests cover concurrent claim winners, identity immutability, rollback, revoked
+approval, changed source/project/surface/configuration, exact approval revisions, one-time dispatch,
+cross-workspace denial, lease fencing and stale/unconfirmed receipts. Focused lifecycle + source
+pipeline + Docker run: 109 passed. Fresh-database forward-upgrade/recovery drill: 16 passed,
+including the new 0023 boundary while preserving all 0022 rate-limit assertions. Strict mypy:
+210 files clean. Full Python rerun with Docker provisioned: **2,011 passed, zero failures/skips**,
+58 upstream deprecation warnings (153.12 seconds). Ruff lint/format and live OpenAPI/schema/client
+drift checks pass. The initial full run correctly failed three outdated forward-boundary tests;
+the explicit new migration drill was added before this clean full rerun.
+
+The earlier source-broker head `1e8ff8f0facee18d248eeaed8f7821aef3b490d1` passed all GitHub CI jobs
+in run 34713664264, including the real Docker probes on Linux amd64. That is not yet CI proof for
+this new durable-attempt change. PR #37 remains draft; nothing here is merged.
+
 ## Required next work
 
-1. Integrate the persisted-source broker with the exact patch/baseline manifest and durable build
-   claim. Persist its mode-inclusive archive identity before dispatch; equal v1 content-tree
-   digests alone still must not authorize unexplained mode drift. Retained dirty-artifact intake
-   remains separate required work if dirty E0 candidates are supported.
-2. Claim build work atomically in PostgreSQL, reload current PATCH_APPLY authority immediately
-   before sandbox dispatch, persist the exact input/configuration identities and fence stale workers.
-   Pure preparation checks cannot establish that an approval remains unrevoked after it was fetched.
-   Existing `open_verification` transitions the patch from APPROVED to BUILDING and increments its
-   revision. The coordinator must bind the original approved revision and the claimed building
-   revision explicitly; it cannot reuse an APPROVED-only dispatch check after that transition or
-   compare an approval's expected revision to itself.
+1. Retain captured artifact bytes durably with the build's actual resolved image/platform and
+   process receipt. Currently the coordinator returns bytes to its trusted caller and stores the
+   digest; a crash can lose those bytes. No public build endpoint or available-artifact claim exists.
+   Retained dirty-artifact intake remains required if dirty E0 candidates are supported.
+2. Implement operator reconciliation and durable crash/recovery tests for UNKNOWN attempts using
+   the pre-recorded task identity and an explicitly pinned Docker endpoint/daemon identity. The
+   current primitive still uses the CLI's ambient context; context switching during execution or
+   cleanup is not covered by current proof and must be closed before a recovery/merge claim.
+   Fencing is implemented; safe reconciliation/resumption is not.
 3. Provision the actual E0 reference-application toolchain and connect it to the new execution
    primitive. Docker daemon access is supervisor authority, never an author-selectable endpoint.
 4. Run protected functional regressions outside source-writable paths; independently collect and hash

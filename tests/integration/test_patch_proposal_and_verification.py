@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from accessforge_domain.authority import AuthorityError
 from accessforge_domain.canonical import digest
 from accessforge_domain.patch_policy import ProposedChange
 from accessforge_domain.states import ApprovalScope, FindingStatus, Outcome, PatchStatus
@@ -37,6 +39,9 @@ from accessforge_persistence import (
     runs,
     unscoped_connection,
     workspace_connection,
+)
+from accessforge_persistence import (
+    candidate_builds as builds,
 )
 from accessforge_persistence import (
     projects as project_store,
@@ -130,6 +135,293 @@ def finding(db: str, manifest: str, project: str, surface: tuple[str, ...]) -> t
             actor_id=OWNER,
         )
     return finding_id, run_id
+
+
+@pytest.fixture()
+def build_ready(
+    db: str,
+    finding: tuple[str, str],
+    manifest: str,
+    project: str,
+) -> tuple[patches.PatchProposal, builds.BuildInputs]:
+    """Real durable lifecycle, with synthetic archive receipts; not actual build proof."""
+    approved, _ = _approve(db, _propose(db, finding[0], manifest))
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE project SET repository_authorized_by = %s WHERE id = %s", (OWNER, project)
+        )
+        row = conn.execute(
+            "SELECT s.id, s.commit_sha, s.tree_digest, p.paths, p.revision "
+            "FROM sealed_manifest m JOIN source_snapshot s ON s.id = m.source_snapshot_id "
+            "JOIN project_repair_surface p ON p.project_id = m.project_id "
+            "WHERE m.manifest_digest = %s LIMIT 1",
+            (manifest,),
+        ).fetchone()
+    assert row is not None
+    return approved, builds.BuildInputs(
+        str(row["id"]),
+        str(row["commit_sha"]),
+        str(row["tree_digest"]),
+        "a" * 64,
+        "b" * 64,
+        "c" * 64,
+        builds.surface_identity(tuple(row["paths"]), int(row["revision"])),
+        approved.patch_digest,
+        approved.revision,
+    )
+
+
+def _build_claim(
+    db: str, ready: tuple[patches.PatchProposal, builds.BuildInputs]
+) -> builds.BuildClaim:
+    patch, inputs = ready
+    with workspace_connection(db, WS) as conn:
+        return builds.claim_build(conn, workspace_id=WS, patch_id=patch.patch_id, inputs=inputs)
+
+
+def test_candidate_claim_dispatch_and_receipt_are_not_a_verification_conclusion(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+) -> None:
+    patch, inputs = build_ready
+    claim = _build_claim(db, build_ready)
+    with workspace_connection(db, WS) as conn:
+        row = conn.execute(
+            "SELECT * FROM candidate_build_attempt WHERE id = %s", (claim.build_id,)
+        ).fetchone()
+        assert row is not None
+        assert row["approved_revision"] == patch.revision
+        assert row["building_revision"] == patch.revision + 1
+        dispatched = builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=inputs)
+        assert dispatched.state == "DISPATCHED"
+    with workspace_connection(db, WS) as conn:
+        built = builds.finish_build(
+            conn,
+            claim=claim,
+            artifact_digest="d" * 64,
+            candidate_archive_digest=inputs.candidate_archive_digest,
+            cleanup_confirmed=True,
+        )
+        assert built.state == "BUILT"
+        verification = patches.load_verification(conn, verification_id=claim.verification_id)
+        assert verification.state == "BUILDING" and verification.conclusion is None
+        with pytest.raises(builds.BuildClaimRefused):
+            builds.finish_build(
+                conn,
+                claim=claim,
+                artifact_digest="d" * 64,
+                candidate_archive_digest=inputs.candidate_archive_digest,
+                cleanup_confirmed=True,
+            )
+
+
+def test_candidate_source_mismatch_rolls_back_both_claim_and_verification(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+) -> None:
+    patch, inputs = build_ready
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(builds.BuildClaimRefused, match="source"):
+            builds.claim_build(
+                conn,
+                workspace_id=WS,
+                patch_id=patch.patch_id,
+                inputs=replace(inputs, source_commit="f" * 40),
+            )
+        assert patches.load_patch(conn, patch_id=patch.patch_id).status is PatchStatus.APPROVED
+        assert conn.execute("SELECT id FROM candidate_build_attempt").fetchone() is None
+        assert conn.execute("SELECT id FROM patch_verification").fetchone() is None
+
+
+def test_candidate_approval_revocation_between_claim_and_dispatch_is_rechecked(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+) -> None:
+    patch, inputs = build_ready
+    claim = _build_claim(db, build_ready)
+    assert patch.approval_id is not None
+    with workspace_connection(db, WS) as conn:
+        approvals.revoke_approval(conn, approval_id=patch.approval_id)
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(AuthorityError):
+            builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=inputs)
+
+
+@pytest.mark.parametrize("change", ["source", "surface", "project", "policy", "patch"])
+def test_candidate_changed_dispatch_inputs_are_refused(
+    db: str,
+    project: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+    change: str,
+) -> None:
+    patch, inputs = build_ready
+    claim = _build_claim(db, build_ready)
+    with workspace_connection(db, WS) as conn:
+        if change == "source":
+            conn.execute(
+                "UPDATE source_snapshot SET commit_sha = %s WHERE id = %s",
+                ("f" * 40, inputs.source_snapshot_id),
+            )
+        elif change == "surface":
+            conn.execute(
+                "UPDATE project_repair_surface SET revision = revision + 1 WHERE project_id = %s",
+                (project,),
+            )
+        elif change == "project":
+            conn.execute("UPDATE project SET revoked_at = now() WHERE id = %s", (project,))
+        elif change == "patch":
+            patches.transition_patch(
+                conn,
+                workspace_id=WS,
+                patch_id=patch.patch_id,
+                to_status=PatchStatus.FAILED,
+                actor_id=OWNER,
+                reason="cancelled",
+            )
+        else:
+            inputs = replace(inputs, policy_digest="f" * 64)
+        with pytest.raises(builds.BuildClaimRefused):
+            builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=inputs)
+
+
+def test_candidate_dispatch_is_consumed_once(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+) -> None:
+    claim = _build_claim(db, build_ready)
+    with workspace_connection(db, WS) as conn:
+        builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=build_ready[1])
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(builds.BuildClaimRefused):
+            builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=build_ready[1])
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+def test_candidate_expiry_fences_without_reclaim_and_refuses_late_receipts(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+    dispatched: bool,
+) -> None:
+    claim = _build_claim(db, build_ready)
+    future = datetime.now(UTC) + timedelta(minutes=20)
+    with workspace_connection(db, WS) as conn:
+        if dispatched:
+            builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=build_ready[1])
+        assert builds.fence_expired(conn, now=future) == 1
+        assert builds.fence_expired(conn, now=future) == 0
+        row = conn.execute(
+            "SELECT state, epoch FROM candidate_build_attempt WHERE id = %s", (claim.build_id,)
+        ).fetchone()
+        assert row == {"state": "UNKNOWN", "epoch": claim.epoch + 1}
+        with pytest.raises(builds.BuildClaimRefused):
+            builds.finish_build(
+                conn,
+                claim=claim,
+                artifact_digest="d" * 64,
+                candidate_archive_digest=build_ready[1].candidate_archive_digest,
+                cleanup_confirmed=True,
+            )
+        with pytest.raises(patches.PatchError):
+            builds.claim_build(
+                conn, workspace_id=WS, patch_id=claim.patch_id, inputs=build_ready[1]
+            )
+
+
+@pytest.mark.parametrize("wrong", ["token", "epoch", "candidate", "cleanup", "patch"])
+def test_candidate_stale_or_unconfirmed_receipt_cannot_publish(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+    wrong: str,
+) -> None:
+    claim = _build_claim(db, build_ready)
+    with workspace_connection(db, WS) as conn:
+        builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=build_ready[1])
+        if wrong == "patch":
+            patches.transition_patch(
+                conn,
+                workspace_id=WS,
+                patch_id=claim.patch_id,
+                to_status=PatchStatus.FAILED,
+                actor_id=OWNER,
+                reason="cancelled",
+            )
+        bad = replace(claim, worker_token=str(uuid.uuid4())) if wrong == "token" else claim
+        if wrong == "epoch":
+            bad = replace(claim, epoch=claim.epoch + 1)
+        with pytest.raises(builds.BuildClaimRefused):
+            builds.finish_build(
+                conn,
+                claim=bad,
+                artifact_digest="d" * 64,
+                candidate_archive_digest="e" * 64 if wrong == "candidate" else "b" * 64,
+                cleanup_confirmed=wrong != "cleanup",
+            )
+
+
+def test_candidate_claim_is_not_visible_from_another_workspace(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+) -> None:
+    claim = _build_claim(db, build_ready)
+    with workspace_connection(db, str(uuid.uuid4())) as conn:
+        assert conn.execute("SELECT id FROM candidate_build_attempt").fetchone() is None
+        with pytest.raises(builds.BuildClaimRefused):
+            builds.authorize_dispatch(conn, workspace_id=WS, claim=claim, inputs=build_ready[1])
+
+
+def test_candidate_concurrent_claims_have_exactly_one_winner(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    ready = Barrier(2)
+
+    def attempt() -> bool:
+        ready.wait(timeout=10)
+        try:
+            _build_claim(db, build_ready)
+            return True
+        except patches.PatchError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: attempt(), range(2)))
+    assert sorted(results) == [False, True]
+    with workspace_connection(db, WS) as conn:
+        assert len(conn.execute("SELECT id FROM candidate_build_attempt").fetchall()) == 1
+        assert len(conn.execute("SELECT id FROM patch_verification").fetchall()) == 1
+
+
+def test_candidate_input_identity_cannot_be_rewritten_in_the_database(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+) -> None:
+    import psycopg
+
+    claim = _build_claim(db, build_ready)
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(psycopg.IntegrityError, match="immutable"), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_build_attempt SET base_archive_digest = %s WHERE id = %s",
+                ("f" * 64, claim.build_id),
+            )
+
+
+def test_candidate_preparation_for_another_approval_revision_cannot_be_claimed(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+) -> None:
+    patch, inputs = build_ready
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(builds.BuildClaimRefused, match="another approved"):
+            builds.claim_build(
+                conn,
+                workspace_id=WS,
+                patch_id=patch.patch_id,
+                inputs=replace(inputs, approved_revision=inputs.approved_revision + 1),
+            )
 
 
 def _propose(
