@@ -5,17 +5,19 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
 
 from accessforge_build_worker.artifacts import read_retained_candidate
-from accessforge_build_worker.coordinator import execute_claim, prepare_and_claim
+from accessforge_build_worker.coordinator import ClaimedCandidate, execute_claim, prepare_and_claim
 from accessforge_build_worker.sandbox import (
     DockerSandbox,
     SandboxPolicy,
@@ -30,10 +32,12 @@ from accessforge_domain.states import FindingStatus, Outcome
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import (
     assert_row_level_security_enforced,
+    connect,
     evidence,
     migrate,
     patches,
     projects,
+    restore,
     reviews,
     runs,
     unscoped_connection,
@@ -235,15 +239,11 @@ def test_dirty_database_record_is_not_relabelled_as_a_clean_commit(binding: Boun
             )
 
 
-@pytest.mark.sandbox
-@pytest.mark.parametrize("exit_failure", [False, True])
-@pytest.mark.parametrize("fault", ["none", "upload_failure", "tamper", "fenced"])
-def test_real_source_claim_docker_capture_and_durable_receipt(
+def _prepare_owned_build(
     binding: BoundFixture,
-    exit_failure: bool,
-    fault: str,
-    candidate_store: evidence.S3ArtifactStore,
-) -> None:
+    *,
+    exit_failure: bool = False,
+) -> tuple[ClaimedCandidate, DockerSandbox, tuple[str, ...]]:
     """Actual build pipeline over owned synthetic source, not reference-app or reader proof."""
     image = os.environ.get("ACCESSFORGE_SANDBOX_IMAGE")
     if not image:
@@ -346,6 +346,245 @@ def test_real_source_claim_docker_capture_and_durable_receipt(
         sandbox=sandbox,
         command=command,
     )
+    return claimed, sandbox, command
+
+
+@dataclass(frozen=True)
+class IsolatedArchiveStore:
+    settings: evidence.S3Settings
+    store: evidence.S3ArtifactStore
+
+
+@pytest.fixture()
+def isolated_archives() -> Iterator[tuple[IsolatedArchiveStore, IsolatedArchiveStore]]:
+    buckets: list[IsolatedArchiveStore] = []
+    try:
+        for _ in range(2):
+            settings = evidence.S3Settings(
+                endpoint_url=os.environ["OBJECT_STORE_ENDPOINT"],
+                access_key=os.environ["OBJECT_STORE_ACCESS_KEY"],
+                secret_key=os.environ["OBJECT_STORE_SECRET_KEY"],
+                bucket=f"accessforge-candidate-drill-{uuid.uuid4().hex}",
+            )
+            store = evidence.S3ArtifactStore(settings)
+            store.ensure_bucket()
+            buckets.append(IsolatedArchiveStore(settings, store))
+        yield buckets[0], buckets[1]
+    finally:
+        # Only freshly generated, isolated drill buckets; never the configured evidence bucket.
+        for bucket in buckets:
+            for key in bucket.store.iter_keys():
+                bucket.store.delete(key=key)
+            bucket.store._client.delete_bucket(Bucket=bucket.settings.bucket)
+
+
+def _database_at(url: str, name: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, f"/{name}", parts.query, parts.fragment))
+
+
+@pytest.mark.parametrize("replacement", [b"wrong!!", b"short", b"oversized", None])
+def test_restore_rejects_substituted_or_missing_bytes_after_actual_upload(
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: bytes | None,
+) -> None:
+    store = isolated_archives[1].store
+    original_put = store.put
+    key = "synthetic-restore-probe"
+
+    def substituted_put(*, key: str, payload: bytes, content_type: str) -> str:
+        original_put(key=key, payload=payload, content_type=content_type)
+        if replacement is None:
+            store.delete(key=key)
+        else:
+            original_put(key=key, payload=replacement, content_type=content_type)
+        return key
+
+    monkeypatch.setattr(store, "put", substituted_put)
+    with pytest.raises((restore.RestoreError, evidence.ArtifactStoreError)):
+        restore.restore_object_bytes(store, key=key, payload=b"trusted")
+
+
+@pytest.fixture()
+def candidate_restore_target(backup_database_url: str) -> Iterator[str]:
+    name = f"accessforge_candidate_restore_{uuid.uuid4().hex[:12]}"
+    with connect(_database_at(backup_database_url, "postgres")) as conn:
+        conn.autocommit = True
+        conn.execute(f'CREATE DATABASE "{name}"')  # noqa: S608 - generated disposable name.
+    try:
+        yield _database_at(backup_database_url, name)
+    finally:
+        with connect(_database_at(backup_database_url, "postgres")) as conn:
+            conn.autocommit = True
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')  # noqa: S608
+
+
+def _operator_script(
+    script: str, args: tuple[str, ...], env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    root = Path(__file__).resolve().parents[2]
+    return subprocess.run(  # noqa: S603 - owned scripts and explicit argv; no shell.
+        [sys.executable, str(root / "scripts" / script), *args],
+        cwd=root,
+        env={**os.environ, **env},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("retained", [True, False])
+def test_actual_candidate_encrypted_backup_and_isolated_restore(
+    binding: BoundFixture,
+    backup_database_url: str,
+    candidate_restore_target: str,
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+    tmp_path_factory: pytest.TempPathFactory,
+    retained: bool,
+) -> None:
+    source, target = isolated_archives
+    claimed, sandbox, command = _prepare_owned_build(binding)
+    store = FaultStore(source.store, binding, "none" if retained else "tamper", [])
+    if retained:
+        execute_claim(
+            binding.database,
+            workspace_id=binding.workspace,
+            claimed=claimed,
+            sandbox=sandbox,
+            command=command,
+            store=store,
+        )
+    else:
+        with pytest.raises(builds.BuildClaimRefused, match="substituted"):
+            execute_claim(
+                binding.database,
+                workspace_id=binding.workspace,
+                claimed=claimed,
+                sandbox=sandbox,
+                command=command,
+                store=store,
+            )
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        archive_row = conn.execute(
+            "SELECT * FROM candidate_archive WHERE build_id = %s", (claimed.claim.build_id,)
+        ).fetchone()
+        process_row = conn.execute(
+            "SELECT * FROM candidate_process_receipt WHERE build_id = %s",
+            (claimed.claim.build_id,),
+        ).fetchone()
+        assert archive_row is not None and process_row is not None
+    key = str(archive_row["object_key"])
+    captured = source.store.get_bounded(key=key, max_bytes=int(archive_row["size_bytes"]))
+    directory = tmp_path_factory.mktemp("candidate-encrypted-backup")
+    key_file, backup = directory / "backup.key", directory / "candidate.afbk"
+    env = {
+        "ACCESSFORGE_BACKUP_DATABASE_URL": backup_database_url,
+        "ACCESSFORGE_EVIDENCE_ENDPOINT_URL": source.settings.endpoint_url,
+        "ACCESSFORGE_EVIDENCE_ACCESS_KEY": source.settings.access_key,
+        "ACCESSFORGE_EVIDENCE_SECRET_KEY": source.settings.secret_key,
+        "ACCESSFORGE_EVIDENCE_BUCKET": source.settings.bucket,
+    }
+    generated = _operator_script(
+        "backup.py",
+        ("--key-file", str(key_file), "--write-new-key"),
+        env,
+    )
+    assert generated.returncode == 0, generated.stderr
+    backed_up = _operator_script(
+        "backup.py",
+        ("--key-file", str(key_file), "--output", str(backup)),
+        env,
+    )
+    assert backed_up.returncode == 0, backed_up.stderr
+    assert b"print('repaired')" not in backup.read_bytes()
+    args = (
+        "--archive",
+        str(backup),
+        "--key-file",
+        str(key_file),
+        "--target-database-url",
+        candidate_restore_target,
+        "--operator",
+        "candidate-drill",
+    )
+    # Fail before touching PostgreSQL when a destination bucket is missing or is the source.
+    for suffix in ((), ("--target-bucket", source.settings.bucket)):
+        refused = _operator_script("restore.py", (*args, *suffix), env)
+        assert refused.returncode == 2
+        with connect(candidate_restore_target) as conn:
+            assert conn.execute(
+                "SELECT count(*) AS n FROM information_schema.tables WHERE table_schema = 'public'"
+            ).fetchone() == {"n": 0}
+    source.store.delete(key=key)
+    restored = _operator_script(
+        "restore.py",
+        (*args, "--target-bucket", target.settings.bucket),
+        env,
+    )
+    assert restored.returncode == 0, restored.stderr
+    assert "reconciled:" in restored.stdout
+    assert not source.store.exists(key=key)
+    assert target.store.get_bounded(key=key, max_bytes=len(captured)) == captured
+    restored_app_url = _database_at(
+        binding.database, urlsplit(candidate_restore_target).path.lstrip("/")
+    )
+    with workspace_connection(restored_app_url, binding.workspace) as conn:
+        assert (
+            conn.execute(
+                "SELECT * FROM candidate_archive WHERE build_id = %s", (claimed.claim.build_id,)
+            ).fetchone()
+            == archive_row
+        )
+        assert (
+            conn.execute(
+                "SELECT * FROM candidate_process_receipt WHERE build_id = %s",
+                (claimed.claim.build_id,),
+            ).fetchone()
+            == process_row
+        )
+        state = conn.execute(
+            "SELECT state,epoch,failure_code FROM candidate_build_attempt WHERE id = %s",
+            (claimed.claim.build_id,),
+        ).fetchone()
+        assert state == {
+            "state": "BUILT" if retained else "UNKNOWN",
+            "epoch": 1 if retained else 2,
+            "failure_code": None if retained else "RESTORED_DATABASE",
+        }
+        with pytest.raises(builds.BuildClaimRefused):
+            builds.authorize_dispatch(
+                conn, workspace_id=binding.workspace, claim=claimed.claim, inputs=claimed.inputs
+            )
+    if retained:
+        candidate = read_retained_candidate(
+            restored_app_url,
+            workspace_id=binding.workspace,
+            build_id=claimed.claim.build_id,
+            store=target.store,
+        )
+        assert candidate.files == (SourceFile("out/candidate.txt", b"print('repaired')\n"),)
+    else:
+        with pytest.raises(builds.BuildClaimRefused, match="no retained"):
+            read_retained_candidate(
+                restored_app_url,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                store=target.store,
+            )
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("exit_failure", [False, True])
+@pytest.mark.parametrize("fault", ["none", "upload_failure", "tamper", "fenced"])
+def test_real_source_claim_docker_capture_and_durable_receipt(
+    binding: BoundFixture,
+    exit_failure: bool,
+    fault: str,
+    candidate_store: evidence.S3ArtifactStore,
+) -> None:
+    claimed, sandbox, command = _prepare_owned_build(binding, exit_failure=exit_failure)
     store = FaultStore(candidate_store, binding, fault, [])
     if exit_failure:
         with pytest.raises(SandboxRefused, match="code 23"):

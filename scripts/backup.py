@@ -50,6 +50,7 @@ from urllib.parse import urlsplit
 from accessforge_evidence.envelope import KEY_BYTES, generate_key, seal
 from accessforge_persistence import connect, expected_migrations
 from accessforge_persistence.evidence.objectstore import S3ArtifactStore, S3Settings
+from accessforge_persistence.restore import RestoreError, assert_backup_run_integrity
 
 #: The largest archive this in-memory implementation will attempt. See the module docstring: the
 #: whole tar is assembled before sealing, so exceeding this is an out-of-memory kill rather than an
@@ -85,6 +86,11 @@ def _dump_postgres(database_url: str, destination: Path) -> None:
     `pg_dump` fails here rather than producing an empty-looking backup that nobody notices until a
     restore.
     """
+    try:
+        with connect(database_url) as conn:
+            assert_backup_run_integrity(conn)
+    except RestoreError as exc:
+        raise SystemExit(str(exc)) from exc
     pg_dump = shutil.which("pg_dump")
     if pg_dump is None:
         raise SystemExit(

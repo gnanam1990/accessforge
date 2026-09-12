@@ -37,6 +37,8 @@ from typing import Any
 
 import psycopg
 
+from .evidence.objectstore import S3ArtifactStore
+
 
 class RestoreError(RuntimeError):
     """Reconciliation could not complete."""
@@ -66,6 +68,30 @@ def assert_can_reconcile(conn: psycopg.Connection[dict[str, Any]]) -> None:
             "reconciliation must run as a role that bypasses row-level security. The connected "
             "role does not, so it sees none of the leases, runners or jobs it is meant to "
             "invalidate — every statement below would report success and change nothing."
+        )
+
+
+def restore_object_bytes(store: S3ArtifactStore, *, key: str, payload: bytes) -> None:
+    """Write and re-read one archive member before restored database authority is exposed."""
+    if not 0 < len(payload) <= 64 * 1024 * 1024:
+        raise RestoreError("stored object is empty or exceeds the supported restore bound")
+    store.put(key=key, payload=payload, content_type="application/octet-stream")
+    if store.get_bounded(key=key, max_bytes=len(payload)) != payload:
+        raise RestoreError("restored object failed bounded read-back")
+
+
+def assert_backup_run_integrity(conn: psycopg.Connection[dict[str, Any]]) -> None:
+    """Refuse known pre-0026 orphan corruption; never invent or delete historical parents."""
+    assert_can_reconcile(conn)
+    row = conn.execute(
+        "SELECT count(*) AS n FROM run r LEFT JOIN workspace w ON w.id = r.workspace_id "
+        "WHERE w.id IS NULL"
+    ).fetchone()
+    if row is not None and int(row["n"]) != 0:
+        raise RestoreError(
+            "backup refused: runs reference missing workspaces (possible pre-0026 delete-trigger "
+            "corruption). Recover parent records from trusted history before retrying; "
+            "no data was repaired or deleted."
         )
 
 

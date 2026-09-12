@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0025_candidate_artifact_receipts.sql"
+NEWEST = "0026_nonterminal_run_delete.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -143,12 +143,60 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     disposable: str,
 ) -> None:
     _apply_through(disposable, _previous())
+    run_id = str(uuid.uuid4())
+    with connect(disposable) as conn:
+        conn.execute("INSERT INTO workspace (id,name) VALUES (%s,'delete-regression')", (WS,))
+        conn.execute(
+            "INSERT INTO run (id,workspace_id,manifest_digest,status,outcome) "
+            "VALUES (%s,%s,repeat('a',64),'QUEUED','NOT_EVALUATED')",
+            (run_id, WS),
+        )
+        # Demonstrate the old trigger, but roll back instead of leaving corrupt data behind.
+        with conn.transaction(force_rollback=True):
+            assert conn.execute("DELETE FROM workspace WHERE id = %s", (WS,)).rowcount == 1
+            assert conn.execute("SELECT id FROM run WHERE id = %s", (run_id,)).fetchone()
+            with pytest.raises(restore.RestoreError, match="missing workspaces"):
+                restore.assert_backup_run_integrity(conn)
+    assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        assert conn.execute("DELETE FROM workspace WHERE id = %s", (WS,)).rowcount == 1
+        assert conn.execute("SELECT id FROM run WHERE id = %s", (run_id,)).fetchone() is None
+        restore.assert_backup_run_integrity(conn)
+
+
+@pytest.mark.parametrize("state", ["COMPLETED", "INTERRUPTED", "CANCELLED"])
+def test_run_delete_fix_preserves_terminal_immutability(disposable: str, state: str) -> None:
+    migrate(disposable)
+    run_id = str(uuid.uuid4())
+    with connect(disposable) as conn:
+        conn.execute("INSERT INTO workspace (id,name) VALUES (%s,'terminal-delete')", (WS,))
+        conn.execute(
+            "INSERT INTO run (id,workspace_id,manifest_digest,status,outcome,ambiguity_reason) "
+            "VALUES (%s,%s,repeat('a',64),%s,'INCONCLUSIVE','synthetic terminal fixture')",
+            (run_id, WS, state),
+        )
+        for statement, identity in (
+            ("DELETE FROM run WHERE id = %s", run_id),
+            ("DELETE FROM workspace WHERE id = %s", WS),
+            ("UPDATE run SET revision = revision + 1 WHERE id = %s", run_id),
+        ):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(statement, (identity,))
+        assert conn.execute("SELECT id FROM workspace WHERE id = %s", (WS,)).fetchone()
+        assert conn.execute("SELECT id FROM run WHERE id = %s", (run_id,)).fetchone()
+
+
+def test_candidate_artifact_migration_preserves_its_constraints(disposable: str) -> None:
+    _apply_through(disposable, "0024_candidate_daemon_binding.sql")
     historical = _seed_legacy_candidate(disposable, "BUILT")
     with connect(disposable) as conn:
         assert conn.execute("SELECT to_regclass('candidate_archive') AS name").fetchone() == {
             "name": None,
         }
-    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == [
+        "0025_candidate_artifact_receipts.sql",
+        "0026_nonterminal_run_delete.sql",
+    ]
     with connect(disposable) as conn:
         # Migration cannot invent process provenance or available bytes for an old digest.
         assert conn.execute("SELECT * FROM candidate_process_receipt").fetchall() == []
