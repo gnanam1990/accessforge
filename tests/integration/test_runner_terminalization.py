@@ -225,6 +225,7 @@ def test_cancelled_is_refused_while_an_action_is_unresolved(db: str) -> None:
         attempt = conn.execute(
             "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
         ).fetchone()
+        assert attempt is not None
         action_id = runners.record_action_intent(
             conn,
             workspace_id=WS,
@@ -314,6 +315,7 @@ def test_an_ambiguous_action_ends_the_run_interrupted_and_inconclusive(db: str) 
         attempt = conn.execute(
             "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
         ).fetchone()
+        assert attempt is not None
         action_id = runners.record_action_intent(
             conn,
             workspace_id=WS,
@@ -354,6 +356,7 @@ def test_the_run_and_its_desktop_are_fenced_in_one_transaction(db: str) -> None:
         attempt = conn.execute(
             "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
         ).fetchone()
+        assert attempt is not None
         action_id = runners.record_action_intent(
             conn,
             workspace_id=WS,
@@ -382,6 +385,8 @@ def test_the_run_and_its_desktop_are_fenced_in_one_transaction(db: str) -> None:
         lease = conn.execute(
             "SELECT release_reason FROM desktop_lease WHERE id = %s", (lease_id,)
         ).fetchone()
+    assert runner is not None
+    assert lease is not None
     assert str(runner["status"]) == RunnerStatus.QUARANTINED
     assert runner["quarantine_reason"] == "AMBIGUOUS_ACTION"
     assert lease["release_reason"] == "AMBIGUOUS_ACTION"
@@ -395,6 +400,7 @@ def test_a_stale_revision_refuses_the_interruption(db: str) -> None:
         attempt = conn.execute(
             "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
         ).fetchone()
+        assert attempt is not None
         action_id = runners.record_action_intent(
             conn,
             workspace_id=WS,
@@ -425,11 +431,11 @@ def test_a_terminal_run_cannot_be_interrupted_again(db: str) -> None:
     """
     _, lease_id, run_id, epoch = _running_with_lease(db)
     with workspace_connection(db, WS) as conn:
-        attempt = str(
-            conn.execute(
-                "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
-            ).fetchone()["attempt_id"]
-        )
+        lease = conn.execute(
+            "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
+        ).fetchone()
+        assert lease is not None
+        attempt = str(lease["attempt_id"])
         first = runners.record_action_intent(
             conn,
             workspace_id=WS,
@@ -485,11 +491,11 @@ def test_an_action_cannot_be_journaled_against_a_released_lease(db: str) -> None
     _, lease_id, run_id, epoch = _running_with_lease(db)
     after_the_deadline = _just_after_the_deadline(db, lease_id)
     with workspace_connection(db, WS) as conn:
-        attempt = str(
-            conn.execute(
-                "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
-            ).fetchone()["attempt_id"]
-        )
+        lease = conn.execute(
+            "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
+        ).fetchone()
+        assert lease is not None
+        attempt = str(lease["attempt_id"])
         fenced = runners.fence_expired_leases(conn, now=after_the_deadline)
         # Asserted, because the interesting assertion below holds whether or not anything was
         # fenced. The literal this replaced stopped fencing on 2026-09-11 and the test failed; the
@@ -513,11 +519,11 @@ def test_an_action_cannot_claim_an_epoch_the_lease_is_not_at(db: str) -> None:
     """Nothing in the schema could catch this: the foreign key binds the lease, not its epoch."""
     _, lease_id, run_id, epoch = _running_with_lease(db)
     with workspace_connection(db, WS) as conn:
-        attempt = str(
-            conn.execute(
-                "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
-            ).fetchone()["attempt_id"]
-        )
+        lease = conn.execute(
+            "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
+        ).fetchone()
+        assert lease is not None
+        attempt = str(lease["attempt_id"])
         with pytest.raises(runners.RunnerError, match="claims epoch"):
             runners.record_action_intent(
                 conn,
@@ -542,11 +548,11 @@ def test_an_ambiguous_status_without_a_reason_is_refused_by_the_database(db: str
     """
     _, lease_id, run_id, epoch = _running_with_lease(db)
     with workspace_connection(db, WS) as conn:
-        attempt = str(
-            conn.execute(
-                "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
-            ).fetchone()["attempt_id"]
-        )
+        lease = conn.execute(
+            "SELECT attempt_id FROM desktop_lease WHERE id = %s", (lease_id,)
+        ).fetchone()
+        assert lease is not None
+        attempt = str(lease["attempt_id"])
         action_id = runners.record_action_intent(
             conn,
             workspace_id=WS,

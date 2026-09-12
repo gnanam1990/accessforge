@@ -132,7 +132,7 @@ leaves neither a half-applied schema nor a false record of success. The integrat
 |---|---|---|
 | Format | `uv run ruff format --check .` | Formatting is normalized |
 | Lint | `uv run ruff check .` | Lint rules including security (`S`) and import boundaries (`TID`) |
-| Types | `uv run mypy apps/api/src fixtures/reference-app/src packages/domain/src packages/contracts/python/src` | Strict typing across all four Python packages |
+| Types | `uv run mypy apps/api/src fixtures/reference-app/src apps/orchestrator/src packages/agent-tools/navigation/src packages/domain/src packages/contracts/python/src packages/persistence/src packages/evidence/src packages/clients/python/src scripts tests` | Strict typing across every Python workspace member, operator scripts and tests |
 | Unit | `uv run pytest tests/unit -q` | Validation, fail-closed configuration, redaction, fixture-variant integrity, outcome precedence, reducers, authority, property tests |
 | Contract | `uv run pytest tests/contract -q` | Schema validation, RFC8785 canonicalization, and Python/TypeScript digest agreement |
 | Binding drift | `uv run python scripts/generate_contract_bindings.py --check` | Generated bindings still match the authoritative schemas |

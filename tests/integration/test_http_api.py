@@ -609,7 +609,9 @@ def test_an_enrolled_runner_is_never_ready(db: str, client: TestClient) -> None:
     assert enrolled.json()["status"] == "PREFLIGHT_REQUIRED"
 
 
-def test_there_is_no_route_that_reads_an_enrollment_token_back(db: str, settings) -> None:
+def test_there_is_no_route_that_reads_an_enrollment_token_back(
+    db: str, settings: ApiSettings
+) -> None:
     """Structural, over the whole route table.
 
     An endpoint that could reveal an enrollment token would be a way to take over a tenant's

@@ -175,7 +175,9 @@ def _complete_attempt(url: str, s3: evidence.S3ArtifactStore) -> tuple[str, str]
     return run_id, attempt_id
 
 
-def _assess(url: str, s3: evidence.S3ArtifactStore, run_id: str, attempt_id: str):
+def _assess(
+    url: str, s3: evidence.S3ArtifactStore, run_id: str, attempt_id: str
+) -> evidence.Completeness:
     with workspace_connection(url, WS) as conn:
         return evidence.assess_completeness(
             conn, s3, run_id=run_id, attempt_id=attempt_id, required_producers=REQUIRED
@@ -340,11 +342,11 @@ def test_a_swapped_artifact_makes_a_complete_attempt_incomplete(
     assert _assess(db, store, run_id, attempt_id).complete
 
     with workspace_connection(db, WS) as conn:
-        key = str(
-            conn.execute(
-                "SELECT object_key FROM evidence_artifact WHERE attempt_id = %s", (attempt_id,)
-            ).fetchone()["object_key"]
-        )
+        artifact = conn.execute(
+            "SELECT object_key FROM evidence_artifact WHERE attempt_id = %s", (attempt_id,)
+        ).fetchone()
+        assert artifact is not None
+        key = str(artifact["object_key"])
     store.put(key=key, payload=b'{"phrases": []}', content_type="application/json")
 
     result = _assess(db, store, run_id, attempt_id)

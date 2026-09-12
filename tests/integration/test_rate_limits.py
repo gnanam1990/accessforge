@@ -25,6 +25,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
+from httpx2 import Response
 
 from accessforge_persistence import (
     assert_row_level_security_enforced,
@@ -385,10 +387,8 @@ def test_a_pruned_bucket_comes_back_full_which_is_what_it_already_was(db: str) -
 
 
 @pytest.fixture()
-def api(db: str) -> Iterator[object]:
+def api(db: str) -> Iterator[TestClient]:
     """The real application, with a tiny allowance so a boundary is reachable in a test."""
-    from fastapi.testclient import TestClient
-
     from accessforge_api.app import create_app
     from accessforge_api.config import ApiSettings
 
@@ -411,25 +411,27 @@ def api(db: str) -> Iterator[object]:
         yield client
 
 
-def _sign_in(db_url: str, client: object, user_id: str = OWNER) -> str:
+def _sign_in(db_url: str, client: TestClient, user_id: str = OWNER) -> str:
     from accessforge_api.auth import SESSION_COOKIE, issue_session
 
     with workspace_connection(db_url, WS) as conn:
         issued = issue_session(conn, user_id=user_id)
-    client.cookies.set(SESSION_COOKIE, issued.session_token)  # type: ignore[attr-defined]
+    client.cookies.set(SESSION_COOKIE, issued.session_token)
     return issued.csrf_token
 
 
-def _write(client: object, csrf: str, **headers: str) -> object:
+def _write(client: TestClient, csrf: str, **headers: str) -> Response:
     """One cheap write. `POST /projects` needs only a name, so the 429 is about the limit."""
-    return client.post(  # type: ignore[attr-defined]
+    return client.post(
         f"/v1/workspaces/{WS}/projects",
         json={"name": f"p-{uuid.uuid4().hex[:8]}"},
         headers={"x-csrf-token": csrf, **headers},
     )
 
 
-def test_a_write_over_the_limit_is_an_rfc7807_429_with_retry_after(db: str, api: object) -> None:
+def test_a_write_over_the_limit_is_an_rfc7807_429_with_retry_after(
+    db: str, api: TestClient
+) -> None:
     """The refusal a client has to be able to act on.
 
     Three facts a caller needs and a 429 alone does not carry: that this is a rate and not a spent
@@ -439,53 +441,53 @@ def test_a_write_over_the_limit_is_an_rfc7807_429_with_retry_after(db: str, api:
     """
     csrf = _sign_in(db, api)
     for _ in range(3):
-        assert _write(api, csrf).status_code == 201  # type: ignore[attr-defined]
+        assert _write(api, csrf).status_code == 201
 
     refused = _write(api, csrf)
-    assert refused.status_code == 429  # type: ignore[attr-defined]
-    content_type = refused.headers["content-type"]  # type: ignore[attr-defined]
+    assert refused.status_code == 429
+    content_type = refused.headers["content-type"]
     assert content_type.startswith("application/problem+json")
-    body = refused.json()  # type: ignore[attr-defined]
+    body = refused.json()
     assert body["code"] == "RATE_LIMITED"
     assert body["status"] == 429
     assert body["scope"] == "PRINCIPAL"
     assert body["limitPerMinute"] == 3
     assert body["retryAfterSeconds"] >= 1
     # The header and the body agree. Two numbers that could disagree is a contract nobody can trust.
-    header_wait = refused.headers["Retry-After"]  # type: ignore[attr-defined]
+    header_wait = refused.headers["Retry-After"]
     assert header_wait == str(body["retryAfterSeconds"])
     assert "not a quota" in body["detail"]
 
 
-def test_a_refused_write_did_not_happen(db: str, api: object) -> None:
+def test_a_refused_write_did_not_happen(db: str, api: TestClient) -> None:
     """A limiter that refuses after the work is a logger."""
     csrf = _sign_in(db, api)
     for _ in range(3):
-        assert _write(api, csrf).status_code == 201  # type: ignore[attr-defined]
+        assert _write(api, csrf).status_code == 201
 
     with workspace_connection(db, WS) as conn:
         before = conn.execute("SELECT count(*) AS n FROM project").fetchone()
-    assert _write(api, csrf).status_code == 429  # type: ignore[attr-defined]
+    assert _write(api, csrf).status_code == 429
     with workspace_connection(db, WS) as conn:
         after = conn.execute("SELECT count(*) AS n FROM project").fetchone()
     assert before is not None and after is not None
     assert int(after["n"]) == int(before["n"])
 
 
-def test_reads_are_not_charged(db: str, api: object) -> None:
+def test_reads_are_not_charged(db: str, api: TestClient) -> None:
     """The limit is on writes. A caller who has been refused can still see why."""
     csrf = _sign_in(db, api)
     for _ in range(3):
-        assert _write(api, csrf).status_code == 201  # type: ignore[attr-defined]
-    assert _write(api, csrf).status_code == 429  # type: ignore[attr-defined]
+        assert _write(api, csrf).status_code == 201
+    assert _write(api, csrf).status_code == 429
 
     for _ in range(10):
-        listing = api.get(f"/v1/workspaces/{WS}/projects")  # type: ignore[attr-defined]
+        listing = api.get(f"/v1/workspaces/{WS}/projects")
         assert listing.status_code == 200, listing.text
 
 
 @pytest.mark.parametrize("verb", ["post", "put"])
-def test_every_write_verb_is_charged(db: str, api: object, verb: str) -> None:
+def test_every_write_verb_is_charged(db: str, api: TestClient, verb: str) -> None:
     """POST and PUT both go through the same chokepoint.
 
     Enforcement lives in `build_context`, which every route reaches through `authorize`, so a new
@@ -495,8 +497,8 @@ def test_every_write_verb_is_charged(db: str, api: object, verb: str) -> None:
     """
     csrf = _sign_in(db, api)
     created = _write(api, csrf)
-    assert created.status_code == 201, created.text  # type: ignore[attr-defined]
-    project_id = created.json()["projectId"]  # type: ignore[attr-defined]
+    assert created.status_code == 201, created.text
+    project_id = created.json()["projectId"]
 
     # Cleared so the assertion is about *this* request creating the buckets.
     with workspace_connection(db, WS) as conn:
@@ -505,12 +507,12 @@ def test_every_write_verb_is_charged(db: str, api: object, verb: str) -> None:
     if verb == "post":
         response = _write(api, csrf)
     else:
-        response = api.put(  # type: ignore[attr-defined]
+        response = api.put(
             f"/v1/workspaces/{WS}/projects/{project_id}/repair-surface",
             json={"paths": ["src"]},
             headers={"x-csrf-token": csrf},
         )
-    assert response.status_code < 400, response.text  # type: ignore[attr-defined]
+    assert response.status_code < 400, response.text
 
     with workspace_connection(db, WS) as conn:
         principal = rate_limits.bucket_state(conn, scope_kind="PRINCIPAL", scope_id=OWNER)
@@ -519,7 +521,7 @@ def test_every_write_verb_is_charged(db: str, api: object, verb: str) -> None:
     assert workspace is not None, f"a {verb.upper()} was not charged to the workspace"
 
 
-def test_the_bucket_ignores_everything_the_caller_can_set(db: str, api: object) -> None:
+def test_the_bucket_ignores_everything_the_caller_can_set(db: str, api: TestClient) -> None:
     """Identity comes from the session and the path, never from a header or a body field.
 
     A limiter keyed on anything a caller chooses is one the caller turns off by choosing
@@ -546,12 +548,14 @@ def test_the_bucket_ignores_everything_the_caller_can_set(db: str, api: object) 
     assert rows is not None and int(rows["n"]) == 2
 
 
-def test_a_body_supplied_workspace_id_still_cannot_choose_the_bucket(db: str, api: object) -> None:
+def test_a_body_supplied_workspace_id_still_cannot_choose_the_bucket(
+    db: str, api: TestClient
+) -> None:
     """A body `workspaceId` is already refused as an authority claim, and must not reach the
     bucket either.
     """
     csrf = _sign_in(db, api)
-    response = api.post(  # type: ignore[attr-defined]
+    response = api.post(
         f"/v1/workspaces/{WS}/projects",
         json={"name": "from-body", "workspaceId": WS_OTHER},
         headers={"x-csrf-token": csrf},
@@ -562,7 +566,7 @@ def test_a_body_supplied_workspace_id_still_cannot_choose_the_bucket(db: str, ap
         assert rate_limits.bucket_state(conn, scope_kind="WORKSPACE", scope_id=WS_OTHER) is None
 
 
-def test_an_idempotency_key_does_not_buy_a_bypass(db: str, api: object) -> None:
+def test_an_idempotency_key_does_not_buy_a_bypass(db: str, api: TestClient) -> None:
     """The limit is charged before idempotency is consulted, and that ordering is the guarantee.
 
     `authorize` runs at the top of every route and `run_idempotently` inside it, so a replay cannot
@@ -575,9 +579,9 @@ def test_an_idempotency_key_does_not_buy_a_bypass(db: str, api: object) -> None:
     """
     csrf = _sign_in(db, api)
     for _ in range(3):
-        assert _write(api, csrf).status_code == 201  # type: ignore[attr-defined]
+        assert _write(api, csrf).status_code == 201
 
-    refused = api.post(  # type: ignore[attr-defined]
+    refused = api.post(
         f"/v1/workspaces/{WS}/projects",
         json={"name": "keyed"},
         headers={"x-csrf-token": csrf, "Idempotency-Key": str(uuid.uuid4())},
@@ -586,10 +590,12 @@ def test_an_idempotency_key_does_not_buy_a_bypass(db: str, api: object) -> None:
     assert refused.json()["code"] == "RATE_LIMITED"
 
 
-def test_an_unauthenticated_caller_cannot_spend_anybody_s_allowance(db: str, api: object) -> None:
+def test_an_unauthenticated_caller_cannot_spend_anybody_s_allowance(
+    db: str, api: TestClient
+) -> None:
     """Authentication is resolved first, so there is no anonymous channel into a bucket."""
-    api.cookies.clear()  # type: ignore[attr-defined]
-    response = api.post(  # type: ignore[attr-defined]
+    api.cookies.clear()
+    response = api.post(
         f"/v1/workspaces/{WS}/projects", json={"name": "anon"}, headers={"x-csrf-token": "nope"}
     )
     assert response.status_code == 401, response.text
@@ -598,7 +604,7 @@ def test_an_unauthenticated_caller_cannot_spend_anybody_s_allowance(db: str, api
     assert rows is not None and int(rows["n"]) == 0
 
 
-def test_a_non_member_gets_not_found_before_any_bucket_is_touched(db: str, api: object) -> None:
+def test_a_non_member_gets_not_found_before_any_bucket_is_touched(db: str, api: TestClient) -> None:
     """The 404 that hides whether a workspace exists still comes first.
 
     If the limit were charged before membership, a non-member could tell a workspace that exists
@@ -607,7 +613,7 @@ def test_a_non_member_gets_not_found_before_any_bucket_is_touched(db: str, api: 
     oracle back through a side channel.
     """
     csrf = _sign_in(db, api)
-    response = api.post(  # type: ignore[attr-defined]
+    response = api.post(
         f"/v1/workspaces/{WS_OTHER}/projects",
         json={"name": "not-mine"},
         headers={"x-csrf-token": csrf},
@@ -620,7 +626,7 @@ def test_a_non_member_gets_not_found_before_any_bucket_is_touched(db: str, api: 
     assert other is None
 
 
-def test_the_session_routes_are_documented_as_uncovered(db: str, api: object) -> None:
+def test_the_session_routes_are_documented_as_uncovered(db: str, api: TestClient) -> None:
     """The honest limitation, asserted so it cannot drift silently.
 
     `POST /v1/sessions` has no principal and no workspace yet -- the request that creates one -- so
@@ -657,10 +663,8 @@ def test_the_session_routes_are_documented_as_uncovered(db: str, api: object) ->
 
 
 @pytest.fixture()
-def bursty_api(db: str) -> Iterator[object]:
+def bursty_api(db: str) -> Iterator[TestClient]:
     """The same application with a burst of two, which is what separates the two numbers."""
-    from fastapi.testclient import TestClient
-
     from accessforge_api.app import create_app
     from accessforge_api.config import ApiSettings
 
@@ -684,7 +688,9 @@ def bursty_api(db: str) -> Iterator[object]:
         yield client
 
 
-def test_a_burst_above_one_does_not_inflate_the_reported_rate(db: str, bursty_api: object) -> None:
+def test_a_burst_above_one_does_not_inflate_the_reported_rate(
+    db: str, bursty_api: TestClient
+) -> None:
     """The two numbers the refusal reports are the rate and the burst, and they are not the same.
 
     `limitPerMinute` was the capacity, which is the per-minute allowance times the burst. So a
@@ -710,13 +716,13 @@ def test_a_burst_above_one_does_not_inflate_the_reported_rate(db: str, bursty_ap
 
 
 def test_without_a_burst_the_two_numbers_coincide_and_the_prose_says_one_thing(
-    db: str, api: object
+    db: str, api: TestClient
 ) -> None:
     """The default case must not start mentioning a burst that is not there."""
     csrf = _sign_in(db, api)
     for _ in range(3):
-        assert _write(api, csrf).status_code == 201  # type: ignore[attr-defined]
-    body = _write(api, csrf).json()  # type: ignore[attr-defined]
+        assert _write(api, csrf).status_code == 201
+    body = _write(api, csrf).json()
     assert body["limitPerMinute"] == body["burstCapacity"] == 3
     assert "with a burst of" not in body["detail"]
 
@@ -771,7 +777,7 @@ def test_the_contract_documents_retry_after_on_exactly_the_limited_operations(db
 
 
 @pytest.fixture()
-def reviewer_api(db: str, api: object) -> object:
+def reviewer_api(db: str, api: TestClient) -> TestClient:
     """The same application with a reviewer signed in: a member who may read but not write.
 
     A reviewer holds EVIDENCE_READ and PATCH_REVIEW and nothing that creates a project, so every
@@ -788,7 +794,7 @@ def reviewer_api(db: str, api: object) -> object:
 
 
 def test_repeated_permission_denied_writes_become_rate_limited(
-    db: str, reviewer_api: object
+    db: str, reviewer_api: TestClient
 ) -> None:
     """The blocker. A request refused for permissions must still be charged.
 
@@ -823,7 +829,7 @@ def test_repeated_permission_denied_writes_become_rate_limited(
     assert float(bucket["tokens"]) < 1.0
 
 
-def test_repeated_invalid_writes_become_rate_limited(db: str, api: object) -> None:
+def test_repeated_invalid_writes_become_rate_limited(db: str, api: TestClient) -> None:
     """The same for a write that fails on its own terms rather than on authority.
 
     A body missing a required field is refused by the route, after `authorize` has returned and the
@@ -840,14 +846,14 @@ def test_repeated_invalid_writes_become_rate_limited(db: str, api: object) -> No
     """
     csrf = _sign_in(db, api)
     for index in range(3):
-        invalid = api.post(  # type: ignore[attr-defined]
+        invalid = api.post(
             f"/v1/workspaces/{WS}/projects",
             json={},
             headers={"x-csrf-token": csrf},
         )
         assert invalid.status_code == 400, f"attempt {index + 1}: {invalid.text}"
 
-    limited = api.post(  # type: ignore[attr-defined]
+    limited = api.post(
         f"/v1/workspaces/{WS}/projects",
         json={"name": "valid-now"},
         headers={"x-csrf-token": csrf},
@@ -912,7 +918,9 @@ def test_a_refused_request_spends_no_token_from_the_other_bucket(db: str) -> Non
     assert principal is None, "a workspace refusal spent a principal token"
 
 
-def test_the_charge_survives_a_rollback_of_the_business_transaction(db: str, api: object) -> None:
+def test_the_charge_survives_a_rollback_of_the_business_transaction(
+    db: str, api: TestClient
+) -> None:
     """Stated as the mechanism rather than the symptom.
 
     The limiter's transaction is separate, so its decrement is committed while the request's own
@@ -920,7 +928,7 @@ def test_the_charge_survives_a_rollback_of_the_business_transaction(db: str, api
     the two tests above depend on, asserted directly: one failed write, one token gone.
     """
     csrf = _sign_in(db, api)
-    failed = api.post(  # type: ignore[attr-defined]
+    failed = api.post(
         f"/v1/workspaces/{WS}/projects",
         json={},
         headers={"x-csrf-token": csrf},

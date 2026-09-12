@@ -309,6 +309,7 @@ def test_no_response_anywhere_carries_a_credential_or_a_stack_trace(
     mean an exception message reached a caller.
     """
     token = next(c.value for c in client.cookies.jar if c.name == SESSION_COOKIE)
+    assert token is not None
     csrf = client.headers[CSRF_HEADER]
     paths = [path for _, path in _probe_paths(world)] + [
         f"/v1/workspaces/{MINE}/projects",

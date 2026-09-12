@@ -155,7 +155,7 @@ def test_compilation_is_deterministic() -> None:
         {"platform": "win32"},
     ],
 )
-def test_any_change_produces_a_new_journey_digest(change: dict) -> None:
+def test_any_change_produces_a_new_journey_digest(change: dict[str, object]) -> None:
     """Editing creates a new version, never an amended one."""
     if change.get("platform") == "win32":
         change = {**change, "allowed_key_chords": frozenset({"TAB", "ENTER"})}
@@ -288,8 +288,8 @@ def test_a_reader_cannot_decide_task_completion() -> None:
         description="d",
         unknown_reasons=frozenset({UnknownReason.OBSERVER_UNREACHABLE}),
     )
-    assert completion.observer is Observer.APPLICATION_OBSERVER
     assert completion.observer is not Observer.READER
+    assert completion.observer is Observer.APPLICATION_OBSERVER
 
 
 def test_an_application_observer_cannot_decide_an_announcement() -> None:

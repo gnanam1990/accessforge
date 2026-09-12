@@ -227,12 +227,12 @@ def test_requesting_a_run_returns_a_request_and_not_a_result(
     `if client.request_run(...)` and believes a run happened.
     """
     project = client.call("create_project", workspace_id=WS, body={"name": "Runs"})
-    manifest = manifest(project["projectId"])
+    manifest_digest = manifest(project["projectId"])
 
     outcome = client.call(
         "request_run",
         workspace_id=WS,
-        body={"projectId": project["projectId"], "manifestDigest": manifest},
+        body={"projectId": project["projectId"], "manifestDigest": manifest_digest},
     )
     assert isinstance(outcome, Requested)
     assert outcome.identifier
@@ -254,9 +254,9 @@ def test_the_same_idempotency_key_replays_rather_than_creating_twice(
     db: str, client: AccessForgeClient, manifest: Callable[[str], str]
 ) -> None:
     project = client.call("create_project", workspace_id=WS, body={"name": "Idempotent"})
-    manifest = manifest(project["projectId"])
+    manifest_digest = manifest(project["projectId"])
     key = str(uuid.uuid4())
-    body = {"projectId": project["projectId"], "manifestDigest": manifest}
+    body = {"projectId": project["projectId"], "manifestDigest": manifest_digest}
 
     first = client.call("request_run", workspace_id=WS, body=body, idempotency_key=key)
     second = client.call("request_run", workspace_id=WS, body=body, idempotency_key=key)
@@ -271,13 +271,13 @@ def test_the_same_key_with_a_different_body_is_a_conflict(
 ) -> None:
     """Two different operations wearing one name; replaying the first would discard the second."""
     project = client.call("create_project", workspace_id=WS, body={"name": "Conflict"})
-    manifest = manifest(project["projectId"])
+    manifest_digest = manifest(project["projectId"])
     key = str(uuid.uuid4())
 
     client.call(
         "request_run",
         workspace_id=WS,
-        body={"projectId": project["projectId"], "manifestDigest": manifest},
+        body={"projectId": project["projectId"], "manifestDigest": manifest_digest},
         idempotency_key=key,
     )
     with pytest.raises(ApiProblem) as raised:
@@ -286,7 +286,7 @@ def test_the_same_key_with_a_different_body_is_a_conflict(
             workspace_id=WS,
             body={
                 "projectId": project["projectId"],
-                "manifestDigest": manifest,
+                "manifestDigest": manifest_digest,
                 "environment": "x",
             },
             idempotency_key=key,
@@ -403,7 +403,7 @@ def test_the_cli_prints_a_run_request_as_requested_and_never_as_a_result(
     with AccessForgeClient(server) as api:
         api.sign_in(EMAIL)
         project = api.call("create_project", workspace_id=WS, body={"name": "CLI"})
-    manifest = manifest(project["projectId"])
+    manifest_digest = manifest(project["projectId"])
 
     result = _cli(
         server,
@@ -415,7 +415,7 @@ def test_the_cli_prints_a_run_request_as_requested_and_never_as_a_result(
         "--project",
         project["projectId"],
         "--manifest",
-        manifest,
+        manifest_digest,
     )
     assert result.returncode == 0, result.stderr
     printed = json.loads(result.stdout)

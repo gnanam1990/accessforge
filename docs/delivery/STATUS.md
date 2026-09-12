@@ -308,9 +308,10 @@ text, and it is recorded in the handoff rather than quietly fixed.
   coverage found a real gap: the route never set `Idempotent-Replay`, so a client retrying an
   irreversible deletion could not tell whether it had destroyed a second scope of evidence or been
   handed the first answer back.
-- `mypy` still does not cover `tests/`, which reports 139 strict errors — almost all of them bare
-  `dict` annotations. That is a real gap in a suite whose correctness is the evidence for everything
-  else, and it is untouched rather than unknown.
+- Strict `mypy` coverage now includes the entire test suite and every Python workspace member.
+  The refreshed baseline was 234 errors, resolved without relaxing strict mode or adding test
+  exemptions. Local type-check is clean over 197 files; runtime/merge status is tracked in
+  `docs/handoffs/test-suite-mypy.md`.
 - Python dependency scanning audits the set that resolves on Linux; eleven locked packages carry
   environment markers and a platform-only dependency is therefore not audited. The input floor is a
   floor, not an equality, so an export that lost a few packages would still pass.
