@@ -112,7 +112,7 @@ class SandboxPolicy:
     log_bytes: int = 1024 * 1024
 
     def __post_init__(self) -> None:
-        if not re.fullmatch(r"[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-9]{64}", self.image):
+        if not re.fullmatch(r"(?:[a-z0-9][a-z0-9./:_-]*@)?sha256:[a-f0-9]{64}", self.image):
             raise SandboxRefused("a preprovisioned digest-pinned toolchain is required")
         if not 0 < self.wall_seconds <= 600 or not 1 <= self.log_bytes <= 4 * 1024 * 1024:
             raise SandboxRefused("sandbox time/log limits are outside the supported bounds")

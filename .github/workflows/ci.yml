@@ -134,6 +134,14 @@ jobs:
       - name: Real owned-build containment probes
         run: uv run pytest -q tests/sandbox --tb=short
 
+      - name: Provision the pinned reference-app build toolchain
+        # Trusted four-file context only. No target source, credentials, or mutable image tag.
+        run: |
+          set -euo pipefail
+          docker --host "$ACCESSFORGE_SANDBOX_ENDPOINT" pull python@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e
+          reference_image=$(uv run python scripts/provision_reference_toolchain.py --endpoint "$ACCESSFORGE_SANDBOX_ENDPOINT")
+          echo "ACCESSFORGE_REFERENCE_TOOLCHAIN=$reference_image" >> "$GITHUB_ENV"
+
       - uses: pnpm/action-setup@v4
         with:
           version: 11.10.0
@@ -174,7 +182,7 @@ jobs:
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
           apps/orchestrator/src packages/agent-tools/navigation/src
-          apps/build-worker/src
+          apps/build-worker/src apps/build-worker/toolchain/build_reference.py
           packages/domain/src packages/contracts/python/src
           packages/persistence/src packages/evidence/src packages/clients/python/src scripts tests
 
@@ -470,6 +478,9 @@ jobs:
         # and there is no ignore list to add one to; a guard below asserts all of that against this
         # file so the gate cannot be softened without the assertion failing.
         run: uv run python scripts/audit_python_dependencies.py
+
+      - name: Audit the hash-locked reference build backend
+        run: uv run pip-audit --no-deps --disable-pip --strict -r apps/build-worker/toolchain/build-requirements.lock
 
       - name: Known vulnerabilities in the JavaScript dependency tree
         # Reported at high and above and allowed to fail the job. An advisory that is genuinely not

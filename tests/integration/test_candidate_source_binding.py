@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
 import sys
 import uuid
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -26,6 +28,7 @@ from accessforge_build_worker.sandbox import (
 )
 from accessforge_build_worker.snapshot import SnapshotRefused, SourceFile, SourceSnapshot
 from accessforge_build_worker.source_broker import read_persisted_source
+from accessforge_build_worker.toolchain import REFERENCE_BUILD_COMMAND
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.patch_policy import ProposedChange
 from accessforge_domain.states import FindingStatus, Outcome
@@ -107,7 +110,9 @@ class FaultStore:
 
 
 @pytest.fixture()
-def binding(test_database_url: str, tmp_path: Path) -> Iterator[BoundFixture]:
+def binding(
+    test_database_url: str, tmp_path: Path, request: pytest.FixtureRequest
+) -> Iterator[BoundFixture]:
     assert_row_level_security_enforced(test_database_url)
     migrate(test_database_url)
     executable = shutil.which("git")
@@ -122,7 +127,39 @@ def binding(test_database_url: str, tmp_path: Path) -> Iterator[BoundFixture]:
             ),
         )
     )
+    if getattr(request, "param", None) == "reference":
+        # Read exact committed bytes, never a dirty working copy or repository build script.
+        root = Path(__file__).resolve().parents[2]
+
+        def committed(*args: str) -> bytes:
+            return subprocess.run(  # noqa: S603 - fixed read-only Git operations on owned fixture.
+                [executable, "--no-replace-objects", "-C", str(root), *args],
+                capture_output=True,
+                check=True,
+                timeout=10,
+                env={
+                    "PATH": os.defpath,
+                    "GIT_CONFIG_GLOBAL": "/dev/null",
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_NO_LAZY_FETCH": "1",
+                },
+            ).stdout
+
+        revision = committed("rev-parse", "HEAD").decode().strip()
+        prefix = "fixtures/reference-app/"
+        names = (
+            committed("ls-tree", "-r", "--name-only", revision, "--", prefix).decode().splitlines()
+        )
+        source = SourceSnapshot(
+            tuple(
+                SourceFile(name.removeprefix(prefix), committed("show", f"{revision}:{name}"))
+                for name in names
+                if name == prefix + "pyproject.toml" or name.startswith(prefix + "src/")
+            )
+            + (SourceFile("SOURCE_PROVENANCE.txt", f"{revision}:{prefix}\n".encode()),)
+        )
     for file in source.files:
+        (tmp_path / file.path).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / file.path).write_bytes(file.content)
 
     def git(*args: str) -> str:
@@ -248,9 +285,13 @@ def _prepare_owned_build(
     binding: BoundFixture,
     *,
     exit_failure: bool = False,
+    image: str | None = None,
+    command: tuple[str, ...] = ("/usr/local/bin/node", "build.js"),
+    change: ProposedChange | None = None,
 ) -> tuple[ClaimedCandidate, DockerSandbox, tuple[str, ...]]:
     """Actual build pipeline over owned synthetic source, not reference-app or reader proof."""
-    image = os.environ.get("ACCESSFORGE_SANDBOX_IMAGE")
+    image = image or os.environ.get("ACCESSFORGE_SANDBOX_IMAGE")
+    change = change or ProposedChange("app.py", "print('repaired')\n")
     if not image:
         pytest.skip("real Docker toolchain not provisioned")
     with workspace_connection(binding.database, binding.workspace) as conn:
@@ -315,7 +356,7 @@ def _prepare_owned_build(
             conn,
             workspace_id=binding.workspace,
             project_id=binding.project,
-            paths=("app.py",),
+            paths=(change.path,),
             configured_by=binding.owner,
         )
         proposal = patches.propose_patch(
@@ -324,7 +365,7 @@ def _prepare_owned_build(
             finding_id=finding,
             base_manifest_digest=seal.manifest_digest,
             base_source_digest=binding.source.tree_digest,
-            changes=(ProposedChange("app.py", "print('repaired')\n"),),
+            changes=(change,),
             rationale="exercise an owned candidate build",
             proposed_by=binding.owner,
         )
@@ -338,9 +379,8 @@ def _prepare_owned_build(
     endpoint = os.environ.get("ACCESSFORGE_SANDBOX_ENDPOINT")
     assert endpoint is not None, "explicit local Docker endpoint required"
     sandbox = DockerSandbox(
-        SandboxPolicy(image=image, wall_seconds=30), daemon=discover_daemon(endpoint)
+        SandboxPolicy(image=image, wall_seconds=60), daemon=discover_daemon(endpoint)
     )
-    command: tuple[str, ...] = ("/usr/local/bin/node", "build.js")
     if exit_failure:
         command = ("/usr/local/bin/node", "-e", "console.log('PASS'); process.exit(23)")
     claimed = prepare_and_claim(
@@ -352,6 +392,88 @@ def _prepare_owned_build(
         command=command,
     )
     return claimed, sandbox, command
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("binding", ["reference"], indirect=True)
+def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
+    binding: BoundFixture,
+    isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
+) -> None:
+    image = os.environ.get("ACCESSFORGE_REFERENCE_TOOLCHAIN")
+    if not image:
+        if os.environ.get("CI"):
+            pytest.fail("the real reference toolchain must be provisioned in CI")
+        pytest.skip("real reference toolchain not provisioned")
+    path = "src/reference_app/templates.py"
+    original = next(file.content for file in binding.source.files if file.path == path)
+    # Deliberately a build-only approved edit, not an accessibility repair/reader attestation.
+    content = original.decode() + "\n# Owned candidate packaging probe.\n"
+    claimed, sandbox, command = _prepare_owned_build(
+        binding,
+        image=image,
+        command=REFERENCE_BUILD_COMMAND,
+        change=ProposedChange(path, content),
+    )
+    store = isolated_archives[0].store
+    built = execute_claim(
+        binding.database,
+        workspace_id=binding.workspace,
+        claimed=claimed,
+        sandbox=sandbox,
+        command=command,
+        store=store,
+    )
+    retained = read_retained_candidate(
+        binding.database,
+        workspace_id=binding.workspace,
+        build_id=claimed.claim.build_id,
+        store=store,
+    )
+    assert retained.archive() == built.artifact.archive()
+    assert built.cleanup_confirmed and built.image_id == image
+    assert len(built.artifact.files) == 1
+    wheel = built.artifact.files[0]
+    assert wheel.path == "out/accessforge_reference_app-0.0.0-py3-none-any.whl"
+    expected = {
+        file.path.removeprefix("src/"): file.content
+        for file in binding.source.files
+        if file.path.startswith("src/")
+    }
+    expected["reference_app/templates.py"] = content.encode()
+    # Bounded inspection only: never extract/import target code into this host process.
+    with zipfile.ZipFile(io.BytesIO(wheel.content)) as archive:
+        entries = archive.infolist()
+        assert len(entries) == len(expected) + 3
+        assert len({entry.filename for entry in entries}) == len(entries)
+        assert sum(entry.file_size for entry in entries) < 1024 * 1024
+        metadata = "accessforge_reference_app-0.0.0.dist-info/"
+        assert set(archive.namelist()) == set(expected) | {
+            metadata + name for name in ("METADATA", "WHEEL", "RECORD")
+        }
+        for name, payload in expected.items():
+            assert archive.read(name) == payload
+        assert b"Name: accessforge-reference-app\n" in archive.read(metadata + "METADATA")
+    # A fresh contained process uses only the captured wheel and preinstalled runtime.
+    # This import smoke is NOT protected HTTP/database regression or actual reader proof.
+    smoke = sandbox.build(
+        built.artifact,
+        command=(
+            "/usr/local/bin/python",
+            "-I",
+            "-c",
+            "import sys,pathlib; sys.path.insert(0, '/work/src/" + wheel.path + "'); "
+            "import reference_app.app, reference_app.validation; "
+            "assert reference_app.app.__file__.startswith('/work/src/'); "
+            "pathlib.Path('/work/out/import-ok.txt').write_text('imported captured wheel')",
+        ),
+    )
+    assert smoke.artifact.files[0].content == b"imported captured wheel"
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        row = conn.execute(
+            "SELECT state FROM candidate_build_attempt WHERE id=%s", (claimed.claim.build_id,)
+        ).fetchone()
+        assert row is not None and row["state"] == "BUILT"
 
 
 @dataclass(frozen=True)
