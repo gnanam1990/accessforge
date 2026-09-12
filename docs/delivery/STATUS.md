@@ -170,7 +170,11 @@ yet, and nothing pushed** — this branch is for independent review before it go
   every `purged_at` mark for bytes the store had already released, leaving the queue claiming keys
   that no longer existed.
 - ~~`evidence_object_purge.artifact_id` has no foreign key.~~ **Closed 2026-09-12** — migration 0020,
-  composite `(artifact_id, workspace_id)`.
+  composite `(artifact_id, workspace_id)`, pointing at the key migration 0009 already declares.
+  The first version of 0020 added a *second* unique constraint over those columns, so every
+  migrated database maintained two identical unique indexes on the busiest table in the schema.
+  Caught in maintainer review, not by any test; the drill now reads the catalog for every unique
+  constraint matching `UNIQUE (id, workspace_id)` and fails on more than one.
 - ~~No test drives the deletion route with an `Idempotency-Key`.~~ **Closed 2026-09-12** — and the
   coverage found a real gap: the route never set `Idempotent-Replay`, so a client retrying an
   irreversible deletion could not tell whether it had destroyed a second scope of evidence or been
