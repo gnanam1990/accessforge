@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0018_object_purge_queue.sql"
+NEWEST = "0019_navigator_planning_checkpoints.sql"
 
 
 def _with_database(url: str, name: str) -> str:
@@ -142,65 +142,77 @@ def test_the_newest_migrations_effect_is_absent_before_and_present_after(
     with connect(disposable) as conn:
         before = conn.execute(
             "SELECT 1 FROM information_schema.tables "
-            " WHERE table_schema = 'public' AND table_name = 'evidence_object_purge'"
-        ).fetchone()
-        # And the constraint this migration corrects, in its old form. CASCADE here meant deleting a
-        # run would take the record of its deletion with it.
-        cascading = conn.execute(
-            "SELECT confdeltype FROM pg_constraint "
-            " WHERE conrelid = 'evidence_deletion'::regclass AND contype = 'f' "
-            "   AND confrelid = 'run'::regclass"
+            " WHERE table_schema = 'public' AND table_name = 'navigator_planning_checkpoint'"
         ).fetchone()
     assert before is None
-    assert cascading is not None and cascading["confdeltype"] == "c"
 
     migrate(disposable)
 
     with connect(disposable) as conn:
         after = conn.execute(
             "SELECT 1 FROM information_schema.tables "
-            " WHERE table_schema = 'public' AND table_name = 'evidence_object_purge'"
+            " WHERE table_schema = 'public' AND table_name = 'navigator_planning_checkpoint'"
         ).fetchone()
-        # The partial index, not merely an index. A retry sweeps for unfinished work, and the done
-        # rows become the overwhelming majority of the table.
-        pending_index = conn.execute(
-            "SELECT indexdef FROM pg_indexes "
-            " WHERE tablename = 'evidence_object_purge' "
-            "   AND indexname = 'evidence_object_purge_pending'"
+        ordered_index = conn.execute(
+            "SELECT indexdef FROM pg_indexes WHERE tablename = 'navigator_planning_checkpoint' "
+            "AND indexname = 'navigator_planning_checkpoint_attempt_order'"
         ).fetchone()
-        # One row per key per deletion: a repeated enqueue is a retry of the same work, and without
-        # this a stuck key would accumulate a duplicate on every attempt.
-        unique_key = conn.execute(
-            "SELECT 1 FROM pg_constraint WHERE conrelid = 'evidence_object_purge'::regclass "
-            "   AND contype = 'u' "
-            "   AND pg_get_constraintdef(oid) LIKE '%(deletion_id, object_key)%'"
+        shape = conn.execute(
+            "SELECT 1 FROM pg_constraint "
+            "WHERE conrelid = 'navigator_planning_checkpoint'::regclass "
+            "AND conname = 'navigator_checkpoint_shape'"
         ).fetchone()
         forced = conn.execute(
             "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
-            " WHERE relname = 'evidence_object_purge'"
+            " WHERE relname = 'navigator_planning_checkpoint'"
+        ).fetchone()
+        columns = {
+            str(row["column_name"])
+            for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'navigator_planning_checkpoint'"
+            ).fetchall()
+        }
+    assert after is not None
+    assert ordered_index is not None
+    assert shape is not None
+    assert forced is not None
+    assert bool(forced["relrowsecurity"]) and bool(forced["relforcerowsecurity"])
+    assert columns.isdisjoint(
+        {"announcement", "raw_text", "dom", "source", "screenshot", "observer_receipt"}
+    )
+
+
+def test_the_object_purge_queue_from_the_previous_migration_remains_correct(
+    disposable: str,
+) -> None:
+    migrate(disposable)
+    with connect(disposable) as conn:
+        pending_index = conn.execute(
+            "SELECT indexdef FROM pg_indexes WHERE tablename = 'evidence_object_purge' "
+            "AND indexname = 'evidence_object_purge_pending'"
+        ).fetchone()
+        unique_key = conn.execute(
+            "SELECT 1 FROM pg_constraint WHERE conrelid = 'evidence_object_purge'::regclass "
+            "AND contype = 'u' AND pg_get_constraintdef(oid) "
+            "LIKE '%(deletion_id, object_key)%'"
+        ).fetchone()
+        forced = conn.execute(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+            "WHERE relname = 'evidence_object_purge'"
         ).fetchone()
         restricted = conn.execute(
             "SELECT confdeltype, convalidated FROM pg_constraint "
-            " WHERE conrelid = 'evidence_deletion'::regclass AND contype = 'f' "
-            "   AND confrelid = 'run'::regclass"
+            "WHERE conrelid = 'evidence_deletion'::regclass AND contype = 'f' "
+            "AND confrelid = 'run'::regclass"
         ).fetchone()
-    assert after is not None
     assert pending_index is not None
-    assert "purged_at IS NULL" in str(pending_index["indexdef"]), (
-        "the index covers every row, so a sweep for unfinished purges scans the finished ones too"
-    )
-    assert unique_key is not None, "the same key could be enqueued twice for one deletion"
+    assert "purged_at IS NULL" in str(pending_index["indexdef"])
+    assert unique_key is not None
     assert forced is not None
-    # FORCE, not merely ENABLE: the application role owns this table, and ENABLE does nothing for a
-    # table's owner. An object key names a workspace, a run and an artifact in its path.
     assert bool(forced["relrowsecurity"]) and bool(forced["relforcerowsecurity"])
-    # 'r' is RESTRICT. The table comment always said the deletion record must survive its subject;
-    # until this migration the constraint said the opposite and the constraint is what runs.
     assert restricted is not None and restricted["confdeltype"] == "r"
-    # And validated. The constraint is added NOT VALID so the row scan runs under a lock that does
-    # not block writes to `run`, then validated in its own statement -- leaving it NOT VALID would
-    # mean existing rows were never checked against it at all.
-    assert bool(restricted["convalidated"]), "the foreign key was added but never validated"
+    assert bool(restricted["convalidated"])
 
 
 def test_the_deletion_record_from_an_earlier_migration_is_still_correct(
