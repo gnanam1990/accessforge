@@ -1,31 +1,44 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { main, NOT_IMPLEMENTED_MESSAGE } from '../dist/main.js';
+import { main, READER_UNAVAILABLE_MESSAGE } from '../dist/main.js';
 
-test('the runner reports non-implementation instead of a false success', () => {
+const blockedHost = {
+  pathExists: () => false,
+  readPreference: () => undefined,
+  processRunning: () => false,
+  auditSessionId: () => undefined,
+  screenLocked: () => undefined,
+  hasPermission: () => undefined,
+};
+
+test('the runner reports an unavailable real-reader profile instead of false success', () => {
   const lines = [];
-  const code = main((l) => lines.push(l));
+  const code = main((l) => lines.push(l), blockedHost);
 
-  // A zero exit would let a caller treat an absent runner as a working one.
-  assert.notEqual(code, 0, 'runner must not exit successfully while no reader adapter exists');
+  // A zero exit would let a caller treat a compiled adapter as a proven reader runtime.
+  assert.notEqual(code, 0, 'runner must not exit successfully while no reader profile is proven');
   assert.equal(code, 78);
-  assert.deepEqual(lines, [NOT_IMPLEMENTED_MESSAGE]);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], READER_UNAVAILABLE_MESSAGE);
+  const report = JSON.parse(lines[1]);
+  assert.equal(report.realReaderAvailable, false);
+  assert.equal(report.checks.READER_ACTIVE.condition, 'FALSE');
 });
 
-test('the message distinguishes what module 07 built from what it did not', () => {
-  // The distinction is the whole value of this message. Module 07 is real; the screen reader is not.
-  assert.match(NOT_IMPLEMENTED_MESSAGE, /supervisor protocol from module 07 is implemented/);
-  assert.match(NOT_IMPLEMENTED_MESSAGE, /VoiceOver is owned by module 08/);
-  assert.match(NOT_IMPLEMENTED_MESSAGE, /NVDA by module 09/);
-  assert.match(NOT_IMPLEMENTED_MESSAGE, /reports no screen-reader capability/);
+test('the message distinguishes implemented code from missing actual-reader proof', () => {
+  assert.match(READER_UNAVAILABLE_MESSAGE, /Guidepup VoiceOver adapter is implemented/);
+  assert.match(READER_UNAVAILABLE_MESSAGE, /verified matrix is empty/);
+  assert.match(READER_UNAVAILABLE_MESSAGE, /no reader capability is advertised/);
 });
 
 test('the protocol the message claims to have is actually importable', async () => {
   // Otherwise the message would be the same kind of unverified claim it exists to avoid making.
   const supervisor = await import('../dist/supervisor.js');
   const journal = await import('../dist/journal.js');
+  const voiceover = await import('../dist/voiceover.js');
   for (const name of ['Supervisor', 'inspectJournalAfterRestart', 'ALLOWED_ACTIONS']) {
     assert.ok(name in supervisor, `supervisor module is missing ${name}`);
   }
   assert.ok('FileJournal' in journal);
+  assert.ok('createVoiceOverDispatch' in voiceover);
 });
