@@ -52,6 +52,10 @@ dev = [
   "hypothesis>=6.122",
   "pytest-timeout>=2.3",
   "types-jsonschema>=4.23",
+  # The dependency auditor. A locked dev dependency rather than a floating `uvx` invocation so the
+  # scanner itself is pinned and hash-verified by uv.lock, like everything else it audits: a scanner
+  # resolved fresh on every run is one whose behaviour can change without a commit.
+  "pip-audit>=2.9",
   "pyyaml>=6.0",
   "types-pyyaml>=6.0",
 ]
