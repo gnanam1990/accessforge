@@ -14,6 +14,7 @@ from .exports import router as exports_router
 from .findings import router as findings_router
 from .grants import router as grants_router
 from .journeys import router as journeys_router
+from .patches import router as patches_router
 from .projects import router as projects_router
 from .runners import router as runners_router
 from .runs import router as runs_router
@@ -25,6 +26,7 @@ from .stream import router as stream_router
 __all__ = [
     "exports_router",
     "findings_router",
+    "patches_router",
     "grants_router",
     "journeys_router",
     "projects_router",
