@@ -119,6 +119,15 @@ class SandboxPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class SandboxCreation:
+    task_id: str
+    container_id: str
+    image_id: str
+    platform: str
+    daemon: DaemonBinding
+
+
+@dataclass(frozen=True, slots=True)
 class SandboxBuild:
     task_id: str
     image_id: str
@@ -128,6 +137,8 @@ class SandboxBuild:
     stderr: bytes
     cleanup_confirmed: bool
     daemon: DaemonBinding
+    container_id: str
+    platform: str
     # Build completion is not an assertion outcome or a protected-regression attestation.
 
 
@@ -243,6 +254,7 @@ class DockerSandbox:
         *,
         command: tuple[str, ...],
         task_id: str | None = None,
+        on_created: Callable[[SandboxCreation], None] = lambda _: None,
         cancelled: Callable[[], bool] = lambda: False,
     ) -> SandboxBuild:
         """Run one owned build, hash captured output, and confirm removal before returning.
@@ -338,6 +350,10 @@ class DockerSandbox:
                 image_id=image_id,
                 task_id=task_id,
             )
+            platform = f"{image['Os']}/{image['Architecture']}"
+            if image.get("Variant"):
+                platform += f"/{image['Variant']}"
+            on_created(SandboxCreation(task_id, container, image_id, platform, self.daemon))
             self._checked("container", "start", container, deadline=deadline, cancelled=cancelled)
             self._checked(
                 "exec",
@@ -399,6 +415,8 @@ class DockerSandbox:
                 result.stderr,
                 True,
                 self.daemon,
+                container,
+                platform,
             )
         finally:
             try:

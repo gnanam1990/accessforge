@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import psycopg
 import pytest
 
+from accessforge_build_worker.artifacts import read_retained_candidate
 from accessforge_build_worker.coordinator import execute_claim, prepare_and_claim
 from accessforge_build_worker.sandbox import (
     DockerSandbox,
@@ -28,6 +30,7 @@ from accessforge_domain.states import FindingStatus, Outcome
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import (
     assert_row_level_security_enforced,
+    evidence,
     migrate,
     patches,
     projects,
@@ -35,6 +38,9 @@ from accessforge_persistence import (
     runs,
     unscoped_connection,
     workspace_connection,
+)
+from accessforge_persistence import (
+    candidate_builds as builds,
 )
 from accessforge_persistence.source_intake import SourceIdentity
 
@@ -50,6 +56,45 @@ class BoundFixture:
     repository: Path
     source: SourceSnapshot
     owner: str
+
+
+@pytest.fixture()
+def candidate_store() -> Iterator[evidence.S3ArtifactStore]:
+    store = evidence.S3ArtifactStore(
+        evidence.S3Settings(
+            endpoint_url=os.environ["OBJECT_STORE_ENDPOINT"],
+            access_key=os.environ["OBJECT_STORE_ACCESS_KEY"],
+            secret_key=os.environ["OBJECT_STORE_SECRET_KEY"],
+            bucket=os.environ.get("OBJECT_STORE_BUCKET", "accessforge-evidence"),
+        )
+    )
+    store.ensure_bucket()
+    yield store
+
+
+@dataclass
+class FaultStore:
+    """Fault injection around real S3 writes, not a storage substitute."""
+
+    store: evidence.S3ArtifactStore
+    binding: BoundFixture
+    fault: str
+    keys: list[str]
+
+    def put(self, *, key: str, payload: bytes, content_type: str) -> str:
+        self.keys.append(key)
+        if self.fault == "upload_failure":
+            raise evidence.ObjectStoreUnavailable("injected upload outage")
+        self.store.put(key=key, payload=payload, content_type=content_type)
+        if self.fault == "tamper":
+            self.store.put(key=key, payload=b"x" * len(payload), content_type=content_type)
+        if self.fault == "fenced":
+            with workspace_connection(self.binding.database, self.binding.workspace) as conn:
+                assert builds.fence_expired(conn, now=datetime.now(UTC) + timedelta(hours=1)) == 1
+        return key
+
+    def get_bounded(self, *, key: str, max_bytes: int) -> bytes:
+        return self.store.get_bounded(key=key, max_bytes=max_bytes)
 
 
 @pytest.fixture()
@@ -192,9 +237,12 @@ def test_dirty_database_record_is_not_relabelled_as_a_clean_commit(binding: Boun
 
 @pytest.mark.sandbox
 @pytest.mark.parametrize("exit_failure", [False, True])
+@pytest.mark.parametrize("fault", ["none", "upload_failure", "tamper", "fenced"])
 def test_real_source_claim_docker_capture_and_durable_receipt(
     binding: BoundFixture,
     exit_failure: bool,
+    fault: str,
+    candidate_store: evidence.S3ArtifactStore,
 ) -> None:
     """Actual build pipeline over owned synthetic source, not reference-app or reader proof."""
     image = os.environ.get("ACCESSFORGE_SANDBOX_IMAGE")
@@ -298,6 +346,7 @@ def test_real_source_claim_docker_capture_and_durable_receipt(
         sandbox=sandbox,
         command=command,
     )
+    store = FaultStore(candidate_store, binding, fault, [])
     if exit_failure:
         with pytest.raises(SandboxRefused, match="code 23"):
             execute_claim(
@@ -306,6 +355,7 @@ def test_real_source_claim_docker_capture_and_durable_receipt(
                 claimed=claimed,
                 sandbox=sandbox,
                 command=command,
+                store=store,
             )
         with workspace_connection(binding.database, binding.workspace) as conn:
             receipt = conn.execute(
@@ -319,12 +369,52 @@ def test_real_source_claim_docker_capture_and_durable_receipt(
                 "artifact_digest": None,
             }
         return
+    if fault != "none":
+        expected = (
+            evidence.ObjectStoreUnavailable
+            if fault == "upload_failure"
+            else builds.BuildClaimRefused
+        )
+        try:
+            with pytest.raises(expected):
+                execute_claim(
+                    binding.database,
+                    workspace_id=binding.workspace,
+                    claimed=claimed,
+                    sandbox=sandbox,
+                    command=command,
+                    store=store,
+                )
+            with workspace_connection(binding.database, binding.workspace) as conn:
+                row = conn.execute(
+                    "SELECT b.state, b.artifact_digest, a.state AS archive_state "
+                    "FROM candidate_build_attempt b JOIN candidate_archive a ON a.build_id = b.id "
+                    "WHERE b.id = %s",
+                    (claimed.claim.build_id,),
+                ).fetchone()
+                assert row == {
+                    "state": "UNKNOWN" if fault == "fenced" else "DISPATCHED",
+                    "artifact_digest": None,
+                    "archive_state": "QUARANTINED",
+                }
+            with pytest.raises(builds.BuildClaimRefused, match="no retained"):
+                read_retained_candidate(
+                    binding.database,
+                    workspace_id=binding.workspace,
+                    build_id=claimed.claim.build_id,
+                    store=store,
+                )
+        finally:
+            for key in store.keys:
+                candidate_store.delete(key=key)
+        return
     result = execute_claim(
         binding.database,
         workspace_id=binding.workspace,
         claimed=claimed,
         sandbox=sandbox,
         command=command,
+        store=store,
     )
     assert result.task_id == claimed.claim.build_id
     assert result.artifact.files == (SourceFile("out/candidate.txt", b"print('repaired')\n"),)
@@ -342,3 +432,59 @@ def test_real_source_claim_docker_capture_and_durable_receipt(
             "daemon_endpoint": result.daemon.endpoint,
             "daemon_id": result.daemon.daemon_id,
         }
+        process = conn.execute(
+            "SELECT container_id,image_id,platform FROM candidate_process_receipt "
+            "WHERE build_id = %s",
+            (claimed.claim.build_id,),
+        ).fetchone()
+        assert process == {
+            "container_id": result.container_id,
+            "image_id": result.image_id,
+            "platform": result.platform,
+        }
+        verification = patches.load_verification(
+            conn, verification_id=claimed.claim.verification_id
+        )
+        assert verification.state == "BUILDING" and verification.conclusion is None
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_process_receipt SET platform = 'linux/other' WHERE build_id = %s",
+                (claimed.claim.build_id,),
+            )
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE candidate_archive SET size_bytes = 1 WHERE build_id = %s",
+                (claimed.claim.build_id,),
+            )
+    try:
+        assert (
+            read_retained_candidate(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                store=store,
+            )
+            == result.artifact
+        )
+        with pytest.raises(builds.BuildClaimRefused, match="no retained"):
+            read_retained_candidate(
+                binding.database,
+                workspace_id=str(uuid.uuid4()),
+                build_id=claimed.claim.build_id,
+                store=store,
+            )
+        candidate_store.put(
+            key=store.keys[0],
+            payload=b"x" * len(result.artifact.archive()),
+            content_type="application/x-tar",
+        )
+        with pytest.raises(builds.BuildClaimRefused, match="substituted"):
+            read_retained_candidate(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                store=store,
+            )
+    finally:
+        for key in store.keys:
+            candidate_store.delete(key=key)

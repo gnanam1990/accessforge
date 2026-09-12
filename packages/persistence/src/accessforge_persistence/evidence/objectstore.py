@@ -221,6 +221,27 @@ class S3ArtifactStore:
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStoreUnavailable(f"delete of {key} failed: {exc}") from exc
 
+    def get_bounded(self, *, key: str, max_bytes: int) -> bytes:
+        """Read an untrusted object without buffering an unlimited substituted body."""
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        if not 1 <= max_bytes <= 64 * 1024 * 1024:
+            raise ArtifactStoreError("invalid bounded object read limit")
+        try:
+            response: Any = self._client.get_object(Bucket=self._bucket, Key=key)
+            body = response["Body"]
+            try:
+                if int(response["ContentLength"]) > max_bytes:
+                    raise ArtifactStoreError("stored object exceeds its recorded byte limit")
+                payload = bytes(body.read(max_bytes + 1))
+                if len(payload) > max_bytes:
+                    raise ArtifactStoreError("stored object body exceeds its recorded byte limit")
+                return payload
+            finally:
+                body.close()
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStoreUnavailable("bounded object read failed") from exc
+
     def exists(self, *, key: str) -> bool:
         from botocore.exceptions import BotoCoreError, ClientError
 

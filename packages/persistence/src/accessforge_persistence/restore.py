@@ -81,6 +81,7 @@ class Reconciliation:
     outbox_messages_suppressed: int
     attempts_quarantined: int
     grants_requiring_revalidation: list[str] = field(default_factory=list)
+    candidate_builds_fenced: int = 0
 
     @property
     def summary(self) -> str:
@@ -90,6 +91,7 @@ class Reconciliation:
             f"leases, quarantined {self.runners_quarantined} runners and "
             f"{self.attempts_quarantined} ambiguous attempts, released {self.jobs_released} jobs "
             f"and suppressed {self.outbox_messages_suppressed} undelivered messages. "
+            f"Fenced {self.candidate_builds_fenced} candidate builds without redispatch. "
             f"{len(self.grants_requiring_revalidation)} execution grants require revalidation "
             "before anything may be dispatched under them."
         )
@@ -258,6 +260,14 @@ def reconcile(
     ]
     grants.sort()
 
+    # Restored claim/dispatch state cannot prove that the original container stopped.
+    candidate_builds = conn.execute(
+        "UPDATE candidate_build_attempt SET state = 'UNKNOWN', epoch = epoch + 1, "
+        "finished_at = %s, failure_code = 'RESTORED_DATABASE' "
+        "WHERE state IN ('CLAIMED', 'DISPATCHED')",
+        (moment,),
+    ).rowcount
+
     conn.execute(
         """
         INSERT INTO global_audit_event
@@ -280,6 +290,7 @@ def reconcile(
                     "jobsReleased": jobs,
                     "outboxSuppressed": outbox,
                     "grantsRequiringRevalidation": len(grants),
+                    "candidateBuildsFenced": candidate_builds,
                 }
             ),
         ),
@@ -294,6 +305,7 @@ def reconcile(
         outbox_messages_suppressed=outbox,
         attempts_quarantined=attempts_quarantined,
         grants_requiring_revalidation=grants,
+        candidate_builds_fenced=candidate_builds,
     )
 
 

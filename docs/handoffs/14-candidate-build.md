@@ -187,17 +187,60 @@ pinned toolchain: **2,023 passed, zero failures/skips**, 58 upstream deprecation
 Earlier durable-pipeline head `41427b5c1e5ba8144ad57624a0b579d00208bbe3` passed all GitHub CI in run
 34714720918. The new endpoint-binding head requires its own CI; PR #37 stays draft.
 
+## Durable candidate archives and process identity
+
+Migration 0025 adds workspace-isolated, immutable process provenance and archive identity.
+After Docker returns an immutable container ID and configuration is inspected, the coordinator
+commits its actual resolved image ID/platform and explicit daemon binding before starting source
+execution. Failure to record this receipt prevents execution and follows exact-container cleanup.
+This receipt means creation was observed, not that source execution succeeded.
+
+Successful output is stored through the existing S3-compatible object store in a separate
+`workspaces/{workspace}/candidate-builds/{build}/archives/{sha256}` namespace. Executable tar
+archives are not added to the transcript/evidence MIME allowlist. The supervisor commits a
+QUARANTINED upload intent first, writes its own canonical bytes, then performs a size-bounded
+read-back and SHA-256 comparison. Archive promotion and BUILT occur in one database transaction
+only after fresh worker/epoch/lease and patch checks. A digest-only finish call is now refused.
+
+The retained reader derives the namespace independently, enforces workspace RLS and BUILT/
+RETAINED states, rechecks the bounded bytes on every read, and reparses the strict archive.
+Substitution, missing objects and cross-workspace reads cannot return an available candidate.
+Upload failure or fencing after upload leaves a quarantined intent, never a BUILT receipt.
+Raw producer logs are not retained here; stdout/stderr digests accompany the archive.
+
+Restore reconciliation fences every CLAIMED/DISPATCHED candidate, including unexpired leases,
+as UNKNOWN with a new epoch and RESTORED_DATABASE. It does not assert container retirement or
+redispatch. The existing backup enumerates all bucket keys (including this new namespace);
+its object reads are now bounded before allocation. A dedicated full candidate-byte encrypted
+backup/restore drill and archive retention/deletion policy integration are still outstanding.
+Historical BUILT rows remain historical: migration does not invent process receipts or bytes.
+
+The new connected tests use real Git, PostgreSQL, Docker and S3-compatible storage. Injected
+upload outages, post-upload fencing and equal-size object substitution test failure paths around
+real storage operations. Successful builds prove read-back, durable resolved process identity,
+immutability, cross-workspace denial and refusal after object tampering. Baseline findings remain
+synthetic; none of these tests claims actual E0 accessibility repair or reader verification.
+
+Preceding endpoint-binding head `4a868c5767ab94e05e57616d6b76a7e2128d89ec` passed all GitHub CI
+in run 34715395960. This retention continuation passed the full Python suite with the explicit
+endpoint and pinned toolchain: **2,033 passed, zero failures/skips**, 58 upstream deprecation
+warnings (163.94 seconds). Strict mypy: 211 files clean. Ruff lint/format and live OpenAPI,
+six schema/enumeration bindings and 74-operation client drift checks pass. The full suite includes
+the fresh 0025 upgrade drill, retained 0024/0023 assertions, and unexpired-claim restore fencing.
+The earlier focused source/patch/migration/restore run passed 144 tests before the last new cases.
+The new committed head still requires its own GitHub CI; PR #37 remains draft and unmerged.
+
 ## Required next work
 
-1. Retain captured artifact bytes durably with the build's actual resolved image/platform and
-   process receipt. Currently the coordinator returns bytes to its trusted caller and stores the
-   digest; a crash can lose those bytes. No public build endpoint or available-artifact claim exists.
+1. Integrate archive expiry/deletion and quarantined-object cleanup with retention policy, and run
+   the dedicated candidate-byte encrypted backup/restore drill. Durable successful artifact bytes
+   and actual resolved process receipts are implemented; no public build endpoint is exposed.
    Retained dirty-artifact intake remains required if dirty E0 candidates are supported.
 2. Implement operator reconciliation and durable crash/recovery tests for UNKNOWN attempts using
    the pre-recorded task and explicit daemon binding. Fencing and endpoint binding are implemented;
    safe reconciliation/resumption is not. In particular, an absent container alone cannot prove an
-   interrupted create request will not materialize later. Persist creation/process receipts and
-   distinguish observed absence from confirmed retirement; never automatically retry UNKNOWN.
+   interrupted create request will not materialize later. Use the now-persisted creation receipt
+   to distinguish observed absence from confirmed retirement; never automatically retry UNKNOWN.
 3. Provision the actual E0 reference-application toolchain and connect it to the new execution
    primitive. Docker daemon access is supervisor authority, never an author-selectable endpoint.
 4. Run protected functional regressions outside source-writable paths; independently collect and hash

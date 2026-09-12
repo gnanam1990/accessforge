@@ -266,7 +266,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             accumulated = 0
             for object_key in store.iter_keys():
-                payload = store.get(key=object_key)
+                # Bound allocation before buffering a substituted evidence/build object.
+                payload = store.get_bounded(
+                    key=object_key,
+                    max_bytes=min(64 * 1024 * 1024, MAX_UNSEALED_BYTES - accumulated),
+                )
                 accumulated += len(payload)
                 if accumulated > MAX_UNSEALED_BYTES:
                     raise SystemExit(
