@@ -81,12 +81,45 @@ deprecation warnings (261.60 seconds). Ruff lint/format, live OpenAPI, six schem
 bindings and 74-operation generated-client drift checks also pass locally. GitHub CI and merge
 are still pending for this branch.
 
+## Committed-source broker
+
+`source_broker.py` now reads the persisted source row under workspace RLS, requires an unrevoked
+project with recorded repository authorization, and resolves the local repository from an
+operator-owned project-ID mapping. Neither a request path nor an author-supplied content hash
+selects its source. Dirty source rows are refused by this commit-only path; supporting dirty E0
+work still requires a separately retained trusted artifact.
+
+The broker follows raw commit/tree/blob objects, verifies their Git content addresses itself,
+and recovers file modes as well as bytes. It does not use checkout or `git archive` (which can
+apply export attributes). Full SHA-1 commit IDs are required by the existing source schema;
+the canonical archive uses SHA-256. Git replacement refs are disabled, ambient Git variables
+and credentials are not forwarded, lazy fetching and all transport protocols are disabled,
+and no filters, hooks or submodules run. Missing, corrupt, oversized, malformed, symlink and
+gitlink inputs fail closed under byte/member/time limits. An unsupported Git binary fails rather
+than falling back; local testing used Git 2.55.0 and its `--no-lazy-fetch` support.
+
+The recovered mode-inclusive archive is now bound to the persisted commit. The durable build
+coordinator still must select the source via the exact patch/baseline manifest, persist this
+binding with the build claim, and recheck dispatch authority. The source broker by itself is not
+authorization to execute and does not create BUILT/VERIFIED state.
+
+Real owned-repository tests cover mutable checkout, executable-mode-only changes, export
+attributes, filters, replacement refs, inherited Git configuration, missing objects/promisor
+remotes, corrupted blob content, links/gitlinks, dirty identities and exact response framing.
+Five PostgreSQL/Git integration tests cover persisted identity, cross-workspace denial even
+when supplied the exact foreign ID, absent operator mapping, revoked project and dirty row.
+Focused broker/process/database run: 28 passed. Strict mypy: 208 files clean. Full Python suite
+with the pinned Docker probe image: **1,988 passed, zero failures/skips**, 58 upstream deprecation
+warnings (144.41 seconds). Ruff lint/format and live OpenAPI/schema/client drift checks pass.
+
+Protocol references: https://git-scm.com/docs/git-cat-file and https://git-scm.com/docs/git
+
 ## Required next work
 
-1. Bind intake to the persisted immutable source commit/artifact, not an author-supplied archive.
-   Module 05's existing content-tree digest omits executable bits. The new canonical archive digest
-   includes them, but the coordinator must bind that exact archive to trusted source provenance
-   before dispatch; equal v1 tree digests alone must not authorize unexplained mode drift.
+1. Integrate the persisted-source broker with the exact patch/baseline manifest and durable build
+   claim. Persist its mode-inclusive archive identity before dispatch; equal v1 content-tree
+   digests alone still must not authorize unexplained mode drift. Retained dirty-artifact intake
+   remains separate required work if dirty E0 candidates are supported.
 2. Claim build work atomically in PostgreSQL, reload current PATCH_APPLY authority immediately
    before sandbox dispatch, persist the exact input/configuration identities and fence stale workers.
    Pure preparation checks cannot establish that an approval remains unrevoked after it was fetched.

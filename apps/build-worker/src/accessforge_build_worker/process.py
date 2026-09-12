@@ -28,6 +28,7 @@ def run_bounded(
     deadline: float,
     output_limit: int,
     input_bytes: bytes | None = None,
+    env: dict[str, str] | None = None,
     cancelled: Callable[[], bool] = lambda: False,
 ) -> CommandResult:
     """Drain every pipe without unbounded communicate() buffers or producer deadlock.
@@ -51,6 +52,7 @@ def run_bounded(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        env=env,
     ) as process:
         assert process.stdout is not None and process.stderr is not None
         try:
