@@ -40,6 +40,11 @@ path is exercised with evidence the tests name `_fabricated_`. Nothing is marked
 Largest remaining hole: the gates trust what a caller reports about a candidate run. When a real
 runner exists those fields must come from evidence, not claims.
 
+Maintainer review round 1 closed three defects: the proposal now persists and reloads exact change
+bytes, modes and deletions; `baseSourceDigest` is verified against the source snapshot the manifest
+sealed; and the dispatch approval check compares against the patch's current revision, with approval
+minting reordered after the transition so a legitimate approval stays dispatchable.
+
 ### P3 — Rate limiting (module 26 gap: "no telemetry or rate limits")
 Per-principal and per-workspace limits on the write routes, with RFC7807 `429` and a stated
 retry-after. **Depends on:** 18. Security-relevant and self-contained.

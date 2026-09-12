@@ -25,16 +25,12 @@ CREATE TABLE IF NOT EXISTS patch_proposal (
     base_manifest_digest TEXT NOT NULL CHECK (base_manifest_digest ~ '^[0-9a-f]{64}$'),
     base_source_digest   TEXT NOT NULL CHECK (base_source_digest ~ '^[0-9a-f]{64}$'),
 
-    -- The patch itself, by digest and by content. The digest is what an approval binds to, so it is
-    -- stored separately rather than recomputed on read: a recomputation shares any bug in the
-    -- function that produced the approved value, and would agree with itself while disagreeing
-    -- with what was approved.
+    -- The digest an approval binds to. Stored rather than recomputed on read: a recomputation
+    -- shares any bug in the function that produced the approved value, so it would agree with
+    -- itself while disagreeing with what was approved. The changes themselves live in
+    -- `patch_change`, and loading a proposal recomputes their digest and refuses a mismatch --
+    -- which is the check this column exists to make possible.
     patch_digest       TEXT NOT NULL CHECK (patch_digest ~ '^[0-9a-f]{64}$'),
-    changed_paths      TEXT[] NOT NULL CHECK (cardinality(changed_paths) > 0),
-
-    -- Paths the policy allowed only as separately reviewed scope: dependency manifests, lockfiles,
-    -- build policy. Kept so a reviewer reading "fixed the label" is told the lockfile moved.
-    separately_reviewed_paths TEXT[] NOT NULL DEFAULT '{}',
 
     status             TEXT NOT NULL CHECK (status IN (
         'PROPOSED', 'APPROVED', 'BUILDING', 'VERIFYING', 'VERIFIED',
@@ -57,9 +53,66 @@ CREATE TABLE IF NOT EXISTS patch_proposal (
 CREATE INDEX IF NOT EXISTS patch_proposal_by_finding
     ON patch_proposal (finding_id, created_at);
 
-COMMENT ON COLUMN patch_proposal.separately_reviewed_paths IS
-    'Dependency, lockfile and build-policy paths. Allowed, but never as a routine accessibility '
-    'edit: a reviewer told only "fixed the label" would not know the build inputs moved.';
+-- The diff itself, one row per path. Without this a proposal was a list of filenames and a digest:
+-- nothing could reload what was actually proposed, a reviewer could not read the change they were
+-- approving, and the bytes an approval bound to existed only in the request that created it.
+--
+-- Content in the database rather than the object store, deliberately and with limits. A repair diff
+-- is small -- the whole point of FR-010 is a bounded, reviewable change -- and a proposal whose
+-- bytes live somewhere with its own retention and failure modes is a proposal that can lose the
+-- thing an approval was granted for. The caps are enforced in `patches.propose_patch` so the error
+-- names the path and the limit.
+CREATE TABLE IF NOT EXISTS patch_change (
+    id             UUID PRIMARY KEY,
+    workspace_id   UUID NOT NULL REFERENCES workspace (id) ON DELETE CASCADE,
+    patch_id       UUID NOT NULL,
+
+    -- Ordering is the proposal's own, preserved so a reloaded patch is byte-identical to the one
+    -- whose digest was approved. The digest sorts by path, but a reviewer reads the diff in the
+    -- order it was written.
+    ordinal        INTEGER NOT NULL CHECK (ordinal >= 0),
+
+    path           TEXT NOT NULL CHECK (length(btrim(path)) > 0),
+
+    -- MODIFY carries content; DELETE carries none. Stored as an operation rather than inferred from
+    -- a NULL, because "content is null" would otherwise mean both "this file is removed" and
+    -- "nobody recorded what this change was".
+    operation      TEXT NOT NULL CHECK (operation IN ('MODIFY', 'DELETE')),
+    content        TEXT,
+
+    -- The git file mode when the proposer knew it. This is how a symlink is recognised: the path and
+    -- diff of a symlink addition look like an ordinary small text file (INV-16).
+    mode           TEXT,
+
+    -- `is_binary`, not `binary`: the latter is a reserved word in PostgreSQL, so the column would
+    -- have needed quoting at every use and the first unquoted one would have been a syntax error.
+    is_binary      BOOLEAN NOT NULL DEFAULT false,
+
+    -- What the policy ruled, kept with the change rather than summarised on the proposal. A
+    -- reviewer needs to see which specific path was allowed only as separately reviewed scope.
+    verdict        TEXT NOT NULL CHECK (verdict IN ('ALLOWED', 'SEPARATELY_REVIEWED')),
+
+    FOREIGN KEY (patch_id, workspace_id)
+        REFERENCES patch_proposal (id, workspace_id) ON DELETE CASCADE,
+
+    -- One row per path per patch, and one ordinal per patch. A repeated path would make the
+    -- reloaded patch ambiguous, and its digest unreproducible.
+    UNIQUE (patch_id, path),
+    UNIQUE (patch_id, ordinal),
+
+    -- A DELETE with content is a contradiction; a MODIFY without content records no change. Either
+    -- would survive into a candidate workspace as something nobody proposed.
+    CONSTRAINT content_matches_operation CHECK (
+        (operation = 'DELETE' AND content IS NULL)
+        OR (operation = 'MODIFY' AND content IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS patch_change_by_patch ON patch_change (patch_id, ordinal);
+
+COMMENT ON TABLE patch_change IS
+    'The exact bytes a patch proposes, per path. An approval binds to the digest of these rows, so '
+    'they are the record of what was approved -- not a summary of it.';
 
 -- Every status move, with who and why. A patch that went STALE or FAILED and came back needs to
 -- say so: the history is what distinguishes "approved once" from "approved, invalidated by a base
@@ -159,6 +212,13 @@ ALTER TABLE patch_proposal ENABLE ROW LEVEL SECURITY;
 ALTER TABLE patch_proposal FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS workspace_isolation ON patch_proposal;
 CREATE POLICY workspace_isolation ON patch_proposal
+    USING (workspace_id = current_workspace_id())
+    WITH CHECK (workspace_id = current_workspace_id());
+
+ALTER TABLE patch_change ENABLE ROW LEVEL SECURITY;
+ALTER TABLE patch_change FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS workspace_isolation ON patch_change;
+CREATE POLICY workspace_isolation ON patch_change
     USING (workspace_id = current_workspace_id())
     WITH CHECK (workspace_id = current_workspace_id());
 

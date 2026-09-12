@@ -165,8 +165,17 @@ retry, no sufficiently senior reviewer — can mark an inconclusive candidate VE
 signature, and a contract test reads the live OpenAPI schema and fails if any request body anywhere
 accepts a `conclusion`.
 
-**1719 tests pass** against real PostgreSQL 17 and MinIO. 12 mutation checks across the policy, the
-persistence gates and two schema constraints, each restored byte-identically by SHA-256.
+**Maintainer review found three defects, all now fixed.** The proposal stored only filenames and a
+digest, so nothing could reload the diff an approval was granted over. `baseSourceDigest` was
+unverified — any 64-character hex string — which made the stale-base check at dispatch compare the
+current tree against a number somebody typed. And the dispatch check compared the approval's
+`expected_revision` against itself, a check that cannot fail, so a patch edited after approval stayed
+dispatchable; repairing it meant reordering approval so the approval binds to the revision the patch
+has once approved.
+
+**1727 tests pass** against real PostgreSQL 17 and MinIO. 20 mutation checks across the policy, the
+persistence gates and the schema, including one that reinstates the self-referential revision
+comparison exactly as it shipped. Each restored byte-identically by SHA-256.
 
 **Runtime proof is BLOCKED, and this is not acceptance of FR-010 or FR-011.** No candidate has been
 built or run: there is no containment boundary for executing an application's build and no real screen

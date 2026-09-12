@@ -33,9 +33,9 @@ from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_api.routes._common import as_body, as_identifier, authorize, workspace_scope
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.patch_policy import ProposedChange
-from accessforge_domain.states import ApprovalScope, PatchStatus
+from accessforge_domain.states import PatchStatus
 from accessforge_domain.timestamps import to_rfc3339_utc
-from accessforge_persistence import approvals, patches
+from accessforge_persistence import patches
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["patches"])
 
@@ -115,6 +115,18 @@ def _patch_view(patch: patches.PatchProposal) -> dict[str, Any]:
         "baseSourceDigest": patch.base_source_digest,
         "patchDigest": patch.patch_digest,
         "changedPaths": list(patch.changed_paths),
+        # The bytes themselves, because a reviewer approving a patch has to be able to read it. A
+        # response listing only filenames asks somebody to authorize a change they cannot see.
+        "changes": [
+            {
+                "path": c.path,
+                "operation": "DELETE" if c.content is None else "MODIFY",
+                "content": c.content,
+                "mode": c.mode,
+                "binary": c.binary,
+            }
+            for c in patch.changes
+        ],
         # Surfaced at the top level, not buried in the diff. A reviewer told only "fixed the label"
         # would not know a lockfile moved, and that changes what the candidate is built from.
         "separatelyReviewedPaths": list(patch.separately_reviewed_paths),
@@ -333,23 +345,17 @@ def approve_patch(
         )
 
     now = datetime.now(UTC)
-    approval_id = approvals.record_approval(
-        conn,
-        workspace_id=workspace_id,
-        scope=ApprovalScope.PATCH_APPLY,
-        actor_id=context.principal.user_id,
-        target_id=patch_id,
-        target_digest=patch.patch_digest,
-        expected_revision=patch.revision,
-        expires_at=to_rfc3339_utc(now + timedelta(seconds=seconds)),
-    )
     try:
+        # Minted inside `approve_patch`, after the transition, so the approval binds to the revision
+        # the patch has once approved. Minting here beforehand recorded the pre-transition number,
+        # and the dispatch check had to compare the approval against itself to keep working.
         approved = patches.approve_patch(
             conn,
             workspace_id=workspace_id,
             patch_id=patch_id,
-            approval_id=approval_id,
             actor_id=context.principal.user_id,
+            expires_at=to_rfc3339_utc(now + timedelta(seconds=seconds)),
+            expected_revision=expected,
             now=now,
         )
     except patches.PatchError as exc:

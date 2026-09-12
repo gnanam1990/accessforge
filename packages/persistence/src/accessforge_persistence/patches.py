@@ -98,6 +98,13 @@ ALLOWED_TRANSITIONS: dict[PatchStatus, frozenset[PatchStatus]] = {
 }
 
 
+#: Per-change and whole-patch content limits. A repair diff is small by construction -- FR-010 is
+#: about a bounded, reviewable change -- and these exist so that "reviewable" stays true: nobody
+#: reads a 40 MiB diff, and an approval granted over one is an approval of bytes nobody saw.
+MAX_CHANGE_BYTES = 256 * 1024
+MAX_PATCH_BYTES = 2 * 1024 * 1024
+
+
 def patch_digest(changes: tuple[ProposedChange, ...]) -> str:
     """The digest an approval binds to.
 
@@ -124,14 +131,32 @@ class PatchProposal:
     base_manifest_digest: str
     base_source_digest: str
     patch_digest: str
-    changed_paths: tuple[str, ...]
-    separately_reviewed_paths: tuple[str, ...]
+    changes: tuple[ProposedChange, ...]
+    """The exact bytes proposed, reloaded from storage. The digest above is over these."""
+
+    verdicts: tuple[tuple[str, str], ...]
+    """What the policy ruled per path, as (path, verdict) in proposal order."""
+
     status: PatchStatus
     approval_id: str | None
     proposed_by: str
     rationale: str
     revision: int
     created_at: str
+
+    @property
+    def changed_paths(self) -> tuple[str, ...]:
+        return tuple(c.path for c in self.changes)
+
+    @property
+    def separately_reviewed_paths(self) -> tuple[str, ...]:
+        """Derived, not stored.
+
+        A second copy of this list could disagree with the rulings it summarises, and the
+        disagreement would be invisible -- a reviewer shown an empty list for a patch that moved a
+        lockfile.
+        """
+        return tuple(path for path, verdict in self.verdicts if verdict == "SEPARATELY_REVIEWED")
 
     @property
     def meaning(self) -> str:
@@ -181,15 +206,51 @@ def propose_patch(
             "reviewer has to reverse-engineer from the diff."
         )
 
+    # The source tree the seal actually names, not the one the caller says it is. Until this joined
+    # through to `source_snapshot`, `base_source_digest` was any 64-character hex string the caller
+    # chose: the proposal recorded a base identity nothing corroborated, and the stale-base check at
+    # dispatch compared the current tree against a number somebody typed.
     sealed = conn.execute(
-        "SELECT 1 FROM sealed_manifest WHERE manifest_digest = %s LIMIT 1",
+        """
+        SELECT DISTINCT s.tree_digest
+          FROM sealed_manifest m
+          JOIN source_snapshot s ON s.id = m.source_snapshot_id
+         WHERE m.manifest_digest = %s
+        """,
         (base_manifest_digest,),
-    ).fetchone()
-    if sealed is None:
+    ).fetchall()
+    if not sealed:
         raise PatchError(
             "no sealed manifest in this workspace has that digest, so there is no base identity to "
             "patch against. A proposal against an unsealed base could never be approved: the "
             "approval would bind to inputs nothing recorded."
+        )
+    sealed_trees = {str(row["tree_digest"]) for row in sealed}
+    if base_source_digest not in sealed_trees:
+        raise PatchError(
+            f"baseSourceDigest {base_source_digest} is not the source tree this manifest sealed "
+            f"({', '.join(sorted(sealed_trees))}). A patch is written against a tree; recording a "
+            "different one would make the stale-base check at dispatch compare the current source "
+            "against a digest nothing ever built."
+        )
+
+    oversized = [
+        c.path
+        for c in changes
+        if c.content is not None and len(c.content.encode("utf-8")) > MAX_CHANGE_BYTES
+    ]
+    if oversized:
+        raise PatchError(
+            f"these changes exceed {MAX_CHANGE_BYTES} bytes each: {', '.join(oversized)}. A repair "
+            "this large is not a reviewable change, and an approval over bytes nobody read is not "
+            "an approval."
+        )
+    total = sum(len(c.content.encode("utf-8")) for c in changes if c.content is not None)
+    if total > MAX_PATCH_BYTES:
+        raise PatchError(
+            f"the patch is {total} bytes in total, over the {MAX_PATCH_BYTES} limit. Propose the "
+            "repair as a bounded change, or split the dependency and build work into its own "
+            "separately reviewed scope."
         )
 
     inspection = inspect_patch(changes, application_paths=application_paths)
@@ -205,15 +266,12 @@ def propose_patch(
         )
 
     patch_id = str(uuid.uuid4())
-    paths = tuple(r.path for r in inspection.rulings)
-    separate = tuple(r.path for r in inspection.separately_reviewed)
     conn.execute(
         """
         INSERT INTO patch_proposal
             (id, workspace_id, finding_id, base_manifest_digest, base_source_digest,
-             patch_digest, changed_paths, separately_reviewed_paths, status,
-             proposed_by, rationale, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PROPOSED', %s, %s, %s)
+             patch_digest, status, proposed_by, rationale, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, 'PROPOSED', %s, %s, %s)
         """,
         (
             patch_id,
@@ -222,13 +280,33 @@ def propose_patch(
             base_manifest_digest,
             base_source_digest,
             patch_digest(changes),
-            list(paths),
-            list(separate),
             proposed_by,
             rationale,
             moment,
         ),
     )
+    verdict_by_path = {r.path: str(r.verdict) for r in inspection.rulings}
+    for ordinal, change in enumerate(changes):
+        conn.execute(
+            """
+            INSERT INTO patch_change
+                (id, workspace_id, patch_id, ordinal, path, operation, content, mode,
+                 is_binary, verdict)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(uuid.uuid4()),
+                workspace_id,
+                patch_id,
+                ordinal,
+                change.path,
+                "DELETE" if change.content is None else "MODIFY",
+                change.content,
+                change.mode,
+                change.binary,
+                verdict_by_path[change.path],
+            ),
+        )
     _record_transition(
         conn,
         workspace_id=workspace_id,
@@ -246,22 +324,49 @@ def load_patch(conn: psycopg.Connection[dict[str, Any]], *, patch_id: str) -> Pa
     row = conn.execute(
         """
         SELECT id, finding_id, base_manifest_digest, base_source_digest, patch_digest,
-               changed_paths, separately_reviewed_paths, status, approval_id, proposed_by,
-               rationale, revision, created_at
+               status, approval_id, proposed_by, rationale, revision, created_at
           FROM patch_proposal WHERE id = %s
         """,
         (patch_id,),
     ).fetchone()
     if row is None:
         raise PatchError(f"no patch proposal {patch_id} is visible here")
+
+    change_rows = conn.execute(
+        """
+        SELECT path, operation, content, mode, is_binary, verdict
+          FROM patch_change WHERE patch_id = %s ORDER BY ordinal
+        """,
+        (patch_id,),
+    ).fetchall()
+    changes = tuple(
+        ProposedChange(
+            path=str(r["path"]),
+            content=None if r["operation"] == "DELETE" else str(r["content"]),
+            mode=None if r["mode"] is None else str(r["mode"]),
+            binary=bool(r["is_binary"]),
+        )
+        for r in change_rows
+    )
+    stored = str(row["patch_digest"])
+    # Recomputed on every load and compared. The digest is what an approval bound to, so if the
+    # stored bytes no longer produce it then either the rows were altered or the digest function
+    # changed -- and in both cases the approval authorizes something other than what is here.
+    # Refusing to return the proposal at all is the only answer that cannot be acted on by mistake.
+    if changes and patch_digest(changes) != stored:
+        raise PatchError(
+            f"patch {patch_id} does not match its recorded digest. The stored changes hash to "
+            f"{patch_digest(changes)} and the proposal records {stored}, so whatever was approved "
+            "is not what is stored. Refusing to load it rather than letting it be applied."
+        )
     return PatchProposal(
         patch_id=str(row["id"]),
         finding_id=str(row["finding_id"]),
         base_manifest_digest=str(row["base_manifest_digest"]),
         base_source_digest=str(row["base_source_digest"]),
-        patch_digest=str(row["patch_digest"]),
-        changed_paths=tuple(row["changed_paths"]),
-        separately_reviewed_paths=tuple(row["separately_reviewed_paths"]),
+        patch_digest=stored,
+        changes=changes,
+        verdicts=tuple((str(r["path"]), str(r["verdict"])) for r in change_rows),
         status=PatchStatus(str(row["status"])),
         approval_id=None if row["approval_id"] is None else str(row["approval_id"]),
         proposed_by=str(row["proposed_by"]),
@@ -370,19 +475,57 @@ def approve_patch(
     *,
     workspace_id: str,
     patch_id: str,
-    approval_id: str,
     actor_id: str,
+    expires_at: str,
+    expected_revision: int | None = None,
     now: datetime | None = None,
 ) -> PatchProposal:
-    """Attach a PATCH_APPLY approval, checking that it authorizes exactly this patch.
+    """Move a patch to APPROVED and mint the `PATCH_APPLY` approval that says so.
 
-    The check is the domain's, not this module's. Every field is compared: a `RUN_EFFECTS` approval
-    is not a weaker `PATCH_APPLY`, an approval for another patch is not an approval for this one,
-    and
-    an approval whose `target_digest` no longer matches the patch bytes is not an approval at all.
+    **Transition first, then mint.** The transition bumps the patch's revision, so an approval
+    minted beforehand records the pre-transition number -- and a dispatch check comparing it against
+    the patch's current revision would reject every legitimate approval. The previous version hid
+    that by comparing the approval's `expected_revision` against itself, which is a check that can
+    never fail: a patch edited after approval stayed dispatchable.
+
+    So the approval binds to the revision the patch has *once approved*. Any later move -- another
+    transition, a rejection, a re-approval -- changes the revision and voids it at dispatch, which
+    is exactly what `expected_revision` is for.
+
+    **Minting here rather than accepting an approval id.** The caller cannot hand in an approval for
+    a different target, a different digest or a different scope, because there is no parameter for
+    one. It also closes the window in which an approval exists pointing at a patch that was never
+    approved.
     """
     moment = now or datetime.now(UTC)
-    patch = load_patch(conn, patch_id=patch_id)
+    approved = transition_patch(
+        conn,
+        workspace_id=workspace_id,
+        patch_id=patch_id,
+        to_status=PatchStatus.APPROVED,
+        actor_id=actor_id,
+        reason="approved for application in an isolated candidate workspace",
+        expected_revision=expected_revision,
+        now=moment,
+    )
+    approval_id = approvals.record_approval(
+        conn,
+        workspace_id=workspace_id,
+        scope=ApprovalScope.PATCH_APPLY,
+        actor_id=actor_id,
+        target_id=patch_id,
+        target_digest=approved.patch_digest,
+        expected_revision=approved.revision,
+        expires_at=expires_at,
+    )
+    conn.execute(
+        "UPDATE patch_proposal SET approval_id = %s WHERE id = %s", (approval_id, patch_id)
+    )
+
+    # Read back and check the binding holds, with the same call a dispatch makes. Constructing an
+    # approval and trusting it because we constructed it is how the self-referential comparison got
+    # in; this asserts the invariant against storage instead of against intent.
+    attached = load_patch(conn, patch_id=patch_id)
     approval = approvals.load_for_check(conn, approval_id=approval_id)
     try:
         approval.check(
@@ -390,26 +533,15 @@ def approve_patch(
             scope=ApprovalScope.PATCH_APPLY,
             workspace_id=workspace_id,
             target_id=patch_id,
-            target_digest=patch.patch_digest,
-            current_revision=patch.revision,
+            target_digest=attached.patch_digest,
+            current_revision=attached.revision,
         )
-    except AuthorityError as exc:
-        raise PatchError(f"this approval does not authorize applying this patch: {exc}") from exc
-
-    updated = transition_patch(
-        conn,
-        workspace_id=workspace_id,
-        patch_id=patch_id,
-        to_status=PatchStatus.APPROVED,
-        actor_id=actor_id,
-        reason=f"approved under {approval_id}",
-        expected_revision=patch.revision,
-        now=moment,
-    )
-    conn.execute(
-        "UPDATE patch_proposal SET approval_id = %s WHERE id = %s", (approval_id, patch_id)
-    )
-    return load_patch(conn, patch_id=updated.patch_id)
+    except AuthorityError as exc:  # pragma: no cover - a bug here, not a caller error
+        raise PatchError(
+            f"the approval just minted does not authorize this patch: {exc}. Refusing rather than "
+            "recording an authorization that would fail at dispatch."
+        ) from exc
+    return attached
 
 
 def assert_dispatchable(
@@ -458,7 +590,10 @@ def assert_dispatchable(
             workspace_id=workspace_id,
             target_id=patch_id,
             target_digest=patch.patch_digest,
-            current_revision=approval.expected_revision,
+            # The patch's current revision, not the approval's own expectation. Comparing the
+            # approval against itself is a check that cannot fail, and it let a patch edited after
+            # approval stay dispatchable.
+            current_revision=patch.revision,
         )
     except AuthorityError as exc:
         raise PatchError(f"the approval no longer authorizes this application: {exc}") from exc
