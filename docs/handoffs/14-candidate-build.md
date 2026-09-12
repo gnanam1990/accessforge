@@ -474,9 +474,10 @@ retention are checked after blocking reads, not against a clock captured before 
    interrupted create request will not materialize later. Use the now-persisted creation receipt
    to distinguish observed absence from confirmed retirement; never automatically retry UNKNOWN.
 3. Connect the now-proven reference-app package toolchain to bounded operator E0 dispatch and
-   separate logical fixture identity from repairable presentation. Docker daemon access is
-   supervisor authority, never an author-selectable endpoint. Packaging/import proof is available;
-   end-to-end reader repair proof is not.
+   independently bind the served browser endpoint to that exact retained artifact. Logical
+   reference fixture identity is now separate from repairable presentation (see below), but is
+   not deployment provenance. Docker daemon access is supervisor authority, never an
+   author-selectable endpoint. End-to-end reader repair proof is not available.
 4. Link the implemented durable build-bound protected regression receipts to a fresh, matched
    candidate reader run/lease and independent verification. Actual-reader evidence is not yet
    bound; repository stdout and self-reported identities remain non-authoritative.
@@ -487,3 +488,51 @@ retention are checked after blocking reads, not against a clock captured before 
 
 No candidate was published, no hosted arbitrary-source support is enabled, no model call or paid
 service was used, and the user checkout was not used as a candidate workspace.
+
+### Versioned logical fixture, separate presentation identity
+
+The frozen `packages/contracts/fixtures/reference-service-request-v1.json` describes the shared
+service-request backend task: fields/validation, authorized setup and observation, submission
+outcomes, one request per nonce, fresh nonce and restart durability. The accessible/inaccessible
+presentations share this definition; changing HTML alone no longer changes its identity.
+`scripts/generate_reference_fixture.py --check` is a mandatory CI drift gate for generated host
+Python, standalone reference-app and TypeScript bindings. An independent golden digest is tested
+in both languages. V1 semantics must not be silently edited/relabelled as the same contract.
+
+Version: `accessforge.reference-service-request/1`.
+Canonical SHA-256: `39acd4e6ff833c3f5668cbc951f541658858568bd9ba31814bfb19a318dbb6a3`.
+The separate `presentation_digest` remains a diagnostic HTML hash. Candidate source/archive
+digests continue binding exact presentation bytes. The journey/manifest `fixtureDigest` also
+covers navigator/reset/observer values; it is NOT interchangeable with the template definition
+digest. A future trusted controller must select and seal both appropriate identities.
+
+Fixture creation declares this explicit version and stores the logical template hash. There is
+no migration/backfill of historical fixture rows or run evidence. Older HTML-derived identities
+remain historical; the new supervisor refuses old/missing-version declarations. A fresh reset
+and seed under the new contract is required, not rewriting old evidence to make pairs match.
+
+The contained regression harness binds the frozen definition in its policy, verifies the fixture
+declaration and independently compares the actual PostgreSQL row. Protected HTTP/database behavior
+checks still run: a matching marker alone is not proof. Tests build an approved presentation edit
+and a malicious definition mutation in real disposable candidate containers; no target code is
+imported onto the host. These synthetic candidate tests do not establish actual reader success.
+
+Browser setup requires the trusted template digest before reset and exact candidate digest,
+version, variant and bounded nonce before launch. Native HTTP transport forbids redirects, caps
+decoded response bytes at 16 KiB and applies a five-second deadline through body consumption.
+Injected fetch adapters remain trusted test/operator code, not candidate-selected transport.
+Only the start URL enters the navigator projection; setup credentials remain supervisor-only.
+This helper does not prove supplied build digests or browser deployment provenance. The module 15
+attestation gate remains closed pending exact build/source/run/lease linkage and real reader proof.
+
+The preceding durable-regression commit `0fdae5896e7ebc15f353082b10de027449ebcebb` passed all
+GitHub CI jobs in run 34720879520. This continuation requires separate current-head validation.
+
+Local checkpoint `3fe5e0d70b6f2c52ec29726d0baadcbc91ef86f5` passed the full Python suite:
+**2,087 passed, zero failures/skips**, 58 upstream deprecation warnings, in 224.64 seconds.
+That includes actual captured-wheel presentation repair with unchanged backend semantics and
+rejection of a candidate that tampers with the fixture definition. Strict mypy: 223 files clean;
+Ruff: 325 files clean; OpenAPI, six schema/enumeration bindings, 74-operation client and frozen
+fixture binding drift checks pass. All Node workspace typecheck/build/test commands pass; the
+final desktop suite has 56 passing tests, including real loopback HTTP redirect, oversized-body
+and stalled-body refusal. No actual-reader or production deployment result is implied.
