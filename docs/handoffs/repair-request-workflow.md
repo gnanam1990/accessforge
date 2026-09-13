@@ -34,6 +34,7 @@ CSRF, exact readback, retry-cache expiry, non-bypassable unknown invocation, imm
 workspace isolation and shared token accounting. No local suite, model, real reader or deployment ran.
 The synthetic diagnosis fixture proves request persistence, not generation readiness or source proof.
 
-Still required: operator delivery connecting the trusted projection, explicit reservation, model,
-post-call identity/authority checks and atomic PROPOSED persistence; plus browser request controls.
+Operator delivery is implemented in [repair model delivery](repair-model-delivery.md), including
+reservation, post-call checks and atomic PROPOSED persistence. Browser request controls and actual
+provider/source acceptance remain required.
 No schema migration or billable request was executed against user data during development.

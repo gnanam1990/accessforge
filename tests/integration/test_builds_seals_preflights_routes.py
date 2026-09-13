@@ -3059,6 +3059,7 @@ def _check_repair_request(
         ]
         == request_id
     )
+    _check_repair_receipt_transaction(db, ref.run_id, request_id, finding, body)
     with workspace_connection(db, WS) as conn:
         assert store.require_active(conn, request_id=request_id)["scope"] == body
         entitlement = budgets.current_entitlement(conn, workspace_id=WS)
@@ -3112,6 +3113,84 @@ def _check_repair_request(
         conn.execute("UPDATE repair_request SET revoked_at=NULL WHERE id=%s", (request_id,))
     with workspace_connection(db, str(uuid.uuid4())) as conn, pytest.raises(LookupError):
         store.inspect(conn, request_id=request_id)
+
+
+def _check_repair_receipt_transaction(
+    db: str, run_id: str, request_id: str, finding_id: str, scope: dict[str, Any]
+) -> None:
+    """Real SQL receipt/patch atomicity with a synthetic proposal, never a model invocation."""
+    from accessforge_domain.patch_policy import ProposedChange
+    from accessforge_persistence import (
+        diagnosis_invocations,
+        patches,
+        repair_deliveries,
+        repair_requests,
+    )
+
+    class RollbackFixture(Exception):
+        pass
+
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(RollbackFixture), conn.transaction():
+            diagnosis_invocations.reserve(
+                conn,
+                workspace_id=WS,
+                run_id=run_id,
+                operation_id=request_id,
+                request_digest="c" * 64,
+                tokens=10,
+                purpose="REPAIR",
+            )
+            patch = patches.propose_patch(
+                conn,
+                workspace_id=WS,
+                finding_id=finding_id,
+                base_manifest_digest=scope["manifestDigest"],
+                base_source_digest=scope["sourceTreeDigest"],
+                changes=(ProposedChange("src/form.ts", "synthetic proposed text"),),
+                rationale="Synthetic fixture, not actual model proof",
+                proposed_by=OWNER,
+            )
+            repair_deliveries.record(
+                conn,
+                workspace_id=WS,
+                request_id=request_id,
+                request_digest="c" * 64,
+                input_digest="d" * 64,
+                binding_digest="e" * 64,
+                patch=patch,
+            )
+            with pytest.raises(repair_deliveries.DeliveryRefused):
+                repair_deliveries.by_request(conn, request_id=request_id)
+            diagnosis_invocations.finish(
+                conn,
+                workspace_id=WS,
+                operation_id=request_id,
+                request_digest="c" * 64,
+                purpose="REPAIR",
+                status="RECORDED",
+            )
+            receipt = repair_deliveries.by_request(conn, request_id=request_id)
+            assert receipt is not None and receipt["outcome"] == "PROPOSED"
+            assert (
+                receipt["patchId"] == patch.patch_id
+                and receipt["patchDigest"] == patch.patch_digest
+            )
+            assert repair_requests.inspect(conn, request_id=request_id)["delivery"] == receipt
+            assert patches.load_patch(conn, patch_id=patch.patch_id).approval_id is None
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute("DELETE FROM repair_delivery WHERE request_id=%s", (request_id,))
+            raise RollbackFixture()
+        assert repair_deliveries.by_request(conn, request_id=request_id) is None
+        assert (
+            conn.execute(
+                "SELECT id FROM patch_proposal WHERE finding_id=%s", (finding_id,)
+            ).fetchone()
+            is None
+        )
+        assert (
+            repair_requests.inspect(conn, request_id=request_id)["invocationState"] == "NOT_STARTED"
+        )
 
 
 def _check_diagnosis_request(
