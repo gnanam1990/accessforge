@@ -145,6 +145,15 @@ def test_compilation_is_deterministic() -> None:
     assert first.version.navigator_policy_digest == second.version.navigator_policy_digest
 
 
+def test_freezing_requires_explicit_stop_without_widening_the_selected_policy() -> None:
+    draft = e0_draft()
+    without_stop = draft.allowed_actions - {"STOP"}
+    with pytest.raises(ValueError, match="explicitly permit STOP"):
+        compile_journey(e0_draft(allowed_actions=frozenset(without_stop)))
+    compiled = compile_journey(draft)
+    assert compiled.navigator_policy["allowedActions"] == sorted(draft.allowed_actions)
+
+
 @pytest.mark.parametrize(
     "change",
     [
