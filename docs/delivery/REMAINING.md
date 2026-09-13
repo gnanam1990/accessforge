@@ -37,6 +37,14 @@ Crash/cancellation/unknown claims are retained for reconciliation. This requires
 root; it does not sandbox malicious same-user code or protect arbitrary low-level runner callers.
 Genuine setup/deployment/capture evidence and canonical runtime identity ingestion remain pending.
 
+The trusted execution bootstrap now joins the desktop claim, one-shot native machine session and
+lazy Guidepup startup. Actions wait for explicit initialization, fresh startup authorization and
+full post-start preflight. Cancellation/late startup cannot reopen the runner; an already-entered
+SDK call remains uncertain and keeps the claim. The empty verified matrix is checked before any
+reservation/network/SDK loading. This is an embedding API, not a deployed daemon or a completed
+controller action transport; startup-consent and genuine evidence/observer producers still need
+deployment integration. No OS permission or actual reader was changed to implement it.
+
 The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
 execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
 completion. Next build work is trusted runtime identity/probe ingestion and the remaining

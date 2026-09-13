@@ -158,14 +158,13 @@ async function boundedJson(response: Awaited<ReturnType<typeof fetch>>): Promise
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-async function receive(config: ReceiverConfig, input: unknown, sessionSecret?: string): Promise<Record<string, unknown>> {
-  config = parseConfig(config);
+/** Validate and snapshot only the bounded wire fields; never clone arbitrary controller objects. */
+export function parseDispatchEnvelope(input: unknown): Readonly<{
+  reference: DispatchReference;
+  ticket: Readonly<{ ticketId: string; token: string; expiresAt: string }>;
+}> {
   const envelope = exactObject(input, ['reference', 'ticket']);
-  const reference = parseReference(envelope.reference);
-  const local = parseReference(config.localReference);
-  if (JSON.stringify(reference) !== JSON.stringify(local)) {
-    throw new ReceiverRefused('dispatch does not match this receiver lease');
-  }
+  const reference = Object.freeze(parseReference(envelope.reference));
   const ticket = exactObject(envelope.ticket, ['ticketId', 'token', 'expiresAt']);
   const ticketId = uuid(ticket.ticketId);
   if (typeof ticket.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(ticket.token) ||
@@ -173,6 +172,17 @@ async function receive(config: ReceiverConfig, input: unknown, sessionSecret?: s
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(ticket.expiresAt)) {
     throw new ReceiverRefused('invalid dispatch ticket');
   }
+  return Object.freeze({ reference, ticket: Object.freeze({ ticketId, token: ticket.token, expiresAt: ticket.expiresAt }) });
+}
+
+async function receive(config: ReceiverConfig, input: unknown, sessionSecret?: string): Promise<Record<string, unknown>> {
+  config = parseConfig(config);
+  const { reference, ticket } = parseDispatchEnvelope(input);
+  const local = parseReference(config.localReference);
+  if (JSON.stringify(reference) !== JSON.stringify(local)) {
+    throw new ReceiverRefused('dispatch does not match this receiver lease');
+  }
+  const ticketId = ticket.ticketId;
   const timeout = config.timeoutMs ?? 5000;
   const remaining = Date.parse(ticket.expiresAt) - Date.now();
   const budgetStarted = performance.now();

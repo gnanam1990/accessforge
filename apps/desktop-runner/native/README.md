@@ -59,7 +59,8 @@ same OS user is a deployment boundary, not established by executable ownership c
 
 `createPhysicalSafariRunner` in `src/physical-preflight.ts` supplies host/session preflight and
 native Safari origin. Pass `desktopClaimDirectory` (the shared private host claim root), the normal
-runner dependencies and `physicalPreflight` containing
+runner dependencies, an adapter with `start()`, `readerStartup: { authorize(signal), timeoutMs }`,
+and `physicalPreflight` containing
 `expectedDesktopSessionId` and `observeRuntimeEvidence(signal)`. The latter reads owned setup,
 capture and deployment observations; it must not reset, type or start a reader and should honor its
 AbortSignal. The collector uses the same monotonic clock as the action supervisor.
@@ -85,8 +86,9 @@ The physical factory now returns a restricted runner holding `desktop-<assigned 
 inside `desktopClaimDirectory`. Provision ONE canonical absolute private directory owned by the
 runner OS user, shared across ALL its run and runner registrations on this host. A different root
 per registration defeats this cooperative exclusion and is not a supported deployment. Neither
-the factory nor the preflight starts a reader: bootstrap must construct this claimed runner before
-starting the reader, and must not start one when construction refuses.
+construction nor preflight starts a reader. Call the returned `initialize()` once; actions remain
+refused until initialization and its fresh post-start preflight complete. Do not start the adapter
+separately. An unproven profile is refused before claim creation, network or Guidepup loading.
 
 Creation is exclusive, mode0600, and flushes both the exact session/reference/nonce payload and
 parent directory before returning. Each action checks the original directory and file ownership,
@@ -103,8 +105,35 @@ reported as unconfirmed, never blindly retried. The finished wrapper cannot send
 Low-level `AuthenticatedRunner`, `createSafariAuthenticatedRunner` and candidate proof helpers
 remain primitives: they do not themselves acquire this claim or establish host-wide exclusivity.
 
-Desktop-claim regressions are authored for CI, not executed locally. Physical runtime identity
-ingestion, production bootstrap, real reader proof and deployed isolation remain incomplete.
+### Claimed reader/session bootstrap
+
+`createExecutionBootstrap` in `src/execution-bootstrap.ts` composes the receiver and concrete lazy
+Guidepup driver. Supply normal physical-runner dependencies except `session`/`adapter`, plus private
+`receiver` configuration and the exact controller `dispatchEnvelope`. It snapshots only the bounded
+reference/ticket fields and refuses mismatched identity. Construction acquires the desktop claim;
+`initialize()` opens `NativeExecutionSession` once under that claim, keeping the independent secret
+private. The run reception claim remains separate and is never cleaned up or replayed. Handshake
+latency counts against session expiry and local lease time; clock rollback refuses startup.
+
+Reader startup needs fresh trusted `readerStartup.authorize(signal)` checks before probes and again
+before entering the SDK. This authorization must cover Guidepup's actual start behavior: its pinned
+implementation terminates/restarts VoiceOver and mounts its preferences, with its own internal
+startup attempts. It is not a read-only attach. Existing AppleScript configuration, OS permissions,
+desktop ownership, reset/build/origin, journal and stale-input checks must already be known-good.
+Only READER_ACTIVE and SPEECH_CAPTURE_WORKING are deferred until after start; post-start readiness
+requires the full vocabulary plus another native Safari sample. The verified-profile gate is not
+relaxed, and this path does not establish the first actual-reader proof.
+
+Initialization is one-shot and bounded (at most30seconds). Cancellation settles the wrapper and
+blocks late guarded operations. An already-entered SDK call cannot be forcibly undone by rejecting
+its promise: uncertainty retains the claim and requires reconciliation, not an automatic stop,
+cleanup/restart or another run. Successful initialization enables the existing authenticated action
+bridge; successful STOP is still the only route to normal finish and release.
+
+Desktop-claim/bootstrap regressions are authored for CI, not executed locally. This is a trusted
+embedding API, not a deployed daemon or a navigator stdin transport. Controller startup-consent
+integration, owned setup/capture/runtime identity producers, independent observer coordination,
+real reader proof and deployed isolation remain incomplete. The default CLI still exits EX_CONFIG.
 
 TypeScript builds and a compile-only Swift expression check passed. Ownership/ioreg/clock/collector
 cases are committed for CI and were not run locally. No physical-reader test loop was performed.
