@@ -15,10 +15,14 @@ Draft PR #37 now includes original frozen rules, independent final observer cond
 artifact retention and atomic final evaluation storage/read API/export reasons. See handoff11 for
 the operator command and evidence boundaries. These branch changes are not yet merged.
 
+The rule-authoring UI now supports the implemented exact phrase/action and independent request-count
+families, with server-provided bounds and field-linked errors (handoff22). Further predicate families
+still need both trusted producers and their own authoring controls.
+
 The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
 execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
-completion. Next build work is trusted runtime identity/probe ingestion, followed by the remaining
-typed predicate producers and rule-authoring UI. Real VoiceOver execution, deployed service/spool
+completion. Next build work is trusted runtime identity/probe ingestion and the remaining
+typed predicate producers. Real VoiceOver execution, deployed service/spool
 isolation and matched repair proof remain unverified; stored snapshots do not close E0/R1.
 
 Local verification remains changed-code static checks and focused regression cases only. CI is not

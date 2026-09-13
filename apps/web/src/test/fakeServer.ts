@@ -328,6 +328,11 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
           },
           allowedEffects: ['FIXTURE_SUBMIT', 'FIXTURE_RESET'],
           assertionKinds: ['TASK_COMPLETION', 'REQUIRED_ANNOUNCEMENT'],
+          evaluationRules: {
+            EXACT_READER_PHRASE: { assertionKind: 'REQUIRED_ANNOUNCEMENT', maxActionSequence: 1000,
+              maxPhraseCharacters: 8192, maxPhraseBytes: 32768 },
+            EFFECT_COUNT: { assertionKind: 'TASK_COMPLETION', effect: 'CREATE_TEST_REQUEST', maxCount: 1000 },
+          },
           unknownReasons: ['READER_UNAVAILABLE', 'OBSERVER_UNREACHABLE'],
           maxActions: 500,
           maxWallTimeSeconds: 1800,

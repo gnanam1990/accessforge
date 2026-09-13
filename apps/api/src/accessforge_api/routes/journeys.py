@@ -42,7 +42,7 @@ from accessforge_domain.journeys import (
     TaskIntent,
     UnknownReason,
 )
-from accessforge_domain.journeys.assertions import EvaluationRule
+from accessforge_domain.journeys.assertions import EvaluationRule, evaluation_rule_capabilities
 from accessforge_domain.journeys.dsl import (
     ALLOWED_ACTIONS,
     ALLOWED_KEY_CHORDS,
@@ -370,6 +370,7 @@ def journey_capabilities(workspace_id: str, request: Request, conn: Conn) -> dic
         },
         "allowedEffects": ["FIXTURE_SUBMIT", "FIXTURE_RESET"],
         "assertionKinds": [kind.value for kind in AssertionKind],
+        "evaluationRules": evaluation_rule_capabilities(),
         "unknownReasons": [reason.value for reason in UnknownReason],
         "maxActions": MAX_ACTIONS,
         "maxWallTimeSeconds": MAX_WALL_TIME_SECONDS,
