@@ -148,6 +148,32 @@ describe('ErrorSummary', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
+  it('moves keyboard activation to the linked control', async () => {
+    const user = userEvent.setup()
+    render(
+      <>
+        <ErrorSummary submissionId={1} errors={[{ fieldId: 'origin', message: 'Bad origin.' }]} />
+        <input id="origin" aria-label="Origin" />
+      </>,
+    )
+    screen.getByRole('link', { name: 'Bad origin.' }).focus()
+    await user.keyboard('{Enter}')
+    expect(screen.getByRole('textbox', { name: 'Origin' })).toHaveFocus()
+  })
+
+  it('preserves modified link activation without moving focus', () => {
+    render(
+      <>
+        <ErrorSummary submissionId={1} errors={[{ fieldId: 'origin', message: 'Bad origin.' }]} />
+        <input id="origin" aria-label="Origin" />
+      </>,
+    )
+    const link = screen.getByRole('link', { name: 'Bad origin.' })
+    link.focus()
+    expect(fireEvent.click(link, { ctrlKey: true })).toBe(true)
+    expect(link).toHaveFocus()
+  })
+
   it('gives each instance its own heading id', () => {
     render(
       <>

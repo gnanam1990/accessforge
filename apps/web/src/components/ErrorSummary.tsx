@@ -75,7 +75,22 @@ export const ErrorSummary = ({
       <ul>
         {errors.map((error) => (
           <li key={error.fieldId}>
-            <a className="af-link" href={`#${error.fieldId}`}>
+            <a
+              className="af-link"
+              href={`#${error.fieldId}`}
+              onClick={(event) => {
+                if (
+                  event.defaultPrevented || event.button !== 0 || event.metaKey ||
+                  event.ctrlKey || event.altKey || event.shiftKey
+                ) return
+                const document = event.currentTarget.ownerDocument
+                const target = document.getElementById(error.fieldId)
+                // Explicitly transfer focus for controls and tabIndex=-1 groups. Keep the
+                // native fragment fallback if the target is missing or cannot receive focus.
+                target?.focus()
+                if (target !== null && document.activeElement === target) event.preventDefault()
+              }}
+            >
               {error.message}
             </a>
           </li>
