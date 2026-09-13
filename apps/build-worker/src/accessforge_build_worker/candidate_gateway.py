@@ -14,6 +14,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import CodeType, FunctionType
 from typing import Any
@@ -21,6 +22,7 @@ from typing import Any
 from accessforge_domain.candidate_endpoint import CSP as CSP
 from accessforge_domain.candidate_endpoint import PROTOCOL
 from accessforge_domain.canonical import digest
+from accessforge_domain.timestamps import parse_rfc3339_utc
 
 from .sandbox import CleanupUnconfirmed, DaemonBinding, SandboxRefused
 
@@ -91,6 +93,7 @@ class CandidateGateway:
         binding: CandidateEndpointBinding,
         nonce: str,
         transport: Callable[[str, str, str], dict[str, Any]],
+        observe_artifact: Callable[[], dict[str, Any]] | None = None,
         wall_seconds: int = 30,
         on_planned: Callable[[dict[str, Any]], None] = lambda identity: None,
         on_bound: Callable[[dict[str, Any]], None] = lambda receipt: None,
@@ -104,6 +107,7 @@ class CandidateGateway:
         self.binding = binding
         self.path = "/form/" + nonce
         self.transport = transport
+        self._observe_artifact = observe_artifact
         self.wall_seconds = wall_seconds
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -147,6 +151,49 @@ class CandidateGateway:
         # Presence of this receipt is not proof the browser actually navigated here.
         identity = {**self.plan(), "origin": self.origin}
         return {**identity, "bindingDigest": digest(identity)}
+
+    def observe_artifact(self) -> dict[str, Any]:
+        """Trusted controller capability only, never a browser route or cached launch receipt.
+
+        No callback means measurement is unavailable. This does not infer SOURCE, ENVIRONMENT or
+        process-memory identity from the build artifact, nor grant reader or effect authority.
+        """
+        _ = self.origin
+        if self._observe_artifact is None:
+            raise SandboxRefused("live candidate artifact observation is not configured")
+        started = datetime.now(UTC)
+        try:
+            result = self._observe_artifact()
+            expected = {
+                "taskId": self.binding.task_id,
+                "candidateId": self.binding.candidate_id,
+                "imageId": self.binding.image_id,
+                "daemonId": self.binding.daemon.daemon_id,
+                "artifactDigest": self.binding.artifact_digest,
+                "meaning": "DEPLOYED_FILESYSTEM_MEASUREMENT_NOT_EXECUTION_ATTESTATION",
+            }
+            if not isinstance(result, dict) or set(result) != set(expected) | {
+                "artifactTreeDigest",
+                "observedAt",
+            }:
+                raise SandboxRefused("closed artifact measurement required")
+            if (
+                any(result[k] != v for k, v in expected.items())
+                or not isinstance(result["artifactTreeDigest"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", result["artifactTreeDigest"])
+            ):
+                raise SandboxRefused("artifact measurement differs from bound deployment")
+            if not isinstance(result["observedAt"], str) or not started <= parse_rfc3339_utc(
+                result["observedAt"]
+            ) <= datetime.now(UTC):
+                raise SandboxRefused("artifact observation is not a fresh measurement")
+            _ = self.origin
+            return dict(result)
+        except Exception:
+            self._closed = True
+            raise SandboxRefused(
+                "candidate artifact measurement unavailable; do not replay effects"
+            ) from None
 
     def __enter__(self) -> CandidateGateway:
         if self._server is not None or self._closed:

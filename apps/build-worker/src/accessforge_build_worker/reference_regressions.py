@@ -16,6 +16,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import CodeType
 from typing import Any
 from urllib.parse import urlencode
@@ -39,7 +40,7 @@ from .sandbox import (
     SandboxPolicy,
     SandboxRefused,
 )
-from .snapshot import SourceFile, SourceSnapshot
+from .snapshot import MAX_ARCHIVE_BYTES, SourceFile, SourceSnapshot, read_artifact
 
 POSTGRES_IMAGE = "postgres@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
 _PG = "/usr/lib/postgresql/17/bin/"
@@ -428,10 +429,32 @@ class ReferenceRegressions:
                     "/work/src",
                     payload=artifact.archive(),
                 )
+                read_deployed_artifact(container, deadline)
                 checked(
                     "exec", "-d", *env_args, container, "/usr/local/bin/python", "-I", "-c", boot
                 )
                 return container
+
+            def read_deployed_artifact(container: str, end: float) -> SourceSnapshot:
+                # Use the immutable runtime image's tar binary, not candidate stdout or markers.
+                # Capture is bounded and parsed as inert bytes on the host; no extraction/import.
+                payload = sandbox._checked(
+                    "exec",
+                    container,
+                    "/bin/tar",
+                    "-cf",
+                    "-",
+                    "-C",
+                    "/work/src",
+                    "out",
+                    deadline=end,
+                    limit=MAX_ARCHIVE_BYTES,
+                    cancelled=cancelled,
+                ).stdout
+                observed = read_artifact(payload)
+                if observed.archive_digest != artifact.archive_digest:
+                    raise SandboxRefused("deployed candidate artifact bytes or modes changed")
+                return observed
 
             candidate = start_candidate("candidate")
 
@@ -497,10 +520,9 @@ class ReferenceRegressions:
                 ):
                     raise SandboxRefused("browser candidate fixture identity differs")
 
-                def transport(method: str, path: str, body: str) -> dict[str, Any]:
-                    end = min(deadline, time.monotonic() + 5)
+                def observe_deployment(end: float) -> dict[str, Any]:
                     assert_endpoint_live()
-                    assert_candidate_request(method)
+                    assert_candidate_request("GET")
                     sandbox._assert_daemon(deadline=end)
                     for container in (candidate, driver):
                         item = sandbox._inspect(container, deadline=end)
@@ -513,15 +535,39 @@ class ReferenceRegressions:
                         normalized = copy.deepcopy(item)
                         normalized["HostConfig"]["NetworkMode"] = "none"
                         sandbox._assert_configuration(normalized, image_id=self.image, task_id=task)
+                    observed = read_deployed_artifact(candidate, end)
                     assert_endpoint_live()
+                    assert_candidate_request("GET")
+                    if cancelled() or time.monotonic() >= end:
+                        raise SandboxRefused("candidate artifact observation expired")
+                    return {
+                        "taskId": task,
+                        "candidateId": candidate,
+                        "imageId": self.image,
+                        "daemonId": sandbox.daemon.daemon_id,
+                        "artifactDigest": observed.archive_digest,
+                        "artifactTreeDigest": observed.tree_digest,
+                        "observedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        "meaning": "DEPLOYED_FILESYSTEM_MEASUREMENT_NOT_EXECUTION_ATTESTATION",
+                    }
+
+                def transport(method: str, path: str, body: str) -> dict[str, Any]:
+                    end = min(deadline, time.monotonic() + 5)
+                    observe_deployment(end)
                     assert_candidate_request(method)
-                    return http(
+                    response = http(
                         method,
                         path,
                         headers={"Content-Type": "application/x-www-form-urlencoded"},
                         body=body,
                         request_deadline=end,
                     )
+                    # If a POST's result cannot be verified, fail without replaying the effect.
+                    # These are filesystem samples, not proof against change-and-restore between
+                    # samples or arbitrary process-memory behavior inside the isolated candidate.
+                    observe_deployment(end)
+                    assert_candidate_request(method)
+                    return response
 
                 with CandidateGateway(
                     binding=CandidateEndpointBinding(
@@ -537,6 +583,9 @@ class ReferenceRegressions:
                     ),
                     nonce=declaration["nonce"],
                     transport=transport,
+                    observe_artifact=lambda: observe_deployment(
+                        min(deadline, time.monotonic() + 5)
+                    ),
                     on_planned=on_endpoint_planned,
                     on_bound=on_endpoint_bound,
                     on_admit=assert_endpoint_live,
