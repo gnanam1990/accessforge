@@ -8,6 +8,7 @@
  */
 
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { Journal, JournalEntry } from './supervisor.js';
 
 export class FileJournal implements Journal {
@@ -17,10 +18,20 @@ export class FileJournal implements Journal {
     // Synchronous and fsynced, deliberately. The asynchronous API would let the runtime hold the
     // bytes in a buffer while `dispatch` sends a keystroke to the operating system, which is the
     // exact ordering this journal exists to prevent.
-    const fd = openSync(this.path, 'a');
+    const fd = openSync(this.path, 'a', 0o600);
     try {
-      writeSync(fd, `${JSON.stringify(entry)}\n`);
+      const bytes = Buffer.from(`${JSON.stringify(entry)}\n`);
+      let written = 0;
+      while (written < bytes.length) {
+        const count = writeSync(fd, bytes, written, bytes.length - written);
+        if (count <= 0) throw new Error('local journal write did not complete');
+        written += count;
+      }
       fsyncSync(fd);
+      // A new file's data can survive while its directory entry does not. Both must be durable
+      // before the caller is allowed to touch the OS. Unsupported directory fsync fails closed.
+      const directory = openSync(dirname(this.path), 'r');
+      try { fsyncSync(directory); } finally { closeSync(directory); }
     } finally {
       closeSync(fd);
     }

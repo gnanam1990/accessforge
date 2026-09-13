@@ -18,6 +18,7 @@ import psycopg
 from accessforge_domain.canonical import digest
 from accessforge_domain.journeys.dsl import ALLOWED_ACTIONS, ALLOWED_KEY_CHORDS
 from accessforge_domain.origins import normalize_origin
+from accessforge_domain.runners.preflight import AmbiguityReason
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
 from . import runners, supervisor_dispatch
@@ -240,4 +241,119 @@ def retain_action_intent(
         "sessionId": session_id,
         "sequence": sequence,
         "meaning": "ACTION_INTENT_RETAINED",
+    }
+
+
+def _action(conn: psycopg.Connection[Any], row: dict[str, Any], action_id: str) -> dict[str, Any]:
+    action = conn.execute(
+        "SELECT * FROM runner_action WHERE id=%s AND workspace_id=%s AND run_id=%s "
+        "AND attempt_id=%s AND lease_id=%s AND epoch=%s FOR UPDATE",
+        (
+            action_id,
+            row["workspace_id"],
+            row["run_id"],
+            row["attempt_id"],
+            row["lease_id"],
+            row["epoch"],
+        ),
+    ).fetchone()
+    if action is None or action["result_at"] is not None:
+        raise Refused("unresolved action identity unavailable")
+    return dict(action)
+
+
+def commit_action_dispatch(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    session_id: str,
+    token: str,
+    action_id: str,
+    origin: str,
+) -> dict[str, Any]:
+    """Commit at most one delivery of the retained command, before the local OS boundary.
+
+    This is a dispatch commitment, NOT proof an OS action happened. Lost acknowledgement means
+    reconciliation/quarantine, never another delivery. The desktop still checks physical state and
+    fsyncs its local journal before invoking its reader adapter.
+    """
+    row, manifest = _live(conn, workspace_id, session_id, token)
+    action = _action(conn, row, action_id)
+    try:
+        normalized = str(normalize_origin(origin))
+    except ValueError as exc:
+        raise Refused("current action origin unavailable") from exc
+    if action["dispatched_at"] is not None or normalized != action["origin"]:
+        raise Refused("action already committed or origin changed")
+    policy_row = conn.execute(
+        "SELECT navigator_policy FROM journey_version WHERE id=%s", (manifest["journeyVersionId"],)
+    ).fetchone()
+    if (
+        policy_row is None
+        or digest(policy_row["navigator_policy"]) != manifest["navigatorPolicyDigest"]
+    ):
+        raise Refused("sealed action policy unavailable")
+    policy = policy_row["navigator_policy"]
+    elapsed = (datetime.now(UTC) - row["created_at"]).total_seconds()
+    if elapsed >= min(manifest["wallTimeBudgetSeconds"], policy["wallTimeSeconds"]):
+        raise Refused("action wall-time budget expired")
+    if action["action"] == "TYPE_TEXT":
+        fixture = conn.execute(
+            "SELECT navigator_values FROM run_fixture_instance WHERE run_id=%s", (row["run_id"],)
+        ).fetchone()
+        if fixture is None or action["text_value"] not in fixture["navigator_values"].values():
+            raise Refused("retained fixture text no longer available")
+    runners.mark_action_dispatched(conn, action_id=action_id)
+    command: dict[str, Any] = {
+        "actionId": action_id,
+        "sequence": action["action_sequence"],
+        "action": action["action"],
+    }
+    if action["key_chord"] is not None:
+        command["keyChord"] = action["key_chord"]
+    if action["text_value"] is not None:
+        command["text"] = action["text_value"]
+    return {"sessionId": session_id, "command": command, "meaning": "ACTION_DISPATCH_COMMITTED"}
+
+
+def record_action_completion(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    session_id: str,
+    token: str,
+    action_id: str,
+    status: str,
+) -> dict[str, Any]:
+    """Retain an authenticated action result once; never a run/assertion verdict.
+
+    Positive results cannot resurrect expired/revoked sessions or overwrite ambiguity. If fresh
+    authority is unavailable, local evidence must be retained and recovery keeps the run unknown.
+    """
+    if status not in {"SUCCEEDED", "FAILED", "AMBIGUOUS"}:
+        raise Refused("invalid action result")
+    row, _ = _live(conn, workspace_id, session_id, token)
+    action = _action(conn, row, action_id)
+    if action["dispatched_at"] is None and status != "AMBIGUOUS":
+        raise Refused("a non-dispatched intent cannot report a known action result")
+    if status == "AMBIGUOUS":
+        runners.mark_action_ambiguous(
+            conn, action_id=action_id, reason=AmbiguityReason.ACTION_RESULT_NEVER_ARRIVED
+        )
+        runners.interrupt_manual_handoff(
+            conn,
+            workspace_id=workspace_id,
+            run_id=str(row["run_id"]),
+            attempt_id=str(row["attempt_id"]),
+            runner_id=str(row["runner_id"]),
+            lease_id=str(row["lease_id"]),
+            epoch=int(row["epoch"]),
+        )
+    else:
+        runners.record_action_result(conn, action_id=action_id, status=status)
+    return {
+        "sessionId": session_id,
+        "actionId": action_id,
+        "status": status,
+        "meaning": "ACTION_RESULT_RETAINED",
     }

@@ -150,6 +150,78 @@ def retain_supervisor_action_intent(
     return result
 
 
+@router.post("/supervisor-sessions/{session_id}/actions/{action_id}/dispatch")
+def commit_supervisor_action_dispatch(
+    workspace_id: str,
+    session_id: str,
+    action_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    for value in (workspace_id, session_id, action_id):
+        as_identifier(value, what="supervisor action identity")
+    if (
+        set(payload) != {"origin"}
+        or not isinstance(payload["origin"], str)
+        or len(payload["origin"]) > 2048
+    ):
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "exact current origin is required")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    try:
+        result = supervisor_sessions.commit_action_dispatch(
+            conn,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            token=credential.credentials,
+            action_id=action_id,
+            origin=payload["origin"],
+        )
+    except (supervisor_sessions.Refused, runners.RunnerError):
+        raise ProblemDetail(
+            ProblemCode.PERMISSION_DENIED, "action dispatch is not admitted"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/supervisor-sessions/{session_id}/actions/{action_id}/result")
+def record_supervisor_action_result(
+    workspace_id: str,
+    session_id: str,
+    action_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    for value in (workspace_id, session_id, action_id):
+        as_identifier(value, what="supervisor action identity")
+    if set(payload) != {"status"} or not isinstance(payload["status"], str):
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "exact action status is required")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    try:
+        result = supervisor_sessions.record_action_completion(
+            conn,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            token=credential.credentials,
+            action_id=action_id,
+            status=payload["status"],
+        )
+    except (supervisor_sessions.Refused, runners.RunnerError):
+        raise ProblemDetail(
+            ProblemCode.PERMISSION_DENIED, "action result is not admitted"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
 @router.post("/runners/enrollment-tokens", status_code=status.HTTP_201_CREATED)
 def issue_enrollment_token(
     workspace_id: str, request: Request, conn: Conn, payload: dict[str, Any]
