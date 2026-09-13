@@ -839,6 +839,66 @@ def test_a_seal_cannot_use_another_projects_build_or_environment(
     assert "environment belongs to a different project" in borrowed_environment.json()["detail"]
 
 
+def test_canonical_run_admission_preserves_reserved_identity_and_refuses_reuse(
+    db: str, client: TestClient, csrf: str, project: str, environment: str
+) -> None:
+    """Actual HTTP authorization/admission; deliberately synthetic execution input records."""
+    build = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/builds",
+        json=_build_body(),
+        headers={CSRF_HEADER: csrf},
+    ).json()
+    run_id, approval_id, journey_id = (str(uuid.uuid4()) for _ in range(3))
+    inputs = project_store.SealInputs(
+        "a" * 64, "a" * 64, "a" * 64, "a" * 64, "a" * 64, "synthetic", "b" * 64
+    )
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,journey_digest,"
+            "assertion_set_digest,fixture_digest,navigator_policy_digest,navigator_policy,"
+            "reviewer_summary) VALUES (%s,%s,%s,'synthetic','web',repeat('a',64),repeat('a',64),"
+            "repeat('a',64),repeat('a',64),'{}','{}')",
+            (journey_id, WS, project),
+        )
+        sealed = project_store.seal_run(
+            conn,
+            workspace_id=WS,
+            project_id=project,
+            source_snapshot_id=build["sourceSnapshotId"],
+            build_artifact_id=build["buildId"],
+            environment_manifest_id=environment,
+            inputs=inputs,
+            run_id=run_id,
+            authorization_id=approval_id,
+            execution=project_store.ExecutionInputs(
+                journey_id,
+                (datetime.now(UTC) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+                10,
+                20,
+                frozenset({"FORM_SUBMIT"}),
+            ),
+        )
+    body = {"manifestDigest": sealed.manifest_digest}
+    wrong = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={**body, "authorizationId": str(uuid.uuid4())},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert wrong.status_code == 400
+    assert "authorizationId differs" in wrong.json()["detail"]
+    admitted = client.post(f"/v1/workspaces/{WS}/runs", json=body, headers={CSRF_HEADER: csrf})
+    assert admitted.status_code == 202, admitted.text
+    assert admitted.json()["runId"] == run_id
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute(
+            "SELECT authorization_id FROM run WHERE id=%s", (run_id,)
+        ).fetchone() == {"authorization_id": uuid.UUID(approval_id)}
+        assert conn.execute("SELECT 1 FROM approval WHERE id=%s", (approval_id,)).fetchone() is None
+    duplicate = client.post(f"/v1/workspaces/{WS}/runs", json=body, headers={CSRF_HEADER: csrf})
+    assert duplicate.status_code == 400, duplicate.text
+    assert "already belongs" in duplicate.json()["detail"]
+
+
 def test_a_run_records_the_project_that_sealed_its_manifest(
     db: str, client: TestClient, csrf: str, project: str, environment: str
 ) -> None:

@@ -736,3 +736,61 @@ pinned local Docker toolchains. Focused live-binding/forward-upgrade run: four p
 seconds. Strict mypy: 229 files; Ruff lint/format: 331 files. OpenAPI, contract bindings, logical
 fixture identity, generated clients and internal documentation links pass. This does not claim
 current-head GitHub CI or actual-reader acceptance.
+
+### Complete canonical execution identity (continuation)
+
+The earlier `sealed_manifest.manifest_digest` was an input fingerprint: it excluded run identity,
+authorization identity, journey version ID, expiry, budgets and permitted effects. It therefore
+did not satisfy the complete `RunManifest` in CONTRACTS section 4. Migration 0033 adds immutable
+`canonical_manifest` storage without inventing any of those missing historical values; old seals
+remain NULL and cannot be backfilled into consent or execution evidence.
+
+`projects.seal_run(..., execution=ExecutionInputs(...))` now constructs and validates the complete
+existing JSON Schema before hashing/storing it. It requires reserved exact run/authorization IDs,
+the matching frozen journey version/project and all journey/assertion/fixture/policy digests,
+this project's exact observed source/build pairing, positive schema-valid budgets, permitted
+effects within the environment and bounded execution expiry. The persistence package reuses the
+existing local contract validator; no third-party dependency version or schema definition changed.
+
+Candidate preparation now requires a full baseline manifest and creates a fresh canonical
+candidate run/authorization identity, retaining the baseline journey, budgets and effects while
+binding the candidate's source/build/environment. Current manifest digest/expiry and both the
+endpoint and execution deadlines are checked at live admission. A reserved authorization ID is
+stored on the run, but **no approval row is issued**. Bound-session POST and verification remain
+closed until the separate authorization/controller path actually exists.
+
+The database refuses replacing a canonical run's digest/authorization/project or reusing its
+manifest for another run. Canonical sealing also refuses retroactively resealing an existing run;
+the SQL insertion guard rejects replacing its identity even when a writer bypasses the Python
+helper. HTTP run admission uses the reserved IDs, rejects a different supplied
+authorization or repeat admission with a structured 400, and serializes competing requests before
+charging quota. Existing legacy input-seal consumers retain their metadata-only behavior; the
+public seal-creation route still produces those legacy input fingerprints, not execution consent.
+
+Tests cover complete schema payloads, per-axis digest changes, invalid IDs/budgets/effects/expiry,
+wrong journey or build/source, absence of implied approval, and a real pre-0033 historical seal
+upgrade. Actual-container candidate tests continue to use synthetic baseline/desktop metadata,
+not an actual reader. A scratch concurrent real-HTTP probe admits exactly one of two requests
+(202/400). Canonical manual RUN_EFFECTS approval, full controller/reader/observer finalization,
+UNKNOWN reconciliation and actual matched repair acceptance remain required. Draft PR #37 is not
+ready for merge. Previous binding commit b1367c9 passed all CI in run 34726565787.
+
+Canonical/API runtime validation: **2,156 passed, zero failures/skips**, 58 upstream warnings,
+291.12 seconds. The subsequent packaging follow-up passed the updated full unit suite:
+**1,041 passed** in 18.61 seconds. Strict mypy: 232 files; Ruff: 334 files. Four contract/client
+drift checks and unchanged specification inputs pass. These are distinct validation checkpoints,
+not a claim that the earlier full suite included the later packaging tests.
+
+Real package builds also exposed two pre-existing distribution failures hidden by editable
+imports: persistence forced its already-included SQL files into wheels a second time, and the
+contracts sdist omitted the sibling schema directory needed when rebuilding a wheel. The redundant
+SQL inclusion is removed. A small [Hatch custom build hook](https://hatch.pypa.io/1.13/plugins/build-hook/custom/)
+now carries schemas into sdists and direct wheels without duplicating files in sdist-built wheels.
+It uses the existing build backend, not a new service or SDK, and reads only package schema files.
+
+The new mandatory CI packaging check builds both paths and compares all **six schema** and
+**33 migration** files byte-for-byte with their sources, checks duplicate entries and the local
+contract dependency metadata. Actual built wheels were installed into a temporary target; module
+origins and packaged resources were checked there. Other runtime dependencies remained in the
+existing test environment, so this is not a hermetic deployment or a published release. Current-head
+GitHub CI, independent execution approval and actual-reader proof remain required.

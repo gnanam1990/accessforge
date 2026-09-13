@@ -184,8 +184,17 @@ jobs:
           uv run mypy apps/api/src fixtures/reference-app/src
           apps/orchestrator/src packages/agent-tools/navigation/src
           apps/build-worker/src apps/build-worker/toolchain/build_reference.py
-          packages/domain/src packages/contracts/python/src
+          packages/domain/src packages/contracts/python/src packages/contracts/python/hatch_build.py
           packages/persistence/src packages/evidence/src packages/clients/python/src scripts tests
+
+      - name: Core distributions retain exact schemas and migrations
+        run: |
+          set -euo pipefail
+          package_dir="$(mktemp -d)"
+          uv build --package accessforge-persistence --out-dir "$package_dir"
+          uv build --package accessforge-contracts --out-dir "$package_dir"
+          uv build --wheel --package accessforge-contracts --out-dir "$package_dir/direct"
+          uv run python scripts/check_core_packages.py "$package_dir"
 
       - name: Install a PostgreSQL 17 client
         # The runner image ships pg_dump 16, and the service container is PostgreSQL 17. An older
