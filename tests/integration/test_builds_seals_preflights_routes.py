@@ -2511,6 +2511,8 @@ def test_authenticated_execution_finish(
             ).status_code
             == 200
         )
+        if case == "artifact-finalize":
+            _check_runtime_preflight(client, action_url, headers, stop_id, sequence)
         if action != "STOP":
             source = {
                 "actionId": stop_id,
@@ -2634,6 +2636,12 @@ def test_authenticated_execution_finish(
         tails = conn.execute("SELECT closed_at_sequence FROM producer_stream").fetchall()
         if closes:
             assert len(tails) == 4 and all(t["closed_at_sequence"] is not None for t in tails)
+            if case == "artifact-finalize":
+                assert conn.execute(
+                    "SELECT admitted_through,closed_at_sequence FROM producer_stream "
+                    "WHERE attempt_id=%s AND producer_id=%s",
+                    (ref.attempt_id, f"supervisor:{ticket.ticket_id}:lifecycle"),
+                ).fetchone() == {"admitted_through": 5, "closed_at_sequence": 5}
             if stop_only:
                 assert conn.execute(
                     "SELECT admitted_through,closed_at_sequence FROM producer_stream "
@@ -2656,6 +2664,59 @@ def test_authenticated_execution_finish(
         assert len(finished) == int(closes)
     if case.startswith("artifact"):
         _retain_stopped_artifact_case(db, ref, ticket, monkeypatch, tmp_path, case, client)
+
+
+def _check_runtime_preflight(
+    client: TestClient, action_url: str, headers: dict[str, str], action_id: str, sequence: int
+) -> None:
+    from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
+
+    # Synthetic reports exercise real session/RLS/retention, never physical-identity attestation.
+    source = {
+        "actionId": action_id,
+        "actionSequence": sequence,
+        "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "checks": {str(key): "UNKNOWN" for key in REQUIRED_PREFLIGHT_CHECKS},
+    }
+    envelope = {"sourceRecord": source, "sourceRecordDigest": digest(source)}
+    url = action_url + "/preflight"
+    assert client.post(url, json=envelope).status_code == 401
+    for bad in (
+        {**source, "actionId": str(uuid.uuid4())},
+        {**source, "actionSequence": False},
+        {**source, "checks": {}},
+        {**source, "checks": {str(key): True for key in REQUIRED_PREFLIGHT_CHECKS}},
+        {**source, "capturedAtUtc": "2000-01-01T00:00:00Z"},
+        {**source, "diagnostic": "private host path must not be retained"},
+    ):
+        assert (
+            client.post(
+                url,
+                headers=headers,
+                json={
+                    "sourceRecord": bad,
+                    "sourceRecordDigest": digest(bad),
+                },
+            ).status_code
+            == 403
+        )
+    retained = client.post(url, headers=headers, json=envelope)
+    assert retained.status_code == 200, retained.text
+    assert retained.json()["meaning"] == "RUNTIME_PREFLIGHT_RETAINED_NOT_IDENTITY_ATTESTATION"
+    assert retained.json()["sourceRecordDigest"] == digest(source)
+    assert client.post(url, headers=headers, json=envelope).json() == retained.json()
+    changed = {**source, "checks": {str(key): "TRUE" for key in REQUIRED_PREFLIGHT_CHECKS}}
+    assert (
+        client.post(
+            url,
+            headers=headers,
+            json={
+                "sourceRecord": changed,
+                "sourceRecordDigest": digest(changed),
+            },
+        ).status_code
+        == 403
+    )
 
 
 def _retain_stopped_artifact_case(
@@ -3478,6 +3539,22 @@ def test_native_execution_session_real_http(
             assert action == [{"action": "READ_CURRENT", "dispatched_at": None, "result_at": None}]
         else:
             assert len(action) == (1 if mode == "ambiguity" else 2)
+            runtime_reports = conn.execute(
+                "SELECT payload FROM canonical_event WHERE run_id=%s "
+                "AND payload->>'provenance'='RUNTIME_PROBE_REPORT' ORDER BY sequence",
+                (ref.run_id,),
+            ).fetchall()
+            assert len(runtime_reports) == len(action)
+            for runtime_report in runtime_reports:
+                payload = runtime_report["payload"]
+                assert payload["serviceIdentity"] == "SUPERVISOR"
+                assert payload["sourceRecordDigest"] == digest(payload["sourceRecord"])
+                assert set(payload["sourceRecord"]) == {
+                    "actionId",
+                    "actionSequence",
+                    "capturedAtUtc",
+                    "checks",
+                }
             assert all(
                 item["dispatched_at"] is not None and item["result_at"] is not None
                 for item in action

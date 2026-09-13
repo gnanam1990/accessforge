@@ -112,6 +112,7 @@ test('URL drift between intent and physical dispatch prevents real-adapter invoc
       async commitDispatch() { return command; },
       async completeAction(_id, status) { results.push(status); },
       async retainObservation() { throw new Error('no reader observation should exist'); },
+      async retainRuntimePreflight() {},
       async finish() { throw new Error('no STOP'); },
     },
     journal, clock: { monotonic: () => performance.now(), utc: () => new Date().toISOString() },
