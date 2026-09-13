@@ -5,6 +5,7 @@ import { expect, it } from 'vitest'
 import { App } from '../App'
 import { ApiClient } from '../api/client'
 import { parsePatch, type Patch } from '../api/patches'
+import { parsePatchComparison } from '../api/patchComparison'
 import { createFakeServer } from '../test/fakeServer'
 
 const proposal = (): Patch => ({ patchId: 'p-1', findingId: 'f-1', status: 'PROPOSED', revision: 1,
@@ -14,7 +15,7 @@ const proposal = (): Patch => ({ patchId: 'p-1', findingId: 'f-1', status: 'PROP
   changes: [{ path: 'src/form.ts', operation: 'MODIFY', content: '<button>Save</button>', mode: '100644', binary: false },
     { path: 'src/old.ts', operation: 'DELETE', content: null, mode: null, binary: false }] })
 
-function fixture(role = 'OWNER', mode: 'success' | 'stale' | 'lost' = 'success') {
+function fixture(role = 'OWNER', mode: 'success' | 'stale' | 'lost' = 'success', comparison?: unknown) {
   const server = createFakeServer({ userId: 'u-1', email: 'operator@example.test', workspaces: [{ workspaceId: 'ws-1', name: 'Fixture', role }] })
   server.data.patches.push(proposal())
   server.data.verifications.push({ verificationId: 'v-1', patchId: 'p-1', baselineRunId: 'r-1', candidateRunId: 'r-2',
@@ -23,6 +24,9 @@ function fixture(role = 'OWNER', mode: 'success' | 'stale' | 'lost' = 'success')
   const writes: { path: string; headers: Headers; body: unknown }[] = []
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
+    if (path.endsWith('/source-comparison') && comparison !== undefined && init?.method !== 'POST') {
+      return new Response(JSON.stringify(comparison), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
     if (init?.method !== 'POST' || !path.includes('/patches/')) return server.fetch(input, init)
     writes.push({ path, headers: new Headers(init.headers), body: JSON.parse(String(init.body)) })
     if (mode === 'stale') return new Response(JSON.stringify({ code: 'STALE_REVISION', status: 409,
@@ -37,8 +41,50 @@ function fixture(role = 'OWNER', mode: 'success' | 'stale' | 'lost' = 'success')
   }) as typeof fetch
   const client = new ApiClient({ fetchImpl, cookieSource: () => 'accessforge_csrf=fixture-csrf' })
   render(<MemoryRouter initialEntries={['/w/ws-1/patches/p-1']}><App client={client} /></MemoryRouter>)
-  return { server, writes }
+  return { server, writes, setComparison: (value: unknown) => { comparison = value } }
 }
+
+const comparisonFixture = () => {
+  const p = proposal()
+  const side = (text: string) => ({ text, byteLength: new TextEncoder().encode(text).length, sha256: 'd'.repeat(64), mode: '100644' })
+  return { comparisonId: 'comparison-1', comparisonDigest: 'e'.repeat(64), preparedBy: 'u-1',
+    patchId: p.patchId, patchDigest: p.patchDigest, baseSourceDigest: p.baseSourceDigest,
+    recordedAt: '2026-09-13T03:00:00Z', retiredAt: null,
+    meaning: 'RETAINED_SOURCE_COMPARISON_NOT_APPROVAL_OR_VERIFICATION',
+    comparison: { schemaVersion: 1, patchId: p.patchId, patchDigest: p.patchDigest,
+      baseManifestDigest: p.baseManifestDigest, baseSourceDigest: p.baseSourceDigest, patchRevision: 1,
+      workspaceId: 'ws-1', projectId: 'project-1', sourceSnapshotId: 'source-1', requestedBy: 'u-1',
+      baseCommitSha: 'f'.repeat(40), baseArchiveDigest: 'a'.repeat(64),
+      meaning: 'ORIGINAL_SOURCE_COMPARISON_NOT_APPLICATION_OR_VERIFICATION',
+      files: [{ path: 'src/form.ts', before: side('<script>original\r\n</script>'), after: side(p.changes[0]!.content!),
+        operation: 'MODIFY', changed: true, unifiedDiff: '-<script>original\r\n+<button>Save</button>\n' },
+      { path: 'src/old.ts', before: side('old\n'), after: null, operation: 'DELETE', changed: true, unifiedDiff: '-old\n' }] } }
+}
+
+it('shows inert original/diff alternatives and clears retired source on explicit readback without writes', async () => {
+  const record = comparisonFixture(), f = fixture('VIEWER', 'success', record), user = userEvent.setup()
+  expect(await screen.findByLabelText('Unified diff for "src/form.ts"')).toHaveValue(record.comparison.files[0]!.unifiedDiff.replace(/\r\n?/g, '\n'))
+  await user.click(screen.getByText('Plain original and proposed source alternatives'))
+  expect(screen.getByLabelText('Original text for "src/form.ts"')).toHaveValue('<script>original\n</script>')
+  expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+  await user.selectOptions(screen.getByLabelText('Comparison file'), '1')
+  expect(screen.getByText('File absent in this side of the comparison.')).toBeVisible()
+  f.setComparison({ ...record, retiredAt: '2026-09-13T04:00:00Z' })
+  await user.click(screen.getByRole('button', { name: 'Read original-source comparison again' }))
+  await screen.findByText(/The retained source copy was retired/)
+  expect(screen.queryByLabelText('Unified diff for "src/old.ts"')).not.toBeInTheDocument()
+  expect(f.writes).toHaveLength(0)
+})
+
+it('refuses a different base or proposed text and lets retirement dominate stale payload', () => {
+  const record = comparisonFixture(), patch = proposal()
+  expect(parsePatchComparison(record, 'ws-1', patch)).not.toBeNull()
+  expect(parsePatchComparison(record, 'another-workspace', patch)).toBeNull()
+  expect(parsePatchComparison({ ...record, comparison: { ...record.comparison, baseSourceDigest: '0'.repeat(64) } }, 'ws-1', patch)).toBeNull()
+  expect(parsePatchComparison({ ...record, comparison: { ...record.comparison, files: [
+    { ...record.comparison.files[0], after: null }, record.comparison.files[1] ] } }, 'ws-1', patch)).toBeNull()
+  expect(parsePatchComparison({ ...record, retiredAt: '2026-09-13T04:00:00Z' }, 'ws-1', patch)?.comparison).toBeNull()
+})
 
 it('shows actual replacement/deletion bytes as inert text and preserves inconclusive verification', async () => {
   const f = fixture('VIEWER'), user = userEvent.setup()
