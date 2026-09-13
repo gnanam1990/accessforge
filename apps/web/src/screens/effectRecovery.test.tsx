@@ -1,10 +1,14 @@
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useLayoutEffect } from 'react'
+import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { expect, it } from 'vitest'
 import { ApiClient } from '../api/client'
 import { parseEffectRecovery, type EffectDelivery, type EffectRecovery } from '../api/effectRecovery'
 import { SessionProvider } from '../session/SessionProvider'
 import { EffectRecoverySection } from './EffectRecoverySection'
+import { App } from '../App'
+import { createFakeServer } from '../test/fakeServer'
 
 // Synthetic display/network contracts for CI, not actual-reader or application-effect proof.
 const id = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`
@@ -105,5 +109,38 @@ it('discards a late response after switching runs', async () => {
   f.rerender(f.view(id(501)))
   await screen.findByRole('heading', { name: 'Action 2: ACTIVATE' })
   await act(async () => { resolve(json(report([item(1)]))); await pending })
+  expect(screen.queryByRole('heading', { name: 'Action 1: ACTIVATE' })).not.toBeInTheDocument()
+})
+
+it('removes the previous history in the navigation commit before the next run read resolves', async () => {
+  const server = createFakeServer()
+  server.setSession({ userId: id(600), email: 'viewer@example.test',
+    workspaces: [{ workspaceId: id(400), name: 'Fixture', role: 'VIEWER' }] })
+  server.data.runs = [{ runId: id(500), status: 'INTERRUPTED', outcome: 'INCONCLUSIVE', revision: 1,
+    leaseEpoch: 1, manifestDigest: digest, cancellationRequestedAt: null, stopAcknowledgedAt: null,
+    ambiguityReason: null, quarantined: true, retryOf: null }]
+  const staleAtCommit: boolean[] = []
+  const nextPath = `/w/${id(400)}/runs/${id(501)}`
+  const Probe = () => {
+    const location = useLocation()
+    useLayoutEffect(() => {
+      if (location.pathname === nextPath) staleAtCommit.push(document.body.textContent?.includes('Action 1: ACTIVATE') ?? false)
+    }, [location.pathname])
+    return <Link to={nextPath}>Read another run</Link>
+  }
+  const client = new ApiClient({ fetchImpl: (async (input, init) => {
+    const path = String(input)
+    if (path === `/v1/workspaces/${id(400)}/runs/${id(501)}`) {
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+      })
+    }
+    if (path.includes('/effect-deliveries?')) return json(report([item(1)]))
+    return server.fetch(input, init)
+  }) as typeof fetch })
+  render(<MemoryRouter initialEntries={[`/w/${id(400)}/runs/${id(500)}`]}><App client={client} /><Probe /></MemoryRouter>)
+  await screen.findByRole('heading', { name: 'Action 1: ACTIVATE' })
+  await userEvent.setup().click(screen.getByRole('link', { name: 'Read another run' }))
+  expect(staleAtCommit).toEqual([false])
   expect(screen.queryByRole('heading', { name: 'Action 1: ACTIVATE' })).not.toBeInTheDocument()
 })

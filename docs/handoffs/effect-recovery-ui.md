@@ -11,6 +11,8 @@ Each page has its own observation time; restarting reads page one again rather t
 The display parser rejects foreign run IDs, malformed phase/response pairs, repeated/out-of-order
 permission IDs, invalid cursors and any claimed retry/reset authority. Navigation aborts the old read;
 actor, workspace, run and role changes replace the mounted history. API authorization remains decisive.
+The whole Run detail state is keyed by route workspace/run identity, so navigation discards previous
+resources, attempt selection and live-follow state in the render commit, not after the next read.
 
 Existing semantic tokens, native buttons, textual statuses and expandable identity details are reused.
 Long identifiers wrap; page navigation moves focus to the new page heading. No reader was started and
