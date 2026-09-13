@@ -30,6 +30,7 @@ import { useWorkspaceId } from './useWorkspaceId'
 import { useFindingId } from './useFindingId'
 import { FindingPatchesSection } from './FindingPatchesSection'
 import { FindingDiagnosisSection } from './FindingDiagnosisSection'
+import { RepairRequestSection } from './RepairRequestSection'
 
 /** What each status means, in the words a reader needs rather than the enum's. */
 const STATUS_MEANING: Record<string, string> = {
@@ -91,6 +92,8 @@ export const FindingScreen = (): JSX.Element => {
           </section>
 
           <FindingDiagnosisSection history={detail.diagnoses} />
+          <RepairRequestSection workspaceId={workspaceId} findingId={findingId}
+            findingStatus={detail.findingStatus} history={detail.diagnoses} />
 
           <section className="af-stack">
             <h2>What people said</h2>
