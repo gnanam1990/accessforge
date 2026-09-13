@@ -21,7 +21,14 @@ from accessforge_domain.runners import PhysicalSession, RunnerProfile
 from accessforge_domain.runners.identity import EnrollmentError
 from accessforge_domain.runners.preflight import PreflightCheck, PreflightResult
 from accessforge_domain.states import Condition
-from accessforge_persistence import runners, sequencer, supervisor_dispatch, supervisor_sessions
+from accessforge_persistence import (
+    execution_approvals,
+    reader_startup_consents,
+    runners,
+    sequencer,
+    supervisor_dispatch,
+    supervisor_sessions,
+)
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runners"])
 
@@ -141,6 +148,44 @@ def check_supervisor_startup_authority(
     except (supervisor_sessions.Refused, runners.RunnerError):
         raise ProblemDetail(
             ProblemCode.PERMISSION_DENIED, "startup execution authority unavailable"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/supervisor-sessions/{session_id}/reader-startup-consent")
+def check_supervisor_reader_startup_consent(
+    workspace_id: str,
+    session_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind/recheck an existing operator grant with an independent live machine credential.
+
+    Empty body: neither a browser cookie nor a claimed grant/session identity mints authority.
+    Does not start the reader or grant OS permissions. Lifetime can only shorten.
+    """
+    as_identifier(workspace_id, what="workspace")
+    as_identifier(session_id, what="supervisor session")
+    if payload:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "reader consent body must be empty")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    try:
+        result = supervisor_sessions.check_reader_startup_consent(
+            conn, workspace_id=workspace_id, session_id=session_id, token=credential.credentials
+        )
+    except (
+        supervisor_sessions.Refused,
+        reader_startup_consents.Refused,
+        execution_approvals.Refused,
+        runners.RunnerError,
+    ):
+        raise ProblemDetail(
+            ProblemCode.PERMISSION_DENIED, "reader startup consent unavailable"
         ) from None
     response.headers["Cache-Control"] = "no-store"
     return result
