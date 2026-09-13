@@ -907,3 +907,30 @@ OpenAPI/schema/client/fixture drift checks and recursive Node typecheck/build/te
 core sdist/direct-wheel builds retain six exact schemas and34 exact migrations. Two scratch-only
 negative controls fail as expected when approval revalidation or quarantine recovery is removed.
 The preceding consent commit889c38b passed GitHub CI34730188016; this new slice requires fresh CI.
+
+### Authenticated one-time supervisor reception (continuation)
+
+The committed controller now issues a short-lived exact-attempt supervisor ticket in the same
+transaction. The receiver API consumes it once under fresh manual authority and current run/lease/
+preflight checks. Human sessions cannot substitute for its bearer secret; a ticket confers no human
+role or observer privilege. Migration0035 keeps identity and consumption irreversible, and restore
+reconciliation revokes old tickets without resuming anything. Real HTTP concurrency, consumed-but-
+lost acknowledgement, actual snapshot/restore, expiry/revocation and SQL rewrite regressions cover
+this boundary. No plaintext token appears in retained rows, audit/outbox, repr or API output.
+
+The controller state-change event now uses `run.running` so the existing live UI refreshes its
+authoritative record; no new event name is used as execution proof. A focused UI test verifies this
+re-read, and the stream test harness flushes React events before asserting asynchronous cleanup.
+The earlier hook itself was unchanged; its observed timing-sensitive test failure was not hidden.
+
+This is authenticated control-plane reception, not actual desktop execution. Default production
+transport remains unavailable; candidate POST, per-action authority, observer closure and VERIFIED
+repair remain closed/pending. See [handoff07](07.md#supervisor-ticket-reception).
+
+Final validation after event-topic correction: **2,264 passed**, zero failures/skips,58 upstream
+warnings,326.94 seconds. Strict mypy235, Ruff337,79-operation generated clients and all four drift
+checks pass. Recursive Node typecheck/build/test passes; the17-test live-subscription file also
+passes five repeated launches with close/restart assertions retained. Real core package checks
+retain six schemas and35 migrations. Scratch token-comparison and cached-authority mutants each
+fail their negative regression; workspace erasure succeeds without bypassing the ticket guard.
+Prior controller commit4b7f5ab passed GitHub CI34731177181; the new head needs its own CI.

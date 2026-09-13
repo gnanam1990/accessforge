@@ -1232,6 +1232,76 @@ def assert_manual_dispatch_authorized(
     The controller must still observe the deployed bytes, journal intent and enforce each action's
     origin/effects/budgets. Passing this pre-dispatch check is not permission to bypass those gates.
     """
+    _assert_manual_authorized(
+        conn,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        runner_id=runner_id,
+        lease_id=lease_id,
+        epoch=epoch,
+        required_status=RunStatus.LEASED,
+        now=now,
+    )
+
+
+def assert_manual_attempt_authorized(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    run_id: str,
+    runner_id: str,
+    lease_id: str,
+    attempt_id: str,
+    epoch: int,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Receiver gate for an already committed manual attempt; never an OS action permission."""
+    manifest = _assert_manual_authorized(
+        conn,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        runner_id=runner_id,
+        lease_id=lease_id,
+        epoch=epoch,
+        required_status=RunStatus.RUNNING,
+        now=now,
+    )
+    pairing = conn.execute(
+        "SELECT 1 FROM desktop_lease l JOIN run_attempt a ON a.id=l.attempt_id "
+        "AND a.workspace_id=l.workspace_id WHERE l.id=%s AND l.attempt_id=%s "
+        "AND a.run_id=%s AND a.lease_epoch=%s",
+        (lease_id, attempt_id, run_id, epoch),
+    ).fetchone()
+    context = {
+        "workspace_id": workspace_id,
+        "run_id": run_id,
+        "attempt_id": attempt_id,
+        "runner_id": runner_id,
+        "lease_id": lease_id,
+        "epoch": epoch,
+    }
+    claim = conn.execute(
+        "SELECT 1 FROM audit_event WHERE workspace_id=%s AND target_id=%s "
+        "AND action='MANUAL_DISPATCH_CLAIMED' AND actor_service='manual-run-controller' "
+        "AND detail->'context'=%s",
+        (workspace_id, run_id, Jsonb(context)),
+    ).fetchone()
+    if pairing is None or claim is None:
+        raise DispatchRefused("receiver does not name the exact committed manual attempt")
+    return manifest
+
+
+def _assert_manual_authorized(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    run_id: str,
+    runner_id: str,
+    lease_id: str,
+    epoch: int,
+    required_status: RunStatus,
+    now: str | None,
+) -> dict[str, Any]:
     moment = _now(now)
     run = conn.execute("SELECT * FROM run WHERE id=%s", (run_id,)).fetchone()
     if run is None or str(run["workspace_id"]) != workspace_id:
@@ -1265,8 +1335,10 @@ def assert_manual_dispatch_authorized(
         expected_profile_digest=manifest["runnerProfileDigest"],
         expected_environment_config_digest=manifest["environmentConfigDigest"],
         expected_manifest_digest=sealed.manifest_digest,
+        required_status=required_status,
         now=moment,
     )
+    return manifest
 
 
 def assert_dispatch_authorized(
@@ -1341,6 +1413,7 @@ def _assert_dispatch_ready(
     expected_environment_config_digest: str,
     expected_manifest_digest: str,
     now: str,
+    required_status: RunStatus = RunStatus.LEASED,
 ) -> None:
 
     try:
@@ -1404,12 +1477,12 @@ def _assert_dispatch_ready(
     ).fetchone()
     if (
         run is None
-        or run["status"] != "LEASED"
+        or run["status"] != required_status.value
         or int(run["lease_epoch"]) != epoch
         or run["cancel_requested_at"] is not None
         or run["quarantined"]
     ):
-        raise DispatchRefused("run is not currently eligible for initial dispatch on this lease")
+        raise DispatchRefused("run is not currently eligible for this dispatch phase on this lease")
 
     # 4. Preflight, bound to this epoch. The most recent one, not any successful one ever recorded.
     preflight = conn.execute(
@@ -1528,6 +1601,11 @@ def interrupt_manual_handoff(
     ):
         raise DispatchRefused("run has no recoverable manual dispatch commitment")
     moment = _now(None)
+    conn.execute(
+        "UPDATE supervisor_dispatch_ticket SET revoked_at=%s WHERE run_id=%s "
+        "AND revoked_at IS NULL",
+        (moment, run_id),
+    )
     conn.execute(
         "UPDATE desktop_lease SET released_at=COALESCE(released_at,%s), "
         "release_reason=COALESCE(release_reason,'AMBIGUOUS_ACTION') WHERE id=%s",

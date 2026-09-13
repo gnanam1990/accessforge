@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import psycopg
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from accessforge_api.dependencies import clamp_page_size, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
@@ -20,11 +21,50 @@ from accessforge_domain.runners import PhysicalSession, RunnerProfile
 from accessforge_domain.runners.identity import EnrollmentError
 from accessforge_domain.runners.preflight import PreflightCheck, PreflightResult
 from accessforge_domain.states import Condition
-from accessforge_persistence import runners
+from accessforge_persistence import runners, supervisor_dispatch
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runners"])
 
 Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
+SupervisorBearer = Annotated[
+    HTTPAuthorizationCredentials | None, Depends(HTTPBearer(auto_error=False))
+]
+
+
+@router.post("/supervisor-dispatches/{ticket_id}/accept")
+def accept_supervisor_dispatch(
+    workspace_id: str,
+    ticket_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Machine-only one-time admission; a browser session is never a supervisor credential.
+
+    No OS action, actual-reader observation or outcome is produced. A duplicate after a lost
+    response is refused; the controller must reconcile, not launch another attempt.
+    """
+    as_identifier(workspace_id, what="workspace")
+    as_identifier(ticket_id, what="dispatch ticket")
+    if payload:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "dispatch acceptance body must be empty")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "dispatch ticket unavailable")
+    try:
+        principal = supervisor_dispatch.accept(
+            conn, workspace_id=workspace_id, ticket_id=ticket_id, token=credential.credentials
+        )
+    except supervisor_dispatch.Refused:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "dispatch ticket unavailable") from None
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "ticketId": principal.credential_id,
+        "runId": principal.run_id,
+        "leaseId": principal.lease_id,
+        "meaning": "DISPATCH_REFERENCE_ACCEPTED",
+    }
 
 
 @router.post("/runners/enrollment-tokens", status_code=status.HTTP_201_CREATED)
