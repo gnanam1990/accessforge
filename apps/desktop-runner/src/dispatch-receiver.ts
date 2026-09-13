@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { digest } from '@accessforge/contracts';
 import type { RawObservation, UnknownObservation } from '@accessforge/at-voiceover';
 import type { ActionCommand } from './supervisor.js';
+import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from './reader-startup-consent.js';
 
 export interface DispatchReference {
   readonly workspaceId: string;
@@ -298,6 +299,34 @@ export class NativeExecutionSession {
     } catch {
       this.#fenced = true;
       throw new ReceptionUnknown('startup authority unavailable; retain desktop claim, never retry initialization');
+    } finally { this.#busy = false; }
+  }
+
+  /** Fresh separate operator consent plus live execution authority, before any reader startup. */
+  async checkReaderStartupConsent(scope: ReaderStartupConsentScope, signal: AbortSignal): Promise<void> {
+    if (this.#fenced || this.#busy || this.#intentPending || this.#finishStarted ||
+        this.#current !== undefined || signal.aborted) throw new ReceiverRefused('startup consent unavailable');
+    this.#busy = true;
+    const started = performance.now(), wall = Date.now();
+    try {
+      const expected = parseReaderStartupConsentScope(scope);
+      const result = exactObject(await this.#post('reader-startup-consent', {}, signal),
+        ['sessionId', 'reference', 'consentId', 'manifestDigest', 'desktopSessionKey',
+          'runnerProfileDigest', 'effectsDigest', 'expiresAt', 'meaning']);
+      if (uuid(result.sessionId) !== this.#sessionId ||
+          JSON.stringify(parseReference(result.reference)) !== JSON.stringify(this.#config.localReference) ||
+          Object.entries(expected).some(([key, value]) => result[key] !== value) ||
+          result.meaning !== 'OPERATOR_STARTUP_CONSENT_RECHECKED_NOT_PHYSICAL_PROOF' ||
+          typeof result.expiresAt !== 'string' ||
+          !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(result.expiresAt) ||
+          !Number.isFinite(Date.parse(result.expiresAt)) ||
+          Date.parse(result.expiresAt) > Date.parse(String(this.receipt.expiresAt))) throw new Error('startup consent identity');
+      const remaining = Date.parse(result.expiresAt) - wall;
+      this.#deadline = Math.min(this.#deadline, started + remaining);
+      if (remaining <= 0 || performance.now() >= this.#deadline || signal.aborted) throw new Error('startup consent expired');
+    } catch {
+      this.#fenced = true;
+      throw new ReceptionUnknown('startup consent unavailable; retain desktop claim, never retry initialization');
     } finally { this.#busy = false; }
   }
 
