@@ -1,0 +1,243 @@
+"""Exact-attempt machine sessions and durable action-intent admission, not OS execution proof.
+
+The receiver supplies a newly generated secret during one-time bootstrap acceptance. Only its hash
+is retained. The bootstrap secret cannot be reused for session calls; restore/handoff revocation of
+the parent ticket also invalidates the session. Every intent rechecks current manual authority.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import re
+from datetime import UTC, datetime
+from typing import Any
+
+import psycopg
+
+from accessforge_domain.canonical import digest
+from accessforge_domain.journeys.dsl import ALLOWED_ACTIONS, ALLOWED_KEY_CHORDS
+from accessforge_domain.origins import normalize_origin
+from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
+
+from . import runners, supervisor_dispatch
+
+
+class Refused(Exception):
+    """Machine identity or current exact-attempt authority unavailable."""
+
+
+def _token_digest(token: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+        raise Refused("supervisor session unavailable")
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def open_session(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    ticket_id: str,
+    bootstrap_token: str,
+    session_token: str,
+) -> dict[str, Any]:
+    """Same transaction consumes the bootstrap and binds the receiver's independent secret."""
+    token_digest = _token_digest(session_token)
+    if hmac.compare_digest(_token_digest(bootstrap_token), token_digest):
+        raise Refused("session must use an independent credential")
+    accepted = supervisor_dispatch.accept(
+        conn, workspace_id=workspace_id, ticket_id=ticket_id, token=bootstrap_token
+    )
+    principal = accepted.principal
+    bounds = conn.execute(
+        "SELECT l.deadline_at,a.expires_at,s.canonical_manifest FROM run r "
+        "JOIN desktop_lease l ON l.id=%s JOIN approval a ON a.id=r.authorization_id "
+        "JOIN sealed_manifest s ON s.manifest_digest=r.manifest_digest "
+        "WHERE r.id=%s AND s.workspace_id=r.workspace_id",
+        (principal.lease_id, principal.run_id),
+    ).fetchone()
+    if bounds is None:
+        raise Refused("supervisor session unavailable")
+    expires = min(
+        bounds["deadline_at"],
+        bounds["expires_at"],
+        parse_rfc3339_utc(bounds["canonical_manifest"]["expiresAt"], field="expiresAt"),
+    )
+    if expires <= datetime.now(UTC):
+        raise Refused("supervisor session unavailable")
+    conn.execute(
+        "INSERT INTO supervisor_execution_session(ticket_id,workspace_id,token_digest,expires_at) "
+        "VALUES(%s,%s,%s,%s)",
+        (ticket_id, workspace_id, token_digest, expires),
+    )
+    return {
+        "sessionId": ticket_id,
+        "workspaceId": workspace_id,
+        "runId": principal.run_id,
+        "attemptId": accepted.attempt_id,
+        "runnerId": accepted.runner_id,
+        "leaseId": principal.lease_id,
+        "epoch": accepted.epoch,
+        "expiresAt": to_rfc3339_utc(expires),
+        "meaning": "SUPERVISOR_SESSION_OPENED",
+    }
+
+
+def _live(
+    conn: psycopg.Connection[Any], workspace_id: str, session_id: str, token: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    token_digest = _token_digest(token)
+    row = conn.execute(
+        "SELECT t.*,s.token_digest AS session_digest FROM supervisor_execution_session s "
+        "JOIN supervisor_dispatch_ticket t ON t.id=s.ticket_id AND t.workspace_id=s.workspace_id "
+        "WHERE s.ticket_id=%s AND s.workspace_id=%s",
+        (session_id, workspace_id),
+    ).fetchone()
+    if row is None or not hmac.compare_digest(row["session_digest"], token_digest):
+        raise Refused("supervisor session unavailable")
+    conn.execute("SELECT id FROM runner WHERE id=%s FOR UPDATE", (row["runner_id"],))
+    conn.execute("SELECT id FROM run WHERE id=%s FOR UPDATE", (row["run_id"],))
+    conn.execute("SELECT id FROM desktop_lease WHERE id=%s FOR UPDATE", (row["lease_id"],))
+    conn.execute(
+        "SELECT a.id FROM approval a JOIN run r ON r.authorization_id=a.id "
+        "WHERE r.id=%s FOR SHARE OF a",
+        (row["run_id"],),
+    )
+    current = conn.execute(
+        "SELECT 1 FROM supervisor_execution_session s JOIN supervisor_dispatch_ticket t "
+        "ON t.id=s.ticket_id AND t.workspace_id=s.workspace_id WHERE s.ticket_id=%s "
+        "AND s.workspace_id=%s AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() "
+        "AND t.accepted_at IS NOT NULL AND t.revoked_at IS NULL FOR UPDATE OF s,t",
+        (session_id, workspace_id),
+    ).fetchone()
+    if current is None:
+        raise Refused("supervisor session unavailable")
+    try:
+        manifest = runners.assert_manual_attempt_authorized(
+            conn,
+            workspace_id=workspace_id,
+            run_id=str(row["run_id"]),
+            attempt_id=str(row["attempt_id"]),
+            runner_id=str(row["runner_id"]),
+            lease_id=str(row["lease_id"]),
+            epoch=int(row["epoch"]),
+        )
+    except runners.DispatchRefused as exc:
+        raise Refused("supervisor session unavailable") from exc
+    return dict(row), manifest
+
+
+def retain_action_intent(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    session_id: str,
+    token: str,
+    command: dict[str, Any],
+) -> dict[str, Any]:
+    """Reserve one sequential unresolved intent. Never a dispatch/result or canonical observation.
+
+    The physical supervisor must still validate observed origin/focus, deployed bytes, effects,
+    local watchdog and its fsynced journal immediately before touching the OS. This acknowledgement
+    deliberately does not mint permission to bypass those physical checks.
+    """
+    row, manifest = _live(conn, workspace_id, session_id, token)
+    allowed_fields = {"action", "sequence", "origin", "keyChord", "textValueRef"}
+    if set(command) - allowed_fields or not {"action", "sequence", "origin"} <= set(command):
+        raise Refused("invalid action intent")
+    action, sequence, origin = command["action"], command["sequence"], command["origin"]
+    if not isinstance(action, str) or action not in ALLOWED_ACTIONS or type(sequence) is not int:
+        raise Refused("invalid action intent")
+    if not isinstance(origin, str) or len(origin) > 2048:
+        raise Refused("invalid action origin")
+    if ("keyChord" in command) != (action == "KEY_CHORD") or ("textValueRef" in command) != (
+        action == "TYPE_TEXT"
+    ):
+        raise Refused("invalid action fields")
+    policy_row = conn.execute(
+        "SELECT navigator_policy FROM journey_version WHERE id=%s", (manifest["journeyVersionId"],)
+    ).fetchone()
+    if policy_row is None:
+        raise Refused("sealed action policy unavailable")
+    policy = policy_row["navigator_policy"]
+    policy_max, policy_wall = policy.get("maxActions"), policy.get("wallTimeSeconds")
+    if (
+        type(policy_max) is not int
+        or type(policy_wall) is not int
+        or policy_max < 1
+        or policy_wall < 1
+    ):
+        raise Refused("sealed action policy budgets unavailable")
+    if digest(policy) != manifest["navigatorPolicyDigest"] or action not in policy.get(
+        "allowedActions", []
+    ):
+        raise Refused("sealed action policy unavailable")
+    environment = conn.execute(
+        "SELECT e.allowed_origins FROM environment_manifest e JOIN sealed_manifest s "
+        "ON s.environment_manifest_id=e.id WHERE s.run_id=%s",
+        (row["run_id"],),
+    ).fetchone()
+    try:
+        normalized = str(normalize_origin(origin))
+    except ValueError as exc:
+        raise Refused("invalid action origin") from exc
+    if environment is None or normalized not in environment["allowed_origins"]:
+        raise Refused("action origin is outside the sealed environment")
+    chord = command.get("keyChord")
+    if action == "KEY_CHORD":
+        platform = conn.execute(
+            "SELECT platform FROM runner WHERE id=%s", (row["runner_id"],)
+        ).fetchone()
+        if (
+            not isinstance(chord, str)
+            or platform is None
+            or chord not in ALLOWED_KEY_CHORDS.get(platform["platform"], frozenset())
+            or chord not in policy.get("allowedKeyChords", [])
+        ):
+            raise Refused("key chord is outside the sealed policy")
+    text: str | None = None
+    if action == "TYPE_TEXT":
+        reference = command.get("textValueRef")
+        fixture = conn.execute(
+            "SELECT navigator_values FROM run_fixture_instance WHERE run_id=%s", (row["run_id"],)
+        ).fetchone()
+        if not isinstance(reference, str) or fixture is None:
+            raise Refused("action fixture value unavailable")
+        value = fixture["navigator_values"].get(reference)
+        if not isinstance(value, str) or len(value) > 4096:
+            raise Refused("action fixture value unavailable")
+        text = value
+    usage = conn.execute(
+        "SELECT count(*) AS n,coalesce(max(action_sequence),0) AS last,"
+        "count(*) FILTER(WHERE result_at IS NULL OR result_status='AMBIGUOUS') AS unresolved "
+        "FROM runner_action WHERE run_id=%s AND attempt_id=%s",
+        (row["run_id"], row["attempt_id"]),
+    ).fetchone()
+    assert usage is not None
+    elapsed = (datetime.now(UTC) - row["created_at"]).total_seconds()
+    if (
+        usage["unresolved"]
+        or sequence != usage["last"] + 1
+        or usage["n"] >= min(manifest["actionBudget"], policy_max)
+        or elapsed >= min(manifest["wallTimeBudgetSeconds"], policy_wall)
+    ):
+        raise Refused("action sequence, unresolved intent or budget prevents admission")
+    action_id = runners.record_action_intent(
+        conn,
+        workspace_id=workspace_id,
+        lease_id=str(row["lease_id"]),
+        run_id=str(row["run_id"]),
+        attempt_id=str(row["attempt_id"]),
+        epoch=int(row["epoch"]),
+        action_sequence=sequence,
+        action=action,
+        origin=normalized,
+        key_chord=chord,
+        text_value=text,
+    )
+    return {
+        "actionId": action_id,
+        "sessionId": session_id,
+        "sequence": sequence,
+        "meaning": "ACTION_INTENT_RETAINED",
+    }

@@ -21,7 +21,7 @@ from accessforge_domain.runners import PhysicalSession, RunnerProfile
 from accessforge_domain.runners.identity import EnrollmentError
 from accessforge_domain.runners.preflight import PreflightCheck, PreflightResult
 from accessforge_domain.states import Condition
-from accessforge_persistence import runners, supervisor_dispatch
+from accessforge_persistence import runners, supervisor_dispatch, supervisor_sessions
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runners"])
 
@@ -70,6 +70,84 @@ def accept_supervisor_dispatch(
         "epoch": accepted.epoch,
         "meaning": "DISPATCH_REFERENCE_ACCEPTED",
     }
+
+
+@router.post("/supervisor-dispatches/{ticket_id}/session", status_code=status.HTTP_201_CREATED)
+def open_supervisor_session(
+    workspace_id: str,
+    ticket_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Atomically accept once and bind an independent receiver-generated machine secret.
+
+    The secret never appears in the response. This is separate from bootstrap-only /accept;
+    an already-consumed ticket cannot later acquire a session or recover a lost acknowledgement.
+    """
+    as_identifier(workspace_id, what="workspace")
+    as_identifier(ticket_id, what="dispatch ticket")
+    if set(payload) != {"sessionSecret"} or not isinstance(payload["sessionSecret"], str):
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "exact sessionSecret is required")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    try:
+        result = supervisor_sessions.open_session(
+            conn,
+            workspace_id=workspace_id,
+            ticket_id=ticket_id,
+            bootstrap_token=credential.credentials,
+            session_token=payload["sessionSecret"],
+        )
+    except (
+        supervisor_dispatch.Refused,
+        supervisor_sessions.Refused,
+        psycopg.errors.UniqueViolation,
+    ):
+        raise ProblemDetail(
+            ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post(
+    "/supervisor-sessions/{session_id}/action-intents", status_code=status.HTTP_201_CREATED
+)
+def retain_supervisor_action_intent(
+    workspace_id: str,
+    session_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Authenticate current exact-attempt authority and retain one unresolved action intent.
+
+    Receipt is neither an OS dispatch permit nor an observation/result. Physical pre-action
+    watchdog, origin/focus, deployed identity/effect checks and local journal remain mandatory.
+    """
+    as_identifier(workspace_id, what="workspace")
+    as_identifier(session_id, what="supervisor session")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    try:
+        result = supervisor_sessions.retain_action_intent(
+            conn,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            token=credential.credentials,
+            command=payload,
+        )
+    except (supervisor_sessions.Refused, runners.RunnerError):
+        raise ProblemDetail(
+            ProblemCode.PERMISSION_DENIED, "action intent is not admitted"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post("/runners/enrollment-tokens", status_code=status.HTTP_201_CREATED)

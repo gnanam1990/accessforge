@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0035_supervisor_dispatch_ticket.sql"
+NEWEST = "0036_supervisor_execution_session.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -146,7 +146,7 @@ def test_dispatch_migration_does_not_invent_historical_machine_credentials(dispo
         assert conn.execute(
             "SELECT to_regclass('supervisor_dispatch_ticket') AS name"
         ).fetchone() == {"name": None}
-    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == ["0035_supervisor_dispatch_ticket.sql", NEWEST]
     with connect(disposable) as conn:
         assert conn.execute("SELECT count(*) AS n FROM supervisor_dispatch_ticket").fetchone() == {
             "n": 0
@@ -154,6 +154,28 @@ def test_dispatch_migration_does_not_invent_historical_machine_credentials(dispo
         assert conn.execute(
             "SELECT release_reason FROM desktop_lease WHERE id=%s", (lease,)
         ).fetchone() == {"release_reason": "OPERATOR_RESET"}
+
+
+def test_session_migration_does_not_mint_historical_execution_authority(disposable: str) -> None:
+    _apply_through(disposable, "0035_supervisor_dispatch_ticket.sql")
+    lease = _seed_released_lease(disposable, reason="OPERATOR_RESET")
+    assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        assert conn.execute(
+            "SELECT count(*) AS n FROM supervisor_execution_session"
+        ).fetchone() == {"n": 0}
+        assert conn.execute(
+            "SELECT relrowsecurity,relforcerowsecurity FROM pg_class "
+            "WHERE oid='supervisor_execution_session'::regclass"
+        ).fetchone() == {
+            "relrowsecurity": True,
+            "relforcerowsecurity": True,
+        }
+        assert conn.execute(
+            "SELECT release_reason FROM desktop_lease WHERE id=%s", (lease,)
+        ).fetchone() == {
+            "release_reason": "OPERATOR_RESET",
+        }
 
 
 def test_manual_approval_migration_preserves_old_decisions_without_creating_consent(
