@@ -5458,7 +5458,7 @@
     },
     "/v1/workspaces/{workspace_id}/projects/{project_id}/seals": {
       "post": {
-        "description": "Seal a manifest over every input a run's identity depends on.\n\nThis is the route a run is requested against. `POST /runs` refuses a digest nothing sealed, so\nuntil this existed a manifest could only be produced by writing SQL \u2014 which meant the product's\ncentral identity step had no surface at all, and the check that would have revealed it was\nmissing.\n\nThe environment is validated first by `seal_run`: sealing against a revoked, expired or\nsuperseded environment would produce a manifest that looked authoritative and was never\nauthorized.\n\nA digest is deliberately **not** unique. Two seals over identical inputs share one, which is how\na baseline and a candidate are shown to differ only by an approved patch (INV-04). Sealing twice\nis therefore not an error, and a caller who wants one seal per attempt supplies an\n`Idempotency-Key`.",
+        "description": "Seal a manifest over every input a run's identity depends on.\n\nThis is the route a run is requested against. `POST /runs` refuses a digest nothing sealed, so\nuntil this existed a manifest could only be produced by writing SQL \u2014 which meant the product's\ncentral identity step had no surface at all, and the check that would have revealed it was\nmissing.\n\nThe environment is validated first by `seal_run`: sealing against a revoked, expired or\nsuperseded environment would produce a manifest that looked authoritative and was never\nauthorized.\n\nSupply `execution` with exactly `journeyVersionId`, `expiresAt`, `actionBudget`,\n`wallTimeBudgetSeconds`, and `permittedEffects` to seal a complete RunManifest. Run and\nauthorization IDs are reserved by the server, not approved. Review `canonicalManifest` before\nseparately authorizing execution. This operation neither requests a run nor issues approval.\n\nOmitting execution preserves legacy input-fingerprint creation, explicitly labeled in the\nresponse. Identical legacy inputs share a digest; canonical execution identities do not.\nAn `Idempotency-Key` replays the same reservation instead of allocating another pair of IDs.",
         "operationId": "seal_manifest",
         "parameters": [
           {
@@ -5603,6 +5603,144 @@
           }
         ],
         "summary": "Seal Manifest",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/seals/{sealed_manifest_id}": {
+      "get": {
+        "description": "Read exact immutable execution scope for review, including expired historical seals.\n\nThis is stored provenance, not evidence of deployment, issued approval, or completed execution.\nLegacy input fingerprints have no canonicalManifest; missing history is never backfilled.",
+        "operationId": "inspect_seal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sealed_manifest_id",
+            "required": true,
+            "schema": {
+              "title": "Sealed Manifest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Inspect Seal",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Inspect Seal",
         "tags": [
           "projects"
         ]
