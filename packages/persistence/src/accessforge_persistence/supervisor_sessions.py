@@ -29,7 +29,7 @@ from accessforge_domain.origins import normalize_origin
 from accessforge_domain.runners.preflight import AmbiguityReason
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
-from . import runners, runs, sequencer, supervisor_dispatch
+from . import reader_startup_consents, runners, runs, sequencer, supervisor_dispatch
 from .evidence import artifacts
 from .evidence import session as session_evidence
 
@@ -199,6 +199,37 @@ def check_startup_authority(
         },
         "expiresAt": to_rfc3339_utc(expires),
         "meaning": "EXECUTION_AUTHORITY_RECHECKED_NOT_READER_START_CONSENT",
+    }
+
+
+def check_reader_startup_consent(
+    conn: psycopg.Connection[Any], *, workspace_id: str, session_id: str, token: str
+) -> dict[str, Any]:
+    """Authenticate live execution, then bind/recheck the separate operator grant atomically.
+
+    No reader is started. Binding a grant cannot extend session/run authority or authorize TCC.
+    """
+    authority = check_startup_authority(
+        conn, workspace_id=workspace_id, session_id=session_id, token=token
+    )
+    consent = reader_startup_consents.bind_and_check(
+        conn, workspace_id=workspace_id, session_id=session_id
+    )
+    return {
+        "sessionId": session_id,
+        "reference": authority["reference"],
+        "consentId": consent["consentId"],
+        "manifestDigest": consent["manifestDigest"],
+        "desktopSessionKey": consent["desktopSessionKey"],
+        "runnerProfileDigest": consent["runnerProfileDigest"],
+        "effectsDigest": consent["effectsDigest"],
+        "expiresAt": to_rfc3339_utc(
+            min(
+                parse_rfc3339_utc(authority["expiresAt"], field="expiresAt"),
+                parse_rfc3339_utc(consent["expiresAt"], field="expiresAt"),
+            )
+        ),
+        "meaning": "OPERATOR_STARTUP_CONSENT_RECHECKED_NOT_PHYSICAL_PROOF",
     }
 
 

@@ -30,6 +30,7 @@ from .routes import (
     journeys_router,
     patches_router,
     projects_router,
+    reader_startup_router,
     runners_router,
     runs_router,
     schedules_router,
@@ -122,6 +123,15 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
     schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
 
     schema.setdefault("components", {})["securitySchemes"] = {
+        "supervisorBearer": {
+            "type": "http",
+            "scheme": "bearer",
+            "description": (
+                "Private supervisor credential: one-time ticket for dispatch admission; "
+                "independent receiver-generated machine secret for session calls. "
+                "A browser cookie is not sufficient."
+            ),
+        },
         "sessionCookie": {
             "type": "apiKey",
             "in": "cookie",
@@ -219,6 +229,13 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
             operation["security"] = (
                 []
                 if path in _UNAUTHENTICATED
+                else [{"supervisorBearer": []}]
+                if path.startswith(
+                    (
+                        "/v1/workspaces/{workspace_id}/supervisor-dispatches/",
+                        "/v1/workspaces/{workspace_id}/supervisor-sessions/",
+                    )
+                )
                 else [{"sessionCookie": []}]
                 if operation is operations.get("get")
                 else [{"sessionCookie": [], "csrfHeader": []}]
@@ -377,6 +394,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     for router in (
         session_router,
         projects_router,
+        reader_startup_router,
         journeys_router,
         runners_router,
         runs_router,

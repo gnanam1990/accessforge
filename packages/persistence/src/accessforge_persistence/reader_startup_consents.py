@@ -84,6 +84,36 @@ def _context(
     return dict(run), dict(runner), manifest
 
 
+def review_scope(
+    conn: psycopg.Connection[Any], *, workspace_id: str, run_id: str, runner_id: str
+) -> dict[str, Any]:
+    """Read the exact scope for a human decision; never issue or reserve consent."""
+    run, runner, manifest = _context(conn, workspace_id, run_id, runner_id)
+    approval = conn.execute(
+        "SELECT expires_at FROM approval WHERE id=%s", (manifest["authorizationId"],)
+    ).fetchone()
+    if approval is None:
+        raise Refused("execution approval unavailable")
+    effects = startup_effects()
+    return {
+        "runId": str(run["id"]),
+        "runnerId": str(runner["id"]),
+        "revision": int(run["revision"]),
+        "manifestDigest": run["manifest_digest"],
+        "desktopSessionKey": runner["session_key"],
+        "runnerProfileDigest": runner["profile_digest"],
+        "effects": effects,
+        "effectsDigest": digest(effects),
+        "maximumExpiresAt": to_rfc3339_utc(
+            min(
+                approval["expires_at"],
+                parse_rfc3339_utc(manifest["expiresAt"], field="expiresAt"),
+            )
+        ),
+        "meaning": "REVIEW_SCOPE_ONLY_NOT_STARTUP_CONSENT",
+    }
+
+
 def issue(
     conn: psycopg.Connection[Any],
     *,
