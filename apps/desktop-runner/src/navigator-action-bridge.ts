@@ -82,7 +82,7 @@ export async function startNavigatorActionBridge(options: NavigatorActionBridgeO
     sockets.add(socket);
     socket.on('error', () => {});
     let entered = false, replied = false;
-    const timeout = setTimeout(() => socket.destroy(), 32000);
+    let timeout = setTimeout(() => socket.destroy(), Math.min(5000, Math.max(1, deadline - performance.now())));
     socket.once('close', () => {
       clearTimeout(timeout); sockets.delete(socket);
       if (entered && !replied) fence(); // The operation may have happened; never accept a repeat.
@@ -103,6 +103,10 @@ export async function startNavigatorActionBridge(options: NavigatorActionBridgeO
           if (!hex(request.token, 64) || !timingSafeEqual(Buffer.from(request.token), Buffer.from(token))) throw new Error('capability');
           entered = true;
           guard();
+          // perform has several separately bounded phases, not a single 30-second envelope.
+          // Once authenticated, the shared lease deadline bounds the entire request instead.
+          clearTimeout(timeout);
+          timeout = setTimeout(() => socket.destroy(), Math.max(1, deadline - performance.now()));
           exact(request, ['protocol', 'token', 'reference', 'requestId', 'sequence', 'command']);
           if (request.protocol !== NAVIGATOR_BRIDGE_PROTOCOL || !hex(request.requestId, 32) ||
               JSON.stringify(parseReference(request.reference)) !== JSON.stringify(reference) ||
@@ -173,7 +177,11 @@ export async function startNavigatorActionBridge(options: NavigatorActionBridgeO
     throw new Error('navigator bridge startup unavailable; reconcile desktop before retry');
   }
   return Object.freeze({
-    privateReference() { guard(); return Object.freeze({ protocol: NAVIGATOR_BRIDGE_PROTOCOL, socketPath: path, token, reference }); },
+    privateReference() {
+      guard();
+      return Object.freeze({ protocol: NAVIGATOR_BRIDGE_PROTOCOL, socketPath: path, token, reference,
+        leaseRemainingMs: Math.max(1, Math.ceil(deadline - performance.now())) });
+    },
     async finish() {
       if (closed || !stopped || busy || finishing) throw new Error('navigator bridge cannot finish');
       finishing = true;

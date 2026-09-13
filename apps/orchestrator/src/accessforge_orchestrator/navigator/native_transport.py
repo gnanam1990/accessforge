@@ -47,19 +47,26 @@ class NativeNavigatorTransport:
             type(expected.epoch) is not int
             or expected.epoch < 1
             or not run_ref
-            or set(private_reference) != {"protocol", "socketPath", "token", "reference"}
+            or set(private_reference)
+            != {"protocol", "socketPath", "token", "reference", "leaseRemainingMs"}
             or private_reference["protocol"] != PROTOCOL
             or private_reference["reference"] != reference
             or not isinstance(private_reference["token"], str)
             or len(private_reference["token"]) != 64
             or any(char not in "0123456789abcdef" for char in private_reference["token"])
             or not isinstance(private_reference["socketPath"], str)
+            or type(private_reference["leaseRemainingMs"]) is not int
+            or not 1 <= private_reference["leaseRemainingMs"] <= 1800000
         ):
             raise ValueError("private native dispatch binding unavailable")
         self._reference = reference
         self._path = Path(private_reference["socketPath"])
         self._token = private_reference["token"]
         self._run_ref = run_ref
+        # The native host's monotonic lease remains authoritative. This local upper bound never
+        # resets between actions and does not assume that an action's several phases total 30s.
+        # Delayed capability delivery cannot extend native authority: the server still expires.
+        self._deadline = time.monotonic() + private_reference["leaseRemainingMs"] / 1000
         self._sequence = 0
         self._busy = self._fenced = False
         self._connection: socket.socket | None = None
@@ -144,16 +151,23 @@ class NativeNavigatorTransport:
         ).encode()
         if len(payload) > 4096 or self._fenced or self._check_path() != self._identity:
             raise ValueError("native request unavailable")
-        deadline = time.monotonic() + 32
+        deadline = self._deadline
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             self._connection = connection
             try:
-                connection.settimeout(32)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("native lease budget elapsed before connect")
+                connection.settimeout(remaining)
                 if self._fenced:
                     raise ValueError("cancelled before connect")
                 connection.connect(str(self._path))
                 if self._fenced or self._check_path() != self._identity:
                     raise ValueError("cancelled or replaced before send")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("native lease budget elapsed before send")
+                connection.settimeout(remaining)
                 connection.sendall(payload)
                 response = bytearray()
                 while len(response) <= 8192:

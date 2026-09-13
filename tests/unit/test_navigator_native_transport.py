@@ -93,6 +93,7 @@ async def test_native_client_transmits_only_fixture_ref_and_never_retries(
                     "reference": reference,
                     "token": "a" * 64,
                     "socketPath": str(path),
+                    "leaseRemainingMs": 10000,
                 },
                 expected=expected,
                 run_ref="run",

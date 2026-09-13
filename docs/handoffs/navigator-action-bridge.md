@@ -19,6 +19,10 @@ instance or retry after transport ambiguity. Both sides fence on uncertain deliv
 results remain distinct from AMBIGUOUS; clean STOP stops further input but does not release the
 desktop claim. Only trusted explicit finish after independent observer closure reaches the existing
 journal/server-ACK release path. Closing a port is not proof that an already-entered OS call stopped.
+Authenticated requests use the native host's remaining monotonic lease budget, rather than treating
+the runner's per-phase timeout as an end-to-end action bound. The private capability carries that
+remaining budget for the Python client's non-resetting deadline; delayed delivery cannot extend
+the native server's lease. Unauthenticated connections have a separate short admission deadline.
 
 Replies include the actual server action ID rather than the local lease:epoch:sequence journal ID.
 No exception content, credentials, announcement or completion verdict is returned. Socket paths,

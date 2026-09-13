@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { startNavigatorActionBridge } from '../dist/navigator-action-bridge.js';
 
 // Actual local sockets with a synthetic runner; not an actual-reader or provider demonstration.
-async function fixture(t, perform) {
+async function fixture(t, perform, lifetimeMs = 10000) {
   const directory = realpathSync(mkdtempSync('/tmp/afn-'));
   const reference = { workspaceId: randomUUID(), runId: randomUUID(), attemptId: randomUUID(),
     runnerId: randomUUID(), leaseId: randomUUID(), epoch: 1 };
@@ -16,7 +16,7 @@ async function fixture(t, perform) {
     requestCancellation() { calls.push('cancel'); },
     async finish() { calls.push('finish'); return { status: 'FINALIZING' }; } };
   const bridge = await startNavigatorActionBridge({ runner, reference, privateDirectory: directory,
-    deadlineMonotonic: performance.now() + 10000, maxActions: 5 });
+    deadlineMonotonic: performance.now() + lifetimeMs, maxActions: 5 });
   const capability = bridge.privateReference();
   t.after(async () => { await bridge.close(); rmSync(directory, { recursive: true, force: true }); });
   return { bridge, capability, calls };
@@ -83,7 +83,8 @@ test('finish drains the STOP reply before server-side socket closure', { skip: p
     let data = '';
     socket.on('error', reject);
     socket.once('connect', () => socket.write(JSON.stringify({ ...h.capability,
-      socketPath: undefined, requestId: randomBytes(16).toString('hex'), sequence: 1,
+      socketPath: undefined, leaseRemainingMs: undefined,
+      requestId: randomBytes(16).toString('hex'), sequence: 1,
       command: { action: 'STOP' } }) + '\n'));
     socket.on('data', (chunk) => {
       data += chunk;
@@ -120,4 +121,29 @@ test('disconnect during an entered action fences its late result and all later i
   await assertClosed(h.capability, 3, { action: 'STOP' });
   assert.equal(h.calls.filter((item) => typeof item === 'object').length, 1);
   await assert.rejects(h.bridge.finish());
+});
+
+test('authenticated multi-phase action uses the lease, not a fixed 32-second cutoff', { skip: process.platform === 'win32' }, async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let entered, release;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const pending = new Promise((resolve) => { release = resolve; });
+  const h = await fixture(t, () => { entered(); return pending; }, 90000);
+  assert.ok(h.capability.leaseRemainingMs > 32000);
+  const socket = createConnection(h.capability.socketPath);
+  t.after(() => socket.destroy());
+  const reply = new Promise((resolve, reject) => {
+    let data = '';
+    socket.on('error', reject);
+    socket.on('data', (chunk) => { data += chunk; });
+    socket.once('close', () => { try { resolve(JSON.parse(data)); } catch (error) { reject(error); } });
+    socket.once('connect', () => socket.write(JSON.stringify({ protocol: h.capability.protocol,
+      token: h.capability.token, reference: h.capability.reference,
+      requestId: randomBytes(16).toString('hex'), sequence: 1, command: { action: 'NEXT' } }) + '\n'));
+  });
+  await started;
+  t.mock.timers.tick(33000);
+  assert.equal(h.calls.includes('cancel'), false);
+  release({ status: 'SUCCEEDED', serverActionId: randomUUID() });
+  assert.equal((await reply).status, 'SUCCEEDED');
 });
