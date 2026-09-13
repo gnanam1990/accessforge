@@ -342,6 +342,7 @@ describe('journey authoring', () => {
     await user.click(screen.getByRole('button', { name: 'Freeze version' }))
     const sent = server.bodies.find((entry) => entry.url.endsWith('/journeys'))
     const body = sent?.body as { assertions: { evaluationRule: unknown }[] }
+    expect((sent?.body as { allowedActions: string[] }).allowedActions).toContain('STOP')
     expect(body.assertions.map((row) => row.evaluationRule)).toEqual([
       { type: 'EFFECT_COUNT', effect: 'CREATE_TEST_REQUEST', count: 0 },
       { type: 'EXACT_READER_PHRASE', actionSequence: 1, phrase: '  Email invalid  ' },
@@ -395,6 +396,24 @@ describe('journey authoring', () => {
     expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
     await user.click(screen.getByRole('button', { name: 'Remove assertion 2' }))
     expect(screen.getByRole('button', { name: 'Add a consecutive reading-order assertion' })).toHaveFocus()
+  })
+
+  it('keeps STOP explicit and links a missing STOP refusal to the action controls', async () => {
+    const user = userEvent.setup(), server = createFakeServer(MEMBER)
+    await openProject(server)
+    const actions = screen.getByRole('group', { name: 'Permitted actions' })
+    const stop = within(actions).getByRole('checkbox', { name: 'STOP' })
+    expect(stop).toBeChecked()
+    await user.click(stop)
+    await user.click(screen.getByRole('button', { name: 'Freeze version' }))
+    const summary = screen.getByRole('alert')
+    const link = within(summary).getByRole('link', { name: /Select STOP in permitted actions/ })
+    expect(link).toHaveAttribute('href', `#${actions.id}`)
+    expect(within(actions).getByText(/Select STOP in permitted actions/)).toBeInTheDocument()
+    await user.click(link)
+    expect(actions).toHaveFocus()
+    expect(stop).not.toBeChecked()
+    expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
   })
 
   it('refuses a budget the browser would have sent as zero or null', async () => {

@@ -332,7 +332,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
 
       if (url.endsWith('/journey-capabilities')) {
         return json({
-          allowedActions: ['NEXT', 'ACTIVATE', 'TYPE_TEXT', 'KEY_CHORD', 'READ_CURRENT'],
+          allowedActions: ['NEXT', 'ACTIVATE', 'TYPE_TEXT', 'KEY_CHORD', 'READ_CURRENT', 'STOP'],
           allowedKeyChordsByPlatform: {
             darwin: ['TAB', 'ENTER', 'CTRL+OPT+RIGHT'],
             win32: ['TAB', 'ENTER', 'DOWN'],
