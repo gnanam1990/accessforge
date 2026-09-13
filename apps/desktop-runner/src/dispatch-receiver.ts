@@ -272,8 +272,37 @@ export class NativeExecutionSession {
     return new NativeExecutionSession(local, secret, receipt);
   }
 
+  /** Fresh machine authority, not permission to start/change the reader or a readiness proof. */
+  async checkStartupAuthority(signal: AbortSignal): Promise<void> {
+    if (this.#fenced || this.#busy || this.#intentPending || this.#finishStarted ||
+        this.#current !== undefined || signal.aborted) throw new ReceiverRefused('startup authority unavailable');
+    this.#busy = true;
+    const started = performance.now();
+    const wall = Date.now();
+    try {
+      const result = exactObject(await this.#post('startup-authority', {}, signal),
+        ['sessionId', 'reference', 'expiresAt', 'meaning']);
+      const reference = parseReference(result.reference);
+      if (uuid(result.sessionId) !== this.#sessionId ||
+          JSON.stringify(reference) !== JSON.stringify(this.#config.localReference) ||
+          result.meaning !== 'EXECUTION_AUTHORITY_RECHECKED_NOT_READER_START_CONSENT' ||
+          typeof result.expiresAt !== 'string' ||
+          !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(result.expiresAt) ||
+          !Number.isFinite(Date.parse(result.expiresAt)) ||
+          Date.parse(result.expiresAt) > Date.parse(String(this.receipt.expiresAt))) throw new Error('startup authority identity');
+      const remaining = Date.parse(result.expiresAt) - wall;
+      this.#deadline = Math.min(this.#deadline, started + remaining);
+      if (!Number.isFinite(remaining) || remaining <= 0 || performance.now() >= this.#deadline || signal.aborted) {
+        throw new Error('startup authority expired');
+      }
+    } catch {
+      this.#fenced = true;
+      throw new ReceptionUnknown('startup authority unavailable; retain desktop claim, never retry initialization');
+    } finally { this.#busy = false; }
+  }
+
   async retainIntent(command: unknown): Promise<Readonly<Record<string, unknown>>> {
-    if (this.#fenced || this.#finishStarted || this.#stopActionId !== undefined ||
+    if (this.#fenced || this.#busy || this.#finishStarted || this.#stopActionId !== undefined ||
         this.#intentPending || performance.now() >= this.#deadline) {
       throw new ReceiverRefused('session expired or has an unresolved intent; never replay');
     }
@@ -313,7 +342,7 @@ export class NativeExecutionSession {
     }
   }
 
-  async #post(path: string, payload: object): Promise<unknown> {
+  async #post(path: string, payload: object, signal?: AbortSignal): Promise<unknown> {
     const remaining = this.#deadline - performance.now();
     if (remaining <= 0) { this.#fenced = true; throw new ReceiverRefused('session expired'); }
     const abort = new AbortController();
@@ -322,10 +351,10 @@ export class NativeExecutionSession {
       const url = new URL(`/v1/workspaces/${this.#config.localReference.workspaceId}/supervisor-sessions/${this.#sessionId}/${path}`, this.#config.apiOrigin);
       const response = await fetch(url, { method: 'POST', body: JSON.stringify(payload),
         headers: { Authorization: `Bearer ${this.#secret}`, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-        redirect: 'error', credentials: 'omit', signal: abort.signal });
+        redirect: 'error', credentials: 'omit', signal: signal === undefined ? abort.signal : AbortSignal.any([abort.signal, signal]) });
       if (response.status !== 200) throw new Error('response');
       const result = await boundedJson(response);
-      if (performance.now() >= this.#deadline) throw new Error('deadline');
+      if (performance.now() >= this.#deadline || signal?.aborted) throw new Error('deadline');
       return result;
     } catch {
       this.#fenced = true;

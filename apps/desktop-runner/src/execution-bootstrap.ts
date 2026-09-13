@@ -69,6 +69,10 @@ export function createExecutionBootstrap(options: ExecutionBootstrapOptions): Ex
       check();
       await readerStartup.authorize(signal);
       check();
+      // Operator consent to SDK side effects is separate from live server run/lease authority.
+      // This read is last so slow operator authorization cannot cache an earlier server decision.
+      await requireMachine().checkStartupAuthority(signal);
+      check();
     },
   } });
 }

@@ -11,7 +11,7 @@ import hashlib
 import hmac
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -138,6 +138,68 @@ def _live(
     except runners.DispatchRefused as exc:
         raise Refused("supervisor session unavailable") from exc
     return dict(row), manifest
+
+
+def check_startup_authority(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    session_id: str,
+    token: str,
+) -> dict[str, Any]:
+    """Fresh pre-action execution authority, NOT reader-settings consent or physical proof.
+
+    No action, approval, event or lifetime extension. The same locks as intent admission serialize
+    this read; after the first intent, even a resolved one, this is no longer a startup path.
+    """
+    row, manifest = _live(conn, workspace_id, session_id, token)
+    if conn.execute(
+        "SELECT 1 FROM runner_action WHERE run_id=%s AND attempt_id=%s LIMIT 1",
+        (row["run_id"], row["attempt_id"]),
+    ).fetchone():
+        raise Refused("startup authority unavailable after action admission")
+    policy_row = conn.execute(
+        "SELECT navigator_policy FROM journey_version WHERE id=%s",
+        (manifest["journeyVersionId"],),
+    ).fetchone()
+    if policy_row is None:
+        raise Refused("startup policy unavailable")
+    policy = policy_row["navigator_policy"]
+    wall = policy.get("wallTimeSeconds")
+    if type(wall) is not int or wall < 1 or digest(policy) != manifest["navigatorPolicyDigest"]:
+        raise Refused("startup policy unavailable")
+    bounds = conn.execute(
+        "SELECT s.expires_at AS session_expiry,l.deadline_at AS lease_expiry,"
+        "a.expires_at AS approval_expiry,clock_timestamp() AS observed_at "
+        "FROM supervisor_execution_session s JOIN desktop_lease l ON l.id=%s "
+        "JOIN run r ON r.id=%s JOIN approval a ON a.id=r.authorization_id "
+        "WHERE s.ticket_id=%s AND s.workspace_id=%s",
+        (row["lease_id"], row["run_id"], session_id, workspace_id),
+    ).fetchone()
+    if bounds is None:
+        raise Refused("startup authority unavailable")
+    expires = min(
+        bounds["session_expiry"],
+        bounds["lease_expiry"],
+        bounds["approval_expiry"],
+        parse_rfc3339_utc(manifest["expiresAt"], field="expiresAt"),
+        row["created_at"] + timedelta(seconds=min(wall, manifest["wallTimeBudgetSeconds"])),
+    )
+    if expires <= bounds["observed_at"]:
+        raise Refused("startup execution budget expired")
+    return {
+        "sessionId": session_id,
+        "reference": {
+            "workspaceId": workspace_id,
+            "runId": str(row["run_id"]),
+            "attemptId": str(row["attempt_id"]),
+            "runnerId": str(row["runner_id"]),
+            "leaseId": str(row["lease_id"]),
+            "epoch": int(row["epoch"]),
+        },
+        "expiresAt": to_rfc3339_utc(expires),
+        "meaning": "EXECUTION_AUTHORITY_RECHECKED_NOT_READER_START_CONSENT",
+    }
 
 
 def retain_action_intent(

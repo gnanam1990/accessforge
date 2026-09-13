@@ -1569,6 +1569,101 @@ def test_supervisor_session_action_intent(
 
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
 @pytest.mark.parametrize(
+    "fault",
+    [None, "bootstrap-reuse", "session-revoked", "parent-revoked", "approval-revoked", "started"],
+)
+def test_startup_authority_is_fresh_read_only_and_not_reader_consent(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    fault: str | None,
+) -> None:
+    import secrets
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    secret = secrets.token_urlsafe(32)
+    opened = client.post(
+        _ticket_url(ticket).removesuffix("accept") + "session",
+        json={"sessionSecret": secret},
+        headers={"Authorization": f"Bearer {ticket.token}"},
+    )
+    assert opened.status_code == 201
+    base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
+    headers = {"Authorization": f"Bearer {secret}"}
+    if fault == "started":
+        assert (
+            client.post(
+                base + "/action-intents",
+                json={
+                    "action": "READ_CURRENT",
+                    "sequence": 1,
+                    "origin": "https://app.example.test",
+                },
+                headers=headers,
+            ).status_code
+            == 201
+        )
+    with workspace_connection(db, WS) as conn:
+        if fault == "session-revoked":
+            conn.execute(
+                "UPDATE supervisor_execution_session SET revoked_at=now() WHERE ticket_id=%s",
+                (ticket.ticket_id,),
+            )
+        if fault == "parent-revoked":
+            conn.execute(
+                "UPDATE supervisor_dispatch_ticket SET revoked_at=now() WHERE id=%s",
+                (ticket.ticket_id,),
+            )
+        if fault == "approval-revoked":
+            conn.execute(
+                "UPDATE approval SET revoked_at=now() WHERE id=("
+                "SELECT authorization_id FROM run WHERE id=%s)",
+                (ref.run_id,),
+            )
+        before = conn.execute(
+            "SELECT (SELECT count(*) FROM canonical_event) AS events,"
+            "(SELECT count(*) FROM runner_action) AS actions,"
+            "(SELECT count(*) FROM approval) AS approvals"
+        ).fetchone()
+    url = base + "/startup-authority"
+    assert client.post(url, json={}).status_code == 401
+    assert client.post(url, json={"readerSettings": True}, headers=headers).status_code == 400
+    if fault == "bootstrap-reuse":
+        headers = {"Authorization": f"Bearer {ticket.token}"}
+    for _ in range(2):
+        response = client.post(url, json={}, headers=headers)
+        assert response.status_code == (200 if fault is None else 403)
+        assert secret not in response.text and ticket.token not in response.text
+        if fault is None:
+            assert response.headers["cache-control"] == "no-store"
+            body = response.json()
+            assert body["sessionId"] == ticket.ticket_id
+            assert body["reference"] == {
+                "workspaceId": WS,
+                "runId": ref.run_id,
+                "attemptId": ref.attempt_id,
+                "runnerId": ref.runner_id,
+                "leaseId": ref.lease_id,
+                "epoch": ref.epoch,
+            }
+            assert body["meaning"] == "EXECUTION_AUTHORITY_RECHECKED_NOT_READER_START_CONSENT"
+            assert datetime.fromisoformat(
+                body["expiresAt"].replace("Z", "+00:00")
+            ) <= datetime.fromisoformat(opened.json()["expiresAt"].replace("Z", "+00:00"))
+    with workspace_connection(db, WS) as conn:
+        assert (
+            conn.execute(
+                "SELECT (SELECT count(*) FROM canonical_event) AS events,"
+                "(SELECT count(*) FROM runner_action) AS actions,"
+                "(SELECT count(*) FROM approval) AS approvals"
+            ).fetchone()
+            == before
+        )
+
+
+@pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+@pytest.mark.parametrize(
     "case", ["success", "ambiguity", "before-dispatch", "revoked", "wrong-action", "origin"]
 )
 def test_authenticated_action_dispatch_and_result(

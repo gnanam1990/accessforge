@@ -124,6 +124,19 @@ Only READER_ACTIVE and SPEECH_CAPTURE_WORKING are deferred until after start; po
 requires the full vocabulary plus another native Safari sample. The verified-profile gate is not
 relaxed, and this path does not establish the first actual-reader proof.
 
+After each operator startup-authorization callback, the bootstrap now calls the real machine-only
+`POST /supervisor-sessions/{sessionId}/startup-authority` route with an empty body and the private
+execution-session secret. The server rechecks exact current run/attempt, manual approval, lease,
+session/ticket revocation, preflight and sealed policy. Expiry is capped by session, lease, approval,
+manifest and elapsed policy wall budget. A prior action intent closes this startup-read path.
+Repeated reads create no actions, approvals or canonical events and never extend authority.
+
+The native client verifies exact session/reference/meaning/expiry, honors the startup AbortSignal,
+and only shortens its deadline. Missing/refused/malformed/expired responses fence initialization,
+with no fallback to a cached receipt. The response deliberately says
+`EXECUTION_AUTHORITY_RECHECKED_NOT_READER_START_CONSENT`: the separate operator callback remains
+mandatory for SDK preference/restart effects; run consent cannot silently become OS-settings consent.
+
 Initialization is one-shot and bounded by both its timeout (at most30seconds) and the absolute
 execution-lease deadline on the same supervisor clock. Every guarded step checks nonfinite/backward
 clock samples and expiry, including time spent reading the desktop claim. Startup authorization is
