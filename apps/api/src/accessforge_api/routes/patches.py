@@ -493,12 +493,35 @@ def get_patch(
     except patches.PatchError as exc:
         raise not_found() from exc
     response.headers["ETag"] = f'"{patch.revision}"'
-    return _patch_view(patch)
+    response.headers["Cache-Control"] = "no-store"
+    view = _patch_view(patch)
+    approval = conn.execute(
+        "SELECT scope,actor_user,target_id,target_digest,expected_revision,expires_at,revoked_at "
+        "FROM approval WHERE id=%s",
+        (patch.approval_id,),
+    ).fetchone()
+    view["approval"] = (
+        None
+        if approval is None
+        else {
+            "approvalId": patch.approval_id,
+            "scope": str(approval["scope"]),
+            "actorId": str(approval["actor_user"]),
+            "targetId": str(approval["target_id"]),
+            "targetDigest": str(approval["target_digest"]),
+            "expectedRevision": int(approval["expected_revision"]),
+            "expiresAt": to_rfc3339_utc(approval["expires_at"]),
+            "revokedAt": None
+            if approval["revoked_at"] is None
+            else to_rfc3339_utc(approval["revoked_at"]),
+        }
+    )
+    return view
 
 
 @router.get("/findings/{finding_id}/patches")
 def list_patches_for_finding(
-    workspace_id: str, finding_id: str, request: Request, conn: Conn
+    workspace_id: str, finding_id: str, request: Request, conn: Conn, response: Response
 ) -> dict[str, Any]:
     """Every patch proposed for this finding, including the rejected and stale ones.
 
@@ -509,6 +532,7 @@ def list_patches_for_finding(
     as_identifier(finding_id, what="findingId")
     if conn.execute("SELECT 1 FROM finding WHERE id = %s", (finding_id,)).fetchone() is None:
         raise not_found()
+    response.headers["Cache-Control"] = "no-store"
     return {
         "items": [_patch_view(p) for p in patches.patches_for_finding(conn, finding_id=finding_id)]
     }
@@ -698,7 +722,7 @@ def get_verification(
 
 @router.get("/patches/{patch_id}/verifications")
 def list_verifications(
-    workspace_id: str, patch_id: str, request: Request, conn: Conn
+    workspace_id: str, patch_id: str, request: Request, conn: Conn, response: Response
 ) -> dict[str, Any]:
     """Every verification attempted for this patch, oldest first.
 
@@ -712,6 +736,7 @@ def list_verifications(
     except patches.PatchError as exc:
         raise not_found() from exc
     records = patches.verifications_for_patch(conn, patch_id=patch_id)
+    response.headers["Cache-Control"] = "no-store"
     return {
         "items": [_verification_view(r) for r in records],
         "meaning": (

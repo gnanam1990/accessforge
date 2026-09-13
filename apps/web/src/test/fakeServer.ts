@@ -23,6 +23,7 @@ import type {
   SealedManifest,
 } from '../api/resources'
 import type { RunEvaluation } from '../api/evaluation'
+import type { Patch, Verification } from '../api/patches'
 
 export interface SessionResponse {
   readonly userId: string
@@ -45,6 +46,8 @@ export interface AttemptRow {
 }
 
 export interface WorkspaceData {
+  patches: Patch[]
+  verifications: Verification[]
   projects: Project[]
   environments: Environment[]
   journeyVersions: JourneyVersion[]
@@ -120,6 +123,8 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
   let runnerPaging: 'single' | 'paged' | 'endless' = 'single'
   let reviewPaging: 'single' | 'endless' = 'single'
   const data: WorkspaceData = {
+    patches: [],
+    verifications: [],
     projects: [],
     environments: [],
     journeyVersions: [],
@@ -440,6 +445,16 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       }
       if (url.includes('/completeness') && method === 'GET') {
         return json(data.completeness)
+      }
+      if (url.includes('/findings/') && url.endsWith('/patches') && method === 'GET') {
+        const finding = url.split('/findings/')[1]?.split('/')[0]
+        return json({ items: data.patches.filter((p) => p.findingId === finding) })
+      }
+      if (url.includes('/patches/') && method === 'GET') {
+        const patchId = url.split('/patches/')[1]?.split('/')[0]
+        const patch = data.patches.find((p) => p.patchId === patchId)
+        if (patch === undefined) return problem(404, 'RESOURCE_NOT_FOUND', 'no such repair', 'Not found')
+        return url.endsWith('/verifications') ? json({ items: data.verifications.filter((v) => v.patchId === patchId) }) : json(patch)
       }
       if (url.includes('/findings/') && method === 'GET') {
         return json(data.findings)
