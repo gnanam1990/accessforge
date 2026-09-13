@@ -934,3 +934,18 @@ passes five repeated launches with close/restart assertions retained. Real core 
 retain six schemas and35 migrations. Scratch token-comparison and cached-authority mutants each
 fail their negative regression; workspace erasure succeeds without bypassing the ticket guard.
 Prior controller commit4b7f5ab passed GitHub CI34731177181; the new head needs its own CI.
+
+### Native bootstrap receiver (continuation)
+
+The desktop now has a private-config/stdin command that consumes one exact supervisor ticket via
+real HTTP, after an exclusive durable local run claim. All six reference fields are verified in
+both the local config and server receipt. Replay, partial claims, process restart, lost replies and
+wrong identity never become another send or actual-reader proof. See handoff07 for invocation,
+storage ownership, bounds and the still-closed physical-action boundary.
+
+Focused API/controller suite:130 passed, including four compiled-Node/real-FastAPI/PostgreSQL
+integration cases. Strict mypy235, Ruff337, all four generation drift checks and recursive Node
+typecheck/build/test passed. Two additional native storage/deadline tests also pass. The repeat full
+Python suite was stopped at the user's request after575 passing tests; it is **not** a completed
+full-suite result. No test assertions or CI gates were disabled. Prior pushed head02f3459 passed
+GitHub CI34732382909. The native receiver continuation needs its own remote CI.

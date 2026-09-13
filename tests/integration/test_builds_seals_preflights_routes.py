@@ -20,15 +20,23 @@ Requirements: FR-002, FR-004, FR-005, FR-010, FR-014. Invariants: INV-02, INV-04
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import shutil
+import socket
+import subprocess
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta, tzinfo
+from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 
 from accessforge_api.app import create_app
@@ -1395,6 +1403,152 @@ def _ticket_url(ticket: DispatchTicket, workspace_id: str = WS) -> str:
     return f"/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket.ticket_id}/accept"
 
 
+@pytest.fixture(scope="module")
+def native_receiver_command() -> Path:
+    root = Path(__file__).resolve().parents[2]
+    pnpm = shutil.which("pnpm")
+    assert pnpm is not None, "pnpm is required for the native receiver integration proof"
+    # A fresh checkout must test current TypeScript, never a stale ignored dist directory.
+    for script in ("typecheck", "build"):
+        subprocess.run(  # noqa: S603 - fixed workspace build command, no shell
+            [pnpm, "--filter", "@accessforge/desktop-runner", script],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+    return root / "apps/desktop-runner/dist/receive-dispatch.js"
+
+
+@pytest.fixture()
+def native_receiver_api(settings: ApiSettings, db: str) -> Iterator[str]:
+    # Real socket/server with test-only settings; no browser, reader, or authentication bypass.
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(16)
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(
+            uvicorn.Config(create_app(settings), log_level="critical", access_log=False)
+        )
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            for _ in range(100):
+                if server.started:
+                    break
+                assert thread.is_alive(), "native receiver test API stopped during startup"
+                time.sleep(0.01)
+            else:
+                pytest.fail("native receiver test API did not start")
+            yield f"http://127.0.0.1:{port}"
+        finally:
+            server.should_exit = True
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "native receiver test API did not stop"
+
+
+@pytest.mark.parametrize("fault", [None, "local-identity", "existing-claim", "revoked-approval"])
+def test_native_receiver_real_http_acceptance_and_restart(
+    db: str,
+    native_receiver_command: Path,
+    native_receiver_api: str,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    tmp_path: Path,
+    fault: str | None,
+) -> None:
+    """Cross-language bootstrap proof only: synthetic preflight, zero actual-reader actions."""
+    ref, ticket = manual_dispatch_reference, supervisor_ticket
+    node = shutil.which("node")
+    assert node is not None, "Node is required for the native receiver integration proof"
+    reference = {
+        "workspaceId": ref.workspace_id,
+        "runId": ref.run_id,
+        "attemptId": ref.attempt_id,
+        "runnerId": ref.runner_id,
+        "leaseId": ref.lease_id,
+        "epoch": ref.epoch,
+    }
+    local = dict(reference)
+    if fault == "local-identity":
+        local["attemptId"] = str(uuid.uuid4())
+    claims = tmp_path.resolve() / "claims"
+    claims.mkdir(mode=0o700)
+    claim = claims / f"{ref.run_id}.json"
+    if fault == "existing-claim":
+        claim.write_text("{", encoding="utf-8")
+    if fault == "revoked-approval":
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "UPDATE approval SET revoked_at=now() WHERE id=("
+                "SELECT authorization_id FROM run WHERE id=%s)",
+                (ref.run_id,),
+            )
+    config_path = tmp_path.resolve() / "receiver.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiOrigin": native_receiver_api,
+                "claimsDirectory": str(claims),
+                "localReference": local,
+                "allowLoopbackHttp": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path.chmod(0o600)
+    payload = json.dumps(
+        {
+            "reference": reference,
+            "ticket": {
+                "ticketId": ticket.ticket_id,
+                "token": ticket.token,
+                "expiresAt": ticket.expires_at,
+            },
+        }
+    )
+    for invocation in range(2):
+        result = subprocess.run(  # noqa: S603 - fixed native executable, secret on stdin only
+            [node, str(native_receiver_command), str(config_path)],
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            # The native process must not inherit database/object-store/test credentials.
+            env={"PATH": os.environ["PATH"]},
+        )
+        assert ticket.token not in result.stdout + result.stderr
+        if fault is None and invocation == 0:
+            assert result.returncode == 0
+            assert json.loads(result.stdout) == {
+                "ticketId": ticket.ticket_id,
+                "reference": reference,
+                "meaning": "DISPATCH_REFERENCE_ACCEPTED",
+            }
+        else:
+            assert result.returncode == 78
+            assert result.stdout == ""
+    with workspace_connection(db, WS) as conn:
+        stored = conn.execute(
+            "SELECT accepted_at FROM supervisor_dispatch_ticket WHERE id=%s", (ticket.ticket_id,)
+        ).fetchone()
+        assert stored is not None
+        assert (stored["accepted_at"] is not None) == (fault is None)
+        audit = conn.execute(
+            "SELECT detail FROM audit_event WHERE action='SUPERVISOR_DISPATCH_ACCEPTED'"
+        ).fetchall()
+        assert len(audit) == (1 if fault is None else 0)
+        assert ticket.token not in json.dumps(audit)
+        state = run_store.load_run(conn, run_id=ref.run_id).state
+        assert (state.status.value, state.outcome.value) == ("RUNNING", "NOT_EVALUATED")
+        assert conn.execute("SELECT count(*) AS n FROM runner_action").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
+    if fault == "local-identity":
+        assert not claim.exists()
+    else:
+        assert claim.exists() and ticket.token not in claim.read_text(encoding="utf-8")
+
+
 def test_supervisor_ticket_is_machine_only_single_consumption_without_evidence(
     db: str,
     client: TestClient,
@@ -1423,8 +1577,12 @@ def test_supervisor_ticket_is_machine_only_single_consumption_without_evidence(
     assert accepted.headers["cache-control"] == "no-store"
     assert accepted.json() == {
         "ticketId": ticket.ticket_id,
+        "workspaceId": WS,
         "runId": manual_dispatch_reference.run_id,
+        "attemptId": manual_dispatch_reference.attempt_id,
+        "runnerId": manual_dispatch_reference.runner_id,
         "leaseId": manual_dispatch_reference.lease_id,
+        "epoch": manual_dispatch_reference.epoch,
         "meaning": "DISPATCH_REFERENCE_ACCEPTED",
     }
     assert ticket.token not in accepted.text

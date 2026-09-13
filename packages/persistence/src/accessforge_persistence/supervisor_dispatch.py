@@ -35,6 +35,14 @@ class DispatchTicket:
     token: str = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class AcceptedDispatch:
+    principal: MachinePrincipal
+    attempt_id: str
+    runner_id: str
+    epoch: int
+
+
 def issue(
     conn: psycopg.Connection[Any],
     *,
@@ -99,7 +107,7 @@ def accept(
     workspace_id: str,
     ticket_id: str,
     token: str,
-) -> MachinePrincipal:
+) -> AcceptedDispatch:
     """Authenticate and consume once, revalidating the committed attempt immediately before use."""
     if len(token) != 43 or not token.isascii():
         raise Refused("dispatch ticket unavailable")
@@ -168,10 +176,15 @@ def accept(
             ),
         ),
     )
-    return MachinePrincipal(
-        service_identity=ServiceIdentity.SUPERVISOR,
-        workspace_id=workspace_id,
-        credential_id=ticket_id,
-        run_id=str(row["run_id"]),
-        lease_id=str(row["lease_id"]),
+    return AcceptedDispatch(
+        principal=MachinePrincipal(
+            service_identity=ServiceIdentity.SUPERVISOR,
+            workspace_id=workspace_id,
+            credential_id=ticket_id,
+            run_id=str(row["run_id"]),
+            lease_id=str(row["lease_id"]),
+        ),
+        attempt_id=str(row["attempt_id"]),
+        runner_id=str(row["runner_id"]),
+        epoch=int(row["epoch"]),
     )

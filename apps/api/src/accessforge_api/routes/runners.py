@@ -53,16 +53,21 @@ def accept_supervisor_dispatch(
     if credential is None or len(request.headers.getlist("authorization")) != 1:
         raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "dispatch ticket unavailable")
     try:
-        principal = supervisor_dispatch.accept(
+        accepted = supervisor_dispatch.accept(
             conn, workspace_id=workspace_id, ticket_id=ticket_id, token=credential.credentials
         )
     except supervisor_dispatch.Refused:
         raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "dispatch ticket unavailable") from None
     response.headers["Cache-Control"] = "no-store"
+    principal = accepted.principal
     return {
         "ticketId": principal.credential_id,
+        "workspaceId": principal.workspace_id,
         "runId": principal.run_id,
+        "attemptId": accepted.attempt_id,
+        "runnerId": accepted.runner_id,
         "leaseId": principal.lease_id,
+        "epoch": accepted.epoch,
         "meaning": "DISPATCH_REFERENCE_ACCEPTED",
     }
 
