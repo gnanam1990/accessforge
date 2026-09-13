@@ -258,6 +258,23 @@ a {
   padding: var(--af-space-6);
 }
 
+/* Recovery records remain readable at narrow widths, including full hashes and IDs. */
+.af-effect-recovery {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.af-effect-recovery > div > ul {
+  list-style: none;
+  padding-inline-start: 0;
+}
+
+.af-effect-recovery summary {
+  min-height: 44px;
+  padding-block: var(--af-space-3);
+  cursor: pointer;
+}
+
 .af-notice {
   display: grid;
   gap: var(--af-space-2);
