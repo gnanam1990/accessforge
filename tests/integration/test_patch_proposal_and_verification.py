@@ -1326,6 +1326,15 @@ def test_approval_requires_the_revision_the_approver_read(
     assert body["approvalId"] is not None
     # The one inference nobody may draw from an approval.
     assert "not authorization to merge, publish or deploy" in body["meaning"]
+    read = api.get(f"/v1/workspaces/{WS}/patches/{created['patchId']}")  # type: ignore[attr-defined]
+    assert read.status_code == 200 and read.headers["Cache-Control"] == "no-store"
+    approval = read.json()["approval"]
+    assert approval["approvalId"] == body["approvalId"]
+    assert approval["scope"] == "PATCH_APPLY"
+    assert approval["targetId"] == body["patchId"]
+    assert approval["targetDigest"] == body["patchDigest"]
+    assert approval["expectedRevision"] == body["revision"]
+    assert approval["revokedAt"] is None
 
 
 def test_an_approval_cannot_be_issued_without_an_expiry_bound(
