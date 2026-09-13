@@ -18,8 +18,10 @@ import {
   assertActionPermitted,
   assertRealReaderProven,
   captureTimedOut,
+  createHostEnvironment,
   dispatch,
   probePermission,
+  probeDesktopOwned,
   probeBrowserVersion,
   probeReaderActive,
   probeReaderVersion,
@@ -280,9 +282,29 @@ test('no check is silently reported TRUE by default', () => {
   const trues = Object.entries(report.checks).filter(([, r]) => r.condition === 'TRUE');
   assert.deepEqual(
     trues.map(([name]) => name),
-    ['MONOTONIC_CLOCK_HEALTHY'],
-    'only the one check that genuinely needs no reader may be TRUE on a bare host',
+    [],
+    'even the supervisor clock needs an actual sample; no missing probe defaults to TRUE',
   );
+});
+
+test('desktop ownership binds the console and process to an independently assigned session', () => {
+  const env = bareEnvironment({ auditSessionId: () => '100025', processAuditSessionId: () => '100025' });
+  assert.equal(probeDesktopOwned(env).condition, 'UNKNOWN');
+  assert.equal(probeDesktopOwned(env, '100025').condition, 'TRUE');
+  assert.equal(probeDesktopOwned(env, '100026').condition, 'FALSE');
+  assert.equal(probeDesktopOwned({ ...env, processAuditSessionId: () => '100026' }, '100025').condition, 'FALSE');
+  assert.equal(probeDesktopOwned({ ...env, processAuditSessionId: () => undefined }, '100025').condition, 'UNKNOWN');
+});
+
+test('the actual ioreg array shape is parsed, while conflicting consoles and malformed lock state stay unknown', () => {
+  const session = { kCGSSessionOnConsoleKey: true, kCGSessionLoginDoneKey: true, kCGSSessionAuditIDKey: 100025 };
+  const at = (sessions) => createHostEnvironment({ run: (executable) => ({ status: 0, stderr: '',
+    stdout: executable.endsWith('ioreg') ? 'opaque-plist' : JSON.stringify([{ IOConsoleUsers: sessions }]) }) });
+  assert.equal(at([session]).auditSessionId(), '100025');
+  assert.equal(at([session]).screenLocked(), false);
+  assert.equal(at([session, { ...session, kCGSSessionAuditIDKey: 100026 }]).auditSessionId(), undefined);
+  assert.equal(at([{ ...session, CGSSessionScreenIsLocked: 'false' }]).screenLocked(), undefined);
+  assert.equal(at([{ ...session, kCGSSessionAuditIDKey: '100025' }]).auditSessionId(), undefined);
 });
 
 test('browser version is read from the host and must match the pinned profile exactly', () => {
