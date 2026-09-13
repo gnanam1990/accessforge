@@ -3,7 +3,7 @@
  */
 import type { PreflightReport, RawObservation, UnknownObservation } from '@accessforge/at-voiceover';
 import { PREFLIGHT_CHECKS } from '@accessforge/at-voiceover';
-import { parseReference } from './dispatch-receiver.js';
+import { parseReference, type DispatchReference } from './dispatch-receiver.js';
 import { Supervisor, type ActionCommand, type Clock, type DispatchOutcome, type Journal, type LeaseState } from './supervisor.js';
 import { createVoiceOverDispatch, type VoiceOverRuntime } from './voiceover.js';
 
@@ -36,6 +36,11 @@ export interface AuthenticatedRunnerOptions {
   readonly recordObservation: (value: RawObservation | UnknownObservation) => Promise<void>;
 }
 
+export interface AuthenticatedActionOutcome extends DispatchOutcome {
+  /** Control-plane identity, not the local journal's lease:epoch:sequence identifier. */
+  readonly serverActionId?: string;
+}
+
 async function bounded<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -47,6 +52,7 @@ async function bounded<T>(promise: Promise<T>, milliseconds: number): Promise<T>
 }
 
 export class AuthenticatedRunner {
+  readonly reference: Readonly<DispatchReference>;
   #supervisor: Supervisor;
   #sequence = 0;
   #busy = false;
@@ -61,6 +67,7 @@ export class AuthenticatedRunner {
 
   constructor(private readonly options: AuthenticatedRunnerOptions) {
     const reference = parseReference(options.session.receipt.reference);
+    this.reference = Object.freeze(reference);
     if (reference.leaseId !== options.lease.leaseId || reference.epoch !== options.lease.epoch ||
         !Number.isFinite(options.actionTimeoutMs) || options.actionTimeoutMs <= 0 || options.actionTimeoutMs > 30000) {
       throw new Error('local supervisor does not match the authenticated session');
@@ -135,7 +142,7 @@ export class AuthenticatedRunner {
     this.#supervisor.requestCancellation();
   }
 
-  async perform(request: { action: ActionCommand['action']; keyChord?: string; textValueRef?: string }): Promise<DispatchOutcome> {
+  async perform(request: { action: ActionCommand['action']; keyChord?: string; textValueRef?: string }): Promise<AuthenticatedActionOutcome> {
     if (this.#busy || this.#fenced || this.#stopping) return { status: 'REFUSED', detail: 'runner fenced or busy' };
     this.#busy = true;
     let actionId: string | undefined;
@@ -171,14 +178,16 @@ export class AuthenticatedRunner {
         this.#supervisor.requestCancellation(); // Local input fence, not a server cancellation.
         this.#stopSucceeded = status === 'SUCCEEDED';
       }
-      return outcome;
+      return { ...outcome, status, serverActionId: actionId };
     } catch {
       this.#executing = false;
       this.#fenced = true;
       if (actionId !== undefined) {
         try { await this.options.session.completeAction(actionId, 'AMBIGUOUS'); } catch { /* Retain local fencing; recovery owns the unresolved server state. */ }
       }
-      return { status: actionId === undefined ? 'REFUSED' : 'AMBIGUOUS', detail: 'execution fenced; no retry or automatic reset' };
+      return { status: actionId === undefined ? 'REFUSED' : 'AMBIGUOUS',
+        ...(actionId === undefined ? {} : { serverActionId: actionId }),
+        detail: 'execution fenced; no retry or automatic reset' };
     } finally { this.#executing = false; this.#busy = false; }
   }
 

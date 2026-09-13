@@ -203,6 +203,7 @@ async def test_type_text_resolves_a_fixture_reference_and_never_accepts_raw_text
         )
     )
     assert dispatched[0].text == "Test Person"
+    assert dispatched[0].text_value_ref == "fullName"
 
     with pytest.raises(ValidationError):
         ProposedAction.model_validate(
