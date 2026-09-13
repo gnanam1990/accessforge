@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
 import { parseReference, type DispatchReference } from './dispatch-receiver.js';
 import type { AuthenticatedRunner } from './authenticated-runner.js';
+import type { Clock } from './supervisor.js';
 
 export interface DesktopClaimOptions {
   /** All runner registrations on this host MUST share this independently provisioned private root. */
@@ -125,6 +126,9 @@ export type ExclusiveDesktopRunner = Pick<AuthenticatedRunner, 'perform' | 'fini
 
 export interface DesktopInitialization {
   readonly timeoutMs: number;
+  readonly clock: Pick<Clock, 'monotonic'>;
+  /** Absolute deadline on the same clock as the authenticated runner lease. */
+  readonly deadlineMonotonic: number;
   /** Startup must call guard immediately before every separately awaited physical operation. */
   readonly run: (guard: () => void, signal: AbortSignal) => Promise<void>;
 }
@@ -140,7 +144,8 @@ export function createExclusiveDesktopRunner(
   initialization?: DesktopInitialization,
 ): ExclusiveDesktopRunner {
   if (initialization !== undefined && (!Number.isFinite(initialization.timeoutMs) ||
-      initialization.timeoutMs <= 0 || initialization.timeoutMs > 30000)) throw new Error('startup deadline unavailable');
+      initialization.timeoutMs <= 0 || initialization.timeoutMs > 30000 ||
+      !Number.isFinite(initialization.deadlineMonotonic))) throw new Error('startup deadline unavailable');
   let claim: ReturnType<typeof claimDesktop> | undefined;
   let state: 'PENDING' | 'INITIALIZING' | 'ACTIVE' | 'FINISHING' | 'CLOSED' = initialization ? 'PENDING' : 'ACTIVE';
   let busy = false;
@@ -163,21 +168,29 @@ export function createExclusiveDesktopRunner(
       state = 'INITIALIZING';
       const controller = new AbortController();
       startupAbort = controller;
-      const started = performance.now();
-      const deadline = started + initialization.timeoutMs;
+      let last: number | undefined;
+      let deadline: number | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const startupGuard = () => {
-        const now = performance.now();
-        if (state !== 'INITIALIZING' || controller.signal.aborted || now < started || now >= deadline) {
+        const now = initialization.clock.monotonic();
+        if (state !== 'INITIALIZING' || controller.signal.aborted || !Number.isFinite(now) ||
+            now < 0 || last === undefined || now < last || deadline === undefined || now >= deadline) {
           throw new Error('desktop initialization fenced');
         }
+        last = now;
         claim.assertHeld();
+        const after = initialization.clock.monotonic();
+        if (!Number.isFinite(after) || after < last || after >= deadline) throw new Error('startup claim read outlived authority');
+        last = after;
       };
       try {
+        last = initialization.clock.monotonic();
+        deadline = Math.min(last + initialization.timeoutMs, initialization.deadlineMonotonic);
         startupGuard();
+        const remaining = deadline - last;
         const interrupted = new Promise<never>((_resolve, reject) => {
           controller.signal.addEventListener('abort', () => reject(new Error('startup cancelled')), { once: true });
-          timer = setTimeout(() => controller.abort(), initialization.timeoutMs);
+          timer = setTimeout(() => controller.abort(), Math.max(1, remaining));
         });
         await Promise.race([interrupted, initialization.run(startupGuard, controller.signal)]);
         startupGuard();

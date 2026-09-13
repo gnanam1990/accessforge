@@ -124,7 +124,11 @@ Only READER_ACTIVE and SPEECH_CAPTURE_WORKING are deferred until after start; po
 requires the full vocabulary plus another native Safari sample. The verified-profile gate is not
 relaxed, and this path does not establish the first actual-reader proof.
 
-Initialization is one-shot and bounded (at most30seconds). Cancellation settles the wrapper and
+Initialization is one-shot and bounded by both its timeout (at most30seconds) and the absolute
+execution-lease deadline on the same supervisor clock. Every guarded step checks nonfinite/backward
+clock samples and expiry, including time spent reading the desktop claim. Startup authorization is
+rechecked after the SDK and postflight, before publishing readiness; physical checks alone cannot
+extend expired session/consent authority. Cancellation settles the wrapper and
 blocks late guarded operations. An already-entered SDK call cannot be forcibly undone by rejecting
 its promise: uncertainty retains the claim and requires reconciliation, not an automatic stop,
 cleanup/restart or another run. Successful initialization enables the existing authenticated action

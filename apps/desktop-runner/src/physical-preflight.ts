@@ -114,7 +114,8 @@ export function createPhysicalSafariRunner(options:
       assertHeld(); // Synchronous final guard immediately before entering the adapter.
       return runtime.adapter.perform(request, context);
     } },
-  }), { timeoutMs: readerStartup.timeoutMs, run: async (guard, signal) => {
+  }), { timeoutMs: readerStartup.timeoutMs, clock: runtime.clock,
+    deadlineMonotonic: runtime.lease.deadlineMonotonic, run: async (guard, signal) => {
     guard();
     await readerStartup.authorize(signal);
     guard();
@@ -135,6 +136,10 @@ export function createPhysicalSafariRunner(options:
     const after = await preflight();
     if (PREFLIGHT_CHECKS.some((key) => after.checks[key].condition !== 'TRUE')) throw new Error('reader readiness unavailable');
     await startupOrigin();
+    guard();
+    // The SDK and postflight may consume the remaining session/consent lifetime. Do not publish
+    // ACTIVE merely because local physical observations passed after that authority expired.
+    await readerStartup.authorize(signal);
     guard();
   } });
 }

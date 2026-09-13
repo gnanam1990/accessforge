@@ -43,7 +43,10 @@ function fixture(t) {
           if (overrides.adapterThrows) throw new Error('unknown physical state');
           return { status: 'SUCCEEDED' };
         } },
-      }), overrides.initialization);
+      }), overrides.initialization === undefined ? undefined : {
+        clock: { monotonic: () => performance.now() }, deadlineMonotonic: performance.now() + 10000,
+        ...overrides.initialization,
+      });
     return { runner, calls, journal, reference };
   }
   return { directory, path, create };
@@ -176,4 +179,34 @@ test('startup failure retains exclusion and cannot become a clean STOP or a retr
   await assert.rejects(h.runner.finish());
   assert.ok(existsSync(f.path));
   assert.throws(() => f.create(), /already held/);
+});
+
+test('lease expiry and clock rollback during initialization fence the next guarded step', async (t) => {
+  for (const fault of ['expired', 'rollback', 'nonfinite']) {
+    const f = fixture(t);
+    let now = 100, physicalSteps = 0;
+    const h = f.create({ initialization: { timeoutMs: 1000, deadlineMonotonic: 200,
+      clock: { monotonic: () => now }, run: async (guard) => {
+        guard(); physicalSteps++;
+        now = 150; guard();
+        now = fault === 'expired' ? 201 : fault === 'rollback' ? 140 : Number.NaN;
+        guard(); physicalSteps++;
+      },
+    } });
+    await assert.rejects(h.runner.initialize(), /unconfirmed/);
+    assert.equal(physicalSteps, 1);
+    assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+    assert.ok(existsSync(f.path));
+  }
+});
+
+test('an expired lease never enters initialization even with a longer startup timeout', async (t) => {
+  const f = fixture(t);
+  let started = false;
+  const h = f.create({ initialization: { timeoutMs: 1000, deadlineMonotonic: 100,
+    clock: { monotonic: () => 100 }, run: async () => { started = true; },
+  } });
+  await assert.rejects(h.runner.initialize(), /unconfirmed/);
+  assert.equal(started, false);
+  assert.ok(existsSync(f.path));
 });

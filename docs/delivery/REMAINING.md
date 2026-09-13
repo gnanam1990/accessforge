@@ -44,6 +44,9 @@ SDK call remains uncertain and keeps the claim. The empty verified matrix is che
 reservation/network/SDK loading. This is an embedding API, not a deployed daemon or a completed
 controller action transport; startup-consent and genuine evidence/observer producers still need
 deployment integration. No OS permission or actual reader was changed to implement it.
+Startup now shares the runner's absolute lease deadline/monotonic clock and rechecks authorization
+after the SDK/postflight before admitting actions; a longer initialization timeout cannot extend
+expired authority. Author review is scoped to this lifecycle delta, not independent PR approval.
 
 The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
 execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
