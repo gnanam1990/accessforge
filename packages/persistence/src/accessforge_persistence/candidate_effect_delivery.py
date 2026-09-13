@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import parse_qsl
 
@@ -16,6 +17,17 @@ from . import candidate_regressions as regressions
 from . import candidate_runs, runners, supervisor_sessions
 
 Refused = permits.Refused
+
+# Closed reference-service-request/1 destinations. Alias names carry field meaning, not a pool
+# of values that may be substituted into any control. Missing aliases never widen permission.
+_FIELD_VALUE_KEYS = MappingProxyType(
+    {
+        "full_name": ("full_name",),
+        "email": ("email", "email_invalid", "email_valid"),
+        "category": ("category",),
+        "description": ("description",),
+    }
+)
 
 
 def _live(
@@ -160,8 +172,17 @@ def begin(
         len(body.encode("utf-8")) > 8192
         or fixture is None
         or len({key for key, _ in pairs}) != len(pairs)
-        or any(key not in {"full_name", "email", "category", "description"} for key, _ in pairs)
-        or any(value and value not in fixture["navigator_values"].values() for _, value in pairs)
+        or any(key not in _FIELD_VALUE_KEYS for key, _ in pairs)
+        or any(
+            value
+            and value
+            not in {
+                fixture["navigator_values"][alias]
+                for alias in _FIELD_VALUE_KEYS[key]
+                if alias in fixture["navigator_values"]
+            }
+            for key, value in pairs
+        )
     ):
         raise Refused("reference form values are outside the sealed synthetic fixture")
     request_digest = digest({"method": "POST", "path": path, "body": body})

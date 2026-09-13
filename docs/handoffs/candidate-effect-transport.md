@@ -5,6 +5,8 @@ gateway can send a bound candidate POST. A lost commit acknowledgement never ret
 to send. Current worker, supervisor session, run/lease, RUN_EFFECTS approval, manifest and endpoint
 bindings are rechecked. Only the original fixture form path and bounded synthetic fixture values
 (or empty fields for validation failures) are accepted; duplicate/unknown fields are refused.
+Values stay destination-bound: full_name/category/description use their same-named fixture keys;
+email accepts only email/email_invalid/email_valid. A value approved for email cannot become a name.
 
 The isolated HTTP call occurs once, within both the existing request deadline and permit expiry.
 Fresh deployed-artifact checks bracket it. A separate transaction retains the bounded response's

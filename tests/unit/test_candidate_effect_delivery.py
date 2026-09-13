@@ -39,7 +39,17 @@ class Store:
         if query.startswith("SELECT p.id"):
             return Rows([] if self.permit["consumed_at"] else [{"id": "permit"}])
         if query.startswith("SELECT navigator_values"):
-            return Rows([{"navigator_values": {"name": "Synthetic Example"}}])
+            return Rows(
+                [
+                    {
+                        "navigator_values": {
+                            "full_name": "Synthetic Example",
+                            "email_invalid": "not-an-email",
+                            "email_valid": "test.person@example.test",
+                        }
+                    }
+                ]
+            )
         if query.startswith("UPDATE candidate_action_effect_permit"):
             self.permit["consumed_at"] = "committed-once"
         elif query.startswith("INSERT INTO candidate_effect_delivery"):
@@ -56,11 +66,24 @@ class Store:
 
 
 @pytest.mark.parametrize(
-    "body", ["full_name=Synthetic+Example", "", "full_name=Unapproved", "email=x&email=y"]
+    ("body", "allowed"),
+    [
+        ("full_name=Synthetic+Example", True),
+        ("", True),
+        ("email=", True),
+        ("full_name=Unapproved", False),
+        ("email=x&email=y", False),
+        ("full_name=not-an-email", False),
+        ("email=Synthetic+Example", False),
+        ("category=not-an-email", False),
+        ("email=not-an-email", True),
+        ("email=test.person%40example.test", True),
+    ],
 )
 def test_consumption_never_replays_and_does_not_hide_unconfirmed_response(
     monkeypatch: pytest.MonkeyPatch,
     body: str,
+    allowed: bool,
 ) -> None:
     store = Store()
     conn = cast(psycopg.Connection[dict[str, Any]], store)
@@ -69,7 +92,7 @@ def test_consumption_never_replays_and_does_not_hide_unconfirmed_response(
     # The authority gate has its own live validation; these cases isolate transport transitions.
     monkeypatch.setattr(delivery, "_live", lambda *args, **kwargs: store.permit)
     monkeypatch.setattr(candidate_effects, "_view", lambda row: dict(permission))
-    if body in {"full_name=Unapproved", "email=x&email=y"}:
+    if not allowed:
         with pytest.raises(delivery.Refused):
             delivery.begin(conn, claim=claim, path="/form/fixture", body=body)
         assert store.claims == 0
