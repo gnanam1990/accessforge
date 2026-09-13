@@ -8,8 +8,8 @@ from typing import Any
 
 from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_persistence import candidate_endpoints as endpoints
+from accessforge_persistence import candidate_observations, candidate_runs, workspace_connection
 from accessforge_persistence import candidate_regressions as regressions
-from accessforge_persistence import candidate_runs, workspace_connection
 
 from .artifacts import CandidateArchiveStore, read_retained_candidate
 from .candidate_gateway import CandidateGateway
@@ -112,6 +112,10 @@ def execute_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             endpoints.closed(conn, claim=claim, cleanup_confirmed=clean)
 
+    def artifact_observed(observation: dict[str, Any]) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            candidate_observations.retain(conn, claim=claim, observation=observation)
+
     def session(gateway: CandidateGateway) -> None:
         def prepare_run(environment_id: str) -> dict[str, Any]:
             gateway.receipt()
@@ -155,6 +159,7 @@ def execute_regressions(
             on_endpoint_planned=endpoint_planned,
             on_endpoint_bound=endpoint_bound,
             on_endpoint_closed=endpoint_closed,
+            on_artifact_observed=artifact_observed,
         )
         if result.task_id != claim.attempt_id or result.daemon != runner.sandbox.daemon:
             raise regressions.Refused("regression task or daemon identity changed")
