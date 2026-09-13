@@ -1521,6 +1521,98 @@ def test_supervisor_session_action_intent(
         assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
 
 
+@pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+@pytest.mark.parametrize(
+    "case", ["success", "ambiguity", "before-dispatch", "revoked", "wrong-action", "origin"]
+)
+def test_authenticated_action_dispatch_and_result(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    case: str,
+) -> None:
+    import secrets
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    secret = secrets.token_urlsafe(32)
+    opened = client.post(
+        _ticket_url(ticket).removesuffix("accept") + "session",
+        json={"sessionSecret": secret},
+        headers={"Authorization": f"Bearer {ticket.token}"},
+    )
+    assert opened.status_code == 201
+    headers = {"Authorization": f"Bearer {secret}"}
+    base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
+    command = {"action": "READ_CURRENT", "origin": "https://app.example.test", "sequence": 1}
+    intent = client.post(base + "/action-intents", json=command, headers=headers)
+    assert intent.status_code == 201
+    action_id = intent.json()["actionId"]
+    action_url = base + f"/actions/{action_id}"
+    if case == "before-dispatch":
+        assert (
+            client.post(
+                action_url + "/result", json={"status": "SUCCEEDED"}, headers=headers
+            ).status_code
+            == 403
+        )
+        return
+    if case == "revoked":
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "UPDATE approval SET revoked_at=now() WHERE id=("
+                "SELECT authorization_id FROM run WHERE id=%s)",
+                (ref.run_id,),
+            )
+    if case == "wrong-action":
+        action_url = base + f"/actions/{uuid.uuid4()}"
+    dispatched = client.post(
+        action_url + "/dispatch",
+        headers=headers,
+        json={"origin": "https://other.example.test" if case == "origin" else command["origin"]},
+    )
+    if case in {"revoked", "wrong-action", "origin"}:
+        assert dispatched.status_code == 403
+        with workspace_connection(db, WS) as conn:
+            assert conn.execute(
+                "SELECT dispatched_at FROM runner_action WHERE id=%s", (action_id,)
+            ).fetchone() == {"dispatched_at": None}
+        return
+    assert dispatched.status_code == 200
+    assert dispatched.json() == {
+        "sessionId": ticket.ticket_id,
+        "meaning": "ACTION_DISPATCH_COMMITTED",
+        "command": {"actionId": action_id, "action": "READ_CURRENT", "sequence": 1},
+    }
+    assert (
+        client.post(
+            action_url + "/dispatch", json={"origin": command["origin"]}, headers=headers
+        ).status_code
+        == 403
+    )
+    status = "AMBIGUOUS" if case == "ambiguity" else "SUCCEEDED"
+    result = client.post(action_url + "/result", json={"status": status}, headers=headers)
+    assert result.status_code == 200 and result.json()["meaning"] == "ACTION_RESULT_RETAINED"
+    assert (
+        client.post(
+            action_url + "/result", json={"status": "SUCCEEDED"}, headers=headers
+        ).status_code
+        == 403
+    )
+    second = client.post(base + "/action-intents", json={**command, "sequence": 2}, headers=headers)
+    assert second.status_code == (403 if case == "ambiguity" else 201)
+    with workspace_connection(db, WS) as conn:
+        state = run_store.load_run(conn, run_id=ref.run_id).state
+        assert (state.status.value, state.outcome.value) == (
+            ("INTERRUPTED", "INCONCLUSIVE") if case == "ambiguity" else ("RUNNING", "NOT_EVALUATED")
+        )
+        if case == "ambiguity":
+            assert conn.execute(
+                "SELECT status FROM runner WHERE id=%s", (ref.runner_id,)
+            ).fetchone() == {"status": "QUARANTINED"}
+        assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
+
+
 @pytest.mark.parametrize(
     "scenario",
     [
@@ -1687,6 +1779,7 @@ def native_receiver_api(settings: ApiSettings, db: str) -> Iterator[str]:
 
 
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+@pytest.mark.parametrize("mode", ["intent", "execution", "ambiguity"])
 def test_native_execution_session_real_http(
     db: str,
     native_receiver_command: Path,
@@ -1694,6 +1787,7 @@ def test_native_execution_session_real_http(
     supervisor_ticket: DispatchTicket,
     manual_dispatch_reference: DispatchReference,
     tmp_path: Path,
+    mode: str,
 ) -> None:
     ref, ticket = manual_dispatch_reference, supervisor_ticket
     node = shutil.which("node")
@@ -1728,11 +1822,42 @@ def test_native_execution_session_real_http(
         const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         const config = readReceiverConfig(process.argv[2]);
         const session = await NativeExecutionSession.open(config, input);
-        const command = { action: 'READ_CURRENT', sequence: 1, origin: 'https://app.example.test' };
-        const intent = await session.retainIntent(command);
-        let refused = false;
-        try { await session.retainIntent(command); } catch { refused = true; }
-        process.stdout.write(JSON.stringify({ session, intent, duplicateRefused: refused }));
+        if (process.argv[3] === 'intent') {
+          const command = { action: 'READ_CURRENT', sequence: 1,
+            origin: 'https://app.example.test' };
+          const intent = await session.retainIntent(command);
+          let refused = false;
+          try { await session.retainIntent(command); } catch { refused = true; }
+          process.stdout.write(JSON.stringify({ session, intent, duplicateRefused: refused }));
+        } else {
+          const base = process.argv[1];
+          const { AuthenticatedRunner } = await import(new URL('./authenticated-runner.js', base));
+          const { FileJournal } = await import(new URL('./journal.js', base));
+          const { PREFLIGHT_CHECKS } = await import(process.argv[4]);
+          let calls = 0;
+          // Real HTTP/client/journal; explicitly synthetic physical probes and adapter.
+          const runner = new AuthenticatedRunner({
+            session, journal: new FileJournal(process.argv[2] + '.actions'),
+            lease: { leaseId: input.reference.leaseId, epoch: input.reference.epoch,
+              deadlineMonotonic: performance.now() + 10000,
+              maxActions: 10, maxWallTimeSeconds: 30 },
+            clock: { monotonic: () => performance.now(), utc: () => new Date().toISOString() },
+            actionTimeoutMs: 1000,
+            preflight: async () => ({ checks: Object.fromEntries(
+              PREFLIGHT_CHECKS.map((key) => [key, { condition: 'TRUE' }])) }),
+            observeOrigin: async () => 'https://app.example.test',
+            authorizePhysicalAction: async () => {},
+            adapter: { async perform() {
+              calls++;
+              if (process.argv[3] === 'ambiguity') throw new Error('synthetic adapter lost result');
+              return { status: 'SUCCEEDED' };
+            } },
+            recordObservation: async () => {},
+          });
+          const first = await runner.perform({ action: 'READ_CURRENT' });
+          const second = await runner.perform({ action: 'READ_CURRENT' });
+          process.stdout.write(JSON.stringify({ session, first, second, calls }));
+        }
       } catch { process.stderr.write('native session failed'); process.exitCode = 78; }
     """
     result = subprocess.run(  # noqa: S603 - owned native client with secret on stdin, no shell
@@ -1743,6 +1868,10 @@ def test_native_execution_session_real_http(
             script,
             native_receiver_command.with_name("dispatch-receiver.js").as_uri(),
             str(config),
+            mode,
+            (
+                native_receiver_command.parents[3] / "packages/at-adapters/voiceover/dist/index.js"
+            ).as_uri(),
         ],
         input=json.dumps(
             {
@@ -1765,14 +1894,38 @@ def test_native_execution_session_real_http(
     # JS private fields must not serialize even if somebody prints the entire session object.
     assert set(output["session"]) == {"receipt"}
     assert output["session"]["receipt"]["reference"] == reference
-    assert output["intent"]["meaning"] == "ACTION_INTENT_RETAINED"
-    assert output["duplicateRefused"] is True
+    if mode == "intent":
+        assert output["intent"]["meaning"] == "ACTION_INTENT_RETAINED"
+        assert output["duplicateRefused"] is True
+    else:
+        assert output["first"]["status"] == ("AMBIGUOUS" if mode == "ambiguity" else "SUCCEEDED")
+        assert output["second"]["status"] == ("REFUSED" if mode == "ambiguity" else "SUCCEEDED")
+        assert output["calls"] == (1 if mode == "ambiguity" else 2)
+        journal = [
+            json.loads(line) for line in Path(str(config) + ".actions").read_text().splitlines()
+        ]
+        assert len(journal) == (2 if mode == "ambiguity" else 4)
+        assert all(entry["serverActionId"] for entry in journal)
     with workspace_connection(db, WS) as conn:
         action = conn.execute(
             "SELECT action,dispatched_at,result_at FROM runner_action WHERE run_id=%s",
             (ref.run_id,),
         ).fetchall()
-        assert action == [{"action": "READ_CURRENT", "dispatched_at": None, "result_at": None}]
+        if mode == "intent":
+            assert action == [{"action": "READ_CURRENT", "dispatched_at": None, "result_at": None}]
+        else:
+            assert len(action) == (1 if mode == "ambiguity" else 2)
+            assert all(
+                item["dispatched_at"] is not None and item["result_at"] is not None
+                for item in action
+            )
+            state = run_store.load_run(conn, run_id=ref.run_id).state
+            assert (state.status.value, state.outcome.value) == (
+                ("INTERRUPTED", "INCONCLUSIVE")
+                if mode == "ambiguity"
+                else ("RUNNING", "NOT_EVALUATED")
+            )
+            assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
         for statement in (
             "UPDATE supervisor_execution_session SET token_digest=repeat('a',64)",
             "UPDATE supervisor_execution_session SET expires_at=expires_at+interval '1 second'",

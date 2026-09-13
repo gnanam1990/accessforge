@@ -193,7 +193,11 @@ def test_manual_approval_migration_preserves_old_decisions_without_creating_cons
             (approval, WS, actor, target),
         )
         before = conn.execute("SELECT * FROM approval").fetchall()
-    assert migrate(disposable) == ["0034_manual_execution_approval.sql", NEWEST]
+    assert migrate(disposable) == [
+        "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
+        NEWEST,
+    ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM approval").fetchall() == before
         assert conn.execute(
@@ -221,6 +225,7 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -246,6 +251,7 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -302,6 +308,7 @@ def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authori
     assert migrate(disposable) == [
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -331,6 +338,7 @@ def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) ->
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -374,6 +382,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -404,6 +413,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -451,6 +461,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -515,6 +526,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -563,6 +575,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
         "0034_manual_execution_approval.sql",
+        "0035_supervisor_dispatch_ticket.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:

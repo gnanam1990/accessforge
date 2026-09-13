@@ -647,6 +647,22 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: true,
     authenticated: true,
   },
+  'commit_supervisor_action_dispatch': {
+    operationId: 'commit_supervisor_action_dispatch',
+    method: 'POST',
+    path: '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/dispatch',
+    parameters: ['workspace_id', 'session_id', 'action_id'],
+    mutating: true,
+    authenticated: true,
+  },
+  'record_supervisor_action_result': {
+    operationId: 'record_supervisor_action_result',
+    method: 'POST',
+    path: '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/result',
+    parameters: ['workspace_id', 'session_id', 'action_id'],
+    mutating: true,
+    authenticated: true,
+  },
   'read_usage': {
     operationId: 'read_usage',
     method: 'GET',
@@ -732,6 +748,8 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/accept',
   '/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/session',
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/action-intents',
+  '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/dispatch',
+  '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/result',
   '/v1/workspaces/{workspace_id}/usage',
   '/v1/workspaces/{workspace_id}/verifications/{verification_id}',
 ]

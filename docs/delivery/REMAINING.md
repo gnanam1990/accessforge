@@ -102,9 +102,12 @@ bootstrap receiver with durable replay fencing are implemented; production reade
 transport remains unavailable by default. A bootstrap receipt does not authorize an OS action.
 Automatic expired/revoked/lease-lost manual-handoff recovery now has a scoped periodic worker;
 it interrupts/quarantines but never restarts the desktop.
-Native machine sessions and current-authority action-intent retention are now connected through
-real HTTP; the native client stops with an unresolved intent and does not drive the OS. Still pending:
-physical dispatch/result and local-journal integration, reader/observer execution and finalization,
+Native machine sessions, current-authority action intents, one-shot dispatch commitments and exact
+result acknowledgements are connected through real HTTP. The authenticated runner now composes
+the local fsynced journal, mandatory live physical guards and existing reader-adapter interface.
+Lost acknowledgements or ambiguity fence further input; ambiguous results interrupt/quarantine.
+This bridge was exercised with synthetic physical adapters, not a live reader. Still pending:
+concrete production physical guards and reader startup, observer ingestion/closure and finalization,
 remaining action/build UNKNOWN recovery,
 and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;

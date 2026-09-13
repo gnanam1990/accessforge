@@ -5,6 +5,7 @@ import {
 } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import type { ActionCommand } from './supervisor.js';
 
 export interface DispatchReference {
   readonly workspaceId: string;
@@ -226,7 +227,7 @@ async function receive(config: ReceiverConfig, input: unknown, sessionSecret?: s
 }
 
 /** In-memory machine credential. No secret in JSON/inspection output and no restart/resume path.
- * This client retains an intent only. It imports no reader and grants no physical OS capability.
+ * This client carries action commitments/results. It imports no reader and grants no physical OS capability.
  */
 export class NativeExecutionSession {
   #secret: string;
@@ -234,6 +235,10 @@ export class NativeExecutionSession {
   #sessionId: string;
   #deadline: number;
   #intentPending = false;
+  #current: { id: string; sequence: number; command: Record<string, unknown> } | undefined;
+  #committed = false;
+  #busy = false;
+  #fenced = false;
   readonly receipt: Readonly<Record<string, unknown>>;
 
   private constructor(config: ReceiverConfig, secret: string, receipt: Record<string, unknown>) {
@@ -252,7 +257,7 @@ export class NativeExecutionSession {
   }
 
   async retainIntent(command: unknown): Promise<Readonly<Record<string, unknown>>> {
-    if (this.#intentPending || performance.now() >= this.#deadline) {
+    if (this.#fenced || this.#intentPending || performance.now() >= this.#deadline) {
       throw new ReceiverRefused('session expired or has an unresolved intent; never replay');
     }
     if (command === null || typeof command !== 'object' || Array.isArray(command)) {
@@ -266,8 +271,8 @@ export class NativeExecutionSession {
     const body = JSON.stringify(row);
     if (Buffer.byteLength(body) > 4096) throw new ReceiverRefused('action intent exceeds bound');
     // Reserve before awaiting any request. Lost acknowledgement cannot clear the local fence.
-    // Resolution/OS dispatch belongs to the future journal/result integration, not this client.
     this.#intentPending = true;
+    const retained = JSON.parse(body) as Record<string, unknown>;
     const abort = new AbortController();
     const timeout = Math.min(this.#config.timeoutMs ?? 5000, this.#deadline - performance.now());
     const timer = setTimeout(() => abort.abort(), Math.max(1, Math.floor(timeout)));
@@ -279,8 +284,9 @@ export class NativeExecutionSession {
       if (response.status !== 201) throw new Error('response');
       const result = exactObject(await boundedJson(response), ['actionId', 'sessionId', 'sequence', 'meaning']);
       uuid(result.actionId);
-      if (uuid(result.sessionId) !== this.#sessionId || result.sequence !== row.sequence ||
+      if (uuid(result.sessionId) !== this.#sessionId || result.sequence !== retained.sequence ||
           result.meaning !== 'ACTION_INTENT_RETAINED' || performance.now() >= this.#deadline) throw new Error('identity');
+      this.#current = { id: uuid(result.actionId), sequence: Number(result.sequence), command: retained };
       return Object.freeze(result);
     } catch {
       throw new ReceptionUnknown('action intent reception unknown; retain fencing and reconcile');
@@ -288,5 +294,75 @@ export class NativeExecutionSession {
       clearTimeout(timer);
       abort.abort();
     }
+  }
+
+  async #post(path: string, payload: object): Promise<unknown> {
+    const remaining = this.#deadline - performance.now();
+    if (remaining <= 0) { this.#fenced = true; throw new ReceiverRefused('session expired'); }
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), Math.max(1, Math.floor(Math.min(remaining, this.#config.timeoutMs ?? 5000))));
+    try {
+      const url = new URL(`/v1/workspaces/${this.#config.localReference.workspaceId}/supervisor-sessions/${this.#sessionId}/${path}`, this.#config.apiOrigin);
+      const response = await fetch(url, { method: 'POST', body: JSON.stringify(payload),
+        headers: { Authorization: `Bearer ${this.#secret}`, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        redirect: 'error', credentials: 'omit', signal: abort.signal });
+      if (response.status !== 200) throw new Error('response');
+      const result = await boundedJson(response);
+      if (performance.now() >= this.#deadline) throw new Error('deadline');
+      return result;
+    } catch {
+      this.#fenced = true;
+      throw new ReceptionUnknown('action acknowledgement unknown; no retry or resumed input');
+    } finally { clearTimeout(timer); abort.abort(); }
+  }
+
+  async commitDispatch(actionId: string, origin: string): Promise<ActionCommand> {
+    const current = this.#current;
+    if (this.#fenced || this.#busy || this.#committed || current?.id !== actionId) {
+      throw new ReceiverRefused('dispatch identity unavailable or already committed');
+    }
+    this.#committed = true;
+    this.#busy = true;
+    try {
+      const result = exactObject(await this.#post(`actions/${current.id}/dispatch`, { origin }),
+        ['sessionId', 'command', 'meaning']);
+      const expected = current.command;
+      const keys = ['actionId', 'sequence', 'action',
+        ...(expected.action === 'KEY_CHORD' ? ['keyChord'] : []),
+        ...(expected.action === 'TYPE_TEXT' ? ['text'] : [])];
+      const command = exactObject(result.command, keys);
+      if (uuid(result.sessionId) !== this.#sessionId || result.meaning !== 'ACTION_DISPATCH_COMMITTED' ||
+          uuid(command.actionId) !== current.id || command.sequence !== current.sequence ||
+          command.action !== expected.action || command.keyChord !== expected.keyChord ||
+          (expected.action === 'TYPE_TEXT' && (typeof command.text !== 'string' || command.text.length > 4096))) {
+        throw new Error('command identity');
+      }
+      return Object.freeze(command) as unknown as ActionCommand;
+    } catch {
+      this.#fenced = true;
+      throw new ReceptionUnknown('dispatch commitment unknown; never dispatch or replay');
+    } finally { this.#busy = false; }
+  }
+
+  async completeAction(actionId: string, status: 'SUCCEEDED' | 'FAILED' | 'AMBIGUOUS'): Promise<void> {
+    if (this.#busy || this.#current?.id !== actionId ||
+        (status !== 'AMBIGUOUS' && (this.#fenced || !this.#committed))) {
+      throw new ReceiverRefused('action result identity unavailable');
+    }
+    this.#busy = true;
+    try {
+      const result = exactObject(await this.#post(`actions/${actionId}/result`, { status }),
+        ['sessionId', 'actionId', 'status', 'meaning']);
+      if (uuid(result.sessionId) !== this.#sessionId || uuid(result.actionId) !== actionId ||
+          result.status !== status || result.meaning !== 'ACTION_RESULT_RETAINED') throw new Error('identity');
+      if (status === 'AMBIGUOUS') this.#fenced = true;
+      // Only this exact successful acknowledgement clears the pending gate. A lost reply does not.
+      this.#current = undefined;
+      this.#intentPending = false;
+      this.#committed = false;
+    } catch {
+      this.#fenced = true;
+      throw new ReceptionUnknown('action result acknowledgement unknown; retain fencing');
+    } finally { this.#busy = false; }
   }
 }
