@@ -27,6 +27,7 @@ import { useResource } from '../api/useResource'
 import { workspacePath } from '../routes/routeMap'
 import { useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
+import { FindingsSection } from './FindingsSection'
 
 /** Why this run needs a person, or null. Read from server-owned fields, never derived. */
 const attentionFor = (run: Run): string | null => {
@@ -54,6 +55,7 @@ export const OverviewScreen = (): JSX.Element => {
   return (
     <>
       <RouteHeading>Overview</RouteHeading>
+      <FindingsSection workspaceId={workspaceId} />
 
       <section className="af-stack">
         <h2>Needs attention</h2>

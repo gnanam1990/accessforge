@@ -28,6 +28,7 @@ import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
 import { useFindingId } from './useFindingId'
+import { FindingDiagnosisSection } from './FindingDiagnosisSection'
 
 /** What each status means, in the words a reader needs rather than the enum's. */
 const STATUS_MEANING: Record<string, string> = {
@@ -35,7 +36,7 @@ const STATUS_MEANING: Record<string, string> = {
     'Proposed from evidence and not yet reproduced. It describes one execution, and nothing has ' +
     'established that it happens again.',
   REPRODUCED:
-    'Seen again in a complete, valid, failed run. This is the status that required evidence rather ' +
+    'Supported by a complete, valid, failed run. This is the status that required evidence rather ' +
     'than agreement.',
   DISMISSED: 'Judged not to be a defect. The evidence it was raised from is unchanged.',
   RESOLVED:
@@ -88,6 +89,8 @@ export const FindingScreen = (): JSX.Element => {
             </dl>
           </section>
 
+          <FindingDiagnosisSection history={detail.diagnoses} />
+
           <section className="af-stack">
             <h2>What people said</h2>
             {detail.humanAssessments.length === 0 ? (
@@ -127,9 +130,9 @@ export const FindingScreen = (): JSX.Element => {
               </ul>
             )}
 
-            <Notice tone="information" heading="How to read these two sections" headingLevel={3}>
+            <Notice tone="information" heading="How to read these separate claims" headingLevel={3}>
               <p>
-                They are different kinds of claim and neither overrides the other. An accepted review
+                These are different kinds of claim and none overrides another. An accepted review
                 cannot make an inconclusive run pass, and a machine outcome does not settle whether a
                 repair is acceptable to a person.
               </p>
