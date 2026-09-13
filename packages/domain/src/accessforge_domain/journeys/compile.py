@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from accessforge_domain.canonical import digest
 
-from .dsl import JourneyDraft, JourneyVersion
+from .dsl import JourneyDraft, JourneyError, JourneyVersion
 from .validation import validate_draft
 
 
@@ -40,6 +40,13 @@ class CompiledJourney:
 def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> CompiledJourney:
     """Validate and compile a draft. Deterministic for a given draft."""
     validate_draft(draft)
+    if any(
+        a.evaluation_rule is not None
+        and a.evaluation_rule.action_sequence is not None
+        and a.evaluation_rule.action_sequence > draft.budget.max_actions
+        for a in draft.assertions.assertions
+    ):
+        raise JourneyError("assertion action sequence exceeds the frozen action budget")
 
     assertion_set_digest = digest(draft.assertions.canonical_form())
 
@@ -102,6 +109,9 @@ def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> Co
     )
 
     reviewer_summary: dict[str, object] = {
+        # Stored on the protected reviewer side, never copied into navigator_policy. This is the
+        # original complete contract (including optional assertions), not a reconstruction of prose.
+        "assertionContract": draft.assertions.canonical_form(),
         "journey": draft.name,
         "platform": draft.platform,
         "whatItWillTry": draft.intent.summary,
@@ -117,6 +127,11 @@ def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> Co
                 "mustBeTrue": a.description,
                 "decidedBy": a.observer.value,
                 "canBeUnknownWhen": sorted(r.value for r in a.unknown_reasons),
+                **(
+                    {"evaluationRule": a.evaluation_rule.canonical_form()}
+                    if a.evaluation_rule is not None
+                    else {}
+                ),
             }
             for a in draft.assertions.required
         ],

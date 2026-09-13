@@ -122,11 +122,18 @@ quarantine reservations, create-only storage and bounded readback make interrupt
 resumable with identical bytes; corrupt, conflicting or deleted evidence is never overwritten.
 This has real PostgreSQL/MinIO/CLI proof with synthetic journals, not deployed spool attestation.
 Still pending: concrete production physical guards and reader startup, observer deployment/role
-isolation, trusted spool/service deployment, assertion derivation and final verdict admission,
+isolation, trusted spool/service deployment and final verdict admission,
 remaining action/build UNKNOWN recovery,
 and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;
 neither synthetic desktop metadata nor backend regressions establish an actual-reader repair.
+
+Frozen executable assertion rules now round-trip through journey authoring and the immutable
+reviewer contract with sealed-digest verification. Literal action-bound reader derivation and
+independent observer-authored final effect-count conditions are implemented, preserving UNKNOWN
+and keeping expectations out of navigator policy. No prose inference or historical backfill.
+Remaining evaluator work includes final evidence/identity admission and persisted verdict, typed
+focus/order/effect-monitor/functional predicates and trusted producers, plus UI rule authoring.
 
 ### P7 — `fixture_digest` offline-guess exposure
 An unkeyed SHA-256 over low-entropy fixture values; anyone holding an export can test guesses

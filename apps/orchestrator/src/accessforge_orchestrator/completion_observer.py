@@ -25,9 +25,18 @@ from accessforge_domain.authorization import (
 )
 from accessforge_domain.canonical import digest
 from accessforge_domain.evaluation.observer import ObserverError
+from accessforge_domain.evaluation.rules import observer_count_assertions
+from accessforge_domain.journeys.assertions import AssertionSet
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.timestamps import to_rfc3339_utc
-from accessforge_persistence import fixtures, projects, runners, sequencer, workspace_connection
+from accessforge_persistence import (
+    fixtures,
+    journeys,
+    projects,
+    runners,
+    sequencer,
+    workspace_connection,
+)
 from accessforge_persistence.evidence.observer import ApplicationObserver
 from accessforge_persistence.evidence.session import observer_producer
 
@@ -133,6 +142,19 @@ def _context(
         (run_id, ticket["attempt_id"]),
     ).fetchone()
     assert last is not None
+    journey = conn.execute(
+        "SELECT reviewer_summary FROM journey_version WHERE id=%s", (manifest["journeyVersionId"],)
+    ).fetchone()
+    assertion_contract = None
+    if journey is not None and "assertionContract" in journey["reviewer_summary"]:
+        try:
+            assertion_contract = journeys.load_assertion_contract(
+                conn,
+                version_id=manifest["journeyVersionId"],
+                expected_digest=manifest["assertionSetDigest"],
+            ).canonical_form()
+        except journeys.JourneyPersistenceError as exc:
+            raise Refused("original assertion contract differs from the seal") from exc
     return {
         "workspace": workspace_id,
         "run": run_id,
@@ -140,6 +162,8 @@ def _context(
         "lease": str(ticket["lease_id"]),
         "epoch": int(ticket["epoch"]),
         "manifestDigest": digest(manifest),
+        "assertionSetDigest": manifest["assertionSetDigest"],
+        "assertionContract": assertion_contract,
         "fixtureId": str(fixture["id"]),
         "fixtureNonce": fixture["nonce"],
         "templateDigest": fixture["template_digest"],
@@ -252,6 +276,14 @@ def measure_once(
         if sequence > 128:
             raise Refused("independent observer record budget exhausted")
         source = {
+            "assertionSetDigest": after["assertionSetDigest"],
+            "assertionObservations": observer_count_assertions(
+                AssertionSet.from_canonical_form(after["assertionContract"]),
+                effect="CREATE_TEST_REQUEST",
+                count=count,
+            )
+            if final_sample and after["assertionContract"] is not None
+            else [],
             "effect": "CREATE_TEST_REQUEST",
             "fixtureInstanceId": after["fixtureId"],
             "afterActionSequence": after["afterActionSequence"],
