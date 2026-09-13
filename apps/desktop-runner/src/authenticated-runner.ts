@@ -13,6 +13,7 @@ export interface ExecutionSessionPort {
   commitDispatch(actionId: string, origin: string): Promise<ActionCommand>;
   completeAction(actionId: string, status: 'SUCCEEDED' | 'FAILED' | 'AMBIGUOUS'): Promise<void>;
   retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string): Promise<void>;
+  retainRuntimePreflight(command: ActionCommand, report: PreflightReport, capturedAtUtc: string): Promise<void>;
   finish(): Promise<Readonly<Record<string, unknown>>>;
 }
 
@@ -86,8 +87,8 @@ export class AuthenticatedRunner {
       dispatch: async () => {
         const command = this.#serverCommand;
         const before = options.clock.monotonic();
-        await this.#checkPhysical();
         if (command === undefined) throw new Error('physical action identity unavailable');
+        await this.#checkPhysical(command);
         await bounded(options.authorizePhysicalAction(command), this.#remaining());
         const origin = await bounded(options.observeOrigin(), this.#remaining());
         // A timed-out preflight may resolve later. It must not then send an OS action.
@@ -108,11 +109,17 @@ export class AuthenticatedRunner {
       this.options.lease.deadlineMonotonic - this.options.clock.monotonic());
   }
 
-  async #checkPhysical(): Promise<void> {
+  async #checkPhysical(command?: ActionCommand): Promise<void> {
     const report = await bounded(this.options.preflight(), this.#remaining());
+    // Snapshot the decision before awaiting retention; mutation of a producer-owned report must
+    // not turn the submitted UNKNOWN/FALSE observation into permission to enter the adapter.
+    const passed = PREFLIGHT_CHECKS.every((key) => report.checks[key]?.condition === 'TRUE');
+    if (command !== undefined) {
+      if (!this.#executing || this.#stopping || this.#fenced || this.#remaining() <= 0) throw new Error('runtime preflight fenced');
+      await bounded(this.options.session.retainRuntimePreflight(command, report, this.options.clock.utc()), this.#remaining());
+    }
     // Require the complete vocabulary, not an empty caller-supplied object passing every().
-    const checks = report.checks as Record<string, { condition: string }>;
-    if (PREFLIGHT_CHECKS.some((key) => checks[key]?.condition !== 'TRUE')) throw new Error('physical preflight unavailable');
+    if (!passed) throw new Error('physical preflight unavailable');
   }
 
   requestCancellation(): void {

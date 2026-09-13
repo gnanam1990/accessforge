@@ -6,7 +6,7 @@ import {
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { digest } from '@accessforge/contracts';
-import type { RawObservation, UnknownObservation } from '@accessforge/at-voiceover';
+import { PREFLIGHT_CHECKS, type PreflightReport, type RawObservation, type UnknownObservation } from '@accessforge/at-voiceover';
 import type { ActionCommand } from './supervisor.js';
 import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from './reader-startup-consent.js';
 
@@ -254,6 +254,7 @@ export class NativeExecutionSession {
   #fenced = false;
   #observationSequence = 0;
   #observationPending = false;
+  #runtimePreflightPending = false;
   #stopActionId: string | undefined;
   #finishStarted = false;
   readonly receipt: Readonly<Record<string, unknown>>;
@@ -437,9 +438,37 @@ export class NativeExecutionSession {
       this.#intentPending = false;
       this.#committed = false;
       this.#observationPending = false;
+      this.#runtimePreflightPending = false;
     } catch {
       this.#fenced = true;
       throw new ReceptionUnknown('action result acknowledgement unknown; retain fencing');
+    } finally { this.#busy = false; }
+  }
+
+  async retainRuntimePreflight(command: ActionCommand, report: PreflightReport, capturedAtUtc: string): Promise<void> {
+    if (this.#busy || this.#fenced || !this.#committed || this.#runtimePreflightPending ||
+        this.#current?.id !== command.actionId || this.#current.sequence !== command.sequence) {
+      throw new ReceiverRefused('runtime preflight identity unavailable');
+    }
+    this.#busy = true;
+    this.#runtimePreflightPending = true;
+    try {
+      const checks = Object.fromEntries(PREFLIGHT_CHECKS.map((key) => [key, report.checks[key]?.condition]));
+      if (Object.keys(report.checks).length !== PREFLIGHT_CHECKS.length ||
+          Object.values(checks).some((value) => !['TRUE', 'FALSE', 'UNKNOWN'].includes(value))) throw new Error('runtime checks incomplete');
+      // Only closed conditions leave the host. Probe diagnostics may contain private host paths,
+      // account names or source URLs and are deliberately not transmitted.
+      const sourceRecord = { actionId: command.actionId, actionSequence: command.sequence, capturedAtUtc, checks };
+      const sourceRecordDigest = digest(sourceRecord);
+      const result = exactObject(await this.#post(`actions/${command.actionId}/preflight`, { sourceRecord, sourceRecordDigest }),
+        ['sessionId', 'actionId', 'eventId', 'sourceRecordDigest', 'meaning']);
+      if (uuid(result.sessionId) !== this.#sessionId || uuid(result.actionId) !== command.actionId ||
+          result.sourceRecordDigest !== sourceRecordDigest ||
+          result.meaning !== 'RUNTIME_PREFLIGHT_RETAINED_NOT_IDENTITY_ATTESTATION') throw new Error('runtime receipt identity');
+      uuid(result.eventId);
+    } catch {
+      this.#fenced = true;
+      throw new ReceptionUnknown('runtime preflight acknowledgement unknown; no physical input or replay');
     } finally { this.#busy = false; }
   }
 
