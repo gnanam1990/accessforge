@@ -781,8 +781,33 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
     endpoint_receipts: list[dict[str, Any]] = []
 
     def browser_endpoint_probe(gateway: CandidateGateway) -> None:
+        from accessforge_persistence import candidate_observations
+
         receipt = gateway.receipt()
         observation = gateway.observe_artifact()
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            retained_observations = candidate_observations.list_for_attempt(
+                conn, attempt_id=gateway.binding.task_id
+            )
+            assert len(retained_observations) == 1
+            measured = retained_observations[0]
+            assert measured["receipt"]["observation"] == observation
+            assert measured["receipt"]["endpointBindingDigest"] == receipt["bindingDigest"]
+            assert measured["receipt"]["runtimePolicyDigest"] == runner.policy_digest()
+            assert measured["receipt"]["runId"] is None
+            assert measured["receipt"]["leaseId"] is None
+            assert measured["receiptDigest"] == digest(measured["receipt"])
+            for statement in (
+                "UPDATE candidate_artifact_observation SET ordinal=99",
+                "DELETE FROM candidate_artifact_observation",
+            ):
+                with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                    conn.execute(statement)
+        with workspace_connection(binding.database, str(uuid.uuid4())) as conn:
+            assert (
+                candidate_observations.list_for_attempt(conn, attempt_id=gateway.binding.task_id)
+                == []
+            )
         assert observation["artifactDigest"] == retained.archive_digest
         assert observation["artifactTreeDigest"] == retained.tree_digest
         assert observation["candidateId"] == gateway.binding.candidate_id
@@ -932,6 +957,12 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
         on_candidate_endpoint=browser_endpoint_probe,
     )
     assert len(endpoint_receipts) == 1
+    from accessforge_persistence import candidate_observations
+
+    with workspace_connection(binding.database, binding.workspace) as conn:
+        observations = candidate_observations.list_for_attempt(conn, attempt_id=regression.task_id)
+        assert len(observations) >= 5
+        assert [row["ordinal"] for row in observations] == list(range(1, len(observations) + 1))
     assert endpoint_receipts[0]["taskId"] == regression.task_id
     assert regression.artifact_digest == retained.archive_digest
     assert "exact_independent_database_receipt" in regression.checks
