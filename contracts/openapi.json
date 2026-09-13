@@ -5458,7 +5458,7 @@
     },
     "/v1/workspaces/{workspace_id}/projects/{project_id}/seals": {
       "post": {
-        "description": "Seal a manifest over every input a run's identity depends on.\n\nThis is the route a run is requested against. `POST /runs` refuses a digest nothing sealed, so\nuntil this existed a manifest could only be produced by writing SQL \u2014 which meant the product's\ncentral identity step had no surface at all, and the check that would have revealed it was\nmissing.\n\nThe environment is validated first by `seal_run`: sealing against a revoked, expired or\nsuperseded environment would produce a manifest that looked authoritative and was never\nauthorized.\n\nA digest is deliberately **not** unique. Two seals over identical inputs share one, which is how\na baseline and a candidate are shown to differ only by an approved patch (INV-04). Sealing twice\nis therefore not an error, and a caller who wants one seal per attempt supplies an\n`Idempotency-Key`.",
+        "description": "Seal a manifest over every input a run's identity depends on.\n\nThis is the route a run is requested against. `POST /runs` refuses a digest nothing sealed, so\nuntil this existed a manifest could only be produced by writing SQL \u2014 which meant the product's\ncentral identity step had no surface at all, and the check that would have revealed it was\nmissing.\n\nThe environment is validated first by `seal_run`: sealing against a revoked, expired or\nsuperseded environment would produce a manifest that looked authoritative and was never\nauthorized.\n\nSupply `execution` with exactly `journeyVersionId`, `expiresAt`, `actionBudget`,\n`wallTimeBudgetSeconds`, and `permittedEffects` to seal a complete RunManifest. Run and\nauthorization IDs are reserved by the server, not approved. Review `canonicalManifest` before\nseparately authorizing execution. This operation neither requests a run nor issues approval.\n\nOmitting execution preserves legacy input-fingerprint creation, explicitly labeled in the\nresponse. Identical legacy inputs share a digest; canonical execution identities do not.\nAn `Idempotency-Key` replays the same reservation instead of allocating another pair of IDs.",
         "operationId": "seal_manifest",
         "parameters": [
           {
@@ -5603,6 +5603,602 @@
           }
         ],
         "summary": "Seal Manifest",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/seals/{sealed_manifest_id}": {
+      "get": {
+        "description": "Read exact immutable execution scope for review, including expired historical seals.\n\nThis is stored provenance, not evidence of deployment, issued approval, or completed execution.\nLegacy input fingerprints have no canonicalManifest; missing history is never backfilled.",
+        "operationId": "inspect_seal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sealed_manifest_id",
+            "required": true,
+            "schema": {
+              "title": "Sealed Manifest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Inspect Seal",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Inspect Seal",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/seals/{sealed_manifest_id}/approval": {
+      "get": {
+        "description": "Inspect an issued decision, including revoked/expired history; not dispatch readiness.",
+        "operationId": "inspect_execution_approval",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sealed_manifest_id",
+            "required": true,
+            "schema": {
+              "title": "Sealed Manifest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Inspect Execution Approval",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Inspect Execution Approval",
+        "tags": [
+          "projects"
+        ]
+      },
+      "post": {
+        "description": "Issue exact manual RUN_EFFECTS consent, not PATCH_APPLY or a standing grant.\n\nRequires RUN_APPROVE, CSRF, the reviewed manifestDigest, a bounded expiresAt, and If-Match\ncontaining the seal's revision returned by GET (not its digest ETag). The immutable seal is\nthe approval target; its canonical payload binds the exact run. No run starts here.",
+        "operationId": "approve_execution_seal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sealed_manifest_id",
+            "required": true,
+            "schema": {
+              "title": "Sealed Manifest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Execution Seal",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Approve Execution Seal",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/projects/{project_id}/seals/{sealed_manifest_id}/approval/revocation": {
+      "post": {
+        "description": "Irreversibly withdraw this exact approval. Does not claim already-started work stopped.",
+        "operationId": "revoke_execution_approval",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sealed_manifest_id",
+            "required": true,
+            "schema": {
+              "title": "Sealed Manifest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revoke Execution Approval",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Revoke Execution Approval",
         "tags": [
           "projects"
         ]
@@ -8167,6 +8763,134 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/runs/{run_id}/evaluation": {
+      "get": {
+        "operationId": "get_evaluation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Evaluation",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Get Evaluation",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/runs/{run_id}/events": {
       "get": {
         "description": "Paginated canonical replay.\n\n`exhausted` is true only for a short page. A full page cannot distinguish \"four events exist\"\nfrom \"four events exist so far\", and reporting exhaustion on one would stop a reader a page\nearly whenever the total is a multiple of the page size.",
@@ -10119,6 +10843,1245 @@
         "summary": "Configure Retention",
         "tags": [
           "settings"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/accept": {
+      "post": {
+        "description": "Machine-only one-time admission; a browser session is never a supervisor credential.\n\nNo OS action, actual-reader observation or outcome is produced. A duplicate after a lost\nresponse is refused; the controller must reconcile, not launch another attempt.",
+        "operationId": "accept_supervisor_dispatch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Accept Supervisor Dispatch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Accept Supervisor Dispatch",
+        "tags": [
+          "runners"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/session": {
+      "post": {
+        "description": "Atomically accept once and bind an independent receiver-generated machine secret.\n\nThe secret never appears in the response. This is separate from bootstrap-only /accept;\nan already-consumed ticket cannot later acquire a session or recover a lost acknowledgement.",
+        "operationId": "open_supervisor_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Open Supervisor Session",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Open Supervisor Session",
+        "tags": [
+          "runners"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/action-intents": {
+      "post": {
+        "description": "Authenticate current exact-attempt authority and retain one unresolved action intent.\n\nReceipt is neither an OS dispatch permit nor an observation/result. Physical pre-action\nwatchdog, origin/focus, deployed identity/effect checks and local journal remain mandatory.",
+        "operationId": "retain_supervisor_action_intent",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retain Supervisor Action Intent",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Retain Supervisor Action Intent",
+        "tags": [
+          "runners"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/dispatch": {
+      "post": {
+        "operationId": "commit_supervisor_action_dispatch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Commit Supervisor Action Dispatch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Commit Supervisor Action Dispatch",
+        "tags": [
+          "runners"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/observation": {
+      "post": {
+        "operationId": "retain_supervisor_reader_observation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retain Supervisor Reader Observation",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Retain Supervisor Reader Observation",
+        "tags": [
+          "runners"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/result": {
+      "post": {
+        "operationId": "record_supervisor_action_result",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Record Supervisor Action Result",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Record Supervisor Action Result",
+        "tags": [
+          "runners"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/finish": {
+      "post": {
+        "operationId": "finish_supervisor_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Finish Supervisor Session",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Finish Supervisor Session",
+        "tags": [
+          "runners"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/startup-authority": {
+      "post": {
+        "description": "Read current machine/run authority, not reader-settings consent or physical readiness.\n\nPOST creates no approval, action, event, lease or extended lifetime. Operator authorization\nfor SDK startup and fresh physical checks remain independently mandatory.",
+        "operationId": "check_supervisor_startup_authority",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Check Supervisor Startup Authority",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Check Supervisor Startup Authority",
+        "tags": [
+          "runners"
         ]
       }
     },

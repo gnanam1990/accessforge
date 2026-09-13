@@ -38,14 +38,8 @@ import { freezeJourneyVersion, getJourneyCapabilities } from '../api/resources'
 import type { FrozenVersion, JourneyCapabilities } from '../api/resources'
 import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
-
-interface AssertionRow {
-  readonly assertionId: string
-  readonly kind: string
-  readonly description: string
-  readonly required: boolean
-  readonly unknownReasons: readonly string[]
-}
+import { AssertionEditor, serializeAssertionRule, validateAssertionRules } from './AssertionEditor'
+import type { AssertionRow } from './AssertionEditor'
 
 const STARTING_ASSERTIONS: readonly AssertionRow[] = [
   {
@@ -144,6 +138,7 @@ export const JourneyAuthoringSection = ({
 
   const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
+    if (busy) return
     setSubmissionId((current) => current + 1)
     setUnsupported(null)
     setFrozen(null)
@@ -175,14 +170,6 @@ export const JourneyAuthoringSection = ({
         message: 'Choose at least one action. A journey that may take none cannot do anything.',
       })
     }
-    assertions.forEach((assertion, index) => {
-      if (assertion.description.trim() === '') {
-        found.push({
-          fieldId: assertionsId,
-          message: `Assertion ${index + 1} needs a description a reviewer can read.`,
-        })
-      }
-    })
 
     // Checked here rather than left to `min` and `max`: the form is `noValidate`, so the browser
     // enforces neither. `Number('')` is 0 and `Number('1e')` is NaN, which `JSON.stringify` writes
@@ -206,6 +193,7 @@ export const JourneyAuthoringSection = ({
       return value
     }
     const actionCeiling = budgetNumber(maxActions, maxActionsId, 'Maximum actions', limits.maxActions)
+    found.push(...validateAssertionRules(assertions, limits, actionCeiling, assertionsId))
     const timeCeiling = budgetNumber(
       wallTime,
       wallTimeId,
@@ -235,6 +223,7 @@ export const JourneyAuthoringSection = ({
         description: assertion.description.trim(),
         required: assertion.required,
         unknownReasons: assertion.unknownReasons,
+        ...serializeAssertionRule(assertion),
       })),
       fixture: {
         templateId: template.trim(),
@@ -276,7 +265,7 @@ export const JourneyAuthoringSection = ({
               ? navigatorValuesId
               : field === 'budget'
                 ? maxActionsId
-                : field === 'assertions'
+                : typeof field === 'string' && field.startsWith('assertions')
                   ? assertionsId
                   : nameId
         setErrors([{ fieldId: target, message: outcome.problem.detail }])
@@ -588,37 +577,27 @@ export const JourneyAuthoringSection = ({
                 </p>
                 {assertions.map((assertion, index) => (
                   <div key={assertion.assertionId} className="af-stack">
-                    <FormField
-                      label={`Assertion ${index + 1} description`}
-                      hint={`Kind: ${assertion.kind}. This sentence is the truth condition a reviewer reads.`}
-                      required
-                    >
-                      {({ id, describedBy, invalid }) => (
-                        <input
-                          id={id}
-                          value={assertion.description}
-                          aria-describedby={describedBy}
-                          aria-invalid={invalid || undefined}
-                          onChange={(event) =>
-                            setAssertions((current) =>
-                              current.map((row, position) =>
-                                position === index
-                                  ? { ...row, description: event.target.value }
-                                  : row,
-                              ),
-                            )
-                          }
-                        />
-                      )}
-                    </FormField>
+                    <AssertionEditor row={assertion} index={index} prefix={assertionsId} policy={policy}
+                      errors={errors} disabled={busy}
+                      onChange={(value) => setAssertions((current) => current.map((row) =>
+                        row.assertionId === value.assertionId ? value : row))} />
+                    {assertion.kind === 'REQUIRED_ANNOUNCEMENT' && <Button disabled={busy}
+                      onClick={() => {
+                        setAssertions((current) => current.filter((row) => row.assertionId !== assertion.assertionId))
+                        setErrors([])
+                        announce(`Assertion ${index + 1} removed from this draft.`)
+                        document.getElementById(`${assertionsId}-add`)?.focus()
+                      }}>Remove assertion {index + 1}</Button>}
                   </div>
                 ))}
                 <Button
+                  id={`${assertionsId}-add`}
+                  disabled={busy || !policy.assertionKinds.includes('REQUIRED_ANNOUNCEMENT')}
                   onClick={() =>
                     setAssertions((current) => [
                       ...current,
                       {
-                        assertionId: `announcement-${current.length}`,
+                        assertionId: `announcement-${crypto.randomUUID()}`,
                         kind: 'REQUIRED_ANNOUNCEMENT',
                         description: '',
                         required: true,

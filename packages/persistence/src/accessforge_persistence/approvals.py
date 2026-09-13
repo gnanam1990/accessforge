@@ -39,6 +39,7 @@ def record_approval(
     target_digest: str,
     expected_revision: int,
     expires_at: str,
+    approval_id: str | None = None,
 ) -> str:
     """Store one exact approval.
 
@@ -46,7 +47,7 @@ def record_approval(
     is what makes it exact. An approval missing any of them authorizes a class of acts rather than
     one act, and a class of acts is what a standing permission is -- which this deliberately is not.
     """
-    approval_id = str(uuid.uuid4())
+    approval_id = approval_id or str(uuid.uuid4())
     conn.execute(
         """
         INSERT INTO approval

@@ -26,6 +26,7 @@ from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import (
     budgets,
     deletion,
+    evaluations,
     evidence,
     projects,
     runners,
@@ -158,6 +159,41 @@ def request_run(
                 request_id=context.request_id,
             )
 
+        reserved_run: str | None = None
+        reserved_authorization = body.get("authorizationId")
+        if sealed.canonical_manifest is not None:
+            # Serialize admission of this exact reserved identity across different HTTP keys.
+            conn.execute(
+                "SELECT id FROM sealed_manifest WHERE id=%s FOR UPDATE",
+                (sealed.sealed_manifest_id,),
+            )
+            try:
+                canonical = projects.assert_execution_seal_current(
+                    conn, sealed_manifest_id=sealed.sealed_manifest_id
+                )
+            except (projects.ProjectError, projects.SealError, ValueError) as exc:
+                raise ProblemDetail(
+                    ProblemCode.CONFLICT, str(exc), request_id=context.request_id
+                ) from exc
+            reserved_run = str(canonical["runId"])
+            if (
+                reserved_authorization is not None
+                and reserved_authorization != canonical["authorizationId"]
+            ):
+                raise ProblemDetail(
+                    ProblemCode.INVALID_INPUT,
+                    "authorizationId differs from the exact canonical manifest",
+                    request_id=context.request_id,
+                )
+            reserved_authorization = str(canonical["authorizationId"])
+            if conn.execute("SELECT 1 FROM run WHERE id=%s", (reserved_run,)).fetchone():
+                raise ProblemDetail(
+                    ProblemCode.INVALID_INPUT,
+                    "this canonical manifest already belongs to a run; "
+                    "retry requires a new run and seal",
+                    request_id=context.request_id,
+                )
+
         try:
             runners.assert_queue_capacity(conn)
         except runners.QueueFull as exc:
@@ -217,7 +253,8 @@ def request_run(
             # From the seal, never from the body. The manifest is the run's identity, so the
             # project that sealed it is the project the run belongs to.
             project_id=sealed.project_id,
-            authorization_id=body.get("authorizationId"),
+            authorization_id=reserved_authorization,
+            run_id=reserved_run,
             retry_of=body.get("retryOf"),
         )
         return {"runId": run_id, "status": "QUEUED", "outcome": "NOT_EVALUATED"}
@@ -248,6 +285,28 @@ def get_run(
     view = _run_view(row)
     response.headers["ETag"] = f'"{view["revision"]}"'
     return view
+
+
+@router.get("/runs/{run_id}/evaluation")
+def get_evaluation(
+    workspace_id: str, run_id: str, request: Request, conn: Conn, response: Response
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    try:
+        uuid.UUID(run_id)
+    except ValueError:
+        raise not_found() from None
+    try:
+        result = evaluations.read(conn, run_id=run_id)
+    except evaluations.EvaluationError:
+        raise ProblemDetail(
+            ProblemCode.CONFLICT, "Retained evaluation integrity is unavailable."
+        ) from None
+    if result is None:
+        raise not_found()
+    response.headers["ETag"] = f'"{result["snapshotDigest"]}"'
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.get("/runs")

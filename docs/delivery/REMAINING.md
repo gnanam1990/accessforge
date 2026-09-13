@@ -9,6 +9,60 @@ constrained Strands navigator and the bounded diagnosis projection. Their rows s
 
 ## Buildable now
 
+### Current branch checkpoint — final evaluation snapshot
+
+Draft PR #37 now includes original frozen rules, independent final observer conditions, post-STOP
+artifact retention and atomic final evaluation storage/read API/export reasons. See handoff11 for
+the operator command and evidence boundaries. These branch changes are not yet merged.
+
+The rule-authoring UI now supports the implemented exact phrase/action and independent request-count
+families, with server-provided bounds and field-linked errors (handoff22). Further predicate families
+still need both trusted producers and their own authoring controls.
+
+The Run screen now displays the original retained evaluation, per-assertion provenance/references,
+outcome reasons and sealed/observed identity comparison (handoff23). It does not derive a new verdict
+or present historical snapshots as proof of current artifact retention. Missing/mismatched records
+remain unavailable, not invented results.
+
+Native Safari origin wiring is now packaged with an operator diagnostic and authenticated-runner
+factory (desktop native README/handoff08). This supersedes earlier local/uncommitted status. The
+positive physical Safari path is not proven, and this read-only probe neither starts VoiceOver nor
+completes focus/effect authorization or full execution bootstrap. No profile gate has been relaxed.
+
+Physical preflight now binds the assigned audit session to console/process observations, samples
+the supervisor clock and rejects stale/drifted reads. The physical Safari factory wires this to the
+origin guard. The physical factory now also acquires a durable per-desktop claim shared across
+runner registrations, guards the adapter, and releases only after clean STOP/journal/server ACK.
+Crash/cancellation/unknown claims are retained for reconciliation. This requires one trusted host
+root; it does not sandbox malicious same-user code or protect arbitrary low-level runner callers.
+Genuine setup/deployment/capture evidence and canonical runtime identity ingestion remain pending.
+
+The trusted execution bootstrap now joins the desktop claim, one-shot native machine session and
+lazy Guidepup startup. Actions wait for explicit initialization, fresh startup authorization and
+full post-start preflight. Cancellation/late startup cannot reopen the runner; an already-entered
+SDK call remains uncertain and keeps the claim. The empty verified matrix is checked before any
+reservation/network/SDK loading. This is an embedding API, not a deployed daemon or a completed
+controller action transport; startup-consent and genuine evidence/observer producers still need
+deployment integration. No OS permission or actual reader was changed to implement it.
+Startup now shares the runner's absolute lease deadline/monotonic clock and rechecks authorization
+after the SDK/postflight before admitting actions; a longer initialization timeout cannot extend
+expired authority. Author review is scoped to this lifecycle delta, not independent PR approval.
+The bootstrap's execution-authority recheck is now backed by a real machine-only server endpoint,
+with exact session/attempt binding, revocation/expiry and original policy wall-budget checks. It
+does not create or substitute for explicit operator consent to SDK preference/restart effects.
+
+The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
+execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
+completion. Next build work is trusted runtime identity/probe ingestion and the remaining
+typed predicate producers. Real VoiceOver execution, deployed service/spool
+isolation and matched repair proof remain unverified; stored snapshots do not close E0/R1.
+
+Local verification now defaults to changed-code build/typecheck only; newly authored regressions
+run on CI, not in repeated local suites. CI is not disabled. The previous CI head's Node
+response-validation test hit a100ms scheduling race; its
+test-only override was removed in favor of the existing2-second fixture budget, preserving both
+assertions and the separate deterministic deadline-expiry case.
+
 ### ~~P1 — Purge pipeline operations~~ — merged (PR #31, `42d83cc`)
 All four acceptance criteria met; see `STATUS.md`.
 
@@ -84,12 +138,56 @@ it audits, and twelve mutation checks cover the ways the gate could go green whi
 markers), the input floor is a floor rather than an equality, and every advisory fails at every
 severity because pip-audit cannot grade many of them.
 
-### P6 — `mypy` over `tests/` — validated locally, awaiting PR/CI
+### ~~P6 — `mypy` over `tests/`~~ — merged (PR #36, `fa60a6f`)
 The refreshed baseline had 234 errors across 29 test files, not the previously recorded 139.
 CI now checks every Python workspace member, operator scripts and the complete test tree with
 strict mode unchanged. Typed helpers, explicit row/cookie preconditions and complete fault-store
 interfaces replace invalid annotations; negative tests remain. Two CI-configuration tests guard
 the target list and prevent test exemptions. See `docs/handoffs/test-suite-mypy.md`.
+
+### Module 14 continuation — candidate preparation and isolated build
+In progress on `feat/isolated-candidate-build`. The new build-worker package prepares bounded,
+immutable candidate source bytes without executing or extracting repository content on the host.
+Isolated owned-reference builds, retained canonical artifacts, protected backend regressions,
+durable endpoint lifecycle, materialized source/build identities, and live candidate seal/fixture/
+first-lease binding, exact manual approval and one-shot committed controller handoff are implemented
+on draft PR #37. One-time exact supervisor-ticket reception and a private-config/stdin native
+bootstrap receiver with durable replay fencing are implemented; production reader action
+transport remains unavailable by default. A bootstrap receipt does not authorize an OS action.
+Automatic expired/revoked/lease-lost manual-handoff recovery now has a scoped periodic worker;
+it interrupts/quarantines but never restarts the desktop.
+Native machine sessions, current-authority action intents, one-shot dispatch commitments and exact
+result acknowledgements are connected through real HTTP. The authenticated runner now composes
+the local fsynced journal, mandatory live physical guards and existing reader-adapter interface.
+Lost acknowledgements or ambiguity fence further input; ambiguous results interrupt/quarantine.
+Reader observations now travel through the session into the canonical sequencer, bound to one
+dispatched action, with source digests and explicit fixture redaction; capture UNKNOWN remains
+distinct from silence. This bridge was exercised with synthetic physical adapters, not a live reader.
+An operator-configured independent observer worker now binds the sealed credential reference and
+fixture to a bounded read-only application-database measurement, then revalidates before retaining
+an OBSERVER effect record. It has real PostgreSQL/CLI proof, not production deployment or reader proof.
+New sessions declare five required artifacts and retain authenticated lifecycle/action receipts.
+Successful STOP fences input; the independent observer closes its own final sample, then exact
+reader/action/lifecycle tails and STOP acknowledgement move the run only to FINALIZING. Native
+journal readback must match issued commands. Missing artifacts remain visible; no outcome is minted.
+A trusted operator artifact command now validates the private supervisor spool against retained
+actions and derives the other four artifacts from the closed canonical streams. Write-ahead
+quarantine reservations, create-only storage and bounded readback make interrupted retention
+resumable with identical bytes; corrupt, conflicting or deleted evidence is never overwritten.
+This has real PostgreSQL/MinIO/CLI proof with synthetic journals, not deployed spool attestation.
+Still pending: concrete production physical guards and reader startup, observer deployment/role
+isolation, trusted spool/service deployment and final verdict admission,
+remaining action/build UNKNOWN recovery,
+and actual matched
+failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;
+neither synthetic desktop metadata nor backend regressions establish an actual-reader repair.
+
+Frozen executable assertion rules now round-trip through journey authoring and the immutable
+reviewer contract with sealed-digest verification. Literal action-bound reader derivation and
+independent observer-authored final effect-count conditions are implemented, preserving UNKNOWN
+and keeping expectations out of navigator policy. No prose inference or historical backfill.
+Remaining evaluator work includes final evidence/identity admission and persisted verdict, typed
+focus/order/effect-monitor/functional predicates and trusted producers, plus UI rule authoring.
 
 ### P7 — `fixture_digest` offline-guess exposure
 An unkeyed SHA-256 over low-entropy fixture values; anyone holding an export can test guesses

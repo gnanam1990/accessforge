@@ -18,6 +18,8 @@ import { createFakeServer } from '../test/fakeServer'
 import type { FakeServer, SessionResponse } from '../test/fakeServer'
 import type { Run } from '../api/resources'
 import { situationFor } from './runStatus'
+import type { RunEvaluation } from '../api/evaluation'
+import { parseRunEvaluation } from '../api/evaluation'
 
 const MEMBER: SessionResponse = {
   userId: 'u-1',
@@ -59,6 +61,21 @@ const serverWithRun = (overrides: Partial<Run> = {}): FakeServer => {
   })
   return server
 }
+
+// Synthetic API display fixture, not an actual reader or completed production evaluation.
+const retainedEvaluation = (): RunEvaluation => ({
+  evaluationId: 'evaluation-1', snapshotDigest: 'b'.repeat(64),
+  recordedAt: '2026-09-13T02:00:00Z', meaning: 'ORIGINAL_EVALUATION_SNAPSHOT',
+  snapshot: {
+    schemaVersion: 1, runId: RUN.runId, attemptId: 'attempt-1', manifestDigest: RUN.manifestDigest,
+    evidenceSetDigest: 'c'.repeat(64), evaluatorVersion: '1.0.0', outcome: 'INCONCLUSIVE',
+    reasons: ['BUILD identity not observed'], scope: 'One recorded journey execution, not general accessibility proof.',
+    sealedIdentities: { BUILD: 'd'.repeat(64), EVALUATOR: '1.0.0' }, observedIdentities: { EVALUATOR: '1.0.0' },
+    assertions: [{ assertionId: 'task-complete', kind: 'TASK_COMPLETION', condition: 'FALSE',
+      provenance: 'OBSERVER_AUTHORED', evidenceRefs: ['canonical-event-1'], unknownReason: null }],
+    artifacts: [{ artifactId: 'artifact-1', kind: 'EFFECT_RECEIPT', producerId: 'independent-observer', digest: 'e'.repeat(64) }],
+  },
+})
 
 // --------------------------------------------------------------------------------------------------
 // The situation copy, exercised directly: it is the specification for this module
@@ -155,18 +172,50 @@ describe('the run screen', () => {
     ).toBeVisible()
   })
 
-  it('states that per-assertion results are not available rather than showing the run outcome twice', async () => {
+  it('states that an original evaluation is unavailable rather than showing the run outcome twice', async () => {
     renderRun(serverWithRun())
     await screen.findByRole('heading', { level: 1, name: /Run run-0000/ })
 
-    // The acceptance gate asks a reviewer to state which exact assertion failed. Nothing assembles
-    // the evaluator's inputs from a stored attempt, so the screen says so instead of listing the
-    // run's outcome once per assertion.
-    const section = screen.getByRole('heading', { name: 'Not available in this build' })
+    const section = await screen.findByRole('heading', { name: 'No retained evaluation available' })
     expect(section).toBeVisible()
     expect(
-      screen.getByText(/would be this interface inventing the thing it exists to report/),
+      screen.getByText(/not being copied into invented per-assertion results/),
     ).toBeVisible()
+  })
+
+  it('renders the original assertion source and missing identity without turning FALSE into a run FAIL', async () => {
+    const server = serverWithRun({ outcome: 'INCONCLUSIVE' })
+    server.data.evaluations.push(retainedEvaluation())
+    renderRun(server)
+    await screen.findByRole('heading', { name: 'Original evaluation, not a fresh verification' })
+    const table = screen.getByRole('table', { name: 'Frozen assertion values and their evidence sources' })
+    expect(within(table).getByText('task-complete')).toBeVisible()
+    expect(within(table).getByText('FALSE')).toBeVisible()
+    expect(within(table).getByText('OBSERVER_AUTHORED')).toBeVisible()
+    expect(within(table).getByText('canonical-event-1')).toBeVisible()
+    expect(screen.getByText('BUILD identity not observed')).toBeVisible()
+    expect(screen.getByText(/does not establish that artifact bytes are still available/)).toBeVisible()
+    expect(screen.queryByText('FAIL')).not.toBeInTheDocument()
+  })
+
+  it('does not render assertion values when the retained evaluation names a different manifest', async () => {
+    const server = serverWithRun({ outcome: 'INCONCLUSIVE' })
+    const snapshot = retainedEvaluation()
+    server.data.evaluations.push({ ...snapshot, snapshot: { ...snapshot.snapshot, manifestDigest: 'f'.repeat(64) } })
+    renderRun(server)
+    await screen.findByRole('heading', { name: 'Evaluation identity differs' })
+    expect(screen.queryByText('canonical-event-1')).not.toBeInTheDocument()
+  })
+
+  it('rejects malformed conditions and missing UNKNOWN explanations rather than displaying a guessed value', () => {
+    const original = retainedEvaluation()
+    expect(parseRunEvaluation(original, RUN.runId)).toEqual(original)
+    for (const assertion of [
+      { ...original.snapshot.assertions[0], condition: ['TRUE'] },
+      { ...original.snapshot.assertions[0], condition: 'UNKNOWN', unknownReason: null },
+      { ...original.snapshot.assertions[0], provenance: 'ABSENT' },
+    ]) expect(parseRunEvaluation({ ...original, snapshot: { ...original.snapshot, assertions: [assertion] } }, RUN.runId)).toBeNull()
+    expect(parseRunEvaluation(original, 'another-run')).toBeNull()
   })
 
   it('offers cancellation only while the run is not terminal', async () => {

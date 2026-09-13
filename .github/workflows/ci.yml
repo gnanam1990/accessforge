@@ -60,6 +60,8 @@ jobs:
           --health-retries 10
 
     env:
+      ACCESSFORGE_SANDBOX_IMAGE: node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+      ACCESSFORGE_SANDBOX_ENDPOINT: unix:///var/run/docker.sock
       # Deliberately NOT the container's POSTGRES_USER. That role is a superuser, and superusers
       # bypass row-level security entirely — including FORCE — so the whole tenant-isolation suite
       # would run against no isolation at all. A dedicated NOSUPERUSER NOBYPASSRLS role is created
@@ -123,6 +125,24 @@ jobs:
         # land without its lockfile.
         run: uv sync --frozen
 
+      - name: Provision the pinned owned-build containment probe toolchain
+        # No implicit pull at dispatch. The registry index supports Linux amd64 and arm64.
+        run: >-
+          docker pull
+          node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+
+      - name: Real owned-build containment probes
+        run: uv run pytest -q tests/sandbox --tb=short
+
+      - name: Provision the pinned reference-app build toolchain
+        # Trusted four-file context only. No target source, credentials, or mutable image tag.
+        run: |
+          set -euo pipefail
+          docker --host "$ACCESSFORGE_SANDBOX_ENDPOINT" pull python@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e
+          docker --host "$ACCESSFORGE_SANDBOX_ENDPOINT" pull postgres@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+          reference_image=$(uv run python scripts/provision_reference_toolchain.py --endpoint "$ACCESSFORGE_SANDBOX_ENDPOINT")
+          echo "ACCESSFORGE_REFERENCE_TOOLCHAIN=$reference_image" >> "$GITHUB_ENV"
+
       - uses: pnpm/action-setup@v4
         with:
           version: 11.10.0
@@ -163,8 +183,18 @@ jobs:
         run: >-
           uv run mypy apps/api/src fixtures/reference-app/src
           apps/orchestrator/src packages/agent-tools/navigation/src
-          packages/domain/src packages/contracts/python/src
+          apps/build-worker/src apps/build-worker/toolchain/build_reference.py
+          packages/domain/src packages/contracts/python/src packages/contracts/python/hatch_build.py
           packages/persistence/src packages/evidence/src packages/clients/python/src scripts tests
+
+      - name: Core distributions retain exact schemas and migrations
+        run: |
+          set -euo pipefail
+          package_dir="$(mktemp -d)"
+          uv build --package accessforge-persistence --out-dir "$package_dir"
+          uv build --package accessforge-contracts --out-dir "$package_dir"
+          uv build --wheel --package accessforge-contracts --out-dir "$package_dir/direct"
+          uv run python scripts/check_core_packages.py "$package_dir"
 
       - name: Install a PostgreSQL 17 client
         # The runner image ships pg_dump 16, and the service container is PostgreSQL 17. An older
@@ -251,6 +281,9 @@ jobs:
         # The schemas are authoritative and the bindings are derived. A schema edited without
         # regenerating them would otherwise ship two disagreeing definitions of the vocabulary.
         run: uv run python scripts/generate_contract_bindings.py --check
+
+      - name: Frozen logical reference fixture bindings
+        run: uv run python scripts/generate_reference_fixture.py --check
 
       - name: The generated clients match the contract
         # Third link in the same chain: the app generates the contract, the contract generates the
@@ -458,6 +491,9 @@ jobs:
         # and there is no ignore list to add one to; a guard below asserts all of that against this
         # file so the gate cannot be softened without the assertion failing.
         run: uv run python scripts/audit_python_dependencies.py
+
+      - name: Audit the hash-locked reference build backend
+        run: uv run pip-audit --no-deps --disable-pip --strict -r apps/build-worker/toolchain/build-requirements.lock
 
       - name: Known vulnerabilities in the JavaScript dependency tree
         # Reported at high and above and allowed to fail the job. An advisory that is genuinely not

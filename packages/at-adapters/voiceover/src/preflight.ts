@@ -63,6 +63,8 @@ export interface ProbeEnvironment {
   readonly processRunning: (name: string) => boolean;
   /** The current interactive session's audit id, or undefined if it cannot be determined. */
   readonly auditSessionId: () => string | undefined;
+  /** Security session inherited by the probing process, not the foreground console's identity. */
+  readonly processAuditSessionId?: () => string | undefined;
   /** Whether the screen is locked; undefined when it cannot be determined. */
   readonly screenLocked: () => boolean | undefined;
   /** Whether this process holds the named TCC permission; undefined when unknown. */
@@ -73,6 +75,8 @@ export interface ProbeEnvironment {
 
 /** Observations produced by the supervisor's owned setup phase, never by the navigator. */
 export interface RuntimeProbeEvidence {
+  /** Dedicated session assigned by trusted runner configuration, never copied from a live probe. */
+  readonly expectedDesktopSessionId?: string;
   readonly speechCaptureWorking?: boolean;
   readonly permittedOrigin?: string;
   readonly observedOrigin?: string;
@@ -130,11 +134,25 @@ function readConsoleSession(run: CommandRunner): ConsoleSession | undefined {
   if (converted.status !== 0) return undefined;
 
   try {
-    const root = JSON.parse(converted.stdout) as { readonly IOConsoleUsers?: ConsoleSession[] };
-    return root.IOConsoleUsers?.find(
-      (session) =>
-        session.kCGSSessionOnConsoleKey === true && session.kCGSessionLoginDoneKey === true,
-    );
+    const parsed = JSON.parse(converted.stdout) as unknown;
+    // ioreg -a emits an array of registry roots. Accept the old object fixture shape too, but
+    // never treat the existence of an arbitrary root or multiple active consoles as ownership.
+    const roots: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
+    const active = roots.flatMap((root) => {
+      if (typeof root !== 'object' || root === null || !('IOConsoleUsers' in root) ||
+          !Array.isArray(root.IOConsoleUsers)) return [];
+      return root.IOConsoleUsers.filter((value: unknown): value is ConsoleSession => {
+        if (typeof value !== 'object' || value === null) return false;
+        const session = value as ConsoleSession;
+        return session.kCGSSessionOnConsoleKey === true && session.kCGSessionLoginDoneKey === true;
+      });
+    });
+    if (active.length !== 1) return undefined;
+    const session = active[0];
+    if (session === undefined || !Number.isSafeInteger(session.kCGSSessionAuditIDKey) ||
+        (session.kCGSSessionAuditIDKey ?? 0) <= 0 || (session.kCGSSessionAuditIDKey ?? 0) >= 4294967295 ||
+        (session.CGSSessionScreenIsLocked !== undefined && typeof session.CGSSessionScreenIsLocked !== 'boolean')) return undefined;
+    return session;
   } catch {
     return undefined;
   }
@@ -142,6 +160,12 @@ function readConsoleSession(run: CommandRunner): ConsoleSession | undefined {
 
 const ACCESSIBILITY_PROBE =
   'import ApplicationServices; print(AXIsProcessTrusted() ? "TRUE" : "FALSE")';
+
+const PROCESS_SESSION_PROBE =
+  'import Security; var identity: SecuritySessionId = 0; ' +
+  'var attributes = SessionAttributeBits(rawValue: 0); ' +
+  'if SessionGetInfo(callerSecuritySession, &identity, &attributes) == errSecSuccess ' +
+  '{ print(identity) }';
 
 // `false` is the important fourth argument: Apple documents that it returns -1744 when consent
 // would be required instead of opening a permission dialog from a health check.
@@ -199,7 +223,8 @@ function unknown(detail: string): ProbeResult {
  * merely not running need different things from an operator, and collapsing them into one FALSE
  * sends somebody to the wrong settings pane.
  */
-export function probeReaderActive(env: ProbeEnvironment): ProbeResult {
+/** Startup prerequisite, separate from the running-process observation. Never enables settings. */
+export function probeReaderControlConfigured(env: ProbeEnvironment): ProbeResult {
   const paths = voiceOverPreferencePaths();
   const configured = paths.some((p) => env.pathExists(p));
   if (!configured) {
@@ -227,6 +252,12 @@ export function probeReaderActive(env: ProbeEnvironment): ProbeResult {
       true,
     );
   }
+  return ok;
+}
+
+export function probeReaderActive(env: ProbeEnvironment): ProbeResult {
+  const configured = probeReaderControlConfigured(env);
+  if (configured.condition !== 'TRUE') return configured;
   if (!env.processRunning('VoiceOver')) {
     return no('VoiceOver is configured and controllable but is not running.');
   }
@@ -300,15 +331,21 @@ export function probePermission(
   return ok;
 }
 
-export function probeDesktopOwned(env: ProbeEnvironment): ProbeResult {
+export function probeDesktopOwned(env: ProbeEnvironment, expectedSessionId?: string): ProbeResult {
+  if (expectedSessionId === undefined || !/^[1-9][0-9]*$/.test(expectedSessionId) ||
+      Number(expectedSessionId) >= 4294967295) {
+    return unknown('no explicit dedicated desktop audit-session binding was supplied by the runner');
+  }
   const audit = env.auditSessionId();
-  if (audit === undefined) {
+  const processAudit = env.processAuditSessionId?.();
+  if (audit === undefined || processAudit === undefined) {
     return unknown(
       'the interactive session could not be identified, so desktop ownership is undetermined; ' +
         'module 07 keys lease exclusivity on exactly this value',
     );
   }
-  return ok;
+  return audit === expectedSessionId && processAudit === expectedSessionId
+    ? ok : no('the active console or controlling process is not in the assigned desktop session');
 }
 
 export interface PreflightReport {
@@ -397,7 +434,7 @@ export function runPreflight(
       'the owned reference environment reset failed',
     ),
     BUILD_IDENTITY_MATCHES_MANIFEST: probeBuildIdentity(evidence),
-    DESKTOP_SESSION_OWNED: probeDesktopOwned(env),
+    DESKTOP_SESSION_OWNED: probeDesktopOwned(env, evidence.expectedDesktopSessionId),
     SCREEN_UNLOCKED: probeScreenUnlocked(env),
     ACCESSIBILITY_PERMISSION_GRANTED: probePermission(env, 'Accessibility'),
     AUTOMATION_PERMISSION_GRANTED: probePermission(env, 'Automation'),
@@ -414,7 +451,7 @@ export function runPreflight(
       'the local action journal could not be written and fsynced',
     ),
     MONOTONIC_CLOCK_HEALTHY: observedBoolean(
-      evidence.monotonicClockHealthy ?? true,
+      evidence.monotonicClockHealthy,
       'the monotonic clock has not been sampled',
       'the monotonic clock moved backwards or could not be trusted',
     ),
@@ -458,6 +495,12 @@ export function createHostEnvironment(options: HostEnvironmentOptions = {}): Pro
     auditSessionId: () => {
       const session = readConsoleSession(run);
       return session?.kCGSSessionAuditIDKey?.toString();
+    },
+    processAuditSessionId: () => {
+      const result = run('/usr/bin/xcrun', ['swift', '-e', PROCESS_SESSION_PROBE]);
+      const value = result.stdout.trim();
+      return result.status === 0 && /^[1-9][0-9]*$/.test(value) && Number(value) < 4294967295
+        ? value : undefined;
     },
     screenLocked: () => {
       const session = readConsoleSession(run);

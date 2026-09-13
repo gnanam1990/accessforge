@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import psycopg
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from accessforge_api.dependencies import clamp_page_size, run_idempotently
+from accessforge_api.dependencies import clamp_page_size, require_if_match, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.origins import OriginError, normalize_origin
-from accessforge_persistence import projects
+from accessforge_domain.timestamps import parse_rfc3339_utc
+from accessforge_persistence import execution_approvals, projects
 from accessforge_persistence.source_intake import SourceIdentity
 
 from ._common import as_body, as_identifier, authorize, workspace_scope
@@ -334,7 +336,7 @@ def list_sealed_manifests(
         SELECT m.id, m.manifest_digest, m.journey_digest, m.assertion_set_digest,
                m.fixture_digest, m.runner_profile_digest, m.navigator_policy_digest,
                m.environment_config_digest, m.evaluator_version, m.model_config_digest,
-               m.run_id, m.sealed_at,
+               m.run_id, m.sealed_at, m.canonical_manifest,
                s.commit_sha, s.tree_digest, b.artifact_digest, e.name AS environment_name
           FROM sealed_manifest m
           LEFT JOIN source_snapshot s ON s.id = m.source_snapshot_id
@@ -370,6 +372,9 @@ def list_sealed_manifests(
             # Set once a run has been sealed against it. A manifest already bound to a run is not a
             # thing to request a second run against.
             "runId": None if r["run_id"] is None else str(r["run_id"]),
+            "manifestKind": "INPUT_FINGERPRINT"
+            if r["canonical_manifest"] is None
+            else "CANONICAL_EXECUTION",
             "createdAt": str(r["sealed_at"]),
         }
         for r in rows[:size]
@@ -459,6 +464,66 @@ SEAL_FIELDS = frozenset(
         "modelConfigDigest",
     }
 )
+
+EXECUTION_FIELDS = frozenset(
+    {
+        "journeyVersionId",
+        "expiresAt",
+        "actionBudget",
+        "wallTimeBudgetSeconds",
+        "permittedEffects",
+    }
+)
+
+
+def _execution_inputs(body: dict[str, Any]) -> projects.ExecutionInputs | None:
+    if "execution" not in body:
+        return None
+    execution = body["execution"]
+    if not isinstance(execution, dict) or set(execution) != EXECUTION_FIELDS:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "execution must contain exactly: " + ", ".join(sorted(EXECUTION_FIELDS)),
+        )
+    effects = execution["permittedEffects"]
+    if (
+        not isinstance(effects, list)
+        or any(not isinstance(effect, str) or not effect for effect in effects)
+        or len(effects) != len(set(effects))
+    ):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "permittedEffects must be an array of unique nonempty strings",
+        )
+    # No string/int coercion: the full canonical JSON Schema validates these values in seal_run.
+    return projects.ExecutionInputs(
+        journey_version_id=execution["journeyVersionId"],
+        expires_at=execution["expiresAt"],
+        action_budget=execution["actionBudget"],
+        wall_time_budget_seconds=execution["wallTimeBudgetSeconds"],
+        permitted_effects=frozenset(effects),
+    )
+
+
+def _assert_seal_response_scope(
+    conn: psycopg.Connection[Any], *, project_id: str, result: dict[str, Any]
+) -> None:
+    # Preserve the existing idempotency namespace so pre-upgrade same-project retries still
+    # replay. Its cached response must nevertheless belong to the current resource path.
+    sealed_id = result.get("sealedManifestId")
+    if not isinstance(sealed_id, str):
+        raise ProblemDetail(
+            ProblemCode.CONFLICT,
+            "the stored seal operation has no completed result; it cannot be safely replayed",
+        )
+    if not conn.execute(
+        "SELECT 1 FROM sealed_manifest WHERE id=%s AND project_id=%s",
+        (as_identifier(sealed_id, what="stored sealedManifestId"), project_id),
+    ).fetchone():
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT,
+            "this idempotency key belongs to a seal in a different or unavailable project",
+        )
 
 
 @router.post("/projects/{project_id}/builds", status_code=status.HTTP_201_CREATED)
@@ -607,10 +672,14 @@ def seal_manifest(
     superseded environment would produce a manifest that looked authoritative and was never
     authorized.
 
-    A digest is deliberately **not** unique. Two seals over identical inputs share one, which is how
-    a baseline and a candidate are shown to differ only by an approved patch (INV-04). Sealing twice
-    is therefore not an error, and a caller who wants one seal per attempt supplies an
-    `Idempotency-Key`.
+    Supply `execution` with exactly `journeyVersionId`, `expiresAt`, `actionBudget`,
+    `wallTimeBudgetSeconds`, and `permittedEffects` to seal a complete RunManifest. Run and
+    authorization IDs are reserved by the server, not approved. Review `canonicalManifest` before
+    separately authorizing execution. This operation neither requests a run nor issues approval.
+
+    Omitting execution preserves legacy input-fingerprint creation, explicitly labeled in the
+    response. Identical legacy inputs share a digest; canonical execution identities do not.
+    An `Idempotency-Key` replays the same reservation instead of allocating another pair of IDs.
     """
     body = as_body(payload)
     context = authorize(
@@ -619,9 +688,10 @@ def seal_manifest(
         workspace_id,
         Permission.PROJECT_CONFIGURE,
         body=body,
-        allowed_fields=SEAL_FIELDS,
+        allowed_fields=SEAL_FIELDS | {"execution"},
     )
     _assert_project_visible(conn, project_id=project_id)
+    execution = _execution_inputs(body)
 
     missing = sorted(SEAL_FIELDS - set(body))
     if missing:
@@ -690,8 +760,11 @@ def seal_manifest(
                     evaluator_version=str(body["evaluatorVersion"]),
                     model_config_digest=str(body["modelConfigDigest"]),
                 ),
+                run_id=str(uuid.uuid4()) if execution is not None else None,
+                authorization_id=str(uuid.uuid4()) if execution is not None else None,
+                execution=execution,
             )
-        except projects.SealError as exc:
+        except (projects.SealError, ValueError) as exc:
             raise ProblemDetail(
                 ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
             ) from exc
@@ -706,8 +779,15 @@ def seal_manifest(
             "sealedManifestId": sealed.sealed_manifest_id,
             "manifestDigest": sealed.manifest_digest,
             "requestRunWith": sealed.manifest_digest,
+            "manifestKind": "INPUT_FINGERPRINT"
+            if sealed.canonical_manifest is None
+            else "CANONICAL_EXECUTION",
+            "canonicalManifest": sealed.canonical_manifest,
             "meaning": (
-                "This digest covers the source commit, the built artifact, the environment "
+                "Complete immutable execution identity. Run and authorization IDs are reserved, "
+                "not approved; sealing neither issues RUN_EFFECTS authority nor starts a run."
+                if sealed.canonical_manifest is not None
+                else "This digest covers the source commit, the built artifact, the environment "
                 "configuration, the journey, its assertions, its fixture, the runner profile, the "
                 "evaluator version and the model configuration -- together. Request a run against "
                 "it. Two seals over identical inputs share a digest by design; that is how a "
@@ -717,5 +797,195 @@ def seal_manifest(
 
     outcome = run_idempotently(
         conn, context, route="POST /projects/seals", body=body, perform=perform
+    )
+    result = outcome.response or {}
+    _assert_seal_response_scope(conn, project_id=project_id, result=result)
+    return result
+
+
+@router.get("/projects/{project_id}/seals/{sealed_manifest_id}")
+def inspect_seal(
+    workspace_id: str,
+    project_id: str,
+    sealed_manifest_id: str,
+    request: Request,
+    conn: Conn,
+    response: Response,
+) -> dict[str, Any]:
+    """Read exact immutable execution scope for review, including expired historical seals.
+
+    This is stored provenance, not evidence of deployment, issued approval, or completed execution.
+    Legacy input fingerprints have no canonicalManifest; missing history is never backfilled.
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _assert_project_visible(conn, project_id=project_id)
+    row = conn.execute(
+        "SELECT id, manifest_digest, canonical_manifest, authorization_revision "
+        "FROM sealed_manifest "
+        "WHERE id=%s AND project_id=%s",
+        (as_identifier(sealed_manifest_id, what="sealedManifestId"), project_id),
+    ).fetchone()
+    if row is None:
+        raise not_found()
+    response.headers["ETag"] = f'"{row["manifest_digest"]}"'
+    return {
+        "sealedManifestId": str(row["id"]),
+        "manifestDigest": str(row["manifest_digest"]),
+        "manifestKind": "INPUT_FINGERPRINT"
+        if row["canonical_manifest"] is None
+        else "CANONICAL_EXECUTION",
+        "canonicalManifest": row["canonical_manifest"],
+        "revision": int(row["authorization_revision"]),
+    }
+
+
+def _approval_target(
+    conn: psycopg.Connection[Any],
+    project_id: str,
+    seal_id: str,
+    expected_revision: int | None = None,
+) -> None:
+    _assert_project_visible(conn, project_id=project_id)
+    row = conn.execute(
+        "SELECT authorization_revision FROM sealed_manifest WHERE id=%s AND project_id=%s",
+        (as_identifier(seal_id, what="sealedManifestId"), project_id),
+    ).fetchone()
+    if row is None:
+        raise not_found()
+    if expected_revision is not None and expected_revision != row["authorization_revision"]:
+        raise ProblemDetail(ProblemCode.STALE_REVISION, "the reviewed seal revision has changed")
+
+
+@router.post(
+    "/projects/{project_id}/seals/{sealed_manifest_id}/approval",
+    status_code=status.HTTP_201_CREATED,
+)
+def approve_execution_seal(
+    workspace_id: str,
+    project_id: str,
+    sealed_manifest_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Issue exact manual RUN_EFFECTS consent, not PATCH_APPLY or a standing grant.
+
+    Requires RUN_APPROVE, CSRF, the reviewed manifestDigest, a bounded expiresAt, and If-Match
+    containing the seal's revision returned by GET (not its digest ETag). The immutable seal is
+    the approval target; its canonical payload binds the exact run. No run starts here.
+    """
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.RUN_APPROVE,
+        body,
+        frozenset({"manifestDigest", "expiresAt"}),
+    )
+    expected = require_if_match(context)
+    _approval_target(conn, project_id, sealed_manifest_id, expected)
+    if set(body) != {"manifestDigest", "expiresAt"} or any(
+        not isinstance(value, str) for value in body.values()
+    ):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT, "manifestDigest and expiresAt strings are required"
+        )
+    try:
+        parse_rfc3339_utc(body["expiresAt"], field="expiresAt")
+    except ValueError as exc:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, str(exc)) from exc
+
+    def perform() -> dict[str, Any]:
+        try:
+            return execution_approvals.issue(
+                conn,
+                sealed_manifest_id=sealed_manifest_id,
+                actor_id=context.principal.user_id,
+                target_digest=body["manifestDigest"],
+                expected_revision=expected,
+                expires_at=body["expiresAt"],
+            )
+        except LookupError as exc:
+            raise not_found() from exc
+        except (
+            execution_approvals.Refused,
+            projects.ProjectError,
+            projects.SealError,
+            ValueError,
+        ) as exc:
+            raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
+
+    outcome = run_idempotently(
+        conn,
+        context,
+        route=f"POST /projects/{project_id}/seals/{sealed_manifest_id}/approval",
+        body=body,
+        perform=perform,
+    )
+    return outcome.response or {}
+
+
+@router.get("/projects/{project_id}/seals/{sealed_manifest_id}/approval")
+def inspect_execution_approval(
+    workspace_id: str,
+    project_id: str,
+    sealed_manifest_id: str,
+    request: Request,
+    conn: Conn,
+) -> dict[str, Any]:
+    """Inspect an issued decision, including revoked/expired history; not dispatch readiness."""
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _approval_target(conn, project_id, sealed_manifest_id)
+    try:
+        return execution_approvals.inspect(conn, sealed_manifest_id=sealed_manifest_id)
+    except LookupError as exc:
+        raise not_found() from exc
+
+
+@router.post("/projects/{project_id}/seals/{sealed_manifest_id}/approval/revocation")
+def revoke_execution_approval(
+    workspace_id: str,
+    project_id: str,
+    sealed_manifest_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Irreversibly withdraw this exact approval. Does not claim already-started work stopped."""
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.RUN_APPROVE,
+        body,
+        frozenset({"manifestDigest"}),
+    )
+    expected = require_if_match(context)
+    _approval_target(conn, project_id, sealed_manifest_id, expected)
+    if set(body) != {"manifestDigest"} or not isinstance(body["manifestDigest"], str):
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "manifestDigest is required")
+
+    def perform() -> dict[str, Any]:
+        try:
+            return execution_approvals.revoke(
+                conn,
+                sealed_manifest_id=sealed_manifest_id,
+                actor_id=context.principal.user_id,
+                target_digest=body["manifestDigest"],
+                expected_revision=expected,
+            )
+        except LookupError as exc:
+            raise not_found() from exc
+        except execution_approvals.Refused as exc:
+            raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
+
+    outcome = run_idempotently(
+        conn,
+        context,
+        route=f"POST /projects/{project_id}/seals/{sealed_manifest_id}/approval/revocation",
+        body=body,
+        perform=perform,
     )
     return outcome.response or {}

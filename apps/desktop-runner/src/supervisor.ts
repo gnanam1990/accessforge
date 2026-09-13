@@ -81,6 +81,8 @@ export interface LeaseState {
 
 export interface JournalEntry {
   readonly actionId: string;
+  /** Exact control-plane action identity when an authenticated run supplies one. */
+  readonly serverActionId?: string;
   readonly leaseId: string;
   readonly epoch: number;
   readonly sequence: number;

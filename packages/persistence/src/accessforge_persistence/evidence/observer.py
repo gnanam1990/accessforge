@@ -36,7 +36,7 @@ from accessforge_domain.timestamps import to_rfc3339_utc
 #: would be one configuration mistake away from counting rows in the product's own database and
 #: reporting them as the application's.
 _EFFECT_TABLES: dict[str, str] = {
-    "CREATE_TEST_REQUEST": "service_request",
+    "CREATE_TEST_REQUEST": "public.service_request",
 }
 
 
@@ -46,7 +46,9 @@ class ApplicationObserver:
     def __init__(self, application_database_url: str) -> None:
         self._url = application_database_url
 
-    def count_effects(self, *, fixture_nonce: str, effect: str) -> EffectCount:
+    def count_effects(
+        self, *, fixture_nonce: str, effect: str, expected_template_digest: str | None = None
+    ) -> EffectCount:
         table = _EFFECT_TABLES.get(effect)
         if table is None:
             # Not an unknown observation -- an unknown *question*. The distinction matters: a caller
@@ -59,10 +61,25 @@ class ApplicationObserver:
             )
 
         try:
-            with psycopg.connect(self._url, row_factory=dict_row, autocommit=False) as conn:
+            with psycopg.connect(
+                self._url,
+                row_factory=dict_row,
+                autocommit=False,
+                connect_timeout=5,
+                options="-c statement_timeout=5000 -c lock_timeout=1000",
+            ) as conn:
                 # Read-only at the database, not by convention. An attempted write inside this
                 # transaction fails even if someone adds one to this class.
-                conn.execute("SET TRANSACTION READ ONLY")
+                conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                if expected_template_digest is not None:
+                    fixture = conn.execute(
+                        "SELECT template_digest FROM public.fixture_instance WHERE nonce=%s",
+                        (fixture_nonce,),
+                    ).fetchone()
+                    if fixture is None or fixture["template_digest"] != expected_template_digest:
+                        raise ObserverError(
+                            "application fixture identity is unavailable or mismatched"
+                        )
                 row: dict[str, Any] | None = conn.execute(
                     # The table name comes from the closed mapping above, never from a parameter.
                     # The nonce is bound.
@@ -74,7 +91,7 @@ class ApplicationObserver:
             # application holds no requests" are opposite conclusions, and returning 0 here would
             # report a confirmed task failure every time the observer could not connect.
             raise ObserverError(
-                f"could not read the application's state: {exc}. This is an unknown, not a count "
+                "could not read the application's state. This is an unknown, not a count "
                 "of zero: being unable to look is not evidence that nothing happened."
             ) from exc
 

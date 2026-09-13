@@ -82,6 +82,31 @@ uv run python -m accessforge_api          # control plane
 pnpm --filter @accessforge/web dev        # web UI
 ```
 
+### 1.6 Recover abandoned manual handoffs
+
+Run a separate supervised process for the explicitly configured workspace(s):
+
+```bash
+uv run python -m accessforge_orchestrator.maintenance.handoff_worker \
+  --workspace-id <workspace-uuid> --interval-seconds 5
+```
+
+It reads `ACCESSFORGE_DATABASE_URL` and uses workspace-scoped transactions, not an elevated
+cross-tenant discovery connection. Repeat `--workspace-id` for additional authorized workspaces.
+`--once` performs one bounded pass and exits nonzero if recovery was unavailable or deferred.
+No migration or infrastructure provisioning happens at startup.
+
+The worker interrupts/quarantines exact committed manual attempts when an unaccepted dispatch
+ticket expires, the ticket is revoked, or its lease expires/is released without acknowledged STOP.
+It never retries dispatch, kills a reader, resets a desktop, or reports an accessibility verdict.
+A consumed bootstrap ticket expiring alone does not end a healthy execution lease. Fresh attempts,
+newer runner epochs, terminal runs and acknowledged stops are left alone. Each recovered attempt
+commits separately and publishes the existing `run.interrupted` event; contention is deferred.
+
+Keep this process supervised for periodic recovery. SIGINT/SIGTERM stops after the current bounded
+pass. This covers abandoned manual handoffs, not every build/action/observer UNKNOWN state, and
+does not enable actual reader execution. No worker has been deployed automatically by these docs.
+
 ---
 
 ## 2. Deploy order — fixed, and one-directional

@@ -39,6 +39,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from accessforge_domain import reducers
 from accessforge_domain.authority import (
@@ -55,10 +56,10 @@ from accessforge_domain.runners import (
     RunnerProfile,
     assert_runner_transition,
 )
-from accessforge_domain.states import ApprovalScope, RunnerStatus
-from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
+from accessforge_domain.states import ApprovalScope, RunnerStatus, RunStatus
+from accessforge_domain.timestamps import is_expired, parse_rfc3339_utc, to_rfc3339_utc
 
-from . import runs
+from . import candidate_runs, execution_approvals, projects, runs
 
 #: A desktop lease is short. A long lease is a long window in which a partitioned supervisor can
 #: still be typing while the server has moved on, and the cost of a short one is a heartbeat.
@@ -594,6 +595,10 @@ def admit_lease(
     moment = _now(now)
     if ttl_seconds < 1 or ttl_seconds > 3600:
         raise RunnerError("a desktop lease lives between one second and one hour")
+    try:
+        candidate_runs.assert_live(conn, run_id=run_id)
+    except (candidate_runs.Refused, AuthorityError) as exc:
+        raise RunnerError(str(exc)) from exc
 
     runner = conn.execute(
         "SELECT id, status, session_key, lease_epoch, revoked_at, quarantine_reason "
@@ -696,6 +701,10 @@ def admit_lease(
         audit_action="DESKTOP_LEASE_ADMITTED",
         now=parse_rfc3339_utc(moment, field="now"),
     )
+    try:
+        candidate_runs.record_lease(conn, run_id=run_id, lease_id=lease_id, epoch=epoch)
+    except (candidate_runs.Refused, AuthorityError) as exc:
+        raise RunnerError(str(exc)) from exc
     return AdmittedLease(
         lease_id=lease_id,
         runner_id=runner_id,
@@ -1208,6 +1217,130 @@ class DispatchRefused(RunnerError):
     """The run is not authorized to start on this desktop, right now, as configured."""
 
 
+def assert_manual_dispatch_authorized(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    run_id: str,
+    runner_id: str,
+    lease_id: str,
+    epoch: int,
+    now: str | None = None,
+) -> None:
+    """Manual E0 gate using persisted exact consent, never a fabricated standing grant.
+
+    The controller must still observe the deployed bytes, journal intent and enforce each action's
+    origin/effects/budgets. Passing this pre-dispatch check is not permission to bypass those gates.
+    """
+    _assert_manual_authorized(
+        conn,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        runner_id=runner_id,
+        lease_id=lease_id,
+        epoch=epoch,
+        required_status=RunStatus.LEASED,
+        now=now,
+    )
+
+
+def assert_manual_attempt_authorized(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    run_id: str,
+    runner_id: str,
+    lease_id: str,
+    attempt_id: str,
+    epoch: int,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Receiver gate for an already committed manual attempt; never an OS action permission."""
+    manifest = _assert_manual_authorized(
+        conn,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        runner_id=runner_id,
+        lease_id=lease_id,
+        epoch=epoch,
+        required_status=RunStatus.RUNNING,
+        now=now,
+    )
+    pairing = conn.execute(
+        "SELECT 1 FROM desktop_lease l JOIN run_attempt a ON a.id=l.attempt_id "
+        "AND a.workspace_id=l.workspace_id WHERE l.id=%s AND l.attempt_id=%s "
+        "AND a.run_id=%s AND a.lease_epoch=%s",
+        (lease_id, attempt_id, run_id, epoch),
+    ).fetchone()
+    context = {
+        "workspace_id": workspace_id,
+        "run_id": run_id,
+        "attempt_id": attempt_id,
+        "runner_id": runner_id,
+        "lease_id": lease_id,
+        "epoch": epoch,
+    }
+    claim = conn.execute(
+        "SELECT 1 FROM audit_event WHERE workspace_id=%s AND target_id=%s "
+        "AND action='MANUAL_DISPATCH_CLAIMED' AND actor_service='manual-run-controller' "
+        "AND detail->'context'=%s",
+        (workspace_id, run_id, Jsonb(context)),
+    ).fetchone()
+    if pairing is None or claim is None:
+        raise DispatchRefused("receiver does not name the exact committed manual attempt")
+    return manifest
+
+
+def _assert_manual_authorized(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    run_id: str,
+    runner_id: str,
+    lease_id: str,
+    epoch: int,
+    required_status: RunStatus,
+    now: str | None,
+) -> dict[str, Any]:
+    moment = _now(now)
+    run = conn.execute("SELECT * FROM run WHERE id=%s", (run_id,)).fetchone()
+    if run is None or str(run["workspace_id"]) != workspace_id:
+        raise DispatchRefused("no such run in this workspace")
+    sealed = projects.find_sealed_manifest(conn, manifest_digest=str(run["manifest_digest"]))
+    if sealed is None:
+        raise DispatchRefused("no sealed execution identity for this run")
+    try:
+        manifest = execution_approvals.assert_authorized(
+            conn,
+            sealed_manifest_id=sealed.sealed_manifest_id,
+            run_id=run_id,
+            workspace_id=workspace_id,
+            now=moment,
+        )
+    except (
+        execution_approvals.Refused,
+        projects.SealError,
+        projects.ProjectError,
+        ValueError,
+    ) as exc:
+        raise DispatchRefused(str(exc)) from exc
+    if str(run["authorization_id"]) != manifest["authorizationId"]:
+        raise DispatchRefused("run authorization differs from the exact approved identity")
+    _assert_dispatch_ready(
+        conn,
+        runner_id=runner_id,
+        lease_id=lease_id,
+        epoch=epoch,
+        run_id=run_id,
+        expected_profile_digest=manifest["runnerProfileDigest"],
+        expected_environment_config_digest=manifest["environmentConfigDigest"],
+        expected_manifest_digest=sealed.manifest_digest,
+        required_status=required_status,
+        now=moment,
+    )
+    return manifest
+
+
 def assert_dispatch_authorized(
     conn: psycopg.Connection[dict[str, Any]],
     *,
@@ -1254,6 +1387,40 @@ def assert_dispatch_authorized(
             "and do not imply one another; nothing but RUN_EFFECTS authorizes executing a run."
         )
 
+    if child.action_budget < 1 or child.wall_time_budget_seconds < 1:
+        raise DispatchRefused("this authorization carries no usable budget")
+    _assert_dispatch_ready(
+        conn,
+        runner_id=runner_id,
+        lease_id=lease_id,
+        epoch=epoch,
+        run_id=run_id,
+        expected_profile_digest=expected_profile_digest,
+        expected_environment_config_digest=expected_environment_config_digest,
+        expected_manifest_digest=expected_manifest_digest,
+        now=moment,
+    )
+
+
+def _assert_dispatch_ready(
+    conn: psycopg.Connection[Any],
+    *,
+    runner_id: str,
+    lease_id: str,
+    epoch: int,
+    run_id: str,
+    expected_profile_digest: str,
+    expected_environment_config_digest: str,
+    expected_manifest_digest: str,
+    now: str,
+    required_status: RunStatus = RunStatus.LEASED,
+) -> None:
+
+    try:
+        candidate_runs.assert_lease(conn, run_id=run_id, lease_id=lease_id, epoch=epoch)
+    except (candidate_runs.Refused, AuthorityError) as exc:
+        raise DispatchRefused(str(exc)) from exc
+
     # 2. The desktop. A quarantined or revoked runner is refused before anything else is inspected,
     #    because no amount of valid authorization makes an unfenced desktop safe.
     runner = conn.execute(
@@ -1281,9 +1448,9 @@ def assert_dispatch_authorized(
     lease = conn.execute(
         """
         SELECT epoch, released_at, release_reason, cancel_requested_at, deadline_at
-          FROM desktop_lease WHERE id = %s AND runner_id = %s
+          FROM desktop_lease WHERE id = %s AND runner_id = %s AND run_id = %s
         """,
-        (lease_id, runner_id),
+        (lease_id, runner_id, run_id),
     ).fetchone()
     if lease is None:
         raise DispatchRefused("no such lease on this runner in this workspace")
@@ -1300,6 +1467,22 @@ def assert_dispatch_authorized(
         raise DispatchRefused(
             "cancellation has been requested for this lease, so no new work is admitted (INV-13)"
         )
+    if int(runner["lease_epoch"]) != epoch or is_expired(
+        now=now, expires_at=to_rfc3339_utc(lease["deadline_at"])
+    ):
+        raise DispatchRefused("desktop lease expired or was superseded")
+    run = conn.execute(
+        "SELECT status,lease_epoch,cancel_requested_at,quarantined FROM run WHERE id=%s",
+        (run_id,),
+    ).fetchone()
+    if (
+        run is None
+        or run["status"] != required_status.value
+        or int(run["lease_epoch"]) != epoch
+        or run["cancel_requested_at"] is not None
+        or run["quarantined"]
+    ):
+        raise DispatchRefused("run is not currently eligible for this dispatch phase on this lease")
 
     # 4. Preflight, bound to this epoch. The most recent one, not any successful one ever recorded.
     preflight = conn.execute(
@@ -1348,14 +1531,6 @@ def assert_dispatch_authorized(
             "the preflight names a different runner profile than the one authorized"
         )
 
-    # 5. Budgets. Non-positive budgets are refused rather than treated as unlimited, which is the
-    #    direction a missing value would otherwise fail in.
-    if child.action_budget < 1 or child.wall_time_budget_seconds < 1:
-        raise DispatchRefused(
-            "this authorization carries no usable budget. A zero or negative budget is not an "
-            "unlimited one, and work that cannot be bounded is not dispatched (INV-14)."
-        )
-
 
 # --- terminalizing an attempt --------------------------------------------------------------------
 #
@@ -1363,6 +1538,90 @@ def assert_dispatch_authorized(
 # whether an action is unresolved, which epoch acknowledged a stop. These two functions are where
 # that knowledge meets the reducers, and they exist so that no caller has to assemble the decision
 # from parts and get one of them wrong.
+
+
+def interrupt_manual_handoff(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    workspace_id: str,
+    run_id: str,
+    attempt_id: str,
+    runner_id: str,
+    lease_id: str,
+    epoch: int,
+) -> None:
+    """Fence an uncertain controller handoff without inventing an OS action journal entry.
+
+    Exact identity is checked even for recovery. A late timeout from another attempt must never
+    quarantine a replacement session. RUNNING is not stop proof and is never re-dispatched.
+    """
+    runner = conn.execute(
+        "SELECT lease_epoch FROM runner WHERE id=%s FOR UPDATE", (runner_id,)
+    ).fetchone()
+    stored = runs.load_run_for_update(conn, run_id=run_id)
+    lease = conn.execute(
+        "SELECT l.id FROM desktop_lease l JOIN run_attempt a ON a.id=l.attempt_id "
+        "AND a.workspace_id=l.workspace_id WHERE l.id=%s AND l.workspace_id=%s "
+        "AND l.runner_id=%s AND l.run_id=%s AND l.attempt_id=%s AND l.epoch=%s "
+        "AND a.run_id=%s AND a.lease_epoch=%s",
+        (lease_id, workspace_id, runner_id, run_id, attempt_id, epoch, run_id, epoch),
+    ).fetchone()
+    if (
+        runner is None
+        or lease is None
+        or int(runner["lease_epoch"]) != epoch
+        or stored.state.lease_epoch != epoch
+        or stored.workspace_id != workspace_id
+    ):
+        raise DispatchRefused("manual handoff recovery identity is stale or mismatched")
+    if stored.state.status is RunStatus.INTERRUPTED:
+        return
+    if (
+        stored.state.status is not RunStatus.RUNNING
+        or conn.execute(
+            "SELECT 1 FROM audit_event WHERE workspace_id=%s AND target_id=%s "
+            "AND action='MANUAL_DISPATCH_CLAIMED' AND actor_service='manual-run-controller' "
+            "AND detail->'context'=%s",
+            (
+                workspace_id,
+                run_id,
+                Jsonb(
+                    {
+                        "workspace_id": workspace_id,
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "runner_id": runner_id,
+                        "lease_id": lease_id,
+                        "epoch": epoch,
+                    }
+                ),
+            ),
+        ).fetchone()
+        is None
+    ):
+        raise DispatchRefused("run has no recoverable manual dispatch commitment")
+    moment = _now(None)
+    conn.execute(
+        "UPDATE supervisor_dispatch_ticket SET revoked_at=%s WHERE run_id=%s "
+        "AND revoked_at IS NULL",
+        (moment, run_id),
+    )
+    conn.execute(
+        "UPDATE desktop_lease SET released_at=COALESCE(released_at,%s), "
+        "release_reason=COALESCE(release_reason,'AMBIGUOUS_ACTION') WHERE id=%s",
+        (moment, lease_id),
+    )
+    _quarantine(conn, runner_id=runner_id, reason=QuarantineReason.AMBIGUOUS_ACTION, now=moment)
+    runs.apply_transition(
+        conn,
+        run_id=run_id,
+        reducer=lambda state: reducers.interrupt(state, reason="MANUAL_HANDOFF_UNKNOWN"),
+        expected_revision=stored.state.revision,
+        operation_id=_operation_id(f"manual-handoff-unknown:{run_id}:{epoch}"),
+        topic="run.interrupted",
+        actor_service="manual-run-controller",
+        audit_action="RUN_INTERRUPTED_MANUAL_HANDOFF_UNKNOWN",
+    )
 
 
 def terminalize_ambiguous_attempt(

@@ -857,25 +857,18 @@ def _regression_attestation(
 ) -> tuple[bool, str]:
     """Whether protected functional regressions are attested for this run.
 
-    **Nothing attests them today, so this is always False.** There is no runner that executes the
-    application's protected tests and no table that records the result, which means the honest
-    answer
-    is "unknown" -- and for a gate, unknown is unmet.
-
-    A function rather than a constant because it is where that evidence will come from. When a
-    runner
-    exists it reports regression results as evidence bound to the attempt, and this reads them.
-    Until
-    then every verification is conclusively non-VERIFIED, which is the correct state for a
-    deployment
-    that cannot run a candidate at all.
+    **Nothing durably attests them today, so this is always False.** The owned-reference worker
+    can execute protected HTTP/database checks, but there is no durable result bound to this
+    candidate run, lease and epoch. An in-memory result or a test report is not such evidence.
+    This gate may read that future protected record only after the trusted dispatch/receipt path
+    exists; callers cannot replace it with an assertion that their tests passed.
     """
     return False, (
-        "no attested record of protected functional regressions exists for this run. Nothing in "
-        "this deployment executes the application's protected tests -- validation, authorization, "
-        "successful submission, failed-input handling -- so whether the repair broke any of them "
-        "is unknown. A repair cannot be established while that is unknown, and an unknown gate is "
-        "an unmet gate."
+        "no attested record of protected functional regressions exists for this run. The local "
+        "owned-reference runner can exercise protected tests, but its result is not yet durably "
+        "bound to this candidate run and dispatch authority. Whether this candidate passed "
+        "validation, authorization, successful submission and failed-input handling is therefore "
+        "unattested. An unknown gate is an unmet gate."
     )
 
 
@@ -1185,11 +1178,10 @@ def conclude_verification(
     happened.
 
     **In this deployment the conclusion can never be VERIFIED.** Nothing attests protected
-    functional
-    regressions, so that gate is permanently unmet, and a permanently unmet gate is the correct
-    state
-    for a product that cannot build or run a candidate at all. Reaching VERIFIED requires a runner
-    that records regression results -- not a different argument to this function.
+    functional regressions for this candidate run, so the gate remains unmet even though a local
+    owned-reference primitive can build and test captured wheels. Reaching VERIFIED requires
+    durable trusted regression receipts and a complete actual matched pair -- not a different
+    argument to this function.
 
     `candidate_run_id` absent is INCONCLUSIVE, not NOT_ESTABLISHED. A run that did not produce a
     verdict has not shown the repair failed -- it has shown nothing -- and recording those as the
@@ -1205,6 +1197,17 @@ def conclude_verification(
         )
     # Validated before anything is written, so a malformed waiver cannot reach the comparison and
     # cannot leave a half-updated record behind.
+    bound = conn.execute(
+        "SELECT run_id,permitted_differences FROM candidate_run_binding WHERE verification_id=%s",
+        (verification_id,),
+    ).fetchone()
+    if bound is not None:
+        if candidate_run_id is not None and candidate_run_id != str(bound["run_id"]):
+            raise VerificationError("verification is bound to another exact candidate run")
+        if permitted_differences and list(permitted_differences) != bound["permitted_differences"]:
+            raise VerificationError("bound candidate differences cannot be widened at conclusion")
+        candidate_run_id = str(bound["run_id"])
+        permitted_differences = tuple(bound["permitted_differences"])
     allowances = _validate_permitted_differences(permitted_differences)
 
     if candidate_run_id is not None:

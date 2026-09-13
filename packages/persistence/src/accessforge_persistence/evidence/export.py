@@ -28,6 +28,7 @@ from accessforge_evidence.bundle import (
     ProducerEntry,
     ReviewEntry,
 )
+from accessforge_persistence import evaluations
 
 from .objectstore import ArtifactStore, ArtifactStoreError
 
@@ -221,6 +222,11 @@ def build_bundle(
         ).fetchall()
     }
 
+    try:
+        retained_evaluation = evaluations.read(conn, run_id=request.run_id)
+    except evaluations.EvaluationError as exc:
+        raise ExportError("retained evaluation integrity unavailable") from exc
+    snapshot = None if retained_evaluation is None else retained_evaluation["snapshot"]
     bundle = Bundle(
         schema_version=BUNDLE_SCHEMA_VERSION,
         canonicalization_version=CANONICALIZATION_VERSION,
@@ -230,9 +236,11 @@ def build_bundle(
         manifest_digest=str(run["manifest_digest"]),
         identities=identities,
         outcome=str(run["outcome"]),
-        outcome_reasons=(),
-        evaluator_version=identities.get("EVALUATOR", ""),
-        scope_statement=PASS_SCOPE_STATEMENT,
+        outcome_reasons=() if snapshot is None else tuple(snapshot["reasons"]),
+        evaluator_version=identities.get("EVALUATOR", "")
+        if snapshot is None
+        else snapshot["evaluatorVersion"],
+        scope_statement=PASS_SCOPE_STATEMENT if snapshot is None else snapshot["scope"],
         events=tuple(events),
         producers=producers,
         artifacts=tuple(artifacts),
