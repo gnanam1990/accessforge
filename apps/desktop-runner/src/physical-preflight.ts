@@ -6,6 +6,7 @@ import type { Clock } from './supervisor.js';
 import { createSafariAuthenticatedRunner, createSafariOriginProbe } from './safari-origin.js';
 import { createExclusiveDesktopRunner, type ExclusiveDesktopRunner } from './desktop-claim.js';
 import { parseReference } from './dispatch-receiver.js';
+import { createArtifactProbe, type ArtifactProbeOptions } from './artifact-probe.js';
 
 export interface PhysicalPreflightOptions {
   /** The assigned dedicated audit session, provisioned independently of observed current state. */
@@ -16,6 +17,8 @@ export interface PhysicalPreflightOptions {
   readonly observeRuntimeEvidence: (signal: AbortSignal) => Promise<Omit<RuntimeProbeEvidence,
     'expectedDesktopSessionId' | 'monotonicClockHealthy'>>;
   readonly maxProbeDurationMs?: number;
+  /** Optional concrete live candidate measurement. Configured failures never use callback digests. */
+  readonly artifactProbe?: ArtifactProbeOptions;
   /** Read-only host port; production defaults to real macOS probes. */
   readonly environment?: ProbeEnvironment;
 }
@@ -29,6 +32,7 @@ export function createPhysicalPreflight(options: PhysicalPreflightOptions): () =
   if (!/^[1-9][0-9]*$/.test(assigned) || Number(assigned) >= 4294967295 ||
       !Number.isFinite(limit) || limit <= 0 || limit > 30000) throw new Error('physical preflight configuration unavailable');
   const environment = options.environment ?? createHostEnvironment();
+  const artifactProbe = options.artifactProbe === undefined ? undefined : createArtifactProbe(options.artifactProbe);
   let last: number | undefined;
   let busy = false;
   let fenced = false;
@@ -41,7 +45,12 @@ export function createPhysicalPreflight(options: PhysicalPreflightOptions): () =
       const start = options.clock.monotonic();
       const startSession = environment.auditSessionId();
       const runtime = await Promise.race([
-        options.observeRuntimeEvidence(controller.signal),
+        (async () => {
+          const runtime = await options.observeRuntimeEvidence(controller.signal);
+          if (controller.signal.aborted) throw new Error('physical evidence cancelled');
+          // The concrete measurement wins over any historical setup digest in the runtime port.
+          return artifactProbe === undefined ? runtime : { ...runtime, ...await artifactProbe(controller.signal) };
+        })(),
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => { controller.abort(); reject(new Error('physical evidence deadline elapsed')); }, limit);
         }),
