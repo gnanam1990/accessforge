@@ -113,6 +113,39 @@ def open_supervisor_session(
     return result
 
 
+@router.post("/supervisor-sessions/{session_id}/startup-authority")
+def check_supervisor_startup_authority(
+    workspace_id: str,
+    session_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Read current machine/run authority, not reader-settings consent or physical readiness.
+
+    POST creates no approval, action, event, lease or extended lifetime. Operator authorization
+    for SDK startup and fresh physical checks remain independently mandatory.
+    """
+    as_identifier(workspace_id, what="workspace")
+    as_identifier(session_id, what="supervisor session")
+    if payload:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "startup authority body must be empty")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    try:
+        result = supervisor_sessions.check_startup_authority(
+            conn, workspace_id=workspace_id, session_id=session_id, token=credential.credentials
+        )
+    except (supervisor_sessions.Refused, runners.RunnerError):
+        raise ProblemDetail(
+            ProblemCode.PERMISSION_DENIED, "startup execution authority unavailable"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
 @router.post(
     "/supervisor-sessions/{session_id}/action-intents", status_code=status.HTTP_201_CREATED
 )

@@ -47,6 +47,9 @@ deployment integration. No OS permission or actual reader was changed to impleme
 Startup now shares the runner's absolute lease deadline/monotonic clock and rechecks authorization
 after the SDK/postflight before admitting actions; a longer initialization timeout cannot extend
 expired authority. Author review is scoped to this lifecycle delta, not independent PR approval.
+The bootstrap's execution-authority recheck is now backed by a real machine-only server endpoint,
+with exact session/attempt binding, revocation/expiry and original policy wall-budget checks. It
+does not create or substitute for explicit operator consent to SDK preference/restart effects.
 
 The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
 execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
