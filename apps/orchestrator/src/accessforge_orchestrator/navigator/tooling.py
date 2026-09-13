@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from strands.types._events import ToolResultEvent
 from strands.types.tools import AgentTool, ToolGenerator, ToolSpec, ToolUse
 
-from accessforge_navigation_tools import NavigationToolGateway, ProposedAction, ToolRefusal
+from accessforge_navigation_tools import NavigationGateway, ProposedAction, ToolRefusal
 
 from .checkpoints import CheckpointKind, PlanningCheckpoint, PlanningCheckpointSink
 
@@ -25,7 +25,7 @@ class NavigationActionTool(AgentTool):
     def __init__(
         self,
         *,
-        gateway: NavigationToolGateway,
+        gateway: NavigationGateway,
         checkpoints: PlanningCheckpointSink,
         cancel_fence: Event,
         utc_now: UtcClock,
@@ -188,7 +188,7 @@ class NavigationActionTool(AgentTool):
 
 def make_navigation_tool(
     *,
-    gateway: NavigationToolGateway,
+    gateway: NavigationGateway,
     checkpoints: PlanningCheckpointSink,
     cancel_fence: Event,
     utc_now: UtcClock,

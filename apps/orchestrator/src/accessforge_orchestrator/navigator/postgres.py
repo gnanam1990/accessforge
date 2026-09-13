@@ -19,6 +19,7 @@ class PostgresPlanningCheckpointSink:
     run_id: str
     attempt_id: str
     expected_run_ref: str
+    operation_id: str | None = None
 
     async def retain(self, checkpoint: PlanningCheckpoint) -> None:
         if checkpoint.run_ref != self.expected_run_ref:
@@ -38,9 +39,9 @@ class PostgresPlanningCheckpointSink:
                     INSERT INTO navigator_planning_checkpoint
                         (id, workspace_id, run_id, attempt_id, run_ref, kind, recorded_at,
                          sdk_version, provider, model_id, action, key_chord, text_value_ref,
-                         dispatch_status, action_id, stop_reason)
+                         dispatch_status, action_id, stop_reason, operation_id)
                     VALUES
-                        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -59,6 +60,7 @@ class PostgresPlanningCheckpointSink:
                         checkpoint.dispatch_status,
                         checkpoint.action_id,
                         checkpoint.stop_reason,
+                        self.operation_id,
                     ),
                 )
             # Exiting the transaction commits before this method returns. The connection is not

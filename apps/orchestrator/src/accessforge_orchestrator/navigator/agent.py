@@ -15,7 +15,7 @@ from strands.agent.agent_result import AgentResult
 from strands.models import BedrockModel
 from strands.types.agent import Limits
 
-from accessforge_navigation_tools import NavigationToolGateway, NavigatorProjection
+from accessforge_navigation_tools import NavigationGateway, NavigatorProjection
 
 from .checkpoints import CheckpointKind, PlanningCheckpoint, PlanningCheckpointSink
 from .config import NavigatorModelProfile
@@ -65,7 +65,7 @@ AgentBuilder = Callable[[Event], NavigatorAgent]
 def build_strands_agent(
     *,
     profile: NavigatorModelProfile,
-    gateway: NavigationToolGateway,
+    gateway: NavigationGateway,
     checkpoints: PlanningCheckpointSink,
     cancel_fence: Event,
     utc_now: UtcClock,

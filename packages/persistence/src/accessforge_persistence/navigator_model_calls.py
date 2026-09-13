@@ -449,6 +449,63 @@ def reserve_turn(
     return request_digest
 
 
+def assert_turn_authorized(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    run_id: str,
+    attempt_id: str,
+    runner_id: str,
+    lease_id: str,
+    epoch: int,
+    consent_id: str,
+    operation_id: str,
+    request_digest: str,
+    model_config_digest: str,
+    projection_digest: str,
+    action_sequence: int,
+) -> None:
+    """Recheck an already committed, in-process turn; never recreate or resume it.
+
+    The coordinator additionally reloads the original reader projection. This function binds that
+    read to this exact open reservation and current consent, before construction and dispatch.
+    """
+    consent, _, _ = _live(
+        conn,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        attempt_id=attempt_id,
+        runner_id=runner_id,
+        lease_id=lease_id,
+        epoch=epoch,
+        consent_id=consent_id,
+    )
+    row = conn.execute(
+        "SELECT 1 FROM navigator_model_turn t JOIN diagnosis_invocation i "
+        "ON i.operation_id=t.operation_id AND i.workspace_id=t.workspace_id "
+        "WHERE t.workspace_id=%s AND t.operation_id=%s AND t.run_id=%s "
+        "AND t.attempt_id=%s AND t.runner_id=%s AND t.lease_id=%s AND t.lease_epoch=%s "
+        "AND t.consent_id=%s AND t.action_sequence=%s AND t.projection_digest=%s "
+        "AND i.request_digest=%s AND i.purpose='NAVIGATOR' AND i.status='STARTED' "
+        "FOR SHARE OF i",
+        (
+            workspace_id,
+            operation_id,
+            run_id,
+            attempt_id,
+            runner_id,
+            lease_id,
+            epoch,
+            consent_id,
+            action_sequence,
+            projection_digest,
+            request_digest,
+        ),
+    ).fetchone()
+    if row is None or model_config_digest != consent["model_config_digest"]:
+        raise Refused("original open invocation and exact configured model required")
+
+
 def finish_turn(
     conn: psycopg.Connection[Any],
     *,
