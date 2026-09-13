@@ -166,7 +166,14 @@ def request_run(
                 "SELECT id FROM sealed_manifest WHERE id=%s FOR UPDATE",
                 (sealed.sealed_manifest_id,),
             )
-            canonical = sealed.canonical_manifest
+            try:
+                canonical = projects.assert_execution_seal_current(
+                    conn, sealed_manifest_id=sealed.sealed_manifest_id
+                )
+            except (projects.ProjectError, projects.SealError, ValueError) as exc:
+                raise ProblemDetail(
+                    ProblemCode.CONFLICT, str(exc), request_id=context.request_id
+                ) from exc
             reserved_run = str(canonical["runId"])
             if (
                 reserved_authorization is not None

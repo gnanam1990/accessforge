@@ -342,6 +342,7 @@ class SealInputs:
 class Seal:
     sealed_manifest_id: str
     manifest_digest: str
+    canonical_manifest: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,7 +500,47 @@ def seal_run(
             Jsonb(canonical) if canonical is not None else None,
         ),
     )
-    return Seal(sealed_manifest_id=sealed_id, manifest_digest=manifest_digest)
+    return Seal(
+        sealed_manifest_id=sealed_id,
+        manifest_digest=manifest_digest,
+        canonical_manifest=canonical,
+    )
+
+
+def assert_execution_seal_current(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    sealed_manifest_id: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Recheck the complete persisted identity and live environment, not execution approval.
+
+    Used at admission and before issuing exact authority. This checks stored identities only;
+    observing the actual deployment and the reader remains a separate dispatch prerequisite.
+    """
+    row = conn.execute(
+        "SELECT * FROM sealed_manifest WHERE id=%s", (sealed_manifest_id,)
+    ).fetchone()
+    if row is None or row["canonical_manifest"] is None:
+        raise SealError("a complete canonical execution manifest is required")
+    manifest: dict[str, Any] = row["canonical_manifest"]
+    validate("run-manifest.schema.json", manifest)
+    if digest(manifest) != str(row["manifest_digest"]) or any(
+        manifest[key] != str(row[column])
+        for key, column in (
+            ("workspaceId", "workspace_id"),
+            ("projectId", "project_id"),
+            ("runId", "run_id"),
+            ("authorizationId", "authorization_id"),
+            ("environmentConfigDigest", "environment_config_digest"),
+        )
+    ):
+        raise SealError("canonical execution identity does not match the stored seal")
+    moment = now or to_rfc3339_utc(datetime.now(UTC))
+    if is_expired(now=moment, expires_at=manifest["expiresAt"]):
+        raise SealError("canonical execution manifest has expired; create a new seal")
+    assert_environment_usable(conn, environment_id=str(row["environment_manifest_id"]), now=moment)
+    return manifest
 
 
 def revalidate_before_dispatch(

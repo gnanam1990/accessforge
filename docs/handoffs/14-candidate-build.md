@@ -794,3 +794,42 @@ contract dependency metadata. Actual built wheels were installed into a temporar
 origins and packaged resources were checked there. Other runtime dependencies remained in the
 existing test environment, so this is not a hermetic deployment or a published release. Current-head
 GitHub CI, independent execution approval and actual-reader proof remain required.
+
+### Public canonical seal creation and review (continuation)
+
+`POST /projects/{projectId}/seals` now accepts an optional `execution` object containing exactly
+`journeyVersionId`, `expiresAt`, `actionBudget`, `wallTimeBudgetSeconds`, and `permittedEffects`.
+The existing source/build/environment and input-digest fields remain required. The server reserves
+fresh run/authorization UUIDs and returns the complete schema-validated `canonicalManifest` plus
+its digest and `manifestKind: CANONICAL_EXECUTION`. It creates neither a run nor an approval.
+Malformed nested fields, non-integer/boolean budgets, duplicate effects, effects outside the
+environment, mismatched frozen journey inputs and invalid/expired/excessive expiry are refused.
+
+`GET /projects/{projectId}/seals/{sealedManifestId}` returns the exact immutable payload for human
+review, with the manifest digest as ETag. It is scoped to the exact project and workspace and uses
+EVIDENCE_READ, whereas creation requires PROJECT_CONFIGURE plus CSRF. It intentionally permits
+historical inspection after expiry or environment revocation, without claiming current execution
+authority. Lists distinguish canonical execution identities from legacy input fingerprints.
+Omitting `execution` still produces a legacy fingerprint with NULL canonical payload; history is
+not backfilled. Cached pre-upgrade responses retain their original shape on same-project replay.
+
+Local review found a pre-existing project-path replay defect: a cached seal under the shared route
+template could be returned through another project's URL. The fix checks the cached seal's actual
+project before responding, while keeping the old key namespace so legitimate pre-upgrade retries
+do not allocate duplicates. Both canonical and old-shape legacy cache regressions fail under a
+scratch-only mutation removing that check (wrong-project HTTP201), and pass with it (HTTP400).
+
+Canonical run admission now rechecks the persisted full schema/digest/reserved IDs, execution expiry
+and current environment usability before charging quota. Requesting still does not approve or
+start execution. Full manual RUN_EFFECTS issuance/revocation and dispatch, actual reader/controller/
+observer finalization, UNKNOWN reconciliation and matched repair acceptance remain pending.
+No new external integration, dependency version or database migration is introduced by this slice.
+The live contract and both generated operation tables now contain 75 operations.
+
+Validation: full Python checkpoint **2,188 passed**, zero failures/skips, 58 upstream warnings,
+294.92 seconds on fresh PostgreSQL and pinned local Docker toolchains. That run was collected
+before the final missing-cache-result guard, which refuses incomplete stored operations with409
+without re-execution. Final focused HTTP plus all unit tests: **1,095 passed** (54 HTTP +1,041 unit),
+one upstream warning,28.98 seconds. These are separate checkpoints. Strict mypy232, Ruff334,
+four drift checks, documentation links and recursive TypeScript typecheck/build/test pass.
+The preceding commit0df922e passed GitHub CI34728157381; the new commit requires its own CI.

@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
 import pytest
@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 from accessforge_api.app import create_app
 from accessforge_api.auth import CSRF_HEADER, SESSION_COOKIE
 from accessforge_api.config import ApiSettings
+from accessforge_contracts import validate
 from accessforge_domain.canonical import digest
 from accessforge_persistence import (
     assert_row_level_security_enforced,
@@ -168,6 +169,339 @@ def _seal_body(build_id: str, environment_id: str, **overrides: Any) -> dict[str
         "modelConfigDigest": _digest("model"),
         **overrides,
     }
+
+
+@pytest.fixture()
+def execution_body(
+    db: str, client: TestClient, csrf: str, project: str, environment: str
+) -> dict[str, Any]:
+    """HTTP-created source/environment and a synthetic frozen journey, not reader proof."""
+    build = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/builds",
+        json=_build_body(),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert build.status_code == 201, build.text
+    journey_id = str(uuid.uuid4())
+    body = _seal_body(build.json()["buildId"], environment)
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,journey_digest,"
+            "assertion_set_digest,fixture_digest,navigator_policy_digest,navigator_policy,"
+            "reviewer_summary) VALUES (%s,%s,%s,'synthetic','web',%s,%s,%s,%s,'{}','{}')",
+            (
+                journey_id,
+                WS,
+                project,
+                body["journeyDigest"],
+                body["assertionSetDigest"],
+                body["fixtureDigest"],
+                body["navigatorPolicyDigest"],
+            ),
+        )
+    body["execution"] = {
+        "journeyVersionId": journey_id,
+        "expiresAt": (datetime.now(UTC) + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        "actionBudget": 10,
+        "wallTimeBudgetSeconds": 30,
+        "permittedEffects": ["FORM_SUBMIT"],
+    }
+    return body
+
+
+def test_http_execution_seal_is_reviewable_idempotent_and_never_implicitly_approved(
+    db: str, client: TestClient, csrf: str, project: str, execution_body: dict[str, Any]
+) -> None:
+    url = f"/v1/workspaces/{WS}/projects/{project}/seals"
+    headers = {CSRF_HEADER: csrf, "Idempotency-Key": str(uuid.uuid4())}
+    created = client.post(url, json=execution_body, headers=headers)
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["manifestKind"] == "CANONICAL_EXECUTION"
+    manifest = body["canonicalManifest"]
+    validate("run-manifest.schema.json", manifest)
+    assert digest(manifest) == body["manifestDigest"]
+    for field, value in execution_body["execution"].items():
+        assert manifest[field] == value
+    assert manifest["workspaceId"] == WS and manifest["projectId"] == project
+    assert client.post(url, json=execution_body, headers=headers).json() == body
+    reviewed = client.get(f"{url}/{body['sealedManifestId']}")
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["canonicalManifest"] == manifest
+    assert reviewed.headers["ETag"] == f'"{body["manifestDigest"]}"'
+    listing = client.get(f"/v1/workspaces/{WS}/projects/{project}/manifests").json()
+    assert listing["items"][0]["manifestKind"] == "CANONICAL_EXECUTION"
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM run").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM approval").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM sealed_manifest").fetchone() == {"n": 1}
+        other_project = project_store.create_project(conn, workspace_id=WS, name="Other")
+    # A key scoped only to the route template used to return project A's seal through project B.
+    assert (
+        client.post(
+            f"/v1/workspaces/{WS}/projects/{other_project}/seals",
+            json=execution_body,
+            headers=headers,
+        ).status_code
+        == 400
+    )
+    assert (
+        client.get(
+            f"/v1/workspaces/{WS}/projects/{other_project}/seals/{body['sealedManifestId']}"
+        ).status_code
+        == 404
+    )
+    again = client.post(url, json=execution_body, headers={CSRF_HEADER: csrf}).json()
+    assert again["manifestDigest"] != body["manifestDigest"]
+    for field in ("runId", "authorizationId"):
+        assert again["canonicalManifest"][field] != manifest[field]
+    admitted = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": body["manifestDigest"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert admitted.status_code == 202, admitted.text
+    assert admitted.json()["runId"] == manifest["runId"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("execution", None),
+        ("execution", {}),
+        ("extra", True),
+        ("actionBudget", True),
+        ("actionBudget", 0),
+        ("actionBudget", "10"),
+        ("wallTimeBudgetSeconds", -1),
+        ("journeyVersionId", 12),
+        ("journeyVersionId", str(uuid.UUID(int=98765))),
+        ("expiresAt", "not-a-date"),
+        ("expiresAt", "2000-01-01T00:00:00Z"),
+        ("expiresAt", "9999-01-01T00:00:00Z"),
+        ("permittedEffects", "FORM_SUBMIT"),
+        ("permittedEffects", [{}]),
+        ("permittedEffects", ["FORM_SUBMIT", "FORM_SUBMIT"]),
+        ("permittedEffects", ["DELETE_ALL"]),
+    ],
+)
+def test_http_execution_seal_refuses_invalid_or_broadened_scope_atomically(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    execution_body: dict[str, Any],
+    field: str,
+    value: Any,
+) -> None:
+    if field == "execution":
+        execution_body[field] = value
+    else:
+        execution_body["execution"][field] = value
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=execution_body,
+        headers={CSRF_HEADER: csrf, "Idempotency-Key": str(uuid.uuid4())},
+    )
+    assert response.status_code == 400, response.text
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM sealed_manifest").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM approval").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM run").fetchone() == {"n": 0}
+
+
+@pytest.mark.parametrize("changed", ["expiry", "environment"])
+def test_canonical_admission_rechecks_live_scope_before_charging(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    environment: str,
+    execution_body: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+) -> None:
+    created = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=execution_body,
+        headers={CSRF_HEADER: csrf},
+    ).json()
+    if changed == "environment":
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "UPDATE environment_manifest SET revoked_at=now() WHERE id=%s", (environment,)
+            )
+    else:
+        future = datetime.now(UTC) + timedelta(hours=2)
+
+        class FutureClock(datetime):
+            @classmethod
+            def now(cls, tz: tzinfo | None = None) -> FutureClock:
+                return cls.fromtimestamp(future.timestamp(), tz=tz)
+
+        monkeypatch.setattr(project_store, "datetime", FutureClock)
+    response = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": created["manifestDigest"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 409, response.text
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM run").fetchone() == {"n": 0}
+        assert conn.execute(
+            "SELECT count(*) AS n FROM usage_event WHERE kind='RUN_ADMITTED'"
+        ).fetchone() == {"n": 0}
+    # Historical review remains possible, without claiming the scope is currently executable.
+    reviewed = client.get(
+        f"/v1/workspaces/{WS}/projects/{project}/seals/{created['sealedManifestId']}"
+    )
+    assert reviewed.status_code == 200
+    assert reviewed.json()["canonicalManifest"] == created["canonicalManifest"]
+
+
+def test_execution_seal_read_and_write_permissions_and_legacy_review(
+    db: str, client: TestClient, csrf: str, project: str, execution_body: dict[str, Any]
+) -> None:
+    from accessforge_api.auth import issue_session
+
+    url = f"/v1/workspaces/{WS}/projects/{project}/seals"
+    created = client.post(url, json=execution_body, headers={CSRF_HEADER: csrf}).json()
+    legacy_body = {key: value for key, value in execution_body.items() if key != "execution"}
+    legacy = client.post(url, json=legacy_body, headers={CSRF_HEADER: csrf}).json()
+    assert legacy["manifestKind"] == "INPUT_FINGERPRINT"
+    assert legacy["canonicalManifest"] is None
+    assert client.get(f"{url}/{legacy['sealedManifestId']}").json()["canonicalManifest"] is None
+    # A caller cannot choose the reserved identities or impersonate the authorizing actor.
+    for field in ("runId", "authorizationId", "actorId"):
+        refused = client.post(
+            url, json={**execution_body, field: str(uuid.uuid4())}, headers={CSRF_HEADER: csrf}
+        )
+        assert refused.status_code == 400, refused.text
+    assert client.post(url, json=execution_body).status_code == 403
+    with workspace_connection(db, WS) as conn:
+        session = issue_session(conn, user_id=VIEWER)
+    client.cookies.set(SESSION_COOKIE, session.session_token)
+    assert client.get(f"{url}/{created['sealedManifestId']}").status_code == 200
+    assert (
+        client.post(url, json=execution_body, headers={CSRF_HEADER: session.csrf_token}).status_code
+        == 403
+    )
+    # Exact tenant and project pairing, including a principal belonging to both tenants.
+    other_ws = str(uuid.uuid4())
+    with unscoped_connection(db) as conn:
+        conn.execute("INSERT INTO workspace(id,name) VALUES (%s,'other')", (other_ws,))
+    with workspace_connection(db, other_ws) as conn:
+        conn.execute(
+            "INSERT INTO workspace_membership(workspace_id,user_id,role) VALUES (%s,%s,'OWNER')",
+            (other_ws, VIEWER),
+        )
+        other_project = project_store.create_project(conn, workspace_id=other_ws, name="other")
+    assert (
+        client.get(
+            f"/v1/workspaces/{other_ws}/projects/{other_project}/seals/{created['sealedManifestId']}"
+        ).status_code
+        == 404
+    )
+    client.cookies.clear()
+    assert client.get(f"{url}/{created['sealedManifestId']}").status_code == 401
+
+
+def test_empty_effects_are_preserved_without_broadening(
+    client: TestClient, csrf: str, project: str, execution_body: dict[str, Any]
+) -> None:
+    execution_body["execution"]["permittedEffects"] = []
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=execution_body,
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["canonicalManifest"]["permittedEffects"] == []
+
+
+def test_pre_upgrade_legacy_seal_replay_is_preserved_but_not_cross_project(
+    db: str, client: TestClient, csrf: str, project: str, execution_body: dict[str, Any]
+) -> None:
+    from accessforge_persistence import idempotency
+
+    url = f"/v1/workspaces/{WS}/projects/{project}/seals"
+    legacy_body = {key: value for key, value in execution_body.items() if key != "execution"}
+    created = client.post(url, json=legacy_body, headers={CSRF_HEADER: csrf}).json()
+    # A real stored old-shape result under the exact committed pre-upgrade namespace.
+    old_response = {
+        key: value
+        for key, value in created.items()
+        if key not in {"canonicalManifest", "manifestKind"}
+    }
+    key = str(uuid.uuid4())
+    with workspace_connection(db, WS) as conn:
+        reserved = idempotency.reserve(
+            conn,
+            workspace_id=WS,
+            principal_id=OWNER,
+            route="POST /projects/seals",
+            idempotency_key=key,
+            request_digest=digest(legacy_body),
+        )
+        idempotency.complete(conn, operation_id=reserved.operation_id, result=old_response)
+        other = project_store.create_project(conn, workspace_id=WS, name="Other")
+    headers = {CSRF_HEADER: csrf, "Idempotency-Key": key}
+    replay = client.post(url, json=legacy_body, headers=headers)
+    assert replay.status_code == 201, replay.text
+    assert replay.json() == old_response
+    assert (
+        client.post(
+            f"/v1/workspaces/{WS}/projects/{other}/seals",
+            json=legacy_body,
+            headers=headers,
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            url,
+            json={**legacy_body, "evaluatorVersion": "changed"},
+            headers=headers,
+        ).status_code
+        == 409
+    )
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM sealed_manifest").fetchone() == {"n": 1}
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_incomplete_stored_seal_operation_refuses_without_reexecution(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    execution_body: dict[str, Any],
+    completed: bool,
+) -> None:
+    from accessforge_persistence import idempotency
+
+    key = str(uuid.uuid4())
+    with workspace_connection(db, WS) as conn:
+        reserved = idempotency.reserve(
+            conn,
+            workspace_id=WS,
+            principal_id=OWNER,
+            route="POST /projects/seals",
+            idempotency_key=key,
+            request_digest=digest(execution_body),
+        )
+        if completed:
+            idempotency.complete(conn, operation_id=reserved.operation_id, result={})
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=execution_body,
+        headers={CSRF_HEADER: csrf, "Idempotency-Key": key},
+    )
+    assert response.status_code == 409, response.text
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM sealed_manifest").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM run").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM approval").fetchone() == {"n": 0}
 
 
 # --- builds --------------------------------------------------------------------------------------

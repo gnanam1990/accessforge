@@ -335,6 +335,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: true,
     authenticated: true,
   },
+  'inspect_seal': {
+    operationId: 'inspect_seal',
+    method: 'GET',
+    path: '/v1/workspaces/{workspace_id}/projects/{project_id}/seals/{sealed_manifest_id}',
+    parameters: ['workspace_id', 'project_id', 'sealed_manifest_id'],
+    mutating: false,
+    authenticated: true,
+  },
   'list_review_requests': {
     operationId: 'list_review_requests',
     method: 'GET',
@@ -644,6 +652,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/projects/{project_id}/manifests',
   '/v1/workspaces/{workspace_id}/projects/{project_id}/repair-surface',
   '/v1/workspaces/{workspace_id}/projects/{project_id}/seals',
+  '/v1/workspaces/{workspace_id}/projects/{project_id}/seals/{sealed_manifest_id}',
   '/v1/workspaces/{workspace_id}/review-requests',
   '/v1/workspaces/{workspace_id}/reviews',
   '/v1/workspaces/{workspace_id}/reviews/{review_id}',

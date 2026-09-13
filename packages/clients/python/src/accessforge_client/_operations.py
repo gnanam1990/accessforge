@@ -362,6 +362,14 @@ OPERATIONS: dict[str, Operation] = {
         mutating=True,
         authenticated=True,
     ),
+    "inspect_seal": Operation(
+        operation_id="inspect_seal",
+        method="GET",
+        path="/v1/workspaces/{workspace_id}/projects/{project_id}/seals/{sealed_manifest_id}",
+        parameters=("workspace_id", "project_id", "sealed_manifest_id"),
+        mutating=False,
+        authenticated=True,
+    ),
     "list_review_requests": Operation(
         operation_id="list_review_requests",
         method="GET",
@@ -673,6 +681,7 @@ PATHS: frozenset[str] = frozenset(
         "/v1/workspaces/{workspace_id}/projects/{project_id}/manifests",
         "/v1/workspaces/{workspace_id}/projects/{project_id}/repair-surface",
         "/v1/workspaces/{workspace_id}/projects/{project_id}/seals",
+        "/v1/workspaces/{workspace_id}/projects/{project_id}/seals/{sealed_manifest_id}",
         "/v1/workspaces/{workspace_id}/review-requests",
         "/v1/workspaces/{workspace_id}/reviews",
         "/v1/workspaces/{workspace_id}/reviews/{review_id}",
