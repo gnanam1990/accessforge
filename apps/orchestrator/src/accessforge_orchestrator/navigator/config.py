@@ -44,7 +44,9 @@ class NavigatorModelProfile(BaseModel):
     invocation_output_tokens: int = Field(default=1024, ge=64, le=4096)
     invocation_total_tokens: int = Field(default=12000, ge=512, le=50000)
     max_context_characters: int = Field(default=24000, ge=1000, le=100000)
-    call_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    # Integral floats are accepted for existing JSON clients; the shared validator rejects
+    # fractional seconds so every accepted profile can be sealed canonically.
+    call_timeout_seconds: float = Field(default=30, ge=1, le=120)
     model_attempts: int = Field(default=2, ge=1, le=3)
     retry_initial_delay_seconds: int = Field(default=1, ge=1, le=5)
     retry_max_delay_seconds: int = Field(default=2, ge=1, le=10)

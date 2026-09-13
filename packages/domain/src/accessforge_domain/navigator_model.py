@@ -52,8 +52,15 @@ def validate_profile(profile: dict[str, Any]) -> None:
     ):
         raise ValueError("finite navigator integer budgets required")
     timeout = profile["call_timeout_seconds"]
-    if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 120:
-        raise ValueError("finite navigator call timeout required")
+    # This field participates in the sealed configuration digest. Canonical authority forbids
+    # fractional floats; integral floats remain equivalent to their integer JSON representation.
+    if (
+        type(timeout) not in (int, float)
+        or not math.isfinite(timeout)
+        or not 1 <= timeout <= 120
+        or int(timeout) != timeout
+    ):
+        raise ValueError("navigator call timeout must be 1 to 120 whole seconds")
     if profile["retry_max_delay_seconds"] < profile["retry_initial_delay_seconds"]:
         raise ValueError("navigator retry delays are inverted")
 
