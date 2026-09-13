@@ -1,17 +1,17 @@
 # Reader startup consent — storage and HTTP delivery
 
-Separate branch: `feat/reader-startup-consent`, includes PR37 correction6d244ab. Not part of PR37.
+Separate branch: `feat/reader-startup-consent`, includes PR #37 correction 6d244ab. Not part of PR #37.
 
-PR37 merged into main at30ce2f0; this branch is restacked onto that commit. PR38 baselinea45c15e
-passed all applicable CI in34743969093. The following normal-review corrections need fresh CI:
+PR #37 merged into main at 30ce2f0; this branch is restacked onto that commit. PR #38 baseline a45c15e
+passed all applicable CI in 34743969093. The following normal-review corrections need fresh CI:
 direct consent deletion is refused while its run/workspace remain, with parent cascades preserved;
-unusable seals are normalized to consent refusal instead of500; supervisor operations are excluded
+unusable seals are normalized to consent refusal instead of 500; supervisor operations are excluded
 from the human cookie/CSRF operation tables (all server paths remain in PATHS and native machine
-transport remains supported); supervisor OpenAPI no longer promises a human-limiter429 response.
+transport remains supported); supervisor OpenAPI no longer promises a human-limiter 429 response.
 Scoped deletion/cascade, stale-environment and contract checks are authored for CI, not run locally.
 
-Implemented locally: migration0038 and persistence methods for exact per-run operator consent,
-reviewable pinned Guidepup0.34.0 effect scope, infrastructure-operator attribution, bounded expiry,
+Implemented locally: migration 0038 and persistence methods for exact per-run operator consent,
+reviewable pinned Guidepup 0.34.0 effect scope, infrastructure-operator attribution, bounded expiry,
 irreversible revocation and one-time binding to an authenticated execution session. Run, runner,
 physical desktop key, profile, manifest and effects digest must remain identical; run approval is
 separately required. Binding uses service audit attribution, not a fabricated human action.
@@ -29,7 +29,8 @@ The machine-only empty-body reader-startup-consent route authenticates the priva
 live execution authority before binding/rechecking consent in the same transaction. Its expiry
 cannot exceed either consent or execution authority. Browser cookies/bootstrap reuse refuse.
 OpenAPI now correctly describes all supervisor routes as bearer-authenticated, not browser-cookie
-routes; generated clients contain92 operations.
+routes; the published contract contains 92 operations, with machine-only operations excluded from
+the human clients' callable operation tables.
 
 Native delivery requires an independently provisioned exact consent/manifest/desktop/profile
 scope. The pinned SDK effects digest must match locally, and bootstrap freezes scope before any
