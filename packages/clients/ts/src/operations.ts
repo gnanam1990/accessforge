@@ -608,6 +608,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: false,
     authenticated: true,
   },
+  'get_effect_deliveries': {
+    operationId: 'get_effect_deliveries',
+    method: 'GET',
+    path: '/v1/workspaces/{workspace_id}/runs/{run_id}/effect-deliveries',
+    parameters: ['workspace_id', 'run_id'],
+    mutating: false,
+    authenticated: true,
+  },
   'get_evaluation': {
     operationId: 'get_evaluation',
     method: 'GET',
@@ -843,6 +851,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/runs/{run_id}/deletions/{deletion_id}/retry',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/diagnosis-requests',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/diagnosis-requests/operation',
+  '/v1/workspaces/{workspace_id}/runs/{run_id}/effect-deliveries',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/evaluation',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/events',
   '/v1/workspaces/{workspace_id}/runs/{run_id}/evidence',
