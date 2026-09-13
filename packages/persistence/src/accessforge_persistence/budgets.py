@@ -3,10 +3,10 @@
 The module exists because a limit that is checked but not enforced under concurrency is not a limit.
 Three properties carry it.
 
-**Admission takes a lock on the entitlement row.** Two runs requested at the same instant would
+**Admission takes a stable workspace lock and locks the entitlement row.** Concurrent requests would
 otherwise both read the same total, both find room, and both be admitted — and the workspace ends up
 over its limit by exactly the number of concurrent requests. `SELECT … FOR UPDATE` serialises the
-decision against the row the decision is about, so the second request reads the first one's usage.
+decision; the workspace lock also covers new entitlement revisions and model reservations.
 
 **Usage events are idempotent.** Delivery repeats; consumption does not. The unique key is the
 producer's own identifier for the event, and a redelivery is a no-op rather than a second charge.
@@ -170,6 +170,12 @@ def _current_row(
     # parameter eventually gets concatenated too, and the linter is right to say so even when the
     # appended text is a literal.
     if lock:
+        # A revision-independent admission lock also covers reservations. A newly appended
+        # entitlement must not let simultaneous admissions lock different revision rows.
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+            ("accessforge:budget:" + workspace_id,),
+        )
         row = conn.execute(
             "SELECT * FROM workspace_entitlement WHERE workspace_id = %s "
             "ORDER BY revision DESC LIMIT 1 FOR UPDATE",
@@ -257,15 +263,16 @@ class UsageTotal:
     estimated: int
     unavailable_events: int
     limit: int
+    reserved: int = 0
 
     @property
     def counted_against_limit(self) -> int:
         """What admission compares to the limit.
 
-        Measured and estimated together. Excluding estimated would let anything self-reported be
-        consumed without bound, which is precisely the number a model provider supplies.
+        Measured and estimated consumption plus outstanding reservations. A reservation holds
+        admission capacity but is not evidence of measured provider consumption.
         """
-        return self.measured + self.estimated
+        return self.measured + self.estimated + self.reserved
 
 
 def usage_since(
@@ -290,6 +297,16 @@ def usage_since(
         (workspace_id, moment - WINDOW),
     ).fetchall()
     by_kind = {str(r["kind"]): r for r in rows}
+    reservation = conn.execute(
+        "SELECT coalesce(sum(greatest(0,i.reserved_tokens-coalesce(u.quantity,0))),0) AS reserved "
+        "FROM diagnosis_invocation i LEFT JOIN usage_event u ON u.workspace_id=i.workspace_id "
+        "AND u.event_key='diagnosis:'||i.operation_id::text||':usage' "
+        "AND u.kind='MODEL_TOKENS' AND u.basis IN ('MEASURED','ESTIMATED') "
+        "AND u.occurred_at>%s "
+        "WHERE i.workspace_id=%s AND (i.status IN ('STARTED','UNCONFIRMED') "
+        "OR (i.status='RECORDED' AND i.finished_at>%s))",
+        (moment - WINDOW, workspace_id, moment - WINDOW),
+    ).fetchone()
 
     totals: list[UsageTotal] = []
     for kind in ("RUN_ADMITTED", "ACTION_DISPATCHED", "WALL_SECONDS", "MODEL_TOKENS"):
@@ -304,6 +321,9 @@ def usage_since(
                 # "nothing happened".
                 unavailable_events=int(row["unavailable"]) if row else 0,
                 limit=entitlement.limit_for(kind),
+                reserved=int(reservation["reserved"])
+                if reservation and kind == "MODEL_TOKENS"
+                else 0,
             )
         )
     return totals

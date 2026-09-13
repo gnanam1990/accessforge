@@ -66,6 +66,7 @@ def read_usage(
                 # A count of events, not a quantity of usage.
                 "unavailableEvents": total.unavailable_events,
                 "countedAgainstLimit": total.counted_against_limit,
+                "reserved": total.reserved,
                 "limit": total.limit,
                 "remaining": max(0, total.limit - total.counted_against_limit),
             }
@@ -77,7 +78,9 @@ def read_usage(
             "Measured is what this system counted. Estimated is what a provider reported about its "
             "own consumption, and it counts against the limit because excluding it would leave "
             "anything self-reported unbounded. Unavailable is a count of events whose quantity "
-            "could not be obtained; it is not zero usage. No figure here is a cost, and nothing "
+            "could not be obtained; it is not zero usage. Reserved is held admission capacity, "
+            "not measured consumption. Unconfirmed model calls retain their hold until reconciled, "
+            "even beyond this window. No figure here is a cost, and nothing "
             "here charges anyone."
         ),
     }

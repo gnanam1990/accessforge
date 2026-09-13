@@ -1,4 +1,38 @@
 -- Immutable original model analysis, separate from findings, machine outcomes and human review.
+CREATE TABLE diagnosis_invocation (
+    operation_id UUID NOT NULL,
+    workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+    run_id UUID NOT NULL,
+    request_digest TEXT NOT NULL CHECK(request_digest ~ '^[0-9a-f]{64}$'),
+    reserved_tokens BIGINT NOT NULL CHECK(reserved_tokens BETWEEN 1 AND 50000),
+    status TEXT NOT NULL DEFAULT 'STARTED' CHECK(status IN ('STARTED','RECORDED','UNCONFIRMED','NOT_CALLED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    finished_at TIMESTAMPTZ,
+    PRIMARY KEY(operation_id,workspace_id),
+    FOREIGN KEY(run_id,workspace_id) REFERENCES run(id,workspace_id),
+    CHECK ((status='STARTED')=(finished_at IS NULL))
+);
+ALTER TABLE diagnosis_invocation ENABLE ROW LEVEL SECURITY;
+ALTER TABLE diagnosis_invocation FORCE ROW LEVEL SECURITY;
+CREATE POLICY workspace_isolation ON diagnosis_invocation
+ USING(workspace_id=current_workspace_id()) WITH CHECK(workspace_id=current_workspace_id());
+CREATE FUNCTION guard_diagnosis_invocation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP='DELETE' AND NOT EXISTS(SELECT 1 FROM workspace WHERE id=OLD.workspace_id) THEN
+        RETURN OLD;
+    END IF;
+    IF TG_OP='UPDATE' AND OLD.status='STARTED' AND NEW.status<>'STARTED'
+       AND NEW.finished_at IS NOT NULL
+       AND (to_jsonb(NEW)-'status'-'finished_at')=(to_jsonb(OLD)-'status'-'finished_at') THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'diagnosis invocation identity and final disposition are immutable'
+      USING ERRCODE='integrity_constraint_violation';
+END;
+$$;
+CREATE TRIGGER diagnosis_invocation_guard BEFORE UPDATE OR DELETE ON diagnosis_invocation
+ FOR EACH ROW EXECUTE FUNCTION guard_diagnosis_invocation();
+
 CREATE TABLE finding_diagnosis (
     id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,

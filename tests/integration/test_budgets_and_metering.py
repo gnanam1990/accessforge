@@ -18,13 +18,16 @@ import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
+import psycopg
 import pytest
 
 from accessforge_domain.canonical import digest
 from accessforge_persistence import (
     assert_row_level_security_enforced,
     budgets,
+    diagnosis_invocations,
     migrate,
     runs,
     unscoped_connection,
@@ -74,6 +77,104 @@ def _entitle(db: str, workspace_id: str = WS, **over: int) -> int:
 # --------------------------------------------------------------------------------------------------
 # Entitlements
 # --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", ["RECORDED", "UNCONFIRMED", "NOT_CALLED"])
+def test_diagnosis_reservations_preserve_unknown_usage_and_refuse_replay(
+    db: str, status: Literal["RECORDED", "UNCONFIRMED", "NOT_CALLED"]
+) -> None:
+    _entitle(db, max_model_tokens_per_day=1000)
+    operation = str(uuid.uuid4())
+    with workspace_connection(db, WS) as conn:
+        run_id = runs.create_run(conn, workspace_id=WS, manifest_digest=MANIFEST)
+        diagnosis_invocations.reserve(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            operation_id=operation,
+            request_digest=MANIFEST,
+            tokens=1000,
+        )
+    # Committed STARTED survives a lost caller and consumes capacity without invented usage.
+    with workspace_connection(db, WS) as conn:
+        entitlement = budgets.current_entitlement(conn, workspace_id=WS)
+        total = budgets.usage_since(conn, workspace_id=WS, entitlement=entitlement)[-1]
+        assert total.reserved == total.counted_against_limit == 1000
+        assert total.measured == total.estimated == total.unavailable_events == 0
+        with pytest.raises(budgets.BudgetExhausted):
+            budgets.admit_within_budget(
+                conn,
+                workspace_id=WS,
+                kind="MODEL_TOKENS",
+                quantity=1,
+                event_key="blocked",
+            )
+        diagnosis_invocations.finish(
+            conn,
+            workspace_id=WS,
+            operation_id=operation,
+            request_digest=MANIFEST,
+            status=status,
+        )
+    with workspace_connection(db, WS) as conn:
+        total = budgets.usage_since(conn, workspace_id=WS, entitlement=entitlement)[-1]
+        assert total.reserved == (0 if status == "NOT_CALLED" else 1000)
+        assert total.measured == total.estimated == 0
+        assert total.unavailable_events == (0 if status == "NOT_CALLED" else 1)
+        future = budgets.usage_since(
+            conn,
+            workspace_id=WS,
+            entitlement=entitlement,
+            now=datetime.now(UTC) + timedelta(days=2),
+        )[-1]
+        assert future.reserved == (1000 if status == "UNCONFIRMED" else 0)
+        with pytest.raises(diagnosis_invocations.InvocationRefused):
+            diagnosis_invocations.reserve(
+                conn,
+                workspace_id=WS,
+                run_id=run_id,
+                operation_id=operation,
+                request_digest=MANIFEST,
+                tokens=1000,
+            )
+        with conn.transaction(), pytest.raises(psycopg.IntegrityError):
+            conn.execute("DELETE FROM diagnosis_invocation WHERE operation_id=%s", (operation,))
+        with pytest.raises(diagnosis_invocations.InvocationRefused):
+            diagnosis_invocations.finish(
+                conn,
+                workspace_id=WS,
+                operation_id=operation,
+                request_digest=MANIFEST,
+                status="NOT_CALLED",
+            )
+    with workspace_connection(db, WS_OTHER) as conn:
+        assert conn.execute("SELECT * FROM diagnosis_invocation").fetchall() == []
+
+
+@pytest.mark.parametrize("same_operation", [False, True])
+def test_concurrent_diagnosis_reservation_has_one_winner(db: str, same_operation: bool) -> None:
+    _entitle(db, max_model_tokens_per_day=1000)
+    operation = str(uuid.uuid4())
+    with workspace_connection(db, WS) as conn:
+        run_id = runs.create_run(conn, workspace_id=WS, manifest_digest=MANIFEST)
+
+    def attempt(index: int) -> bool:
+        with workspace_connection(db, WS) as conn:
+            try:
+                diagnosis_invocations.reserve(
+                    conn,
+                    workspace_id=WS,
+                    run_id=run_id,
+                    operation_id=operation if same_operation else str(uuid.uuid4()),
+                    request_digest=MANIFEST,
+                    tokens=1000,
+                )
+            except (budgets.BudgetExhausted, diagnosis_invocations.InvocationRefused):
+                return False
+            return True
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert sum(pool.map(attempt, range(4))) == 1
 
 
 def test_a_workspace_with_no_entitlement_is_refused_rather_than_unlimited(db: str) -> None:

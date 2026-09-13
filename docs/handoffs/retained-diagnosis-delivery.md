@@ -39,9 +39,20 @@ in the independently labelled diagnosis payload, separate from machine outcomes 
 `diagnosis.delivery.deliver` requires a current requester with run-request and evidence-read
 permission, prepares original retained inputs, invokes the existing bounded diagnosis worker outside
 database locks, then rechecks permission and all input identities before retention. A committed
-matching operation is replayed without another model call. Concurrent duplicate calls can still
-invoke the provider before either commits; durable pre-call reservation and usage accounting remain
-pending, so this remains a draft internal workflow, not a production request endpoint.
+matching operation is replayed without another model call. A durable STARTED reservation now commits
+before worker invocation; concurrent duplicates cannot invoke another worker for that operation.
+Provider SDK retries within one worker invocation are still controlled by its existing profile.
+Crashes leave STARTED holds; interrupted calls settle as UNCONFIRMED, never automatically replayed.
+Successful retention and RECORDED settlement commit together. Cancellation known to precede worker
+entry records NOT_CALLED and releases capacity, without making the operation ID reusable.
+
+Workspace token admission includes conservative reservations separately from measured/estimated
+consumption. The current worker does not expose independently verified token usage: completed calls
+record UNAVAILABLE usage and hold their configured allowance for the rolling window. STARTED and
+UNCONFIRMED holds do not silently expire. Settings expose reserved capacity in its own labelled
+column using the existing keyboard-scrollable semantic table. This is not measured provider use or
+a hard financial cap; provider-usage reconciliation and an operator reconciliation workflow remain
+pending. No allowance is raised automatically and no paid provider was invoked during development.
 
 The existing findings GET now returns a bounded diagnosis history with explicit truncation and
 no-store semantics. When any source artifact is marked deleted, its derived diagnosis payloads are
@@ -54,6 +65,10 @@ derived-text deletion. The forward-migration boundary includes 0039. These addit
 changed-file Ruff/mypy validation locally; fresh CI is required. The earlier projection-only head
 0a73231 passed all applicable CI in run 34746324460.
 
-Next: durable pre-call reservation and model usage/budget integration, authorized operator request
-delivery, reviewer UI, and real retained source/model/reader acceptance proof. No model invocation,
+CI-only budget regressions cover concurrent duplicate and quota races, unknown usage, conservative
+hold expiry, permanent operation identity and workspace isolation. Local validation is limited to
+changed-file Ruff/mypy, web production build and diff checks; no local full test suites were run.
+
+Next: provider usage/reconciliation, authorized operator request delivery, reviewer diagnosis UI,
+and real retained source/model/reader acceptance proof. No model invocation,
 physical reader run, deployment or real finding creation was performed in this implementation turn.
