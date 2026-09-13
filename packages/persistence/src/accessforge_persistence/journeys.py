@@ -26,7 +26,9 @@ from typing import Any
 
 import psycopg
 
+from accessforge_domain.canonical import digest
 from accessforge_domain.journeys import CompiledJourney, JourneyDraft, compile_journey
+from accessforge_domain.journeys.assertions import AssertionSet
 
 
 class JourneyPersistenceError(RuntimeError):
@@ -40,6 +42,34 @@ class JourneyPersistenceError(RuntimeError):
     def __init__(self, message: str, *, field: str | None = None) -> None:
         super().__init__(message)
         self.field = field
+
+
+def load_assertion_contract(
+    conn: psycopg.Connection[Any], *, version_id: str, expected_digest: str
+) -> AssertionSet:
+    """Load only an originally frozen contract bound to the run's sealed assertion digest.
+
+    Older descriptions are not executable rules. Do not backfill an immutable historical journey
+    from prose, current fixtures or a caller-supplied expected answer.
+    """
+    row = conn.execute(
+        "SELECT assertion_set_digest,reviewer_summary FROM journey_version WHERE id=%s",
+        (version_id,),
+    ).fetchone()
+    if (
+        row is None
+        or row["assertion_set_digest"] != expected_digest
+        or not isinstance(row["reviewer_summary"], dict)
+    ):
+        raise JourneyPersistenceError("sealed assertion identity unavailable")
+    contract = row["reviewer_summary"].get("assertionContract")
+    try:
+        result = AssertionSet.from_canonical_form(contract)
+        if digest(result.canonical_form()) != expected_digest:
+            raise ValueError("assertion content digest differs")
+    except (ValueError, TypeError) as exc:
+        raise JourneyPersistenceError("original sealed assertion contract unavailable") from exc
+    return result
 
 
 def _as_uuid(value: str, *, what: str, field: str | None = None) -> str:

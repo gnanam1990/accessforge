@@ -154,6 +154,67 @@ def _environment(**overrides: Any) -> dict[str, Any]:
 # --------------------------------------------------------------------------------------------------
 
 
+def test_frozen_evaluation_rules_are_stored_bound_and_not_navigator_visible(
+    client: TestClient,
+    db: str,
+) -> None:
+    from accessforge_persistence.journeys import JourneyPersistenceError, load_assertion_contract
+
+    headers = _signed_in(db, client)
+    project_id = _project(client, headers)
+    draft = _draft(project_id)
+    draft["assertions"][0]["evaluationRule"] = {
+        "type": "EFFECT_COUNT",
+        "effect": "CREATE_TEST_REQUEST",
+        "count": 1,
+    }
+    draft["assertions"][1]["evaluationRule"] = {
+        "type": "EXACT_READER_PHRASE",
+        "actionSequence": 3,
+        "phrase": "Private literal expectation",
+    }
+    created = client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers)
+    assert created.status_code == 201, created.text
+    body = created.json()
+    with workspace_connection(db, WS) as conn:
+        rows = conn.execute("SELECT * FROM journey_version").fetchall()
+        assert len(rows) == 1
+        row = rows[0]
+        contract = load_assertion_contract(
+            conn, version_id=str(row["id"]), expected_digest=body["assertionSetDigest"]
+        )
+        assert contract.assertions[1].evaluation_rule is not None
+        assert "Private literal expectation" not in str(row["navigator_policy"])
+        with pytest.raises(JourneyPersistenceError):
+            load_assertion_contract(conn, version_id=str(row["id"]), expected_digest="0" * 64)
+    draft["assertions"][1]["evaluationRule"]["phrase"] = "Changed expectation"
+    changed = client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers)
+    assert changed.status_code == 201
+    assert changed.json()["assertionSetDigest"] != body["assertionSetDigest"]
+    assert changed.json()["journeyDigest"] != body["journeyDigest"]
+    assert changed.json()["navigatorPolicyDigest"] == body["navigatorPolicyDigest"]
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        None,
+        {"type": "PASS"},
+        {"type": "EXACT_READER_PHRASE", "actionSequence": 41, "phrase": "Beyond budget"},
+        {"type": "EXACT_READER_PHRASE", "actionSequence": True, "phrase": "Boolean"},
+        {"type": "EFFECT_COUNT", "effect": "CREATE_TEST_REQUEST", "count": 1},
+    ],
+)
+def test_unsupported_frozen_rule_returns_client_error(
+    client: TestClient, db: str, rule: object
+) -> None:
+    headers = _signed_in(db, client)
+    draft = _draft(_project(client, headers))
+    draft["assertions"][1]["evaluationRule"] = rule
+    result = client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers)
+    assert result.status_code == 400
+
+
 def test_freezing_returns_the_digests_that_were_actually_sealed(
     client: TestClient, db: str
 ) -> None:

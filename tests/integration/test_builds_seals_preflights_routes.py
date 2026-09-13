@@ -217,6 +217,7 @@ def execution_body(
     journey_id = str(uuid.uuid4())
     body = _seal_body(build.json()["buildId"], environment)
     policy: dict[str, Any] = {}
+    reviewer_summary: dict[str, Any] = {}
     if getattr(request, "param", None) in {"action-policy", "stop-policy"}:
         policy = {
             "allowedActions": ["READ_CURRENT", "NEXT", "TYPE_TEXT", "KEY_CHORD"],
@@ -228,11 +229,34 @@ def execution_body(
         if request.param == "stop-policy":
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
+            from accessforge_domain.journeys.assertions import (
+                Assertion,
+                AssertionKind,
+                AssertionSet,
+                EvaluationRule,
+                UnknownReason,
+            )
+
+            assertions = AssertionSet(
+                (
+                    Assertion(
+                        "completion.one-request",
+                        AssertionKind.TASK_COMPLETION,
+                        "One independently measured request",
+                        unknown_reasons=frozenset({UnknownReason.OBSERVER_UNREACHABLE}),
+                        evaluation_rule=EvaluationRule(
+                            "EFFECT_COUNT", effect="CREATE_TEST_REQUEST", count=1
+                        ),
+                    ),
+                )
+            )
+            reviewer_summary["assertionContract"] = assertions.canonical_form()
+            body["assertionSetDigest"] = str(digest(assertions.canonical_form()))
     with workspace_connection(db, WS) as conn:
         conn.execute(
             "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,journey_digest,"
             "assertion_set_digest,fixture_digest,navigator_policy_digest,navigator_policy,"
-            "reviewer_summary) VALUES (%s,%s,%s,'synthetic','web',%s,%s,%s,%s,%s,'{}')",
+            "reviewer_summary) VALUES (%s,%s,%s,'synthetic','web',%s,%s,%s,%s,%s,%s)",
             (
                 journey_id,
                 WS,
@@ -242,6 +266,7 @@ def execution_body(
                 body["fixtureDigest"],
                 body["navigatorPolicyDigest"],
                 json.dumps(policy),
+                json.dumps(reviewer_summary),
             ),
         )
     body["execution"] = {
@@ -2105,6 +2130,7 @@ def test_independent_observer_worker(
         "artifact-state",
         "artifact-stored-corrupt",
         "artifact-conflict",
+        "observer-unknown",
     ],
 )
 def test_authenticated_execution_finish(
@@ -2124,7 +2150,7 @@ def test_authenticated_execution_finish(
     from accessforge_persistence.fixtures import create_instance
 
     ticket, ref = supervisor_ticket, manual_dispatch_reference
-    closes = case == "success" or case.startswith("artifact")
+    closes = case in {"success", "observer-unknown"} or case.startswith("artifact")
     secret = secrets.token_urlsafe(32)
     assert (
         client.post(
@@ -2206,14 +2232,33 @@ def test_authenticated_execution_finish(
     if case not in {"missing-observer", "no-stop", "unresolved-stop"}:
         receipt = measure_once(
             db,
-            owned_observer_database,
+            "postgresql://127.0.0.1:1/unavailable"
+            if case == "observer-unknown"
+            else owned_observer_database,
             workspace_id=WS,
             run_id=ref.run_id,
             credential_ref="observer-profile",
             source_record_id=str(uuid.uuid4()),
             final_sample=True,
         )
-        assert receipt.known
+        assert receipt.known == (case != "observer-unknown")
+        with workspace_connection(db, WS) as conn:
+            observed = conn.execute(
+                "SELECT payload FROM canonical_event WHERE event_id=%s", (receipt.event_id,)
+            ).fetchone()
+            assert observed is not None
+            assertion = observed["payload"]["sourceRecord"]["assertionObservations"][0]
+            assert assertion == {
+                "assertionId": "completion.one-request",
+                "kind": "TASK_COMPLETION",
+                "condition": "UNKNOWN" if case == "observer-unknown" else "FALSE",
+                "provenance": "OBSERVER_AUTHORED",
+                **(
+                    {"unknownReason": "measurement or matching frozen effect predicate unavailable"}
+                    if case == "observer-unknown"
+                    else {}
+                ),
+            }
     if case == "revoked":
         with workspace_connection(db, WS) as conn:
             conn.execute(
