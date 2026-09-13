@@ -14,6 +14,7 @@ export interface ExecutionSessionPort {
   completeAction(actionId: string, status: 'SUCCEEDED' | 'FAILED' | 'AMBIGUOUS'): Promise<void>;
   retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string): Promise<void>;
   retainRuntimePreflight(command: ActionCommand, report: PreflightReport, capturedAtUtc: string): Promise<void>;
+  authorizeCandidateFormEffect(command: ActionCommand): Promise<void>;
   finish(): Promise<Readonly<Record<string, unknown>>>;
 }
 
@@ -30,6 +31,8 @@ export interface AuthenticatedRunnerOptions {
   readonly observeOrigin: () => Promise<string>;
   /** Fresh focus/effect authorization against the sealed environment; throws on unknown/refused. */
   readonly authorizePhysicalAction: (command: ActionCommand) => Promise<void>;
+  /** Explicit trusted candidate setup only; permission does not itself perform a POST. */
+  readonly candidateFormEffects?: boolean;
   readonly recordObservation: (value: RawObservation | UnknownObservation) => Promise<void>;
 }
 
@@ -90,6 +93,10 @@ export class AuthenticatedRunner {
         if (command === undefined) throw new Error('physical action identity unavailable');
         await this.#checkPhysical(command);
         await bounded(options.authorizePhysicalAction(command), this.#remaining());
+        if (options.candidateFormEffects === true && (command.action === 'ACTIVATE' ||
+            (command.action === 'KEY_CHORD' && ['ENTER', 'SPACE'].includes(command.keyChord ?? '')))) {
+          await bounded(options.session.authorizeCandidateFormEffect(command), this.#remaining());
+        }
         const origin = await bounded(options.observeOrigin(), this.#remaining());
         // A timed-out preflight may resolve later. It must not then send an OS action.
         if (!this.#executing || this.#stopping || this.#fenced || command === undefined ||

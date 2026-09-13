@@ -255,6 +255,7 @@ export class NativeExecutionSession {
   #observationSequence = 0;
   #observationPending = false;
   #runtimePreflightPending = false;
+  #formPermitPending = false;
   #stopActionId: string | undefined;
   #finishStarted = false;
   readonly receipt: Readonly<Record<string, unknown>>;
@@ -439,9 +440,31 @@ export class NativeExecutionSession {
       this.#committed = false;
       this.#observationPending = false;
       this.#runtimePreflightPending = false;
+      this.#formPermitPending = false;
     } catch {
       this.#fenced = true;
       throw new ReceptionUnknown('action result acknowledgement unknown; retain fencing');
+    } finally { this.#busy = false; }
+  }
+
+  async authorizeCandidateFormEffect(command: ActionCommand): Promise<void> {
+    if (this.#busy || this.#fenced || !this.#committed || !this.#runtimePreflightPending || this.#formPermitPending ||
+        this.#current?.id !== command.actionId || this.#current.sequence !== command.sequence ||
+        !(command.action === 'ACTIVATE' || (command.action === 'KEY_CHORD' && ['ENTER', 'SPACE'].includes(command.keyChord ?? '')))) {
+      throw new ReceiverRefused('candidate form permission identity unavailable');
+    }
+    this.#busy = true;
+    this.#formPermitPending = true;
+    try {
+      const result = exactObject(await this.#post(`actions/${command.actionId}/form-effect-permit`, {}),
+        ['sessionId', 'actionId', 'permitId', 'expiresAt', 'meaning']);
+      if (uuid(result.sessionId) !== this.#sessionId || uuid(result.actionId) !== command.actionId ||
+          !uuid(result.permitId) || result.meaning !== 'ACTION_FORM_PERMISSION_NOT_EFFECT_PROOF' ||
+          typeof result.expiresAt !== 'string' || !Number.isFinite(Date.parse(result.expiresAt)) ||
+          Date.parse(result.expiresAt) <= Date.now()) throw new Error('permission binding');
+    } catch {
+      this.#fenced = true;
+      throw new ReceptionUnknown('form permission acknowledgement unavailable; no action replay');
     } finally { this.#busy = false; }
   }
 

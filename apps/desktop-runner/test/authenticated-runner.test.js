@@ -18,6 +18,7 @@ function harness(overrides = {}) {
     async completeAction(id, status) { calls.push(`server-result:${status}`); assert.equal(id, current.actionId); },
     async retainObservation(command) { calls.push('server-observation'); assert.equal(command.actionId, current.actionId); },
     async retainRuntimePreflight(command) { calls.push('server-preflight'); assert.equal(command.actionId, current.actionId); },
+    async authorizeCandidateFormEffect(command) { calls.push('form-permit'); assert.equal(command.actionId, current.actionId); },
     async finish() { calls.push('server-finish'); return { status: 'FINALIZING' }; },
   };
   const options = {
@@ -96,6 +97,22 @@ test('lost runtime preflight acknowledgement prevents adapter entry and fences t
   assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'AMBIGUOUS');
   assert.equal(h.calls.includes('adapter'), false);
   assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+});
+
+test('candidate form permission follows physical checks and precedes the adapter', async () => {
+  const h = harness({ candidateFormEffects: true });
+  assert.equal((await h.runner.perform({ action: 'ACTIVATE' })).status, 'SUCCEEDED');
+  assert.ok(h.calls.indexOf('form-permit') > h.calls.indexOf('effect-check'));
+  assert.ok(h.calls.indexOf('form-permit') > h.calls.indexOf('server-preflight'));
+  assert.ok(h.calls.indexOf('form-permit') < h.calls.indexOf('adapter'));
+});
+
+test('lost candidate form permission acknowledgement cannot enter or replay the adapter', async () => {
+  const h = harness({ candidateFormEffects: true });
+  h.session.authorizeCandidateFormEffect = async () => { throw new Error('lost permission ack'); };
+  assert.equal((await h.runner.perform({ action: 'ACTIVATE' })).status, 'AMBIGUOUS');
+  assert.equal(h.calls.includes('adapter'), false);
+  assert.equal((await h.runner.perform({ action: 'ACTIVATE' })).status, 'REFUSED');
 });
 
 test('a newly UNKNOWN physical check is retained but never dispatched to the adapter', async () => {

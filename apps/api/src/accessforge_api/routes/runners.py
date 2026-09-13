@@ -22,6 +22,7 @@ from accessforge_domain.runners.identity import EnrollmentError
 from accessforge_domain.runners.preflight import PreflightCheck, PreflightResult
 from accessforge_domain.states import Condition
 from accessforge_persistence import (
+    candidate_effects,
     execution_approvals,
     reader_startup_consents,
     runners,
@@ -293,6 +294,39 @@ def retain_supervisor_reader_observation(
     except (supervisor_sessions.Refused, runners.RunnerError, sequencer.SequencerError):
         raise ProblemDetail(
             ProblemCode.PERMISSION_DENIED, "reader observation is not admitted"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/supervisor-sessions/{session_id}/actions/{action_id}/form-effect-permit")
+def authorize_supervisor_form_effect(
+    workspace_id: str,
+    session_id: str,
+    action_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    for value in (workspace_id, session_id, action_id):
+        as_identifier(value, what="supervisor action identity")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    if payload:
+        raise ProblemDetail(ProblemCode.PERMISSION_DENIED, "form effect payload must be empty")
+    try:
+        result = candidate_effects.authorize_form(
+            conn,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            action_id=action_id,
+            token=credential.credentials,
+        )
+    except (supervisor_sessions.Refused, runners.RunnerError, sequencer.SequencerError):
+        raise ProblemDetail(
+            ProblemCode.PERMISSION_DENIED, "form effect permission refused"
         ) from None
     response.headers["Cache-Control"] = "no-store"
     return result
