@@ -40,6 +40,8 @@ class CompiledJourney:
 def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> CompiledJourney:
     """Validate and compile a draft. Deterministic for a given draft."""
     validate_draft(draft)
+    if "STOP" not in draft.allowed_actions:
+        raise JourneyError("a frozen journey must explicitly permit STOP for normal completion")
     if "NEXT" not in draft.allowed_actions and any(
         a.evaluation_rule is not None and a.evaluation_rule.rule_type == "READER_NEXT_SEQUENCE"
         for a in draft.assertions.assertions
