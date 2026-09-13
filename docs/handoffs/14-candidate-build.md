@@ -16,6 +16,10 @@ NOT_EVALUATED until retained-artifact evaluation; this is not physical reader pr
 
 Normal code inspection and changed-file Ruff/mypy passed. Four scoped STOP-only closure/input/
 artifact cases are added for CI; no local test suite or OS/reader operation was run.
+CI34743350056 passed1228 integration cases, including zero-tail closure/artifact retention, and
+failed only the new boolean-input test's expected HTTP status. The API correctly refuses that
+malformed input at its route boundary with400 (not the service-level403); the expectation is fixed.
+The corrected head still requires its own CI before merge.
 
 `apps/build-worker/` is a Python workspace member with no new third-party dependency.
 Its source-preparation boundary:
