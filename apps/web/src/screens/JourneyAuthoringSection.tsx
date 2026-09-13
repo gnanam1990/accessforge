@@ -25,7 +25,7 @@
  * send an author to different places.
  */
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { JSX } from 'react'
 
 import { useAnnouncer } from '../a11y/Announcer'
@@ -38,7 +38,7 @@ import { freezeJourneyVersion, getJourneyCapabilities } from '../api/resources'
 import type { FrozenVersion, JourneyCapabilities } from '../api/resources'
 import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
-import { AssertionEditor, serializeAssertionRule, validateAssertionRules } from './AssertionEditor'
+import { AssertionEditor, assertionFieldId, readingOrderCapability, serializeAssertionRule, validateAssertionRules } from './AssertionEditor'
 import type { AssertionRow } from './AssertionEditor'
 
 const STARTING_ASSERTIONS: readonly AssertionRow[] = [
@@ -100,6 +100,12 @@ export const JourneyAuthoringSection = ({
   const [chords, setChords] = useState<readonly string[]>([])
   const [effects, setEffects] = useState<readonly string[]>(['FIXTURE_SUBMIT'])
   const [assertions, setAssertions] = useState<readonly AssertionRow[]>(STARTING_ASSERTIONS)
+  const pendingAssertionFocus = useRef<string | null>(null)
+  useEffect(() => {
+    const row = assertions.find((a) => a.assertionId === pendingAssertionFocus.current)
+    if (row) document.getElementById(assertionFieldId(assertionsId, row, 'description'))?.focus()
+    pendingAssertionFocus.current = null
+  }, [assertions, assertionsId])
 
   const [errors, setErrors] = useState<readonly { fieldId: string; message: string }[]>([])
   const [unsupported, setUnsupported] = useState<{ code: string; detail: string } | null>(null)
@@ -193,7 +199,7 @@ export const JourneyAuthoringSection = ({
       return value
     }
     const actionCeiling = budgetNumber(maxActions, maxActionsId, 'Maximum actions', limits.maxActions)
-    found.push(...validateAssertionRules(assertions, limits, actionCeiling, assertionsId))
+    found.push(...validateAssertionRules(assertions, limits, actionCeiling, assertionsId, actions))
     const timeCeiling = budgetNumber(
       wallTime,
       wallTimeId,
@@ -581,12 +587,12 @@ export const JourneyAuthoringSection = ({
                       errors={errors} disabled={busy}
                       onChange={(value) => setAssertions((current) => current.map((row) =>
                         row.assertionId === value.assertionId ? value : row))} />
-                    {assertion.kind === 'REQUIRED_ANNOUNCEMENT' && <Button disabled={busy}
+                    {['REQUIRED_ANNOUNCEMENT', 'READING_ORDER'].includes(assertion.kind) && <Button disabled={busy}
                       onClick={() => {
                         setAssertions((current) => current.filter((row) => row.assertionId !== assertion.assertionId))
                         setErrors([])
                         announce(`Assertion ${index + 1} removed from this draft.`)
-                        document.getElementById(`${assertionsId}-add`)?.focus()
+                        document.getElementById(`${assertionsId}-${assertion.kind === 'READING_ORDER' ? 'add-order' : 'add'}`)?.focus()
                       }}>Remove assertion {index + 1}</Button>}
                   </div>
                 ))}
@@ -608,6 +614,15 @@ export const JourneyAuthoringSection = ({
                 >
                   Add a reader announcement assertion
                 </Button>
+                <Button id={`${assertionsId}-add-order`}
+                  disabled={busy || !policy.assertionKinds.includes('READING_ORDER') || readingOrderCapability(policy) === null}
+                  onClick={() => {
+                    const assertionId = `reading-order-${crypto.randomUUID()}`
+                    pendingAssertionFocus.current = assertionId
+                    setAssertions((current) => [...current, { assertionId, kind: 'READING_ORDER', description: '',
+                      required: true, unknownReasons: ['READER_UNAVAILABLE', 'OBSERVATION_MISSING'],
+                      sequencePhrases: ['', ''] }])
+                  }}>Add a consecutive reading-order assertion</Button>
               </fieldset>
 
               <Button type="submit" variant="primary" busy={busy}>
