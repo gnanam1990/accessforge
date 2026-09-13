@@ -25,6 +25,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -1401,6 +1402,127 @@ def supervisor_ticket(db: str, manual_dispatch_reference: DispatchReference) -> 
 
 def _ticket_url(ticket: DispatchTicket, workspace_id: str = WS) -> str:
     return f"/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket.ticket_id}/accept"
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "fresh",
+        "expired-ticket",
+        "accepted-expired-ticket",
+        "expired-lease",
+        "revoked-ticket",
+        "stop-proof",
+        "stale-epoch",
+    ],
+)
+def test_automatic_handoff_recovery(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+) -> None:
+    from accessforge_domain import reducers
+    from accessforge_orchestrator.maintenance.handoff_worker import recover_once
+    from accessforge_persistence import supervisor_dispatch
+
+    ref = manual_dispatch_reference
+
+    # Reproduce a controller process dying immediately AFTER its commit: the exact same transition,
+    # audit and ticket issue, but no post-commit transport or in-process compensation can execute.
+    # The aged clock is confined to initial ticket issuance; no immutable stored row is rewritten.
+    class Earlier(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> Earlier:
+            return cls.fromtimestamp((datetime.now(tz) - timedelta(seconds=31)).timestamp(), tz)
+
+    with workspace_connection(db, WS) as conn:
+        run_store.apply_transition(
+            conn,
+            run_id=ref.run_id,
+            reducer=reducers.progress,
+            expected_revision=1,
+            operation_id=str(uuid.uuid4()),
+            topic="run.running",
+            actor_service="manual-run-controller",
+            audit_action="MANUAL_DISPATCH_CLAIMED",
+            audit_context=asdict(ref),
+        )
+        with monkeypatch.context() as patch:
+            if scenario in {"expired-ticket", "accepted-expired-ticket"}:
+                patch.setattr(supervisor_dispatch, "datetime", Earlier)
+            ticket = supervisor_dispatch.issue(conn, **asdict(ref))
+        if scenario == "accepted-expired-ticket":
+            # Synthetic historical acceptance, not actual reader proof. Receipt expiry after
+            # consumption must not be confused with the still-live desktop lease deadline.
+            conn.execute(
+                "UPDATE supervisor_dispatch_ticket SET accepted_at=created_at+interval '1 second' "
+                "WHERE id=%s",
+                (ticket.ticket_id,),
+            )
+        if scenario in {"expired-lease", "stop-proof", "stale-epoch"}:
+            conn.execute(
+                "UPDATE desktop_lease SET deadline_at=now()-interval '1 second' WHERE id=%s",
+                (ref.lease_id,),
+            )
+        if scenario == "revoked-ticket":
+            conn.execute(
+                "UPDATE supervisor_dispatch_ticket SET revoked_at=now() WHERE id=%s",
+                (ticket.ticket_id,),
+            )
+        if scenario == "stop-proof":
+            conn.execute(
+                "UPDATE desktop_lease SET stop_acknowledged_at=now(),stop_acknowledged_epoch=epoch "
+                "WHERE id=%s",
+                (ref.lease_id,),
+            )
+        if scenario == "stale-epoch":
+            conn.execute(
+                "UPDATE runner SET lease_epoch=lease_epoch+1 WHERE id=%s", (ref.runner_id,)
+            )
+    should_recover = scenario in {"expired-ticket", "expired-lease", "revoked-ticket"}
+    # Explicit workspace scope: a different tenant cannot discover or recover this attempt.
+    assert recover_once(db, str(uuid.uuid4())).interrupted == 0
+    if scenario == "expired-lease":
+        process = subprocess.run(  # noqa: S603 - actual scoped recovery CLI, no shell
+            [
+                sys.executable,
+                "-m",
+                "accessforge_orchestrator.maintenance.handoff_worker",
+                "--workspace-id",
+                WS,
+                "--once",
+            ],
+            env={"PATH": os.environ["PATH"], "ACCESSFORGE_DATABASE_URL": db},
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert process.returncode == 0
+        assert "interrupted=1 deferred=0" in process.stderr
+        assert db not in process.stderr + process.stdout
+    else:
+        first = recover_once(db, WS)
+        assert first.interrupted == int(should_recover) and first.deferred == 0
+    assert recover_once(db, WS).interrupted == 0
+    with workspace_connection(db, WS) as conn:
+        state = run_store.load_run(conn, run_id=ref.run_id).state
+        assert (state.status.value, state.outcome.value) == (
+            ("INTERRUPTED", "INCONCLUSIVE") if should_recover else ("RUNNING", "NOT_EVALUATED")
+        )
+        runner = conn.execute("SELECT status FROM runner WHERE id=%s", (ref.runner_id,)).fetchone()
+        assert runner is not None
+        assert runner["status"] == ("QUARANTINED" if should_recover else "BUSY")
+        audit = conn.execute(
+            "SELECT 1 FROM audit_event WHERE action='RUN_INTERRUPTED_MANUAL_HANDOFF_UNKNOWN'"
+        ).fetchall()
+        assert len(audit) == int(should_recover)
+        assert conn.execute("SELECT count(*) AS n FROM runner_action").fetchone() == {"n": 0}
+        if should_recover:
+            row = conn.execute(
+                "SELECT revoked_at FROM supervisor_dispatch_ticket WHERE id=%s", (ticket.ticket_id,)
+            ).fetchone()
+            assert row is not None and row["revoked_at"] is not None
 
 
 @pytest.fixture(scope="module")
