@@ -45,6 +45,7 @@ import { RunOutcomeBadge, RunStatusBadge, StatusBadge } from '../components/Stat
 import type { RunOutcome, RunStatus } from '../components/StatusBadge'
 import { EvidenceTimeline } from './EvidenceTimeline'
 import { RunEvaluationSection } from './RunEvaluationSection'
+import { EffectRecoverySection } from './EffectRecoverySection'
 import { ReaderStartupSection } from './ReaderStartupSection'
 import { DiagnosisRequestSection } from './DiagnosisRequestSection'
 import {
@@ -430,6 +431,14 @@ const FollowControl = ({
 export const RunScreen = (): JSX.Element => {
   const workspaceId = useWorkspaceId()
   const runId = useRunId()
+  // Route identity changes must discard ready resources before effects start their next read.
+  // This also resets selected attempts, live following and pending cancellation notices.
+  return <RunDetails key={`${workspaceId}:${runId}`} workspaceId={workspaceId} runId={runId} />
+}
+
+const RunDetails = ({ workspaceId, runId }: {
+  readonly workspaceId: string; readonly runId: string
+}): JSX.Element => {
   const { client } = useSession()
   const { announce } = useAnnouncer()
 
@@ -556,6 +565,7 @@ export const RunScreen = (): JSX.Element => {
             </section>
 
             <RunEvaluationSection workspaceId={workspaceId} run={value} />
+            <EffectRecoverySection workspaceId={workspaceId} runId={runId} />
             <DiagnosisRequestSection key={`diagnosis:${workspaceId}:${value.runId}`} workspaceId={workspaceId} run={value} />
             <ReaderStartupSection key={`${workspaceId}:${value.runId}`} workspaceId={workspaceId} run={value} />
 
