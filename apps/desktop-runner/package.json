@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "bin": {
+    "accessforge-safari-probe": "./dist/probe-safari.js",
     "accessforge-runner": "./dist/main.js"
   },
   "scripts": {
+    "build:native": "node scripts/build-native.mjs",
     "build": "tsc -p tsconfig.json",
     "typecheck": "pnpm --filter @accessforge/contracts build && pnpm --filter @accessforge/at-voiceover build && tsc -p tsconfig.json --noEmit",
     "test": "pnpm run build && node --test test/*.test.js"

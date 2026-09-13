@@ -19,7 +19,12 @@ def test_ci_typechecks_the_test_suite_and_all_python_workspace_members() -> None
     assert argv[:3] == ["uv", "run", "mypy"]
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     sources = {f"{member}/src" for member in project["tool"]["uv"]["workspace"]["members"]}
-    assert set(argv[3:]) == sources | {"scripts", "tests"}
+    assert set(argv[3:]) == sources | {
+        "scripts",
+        "tests",
+        "apps/build-worker/toolchain/build_reference.py",
+        "packages/contracts/python/hatch_build.py",
+    }
     assert not step.get("continue-on-error", False)
     assert "if" not in step
 
@@ -32,3 +37,42 @@ def test_strict_config_does_not_exempt_the_test_suite() -> None:
     assert config["overrides"] == [
         {"module": ["boto3.*", "botocore.*"], "ignore_missing_imports": True}
     ]
+
+
+def test_ci_checks_core_distribution_resources_not_only_editable_installs() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    step = next(
+        s
+        for s in workflow["jobs"]["python"]["steps"]
+        if s.get("name") == "Core distributions retain exact schemas and migrations"
+    )
+    for command in (
+        "uv build --package accessforge-persistence",
+        "uv build --package accessforge-contracts",
+        "uv build --wheel --package accessforge-contracts",
+        "uv run python scripts/check_core_packages.py",
+    ):
+        assert command in step["run"]
+    assert "if" not in step
+    assert not step.get("continue-on-error", False)
+
+
+def test_ci_requires_provisioned_real_sandbox_probes() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    job = workflow["jobs"]["python"]
+    image = job["env"]["ACCESSFORGE_SANDBOX_IMAGE"]
+    assert job["env"]["ACCESSFORGE_SANDBOX_ENDPOINT"] == "unix:///var/run/docker.sock"
+    assert "@sha256:" in image
+    steps = job["steps"]
+    provision = next(
+        s
+        for s in steps
+        if s.get("name") == "Provision the pinned owned-build containment probe toolchain"
+    )
+    probe = next(s for s in steps if s.get("name") == "Real owned-build containment probes")
+    assert shlex.split(provision["run"]) == ["docker", "pull", image]
+    assert shlex.split(probe["run"]) == ["uv", "run", "pytest", "-q", "tests/sandbox", "--tb=short"]
+    assert steps.index(provision) < steps.index(probe)
+    for step in (provision, probe):
+        assert "if" not in step
+        assert not step.get("continue-on-error", False)

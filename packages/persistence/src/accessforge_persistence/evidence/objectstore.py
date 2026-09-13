@@ -30,6 +30,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 #: Ceiling on a single artifact. A speech transcript for a bounded journey is kilobytes; a
 #: hundred megabytes is a bug or an attempt to exhaust storage, and either way it is not evidence.
@@ -51,6 +52,14 @@ ALLOWED_CONTENT_TYPES: dict[str, frozenset[str]] = {
 }
 
 _KEY_SEGMENT = re.compile(r"\A[0-9a-fA-F-]{36}\Z")
+_UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+
+
+def is_candidate_archive_key(key: str) -> bool:
+    return (
+        re.fullmatch(rf"workspaces/{_UUID}/candidate-builds/{_UUID}/archives/[0-9a-f]{{64}}", key)
+        is not None
+    )
 
 
 class ArtifactStoreError(Exception):
@@ -158,6 +167,12 @@ class S3ArtifactStore:
         import boto3
         from botocore.config import Config
 
+        endpoint = urlsplit(settings.endpoint_url)
+        if endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+            raise ArtifactStoreError(
+                "object-store endpoint must not embed credentials or query data"
+            )
+        self._endpoint = settings.endpoint_url.rstrip("/")
         self._bucket = settings.bucket
         self._client = boto3.client(
             "s3",
@@ -170,6 +185,10 @@ class S3ArtifactStore:
             # finalization quickly and visibly rather than after a long silence.
             config=Config(s3={"addressing_style": "path"}, retries={"max_attempts": 2}),
         )
+
+    @property
+    def storage_identity(self) -> tuple[str, str]:
+        return self._endpoint, self._bucket
 
     def ensure_bucket(self) -> None:
         from botocore.exceptions import BotoCoreError, ClientError
@@ -213,6 +232,56 @@ class S3ArtifactStore:
         except BotoCoreError as exc:
             raise ObjectStoreUnavailable(f"cannot reach the object store: {exc}") from exc
 
+    def put_create_only(self, *, key: str, payload: bytes, content_type: str) -> str:
+        """Never overwrite a candidate or its retirement tombstone, including on late retries."""
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        try:
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=payload,
+                ContentType=content_type,
+                ContentDisposition="attachment",
+                IfNoneMatch="*",
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStoreUnavailable("conditional candidate upload failed") from exc
+        return key
+
+    def assert_retirement_supported(self) -> None:
+        """Cannot erase old versions/replicas or survive tombstone lifecycle expiry."""
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        try:
+            if self._client.get_bucket_versioning(Bucket=self._bucket).get("Status"):
+                raise ArtifactStoreError("candidate retirement requires a never-versioned bucket")
+            for operation, absent in (
+                (self._client.get_bucket_lifecycle_configuration, "NoSuchLifecycleConfiguration"),
+                (self._client.get_bucket_replication, "ReplicationConfigurationNotFoundError"),
+            ):
+                try:
+                    operation(Bucket=self._bucket)
+                except ClientError as exc:
+                    if exc.response.get("Error", {}).get("Code") != absent:
+                        raise
+                else:
+                    raise ArtifactStoreError(
+                        "candidate tombstones require no bucket lifecycle or replication policy"
+                    )
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStoreUnavailable(
+                "cannot establish candidate retirement configuration"
+            ) from exc
+
+    def retire_create_only(self, *, key: str) -> None:
+        """Replace bytes, not the key. Deleting the key would admit a late conditional PUT."""
+        self.assert_retirement_supported()
+        self.put(key=key, payload=b"", content_type="application/octet-stream")
+        if self.get_bounded(key=key, max_bytes=1) != b"":
+            raise ArtifactStoreError("candidate retirement tombstone was not verified")
+        self.assert_retirement_supported()
+
     def delete(self, *, key: str) -> None:
         from botocore.exceptions import BotoCoreError, ClientError
 
@@ -220,6 +289,27 @@ class S3ArtifactStore:
             self._client.delete_object(Bucket=self._bucket, Key=key)
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStoreUnavailable(f"delete of {key} failed: {exc}") from exc
+
+    def get_bounded(self, *, key: str, max_bytes: int) -> bytes:
+        """Read an untrusted object without buffering an unlimited substituted body."""
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        if not 1 <= max_bytes <= 64 * 1024 * 1024:
+            raise ArtifactStoreError("invalid bounded object read limit")
+        try:
+            response: Any = self._client.get_object(Bucket=self._bucket, Key=key)
+            body = response["Body"]
+            try:
+                if int(response["ContentLength"]) > max_bytes:
+                    raise ArtifactStoreError("stored object exceeds its recorded byte limit")
+                payload = bytes(body.read(max_bytes + 1))
+                if len(payload) > max_bytes:
+                    raise ArtifactStoreError("stored object body exceeds its recorded byte limit")
+                return payload
+            finally:
+                body.close()
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStoreUnavailable("bounded object read failed") from exc
 
     def exists(self, *, key: str) -> bool:
         from botocore.exceptions import BotoCoreError, ClientError

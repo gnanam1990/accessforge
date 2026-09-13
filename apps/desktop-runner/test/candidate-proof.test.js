@@ -17,6 +17,7 @@ function readyEnvironment(overrides = {}) {
     },
     processRunning: () => true,
     auditSessionId: () => '100025',
+    processAuditSessionId: () => '100025',
     screenLocked: () => false,
     hasPermission: () => true,
     browserVersion: () => '26.6',
@@ -26,6 +27,7 @@ function readyEnvironment(overrides = {}) {
 
 function readyPreflight(env = readyEnvironment()) {
   return runPreflight(env, {
+    expectedDesktopSessionId: '100025',
     speechCaptureWorking: true,
     permittedOrigin: 'http://127.0.0.1:8081',
     observedOrigin: 'http://127.0.0.1:8081',

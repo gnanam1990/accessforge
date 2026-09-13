@@ -15,10 +15,9 @@
  * `COMPLETED` and `PASS`. There is no path by which a green-looking last event, a completion
  * receipt, or a full evidence set becomes a pass on this screen.
  *
- * **Assertion results are absent, and the absence is stated.** The evaluator is a pure function in
- * `packages/domain/.../evaluation`; nothing assembles its inputs from a stored attempt and no route
- * serves a per-assertion result. Rendering the run's outcome as though it were a list of assertion
- * outcomes would be the interface inventing the very thing it exists to report.
+ * **Assertions come only from the original retained evaluation.** Missing, malformed or mismatched
+ * snapshots never become reconstructed results. Historical evaluation and current byte availability
+ * are separate, and the snapshot's exact attempt remains visible when another attempt is selected.
  *
  * **Cancellation is reported as what the server proved.** "Requested; waiting for runner
  * acknowledgement" until a stop is acknowledged, and never "cancelled" before it is.
@@ -45,6 +44,7 @@ import { ResourceView } from '../components/ResourceView'
 import { RunOutcomeBadge, RunStatusBadge, StatusBadge } from '../components/StatusBadge'
 import type { RunOutcome, RunStatus } from '../components/StatusBadge'
 import { EvidenceTimeline } from './EvidenceTimeline'
+import { RunEvaluationSection } from './RunEvaluationSection'
 import {
   getRun,
   listAttempts,
@@ -553,21 +553,7 @@ export const RunScreen = (): JSX.Element => {
               </p>
             </section>
 
-            <section className="af-stack">
-              <h2>Assertion results</h2>
-              <Notice tone="warning" heading="Not available in this build" headingLevel={3}>
-                <p>
-                  This run’s outcome is shown above as the server reported it. The per-assertion
-                  results behind it are not: the evaluator exists as a pure function, and nothing
-                  assembles its inputs from a stored attempt or serves a per-assertion result.
-                </p>
-                <p className="af-secondary">
-                  Listing the run’s outcome once per assertion would be this interface inventing the
-                  thing it exists to report. Until a route serves the evaluator’s own output, a
-                  reviewer cannot see which exact assertion failed.
-                </p>
-              </Notice>
-            </section>
+            <RunEvaluationSection workspaceId={workspaceId} run={value} />
 
             {NON_TERMINAL.has(value.status) && (
               <section className="af-stack">

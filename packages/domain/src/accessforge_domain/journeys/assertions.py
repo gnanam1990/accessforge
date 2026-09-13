@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
+from typing import Any
 
 
 class Observer(StrEnum):
@@ -105,6 +106,92 @@ class UnknownReason(StrEnum):
     OBSERVER_UNREACHABLE = "OBSERVER_UNREACHABLE"
 
 
+MAX_RULE_ACTION_SEQUENCE = 1000
+MAX_RULE_PHRASE_CHARACTERS = 8192
+MAX_RULE_PHRASE_BYTES = 32768
+MAX_RULE_EFFECT_COUNT = 1000
+
+
+def evaluation_rule_capabilities() -> dict[str, Any]:
+    """Authoring limits from the same constants used by frozen rule validation."""
+    return {
+        "EXACT_READER_PHRASE": {
+            "assertionKind": "REQUIRED_ANNOUNCEMENT",
+            "maxActionSequence": MAX_RULE_ACTION_SEQUENCE,
+            "maxPhraseCharacters": MAX_RULE_PHRASE_CHARACTERS,
+            "maxPhraseBytes": MAX_RULE_PHRASE_BYTES,
+        },
+        "EFFECT_COUNT": {
+            "assertionKind": "TASK_COMPLETION",
+            "effect": "CREATE_TEST_REQUEST",
+            "maxCount": MAX_RULE_EFFECT_COUNT,
+        },
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationRule:
+    """Literal, frozen predicates; never interpret prose, run regex/code or invent a matcher.
+
+    A phrase predicate describes one captured utterance after an exact action, not every speech
+    event in an inferred time window. Additional observation kinds need their own typed contracts.
+    """
+
+    rule_type: str
+    action_sequence: int | None = None
+    phrase: str | None = None
+    effect: str | None = None
+    count: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.rule_type == "EXACT_READER_PHRASE":
+            if (
+                type(self.action_sequence) is not int
+                or not 1 <= self.action_sequence <= MAX_RULE_ACTION_SEQUENCE
+                or not isinstance(self.phrase, str)
+                or not self.phrase.strip()
+                or len(self.phrase) > MAX_RULE_PHRASE_CHARACTERS
+                or len(self.phrase.encode()) > MAX_RULE_PHRASE_BYTES
+                or self.effect is not None
+                or self.count is not None
+            ):
+                raise ValueError("phrase rule requires a bounded exact action sequence and phrase")
+        elif self.rule_type == "EFFECT_COUNT":
+            if (
+                self.effect != "CREATE_TEST_REQUEST"
+                or type(self.count) is not int
+                or not 0 <= self.count <= MAX_RULE_EFFECT_COUNT
+                or self.action_sequence is not None
+                or self.phrase is not None
+            ):
+                raise ValueError(
+                    "effect rule requires a supported effect and bounded integer count"
+                )
+        else:
+            raise ValueError("unsupported evaluation rule; no inferred predicate")
+
+    @classmethod
+    def parse(cls, value: Any) -> EvaluationRule:
+        if not isinstance(value, dict):
+            raise ValueError("evaluationRule must be an object")
+        if set(value) == {"type", "actionSequence", "phrase"}:
+            return cls(
+                value["type"], action_sequence=value["actionSequence"], phrase=value["phrase"]
+            )
+        if set(value) == {"type", "effect", "count"}:
+            return cls(value["type"], effect=value["effect"], count=value["count"])
+        raise ValueError("evaluationRule fields are incomplete or unsupported")
+
+    def canonical_form(self) -> dict[str, Any]:
+        if self.rule_type == "EXACT_READER_PHRASE":
+            return {
+                "type": self.rule_type,
+                "actionSequence": self.action_sequence,
+                "phrase": self.phrase,
+            }
+        return {"type": self.rule_type, "effect": self.effect, "count": self.count}
+
+
 @dataclass(frozen=True, slots=True)
 class Assertion:
     """One protected truth condition.
@@ -119,8 +206,18 @@ class Assertion:
     description: str
     required: bool = True
     unknown_reasons: frozenset[UnknownReason] = frozenset()
+    evaluation_rule: EvaluationRule | None = None
 
     def __post_init__(self) -> None:
+        if self.evaluation_rule is not None and (
+            not isinstance(self.evaluation_rule, EvaluationRule)
+            or (self.kind, self.evaluation_rule.rule_type)
+            not in {
+                (AssertionKind.REQUIRED_ANNOUNCEMENT, "EXACT_READER_PHRASE"),
+                (AssertionKind.TASK_COMPLETION, "EFFECT_COUNT"),
+            }
+        ):
+            raise ValueError("evaluation rule is not supported by this assertion's observer")
         if not self.assertion_id.strip():
             raise ValueError("an assertion needs a stable identifier")
         if not self.description.strip():
@@ -178,7 +275,65 @@ class AssertionSet:
                     "required": a.required,
                     "observer": a.observer.value,
                     "unknownReasons": sorted(r.value for r in a.unknown_reasons),
+                    **(
+                        {"evaluationRule": a.evaluation_rule.canonical_form()}
+                        if a.evaluation_rule is not None
+                        else {}
+                    ),
                 }
                 for a in self.assertions
             ]
         }
+
+    @classmethod
+    def from_canonical_form(cls, value: Any) -> AssertionSet:
+        """Read the original complete contract, refusing missing/altered observer identities."""
+        if not isinstance(value, dict) or set(value) != {"assertions"}:
+            raise ValueError("original assertion contract unavailable")
+        if not isinstance(value["assertions"], list):
+            raise ValueError("invalid assertion contract")
+        built = []
+        for item in value["assertions"]:
+            if not isinstance(item, dict) or not {
+                "assertionId",
+                "kind",
+                "description",
+                "required",
+                "observer",
+                "unknownReasons",
+            } <= set(item):
+                raise ValueError("incomplete assertion contract")
+            if (
+                set(item)
+                - {
+                    "assertionId",
+                    "kind",
+                    "description",
+                    "required",
+                    "observer",
+                    "unknownReasons",
+                    "evaluationRule",
+                }
+                or type(item["required"]) is not bool
+                or not isinstance(item["assertionId"], str)
+                or not isinstance(item["description"], str)
+                or not isinstance(item["unknownReasons"], list)
+            ):
+                raise ValueError("invalid assertion contract fields")
+            assertion = Assertion(
+                assertion_id=item["assertionId"],
+                kind=AssertionKind(item["kind"]),
+                description=item["description"],
+                required=item["required"],
+                unknown_reasons=frozenset(UnknownReason(r) for r in item["unknownReasons"]),
+                evaluation_rule=EvaluationRule.parse(item["evaluationRule"])
+                if "evaluationRule" in item
+                else None,
+            )
+            if assertion.observer.value != item["observer"]:
+                raise ValueError("assertion observer identity differs")
+            built.append(assertion)
+        result = cls(tuple(built))
+        if result.canonical_form() != value:
+            raise ValueError("assertion contract is not its original canonical form")
+        return result

@@ -113,6 +113,22 @@ def _upload(
 # --- the object store is real --------------------------------------------------------------------
 
 
+def test_bounded_object_reads_refuse_larger_replacements(store: evidence.S3ArtifactStore) -> None:
+    key = f"bounded-read-probe/{uuid.uuid4()}"
+    try:
+        store.put(key=key, payload=b"bounded", content_type="application/octet-stream")
+        assert store.get_bounded(key=key, max_bytes=7) == b"bounded"
+        with pytest.raises(evidence.ArtifactStoreError, match="exceeds"):
+            store.get_bounded(key=key, max_bytes=6)
+        with pytest.raises(evidence.ArtifactStoreError, match="invalid"):
+            store.get_bounded(key=key, max_bytes=0)
+        store.delete(key=key)
+        with pytest.raises(evidence.ObjectStoreUnavailable):
+            store.get_bounded(key=key, max_bytes=7)
+    finally:
+        store.delete(key=key)
+
+
 def test_an_uploaded_artifact_is_actually_in_the_store(
     db: str, store: evidence.S3ArtifactStore
 ) -> None:

@@ -22,10 +22,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 
+from accessforge_contracts import validate
 from accessforge_domain.canonical import digest
 from accessforge_domain.origins import Origin, normalize_origin
-from accessforge_domain.timestamps import is_expired, to_rfc3339_utc
+from accessforge_domain.timestamps import is_after, is_expired, to_rfc3339_utc
 
 from .source_intake import SourceIdentity
 
@@ -325,7 +327,7 @@ def record_build_artifact(
 
 @dataclass(frozen=True, slots=True)
 class SealInputs:
-    """Everything a run is sealed against, each captured separately."""
+    """Frozen input fingerprints. A complete RunManifest also requires ExecutionInputs and IDs."""
 
     journey_digest: str
     assertion_set_digest: str
@@ -340,6 +342,18 @@ class SealInputs:
 class Seal:
     sealed_manifest_id: str
     manifest_digest: str
+    canonical_manifest: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionInputs:
+    """Explicit bounded execution scope; reserving its approval ID does not authorize it."""
+
+    journey_version_id: str
+    expires_at: str
+    action_budget: int
+    wall_time_budget_seconds: int
+    permitted_effects: frozenset[str]
 
 
 def seal_run(
@@ -353,6 +367,7 @@ def seal_run(
     inputs: SealInputs,
     run_id: str | None = None,
     authorization_id: str | None = None,
+    execution: ExecutionInputs | None = None,
     now: str | None = None,
 ) -> Seal:
     """Seal a run against its exact inputs.
@@ -364,38 +379,94 @@ def seal_run(
     assert_environment_usable(conn, environment_id=environment_manifest_id, now=moment)
 
     env = conn.execute(
-        "SELECT config_digest FROM environment_manifest WHERE id = %s",
+        "SELECT config_digest,expires_at,permitted_effects,project_id FROM environment_manifest "
+        "WHERE id = %s",
         (environment_manifest_id,),
     ).fetchone()
     source = conn.execute(
-        "SELECT commit_sha, tree_digest FROM source_snapshot WHERE id = %s",
+        "SELECT commit_sha, tree_digest, project_id FROM source_snapshot WHERE id = %s",
         (source_snapshot_id,),
     ).fetchone()
     artifact = conn.execute(
-        "SELECT artifact_digest FROM build_artifact WHERE id = %s", (build_artifact_id,)
+        "SELECT artifact_digest,project_id,source_snapshot_id,identity_observable "
+        "FROM build_artifact WHERE id = %s",
+        (build_artifact_id,),
     ).fetchone()
 
     if env is None or source is None or artifact is None:
         raise SealError("a sealed input is missing or not visible in this workspace")
 
-    manifest_digest = digest(
-        {
-            "schemaVersion": 1,
-            "workspaceId": workspace_id,
-            "projectId": project_id,
-            "sourceCommitSha": str(source["commit_sha"]),
-            "sourceTreeDigest": str(source["tree_digest"]),
-            "buildArtifactDigest": str(artifact["artifact_digest"]),
-            "environmentConfigDigest": str(env["config_digest"]),
-            "journeyDigest": inputs.journey_digest,
-            "assertionSetDigest": inputs.assertion_set_digest,
-            "fixtureDigest": inputs.fixture_digest,
-            "runnerProfileDigest": inputs.runner_profile_digest,
-            "navigatorPolicyDigest": inputs.navigator_policy_digest,
-            "evaluatorVersion": inputs.evaluator_version,
-            "modelConfigDigest": inputs.model_config_digest,
-        }
-    )
+    manifest: dict[str, Any] = {
+        "schemaVersion": 1,
+        "workspaceId": workspace_id,
+        "projectId": project_id,
+        "sourceCommitSha": str(source["commit_sha"]),
+        "sourceTreeDigest": str(source["tree_digest"]),
+        "buildArtifactDigest": str(artifact["artifact_digest"]),
+        "environmentConfigDigest": str(env["config_digest"]),
+        "journeyDigest": inputs.journey_digest,
+        "assertionSetDigest": inputs.assertion_set_digest,
+        "fixtureDigest": inputs.fixture_digest,
+        "runnerProfileDigest": inputs.runner_profile_digest,
+        "navigatorPolicyDigest": inputs.navigator_policy_digest,
+        "evaluatorVersion": inputs.evaluator_version,
+        "modelConfigDigest": inputs.model_config_digest,
+    }
+    canonical: dict[str, Any] | None = None
+    if execution is not None:
+        if (
+            str(source["project_id"]) != project_id
+            or str(artifact["project_id"]) != project_id
+            or str(artifact["source_snapshot_id"]) != source_snapshot_id
+            or not artifact["identity_observable"]
+        ):
+            raise SealError(
+                "canonical execution requires this project's exact observed source/build"
+            )
+        if run_id is None or authorization_id is None:
+            raise SealError("canonical execution requires reserved run and authorization IDs")
+        manifest.update(
+            {
+                "runId": run_id,
+                "authorizationId": authorization_id,
+                "journeyVersionId": execution.journey_version_id,
+                "expiresAt": execution.expires_at,
+                "actionBudget": execution.action_budget,
+                "wallTimeBudgetSeconds": execution.wall_time_budget_seconds,
+                "permittedEffects": sorted(execution.permitted_effects),
+            }
+        )
+        validate("run-manifest.schema.json", manifest)
+        if conn.execute("SELECT 1 FROM run WHERE id=%s", (run_id,)).fetchone():
+            raise SealError(
+                "canonical execution requires a fresh run; existing runs cannot be resealed"
+            )
+        journey = conn.execute(
+            "SELECT * FROM journey_version WHERE id=%s FOR SHARE", (execution.journey_version_id,)
+        ).fetchone()
+        if (
+            journey is None
+            or str(journey["project_id"]) != project_id
+            or any(
+                journey[field] != getattr(inputs, field)
+                for field in (
+                    "journey_digest",
+                    "assertion_set_digest",
+                    "fixture_digest",
+                    "navigator_policy_digest",
+                )
+            )
+        ):
+            raise SealError("execution journey does not match the exact frozen inputs/project")
+        if (
+            str(env["project_id"]) != project_id
+            or not execution.permitted_effects <= set(env["permitted_effects"])
+            or is_expired(now=moment, expires_at=execution.expires_at)
+            or is_after(later=execution.expires_at, earlier=to_rfc3339_utc(env["expires_at"]))
+        ):
+            raise SealError("execution effects or expiry exceed the authorized environment")
+        canonical = manifest
+    manifest_digest = digest(manifest)
 
     sealed_id = str(uuid.uuid4())
     conn.execute(
@@ -404,8 +475,9 @@ def seal_run(
             (id, workspace_id, project_id, run_id, source_snapshot_id, build_artifact_id,
              environment_manifest_id, environment_config_digest, journey_digest,
              assertion_set_digest, fixture_digest, runner_profile_digest, navigator_policy_digest,
-             evaluator_version, model_config_digest, manifest_digest, authorization_id)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             evaluator_version, model_config_digest, manifest_digest, authorization_id,
+             canonical_manifest)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (
             sealed_id,
@@ -425,9 +497,50 @@ def seal_run(
             inputs.model_config_digest,
             manifest_digest,
             authorization_id,
+            Jsonb(canonical) if canonical is not None else None,
         ),
     )
-    return Seal(sealed_manifest_id=sealed_id, manifest_digest=manifest_digest)
+    return Seal(
+        sealed_manifest_id=sealed_id,
+        manifest_digest=manifest_digest,
+        canonical_manifest=canonical,
+    )
+
+
+def assert_execution_seal_current(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    sealed_manifest_id: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Recheck the complete persisted identity and live environment, not execution approval.
+
+    Used at admission and before issuing exact authority. This checks stored identities only;
+    observing the actual deployment and the reader remains a separate dispatch prerequisite.
+    """
+    row = conn.execute(
+        "SELECT * FROM sealed_manifest WHERE id=%s", (sealed_manifest_id,)
+    ).fetchone()
+    if row is None or row["canonical_manifest"] is None:
+        raise SealError("a complete canonical execution manifest is required")
+    manifest: dict[str, Any] = row["canonical_manifest"]
+    validate("run-manifest.schema.json", manifest)
+    if digest(manifest) != str(row["manifest_digest"]) or any(
+        manifest[key] != str(row[column])
+        for key, column in (
+            ("workspaceId", "workspace_id"),
+            ("projectId", "project_id"),
+            ("runId", "run_id"),
+            ("authorizationId", "authorization_id"),
+            ("environmentConfigDigest", "environment_config_digest"),
+        )
+    ):
+        raise SealError("canonical execution identity does not match the stored seal")
+    moment = now or to_rfc3339_utc(datetime.now(UTC))
+    if is_expired(now=moment, expires_at=manifest["expiresAt"]):
+        raise SealError("canonical execution manifest has expired; create a new seal")
+    assert_environment_usable(conn, environment_id=str(row["environment_manifest_id"]), now=moment)
+    return manifest
 
 
 def revalidate_before_dispatch(
@@ -535,6 +648,7 @@ class SealedManifest:
     manifest_digest: str
     journey_digest: str
     sealed_at: str
+    canonical_manifest: dict[str, Any] | None = None
 
 
 def find_sealed_manifest(
@@ -549,13 +663,14 @@ def find_sealed_manifest(
     later, at dispatch, as a run refusing to start for naming a manifest that was never sealed.
 
     Oldest first, and `LIMIT 1`. A digest is deliberately **not** unique (migration 0006): two
-    runs with identical inputs share one, which is how a baseline and a candidate are shown to
-    differ only by an approved patch. So this answers "was this ever sealed", not "which run is
-    it" — and any matching row answers that, because they all describe the same inputs.
+    legacy input seals with identical inputs share one. Full canonical manifests include their
+    run and approval IDs, so their payload is returned too: admission must use that exact reserved
+    identity rather than invent another run with the same digest. Legacy lookup alone answers only
+    "were these inputs sealed", never "was an execution authorized".
     """
     row = conn.execute(
         """
-        SELECT id, project_id, manifest_digest, journey_digest, sealed_at
+        SELECT id, project_id, manifest_digest, journey_digest, sealed_at, canonical_manifest
         FROM sealed_manifest
         WHERE manifest_digest = %s
         ORDER BY sealed_at, id
@@ -571,4 +686,5 @@ def find_sealed_manifest(
         manifest_digest=str(row["manifest_digest"]),
         journey_digest=str(row["journey_digest"]),
         sealed_at=to_rfc3339_utc(row["sealed_at"]),
+        canonical_manifest=row["canonical_manifest"],
     )

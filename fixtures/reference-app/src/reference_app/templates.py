@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import html
 
+from .fixture_definition import template_digest as template_digest
 from .validation import ALLOWED_CATEGORIES, FieldError
 
 _BASE_STYLE = """
@@ -176,11 +177,9 @@ def render_form(
     )
 
 
-def template_digest(variant: str) -> str:
-    """Digest of the fixture template itself.
-
-    Recorded separately from a per-run fixture nonce so a template change is distinguishable from
-    a new run of an unchanged template.
-    """
+def presentation_digest(variant: str) -> str:
+    """Diagnostic HTML digest, not the frozen logical fixture identity."""
+    if variant not in ("accessible", "inaccessible"):
+        raise ValueError("unknown reference presentation variant")
     rendered = render_form(nonce="DIGEST", variant=variant)
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()

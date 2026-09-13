@@ -13,7 +13,7 @@
  */
 
 import { MemoryRouter } from 'react-router-dom'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
@@ -72,9 +72,13 @@ const streamFactory = (): { readonly open: (url: string) => EventStream; readonl
           closed = true
         },
         emit: (type: string) => {
-          for (const listener of listeners.get(type) ?? []) {
-            listener(new MessageEvent(type, { data: '{}' }))
-          }
+          // Like userEvent/fireEvent, synthetic stream delivery must flush React's state and
+          // passive cleanup before an assertion can compare the visible status with the socket.
+          act(() => {
+            for (const listener of listeners.get(type) ?? []) {
+              listener(new MessageEvent(type, { data: '{}' }))
+            }
+          })
         },
         closed: () => closed,
       }
@@ -152,6 +156,23 @@ describe('following live events', () => {
     await waitFor(() => expect(screen.getByText(/1 update so far/)).toBeVisible())
     // Re-read, and the authoritative record has not changed.
     expect(screen.getByText('RUNNING')).toBeVisible()
+    expect(screen.queryByText('PASS')).toBeNull()
+    expect(screen.queryByText('COMPLETED')).toBeNull()
+  })
+
+  it('re-reads current state for a delayed manual start on the shared run.running topic', async () => {
+    const streams = streamFactory()
+    const server = serverWithRun({ status: 'RUNNING', outcome: 'NOT_EVALUATED' })
+    renderRun(server, streams)
+    await follow()
+    expect(screen.getByText('RUNNING')).toBeVisible()
+
+    // The start notification can arrive after the record has already advanced again.
+    server.data.runs[0] = { ...RUN, status: 'FINALIZING', outcome: 'NOT_EVALUATED' }
+    streams.last()?.emit('run.running')
+
+    await waitFor(() => expect(screen.getByText('FINALIZING')).toBeVisible())
+    expect(screen.queryByText('RUNNING')).toBeNull()
     expect(screen.queryByText('PASS')).toBeNull()
     expect(screen.queryByText('COMPLETED')).toBeNull()
   })

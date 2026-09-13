@@ -14,17 +14,21 @@ import subprocess
 import tarfile
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
 
+from accessforge_contracts import SchemaValidationError, validate
 from accessforge_domain.canonical import digest
 from accessforge_domain.origins import normalize_origin
 from accessforge_persistence import (
     assert_row_level_security_enforced,
     migrate,
     projects,
+    runs,
     source_intake,
     unscoped_connection,
     workspace_connection,
@@ -473,6 +477,152 @@ def test_sealing_produces_a_deterministic_manifest_digest(db: tuple[str, str], r
     assert len(first) == 64
     # Deliberately not unique in the schema: a baseline and its candidate must be able to share an
     # input digest, which is how INV-04 shows they differ only by the approved patch.
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "missing-run",
+        "missing-approval",
+        "invalid-run",
+        "invalid-approval",
+        "journey",
+        "effects",
+        "expired",
+        "too-long",
+        "zero-actions",
+        "negative-wall",
+        "bool-budget",
+        "unobserved-build",
+        "wrong-build-source",
+        "journey-drift",
+        "existing-run",
+    ],
+)
+def test_canonical_execution_manifest_is_exact_and_bounded(
+    db: tuple[str, str], repo: Path, fault: str | None
+) -> None:
+    """Real storage/schema validation; synthetic identity records, not execution or approval."""
+    url, project_id = db
+    prior_id, prior_digest, _ = _seal(url, project_id, repo)
+    with workspace_connection(url, WS) as conn:
+        prior = conn.execute("SELECT * FROM sealed_manifest WHERE id=%s", (prior_id,)).fetchone()
+        assert prior is not None and prior["canonical_manifest"] is None
+        inputs = _seal_inputs()
+        journey_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,journey_digest,"
+            "assertion_set_digest,fixture_digest,navigator_policy_digest,navigator_policy,"
+            "reviewer_summary) VALUES (%s,%s,%s,'synthetic metadata','web',%s,%s,%s,%s,'{}','{}')",
+            (
+                journey_id,
+                WS,
+                project_id,
+                inputs.journey_digest,
+                inputs.assertion_set_digest,
+                inputs.fixture_digest,
+                inputs.navigator_policy_digest,
+            ),
+        )
+        execution = projects.ExecutionInputs(
+            journey_id, LATER, 10, 20, frozenset({"FIXTURE_SUBMIT"})
+        )
+        args: dict[str, Any] = dict(
+            workspace_id=WS,
+            project_id=project_id,
+            source_snapshot_id=str(prior["source_snapshot_id"]),
+            build_artifact_id=str(prior["build_artifact_id"]),
+            environment_manifest_id=str(prior["environment_manifest_id"]),
+            inputs=inputs,
+            run_id=str(uuid.uuid4()),
+            authorization_id=str(uuid.uuid4()),
+            now=NOW,
+        )
+        if fault in ("missing-run", "invalid-run"):
+            args["run_id"] = None if fault == "missing-run" else "not-a-uuid"
+        if fault in ("missing-approval", "invalid-approval"):
+            args["authorization_id"] = None if fault == "missing-approval" else "not-a-uuid"
+        if fault == "journey":
+            execution = replace(execution, journey_version_id=str(uuid.uuid4()))
+        if fault == "effects":
+            execution = replace(execution, permitted_effects=frozenset({"UNAUTHORIZED_EFFECT"}))
+        if fault in ("expired", "too-long"):
+            execution = replace(
+                execution, expires_at=NOW if fault == "expired" else "2026-09-12T12:00:00Z"
+            )
+        if fault in ("zero-actions", "bool-budget"):
+            execution = replace(execution, action_budget=0 if fault == "zero-actions" else True)
+        if fault == "negative-wall":
+            execution = replace(execution, wall_time_budget_seconds=-1)
+        if fault == "unobserved-build":
+            conn.execute(
+                "UPDATE build_artifact SET identity_observable=false WHERE id=%s",
+                (prior["build_artifact_id"],),
+            )
+        if fault == "wrong-build-source":
+            args["source_snapshot_id"] = projects.record_source_snapshot(
+                conn,
+                workspace_id=WS,
+                project_id=project_id,
+                identity=source_intake.resolve_source(repo),
+                requested_revision="main",
+            )
+        if fault == "journey-drift":
+            args["inputs"] = replace(inputs, assertion_set_digest="0" * 64)
+        if fault == "existing-run":
+            runs.create_run(
+                conn,
+                workspace_id=WS,
+                project_id=project_id,
+                manifest_digest=prior_digest,
+                run_id=args["run_id"],
+            )
+            # Storage guard also catches a writer bypassing the Python seal helper. The payload
+            # here is deliberately incomplete; this probes identity replacement, not schema proof.
+            with pytest.raises(psycopg.IntegrityError, match="cannot replace"), conn.transaction():
+                conn.execute(
+                    "INSERT INTO sealed_manifest SELECT (jsonb_populate_record("
+                    "NULL::sealed_manifest,"
+                    "to_jsonb(m)||jsonb_build_object('id',%s::text,'run_id',%s::text,"
+                    "'authorization_id',%s::text,'manifest_digest',repeat('0',64),"
+                    "'canonical_manifest','{}'::jsonb))).* FROM sealed_manifest m WHERE id=%s",
+                    (str(uuid.uuid4()), args["run_id"], args["authorization_id"], prior_id),
+                )
+        if fault is not None:
+            with pytest.raises((projects.SealError, SchemaValidationError)), conn.transaction():
+                projects.seal_run(conn, execution=execution, **args)
+            assert conn.execute("SELECT count(*) AS n FROM sealed_manifest").fetchone() == {"n": 1}
+            return
+        sealed = projects.seal_run(conn, execution=execution, **args)
+        row = conn.execute(
+            "SELECT * FROM sealed_manifest WHERE id=%s", (sealed.sealed_manifest_id,)
+        ).fetchone()
+        assert row is not None
+        manifest = row["canonical_manifest"]
+        validate("run-manifest.schema.json", manifest)
+        assert digest(manifest) == sealed.manifest_digest != prior_digest
+        assert manifest["runId"] == args["run_id"]
+        assert manifest["authorizationId"] == args["authorization_id"]
+        assert manifest["journeyVersionId"] == journey_id
+        assert manifest["permittedEffects"] == ["FIXTURE_SUBMIT"]
+        # Every newly frozen identity/authority axis must affect the signed approval target.
+        for field, value in {
+            "runId": str(uuid.uuid4()),
+            "authorizationId": str(uuid.uuid4()),
+            "journeyVersionId": str(uuid.uuid4()),
+            "expiresAt": NOW,
+            "actionBudget": 11,
+            "wallTimeBudgetSeconds": 21,
+            "permittedEffects": [],
+        }.items():
+            assert digest({**manifest, field: value}) != sealed.manifest_digest
+        assert (
+            conn.execute(
+                "SELECT 1 FROM approval WHERE id=%s", (args["authorization_id"],)
+            ).fetchone()
+            is None
+        )
 
 
 def test_changing_any_sealed_input_changes_the_digest(db: tuple[str, str], repo: Path) -> None:
