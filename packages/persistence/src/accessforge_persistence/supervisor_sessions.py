@@ -608,7 +608,7 @@ def finish_session(
         state_before.unresolved_action
         or not actions
         or type(reader_sequence) is not int
-        or reader_sequence < 1
+        or reader_sequence < 0
         or str(actions[-1]["id"]) != stop_action_id
         or actions[-1]["action"] != "STOP"
         or actions[-1]["result_status"] != "SUCCEEDED"

@@ -2211,6 +2211,10 @@ def test_independent_observer_worker(
         "success",
         "missing-observer",
         "tail",
+        "stop-only",
+        "stop-only-negative",
+        "stop-only-bool",
+        "artifact-stop-only",
         "no-stop",
         "unresolved-stop",
         "revoked",
@@ -2249,7 +2253,8 @@ def test_authenticated_execution_finish(
     from accessforge_persistence.fixtures import create_instance
 
     ticket, ref = supervisor_ticket, manual_dispatch_reference
-    closes = case in {"success", "observer-unknown"} or case.startswith("artifact")
+    closes = case in {"success", "observer-unknown", "stop-only"} or case.startswith("artifact")
+    stop_only = "stop-only" in case
     secret = secrets.token_urlsafe(32)
     assert (
         client.post(
@@ -2262,6 +2267,11 @@ def test_authenticated_execution_finish(
     headers = {"Authorization": f"Bearer {secret}"}
     base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
     with workspace_connection(db, WS) as conn:
+        assert conn.execute(
+            "SELECT admitted_through,closed_at_sequence FROM producer_stream "
+            "WHERE attempt_id=%s AND producer_id=%s",
+            (ref.attempt_id, f"supervisor:{ticket.ticket_id}:reader"),
+        ).fetchone() == {"admitted_through": 0, "closed_at_sequence": None}
         fixture = create_instance(
             conn,
             workspace_id=WS,
@@ -2279,7 +2289,11 @@ def test_authenticated_execution_finish(
         )
     stop_id = ""
     for sequence, action in enumerate(
-        ["READ_CURRENT"] if case == "no-stop" else ["READ_CURRENT", "STOP"],
+        ["STOP"]
+        if stop_only
+        else ["READ_CURRENT"]
+        if case == "no-stop"
+        else ["READ_CURRENT", "STOP"],
         start=1,
     ):
         intent = client.post(
@@ -2385,7 +2399,13 @@ def test_authenticated_execution_finish(
             headers=headers,
             json={
                 "stopActionId": stop_id,
-                "readerSequence": 0 if case == "tail" else 1,
+                "readerSequence": -1
+                if case == "stop-only-negative"
+                else False
+                if case == "stop-only-bool"
+                else 0
+                if case == "tail" or stop_only
+                else 1,
             },
         )
         assert response.status_code == (200 if closes else 403)
@@ -2419,6 +2439,17 @@ def test_authenticated_execution_finish(
         tails = conn.execute("SELECT closed_at_sequence FROM producer_stream").fetchall()
         if closes:
             assert len(tails) == 4 and all(t["closed_at_sequence"] is not None for t in tails)
+            if stop_only:
+                assert conn.execute(
+                    "SELECT admitted_through,closed_at_sequence FROM producer_stream "
+                    "WHERE attempt_id=%s AND producer_id=%s",
+                    (ref.attempt_id, f"supervisor:{ticket.ticket_id}:reader"),
+                ).fetchone() == {"admitted_through": 0, "closed_at_sequence": 0}
+                assert conn.execute(
+                    "SELECT count(*) AS n FROM producer_source_record WHERE attempt_id=%s "
+                    "AND producer_id=%s",
+                    (ref.attempt_id, f"supervisor:{ticket.ticket_id}:reader"),
+                ).fetchone() == {"n": 0}
             assert lease["release_reason"] == "STOP_ACKNOWLEDGED"
             assert lease["stop_acknowledged_epoch"] == ref.epoch
         assert (

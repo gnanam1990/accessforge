@@ -93,11 +93,20 @@ def emit(
 
 
 def start(conn: psycopg.Connection[Any], row: dict[str, Any]) -> None:
+    required = requirements(conn, row)
     artifacts.declare_required_artifacts(
         conn,
         workspace_id=str(row["workspace_id"]),
         run_id=str(row["run_id"]),
-        requirements=requirements(conn, row),
+        requirements=required,
+    )
+    # STOP produces no reader observation. Declare the reader's empty, still-open stream at
+    # session creation so a genuinely STOP-only run can later close at zero. Never manufacture
+    # an observation or create a missing historical stream during finalization.
+    conn.execute(
+        "INSERT INTO producer_stream(workspace_id,run_id,attempt_id,producer_id) "
+        "VALUES(%s,%s,%s,%s)",
+        (row["workspace_id"], row["run_id"], row["attempt_id"], required["SPEECH_TRANSCRIPT"]),
     )
     emit(
         conn,
