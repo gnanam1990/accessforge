@@ -137,7 +137,7 @@ def test_diagnosis_reservations_preserve_unknown_usage_and_refuse_replay(
                 request_digest=MANIFEST,
                 tokens=1000,
             )
-        with conn.transaction(), pytest.raises(psycopg.IntegrityError):
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
             conn.execute("DELETE FROM diagnosis_invocation WHERE operation_id=%s", (operation,))
         with pytest.raises(diagnosis_invocations.InvocationRefused):
             diagnosis_invocations.finish(
