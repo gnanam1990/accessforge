@@ -19,12 +19,14 @@ const scope = (): ReaderConsentScope => ({ runId: run.runId, runnerId: id(2), re
     reader: 'VoiceOver', effects: ['TERMINATE_AND_RESTART_VOICEOVER', 'MOUNT_GUIDEPUP_READER_PREFERENCES'],
     requiresDedicatedDesktop: true, doesNotAuthorize: ['GRANT_TCC_PERMISSIONS', 'INITIAL_APPLESCRIPT_CONFIGURATION'] } })
 
-function fixture(role = 'OWNER') {
+function fixture(role = 'OWNER', beforeWrite?: () => Promise<void>) {
   const reviewed = scope(), writes: { path: string; body: Record<string, unknown>; headers: Headers }[] = []
+  const reads: string[] = []
   let grant: ReaderConsent | null = null
   const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input), headers = new Headers(init?.headers)
+    if (init?.method !== 'POST') reads.push(path)
     expect(PATHS).toContain(path.split('?')[0]?.replace(id(4), '{workspace_id}').replace(id(1), '{run_id}'))
     if (path === '/v1/session') return json({ userId: id(3), email: 'operator@example.test', workspaces: [{ workspaceId: id(4), name: 'Fixture', role }] })
     if (path.endsWith('/runners')) return json({ items: [{ runnerId: id(2), name: 'Dedicated desktop', platform: 'darwin', revoked: false }], nextCursor: null, readinessMeaning: 'REGISTRATIONS_ONLY' })
@@ -32,6 +34,7 @@ function fixture(role = 'OWNER') {
     if (init?.method === 'POST') {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       writes.push({ path, body, headers })
+      await beforeWrite?.()
       if (path.endsWith('/revocation') && grant !== null) grant = { ...grant, revokedAt: new Date().toISOString() }
       else grant = { ...reviewed, consentId: id(5), actorId: id(3), expiresAt: String(body.expiresAt), revokedAt: null,
         boundSessionId: null, meaning: 'STORED_OPERATOR_STARTUP_CONSENT_NOT_PHYSICAL_PROOF' }
@@ -41,7 +44,7 @@ function fixture(role = 'OWNER') {
   }) as typeof fetch
   const client = new ApiClient({ fetchImpl, cookieSource: () => 'accessforge_csrf=fixture-csrf' })
   render(<SessionProvider client={client}><ReaderStartupSection workspaceId={id(4)} run={run} /></SessionProvider>)
-  return { reviewed, writes }
+  return { reviewed, writes, reads }
 }
 
 it('requires explicit scope review and acknowledgement, then confirms exact permanent revocation', async () => {
@@ -73,6 +76,32 @@ it('does not offer a consent mutation to a non-owner', async () => {
   await screen.findByText(/Only a workspace owner/)
   expect(screen.queryByRole('button', { name: 'Review startup scope' })).not.toBeInTheDocument()
   expect(f.writes).toHaveLength(0)
+})
+
+it('keeps pending grant and revocation mounted and prevents concurrent history refresh', async () => {
+  let release: (() => void) | undefined
+  const f = fixture('OWNER', () => new Promise<void>((resolve) => { release = resolve })), user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: 'Inspect reader consent' }))
+  await user.selectOptions(await screen.findByLabelText(/Runner/), id(2))
+  await user.click(screen.getByRole('button', { name: 'Review startup scope' }))
+  await user.click(await screen.findByRole('checkbox'))
+  await user.click(screen.getByRole('button', { name: 'Store reader startup consent' }))
+  const readCount = f.reads.length
+  const close = screen.getByRole('button', { name: 'Close reader consent' })
+  const refresh = screen.getByRole('button', { name: 'Read stored consent again' })
+  expect(close).toBeDisabled(); expect(refresh).toBeDisabled()
+  await user.click(close); await user.click(refresh)
+  expect(f.reads).toHaveLength(readCount)
+  expect(screen.getByRole('button', { name: 'Store reader startup consent' })).toBeDisabled()
+  release?.()
+  await screen.findByRole('heading', { name: 'Stored operator decision' })
+  await user.click(screen.getByRole('button', { name: 'Revoke reader startup consent' }))
+  await user.click(screen.getByRole('button', { name: 'Confirm permanent revocation' }))
+  expect(close).toBeDisabled(); expect(refresh).toBeDisabled()
+  release?.()
+  await screen.findByRole('heading', { name: 'Revoked operator decision' })
+  expect(close).toBeEnabled(); expect(refresh).toBeEnabled()
+  expect(f.writes).toHaveLength(2)
 })
 
 it('changing expiry clears acknowledgement and an invalid expiry cannot submit', async () => {

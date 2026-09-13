@@ -1,5 +1,12 @@
 # Reader startup consent — operator UI
 
+PR #38 is merged into main at dd1324c; this UI is restacked onto that commit. Normal inspection
+confirmed a pending-mutation refresh/close race. The section now owns the operation lifetime and
+disables history refresh and closing until the request settles. Run revision changes invalidate the
+reviewed form without aborting a pending mutation. A deferred grant/revocation regression is added
+for CI only; no local browser or full test suite was run for this correction. The UI skill's loading
+control guidance informed the native disabled/busy behavior.
+
 Implemented on `feat/reader-startup-consent-ui`, stacked on the consent storage/API/native work
 in PR38. The run screen now offers an explicitly opened consent section, with no background
 polling or machine-secret handling in the browser.
