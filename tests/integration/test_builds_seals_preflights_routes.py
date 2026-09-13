@@ -2876,8 +2876,6 @@ def _retain_stopped_artifact_case(
                 assert (
                     client.get(f"/v1/workspaces/{WS}/runs/not-a-uuid/evaluation").status_code == 404
                 )
-                client.cookies.clear()
-                assert client.get(endpoint).status_code == 401
                 with workspace_connection(db, WS) as conn:
                     bundle, _ = evidence.build_bundle(
                         conn,
@@ -2890,6 +2888,9 @@ def _retain_stopped_artifact_case(
                         ),
                     )
                     assert bundle.outcome_reasons == tuple(result["snapshot"]["reasons"])
+                _check_diagnosis_occurrence(db, ref, result, ids[0], client)
+                client.cookies.clear()
+                assert client.get(endpoint).status_code == 401
                 with workspace_connection(db, WS) as conn:
                     with pytest.raises(psycopg.IntegrityError):
                         conn.execute(
@@ -2919,6 +2920,92 @@ def _retain_stopped_artifact_case(
             ).fetchall()
         for item in keys:
             store.delete(key=item["object_key"])
+
+
+def _check_diagnosis_occurrence(
+    db: str,
+    ref: DispatchReference,
+    evaluation: dict[str, Any],
+    artifact_id: str,
+    client: TestClient,
+) -> None:
+    """Reuse the completed real-DB artifact fixture; no new browser/model/reader execution."""
+    from psycopg.types.json import Jsonb
+
+    from accessforge_persistence import diagnoses
+
+    kwargs: dict[str, Any] = {
+        "workspace_id": WS,
+        "run_id": ref.run_id,
+        "requested_by": OWNER,
+        "operation_id": str(uuid.uuid4()),
+        "assertion_id": evaluation["snapshot"]["assertions"][0]["assertionId"],
+        "component_identity": "src/form.ts",
+        "evaluation_digest": evaluation["snapshotDigest"],
+        "projection_digest": "a" * 64,
+        "model_profile_digest": "b" * 64,
+        "analysis": {
+            "support": "SOURCE_LINKED",
+            "hypothesis": {"uncertainty": "synthetic fixture"},
+        },
+    }
+    with workspace_connection(db, WS) as conn:
+        first = diagnoses.retain(conn, **kwargs)
+        assert diagnoses.retain(conn, **kwargs) == first
+        finding = conn.execute(
+            "SELECT status,summary FROM finding WHERE id=%s", (first["findingId"],)
+        ).fetchone()
+        assert finding is not None and finding["status"] == "CANDIDATE"
+        assert "synthetic fixture" not in finding["summary"]
+        with conn.transaction(), pytest.raises(diagnoses.DiagnosisRefused):
+            diagnoses.retain(conn, **{**kwargs, "projection_digest": "c" * 64})
+        with conn.transaction(), pytest.raises(diagnoses.DiagnosisRefused):
+            diagnoses.retain(conn, **{**kwargs, "operation_id": str(uuid.uuid4())})
+        second = diagnoses.retain(
+            conn,
+            **{
+                **kwargs,
+                "operation_id": str(uuid.uuid4()),
+                "supersedes": first["diagnosisId"],
+                "analysis": {"support": "UNSUPPORTED", "missing_information": ["more evidence"]},
+            },
+        )
+        assert second["findingId"] == first["findingId"]
+        history = diagnoses.history(conn, finding_id=first["findingId"])
+        assert history["complete"] and len(history["items"]) == 2
+        assert history["items"][1] == first
+    response = client.get(f"/v1/workspaces/{WS}/findings/{first['findingId']}")
+    assert response.status_code == 200 and response.headers["Cache-Control"] == "no-store"
+    assert response.json()["diagnoses"]["items"][1] == first
+    assert response.json()["machineOutcome"]["runOutcome"] == "INCONCLUSIVE"
+    with workspace_connection(db, str(uuid.uuid4())) as other:
+        assert diagnoses.history(other, finding_id=first["findingId"])["items"] == []
+    for statement in (
+        "UPDATE finding_diagnosis SET payload='{}'::jsonb WHERE id=%s",
+        "DELETE FROM finding_diagnosis WHERE id=%s",
+    ):
+        with workspace_connection(db, WS) as conn, pytest.raises(psycopg.IntegrityError):
+            conn.execute(statement, (first["diagnosisId"],))
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE evidence_artifact SET retention='DELETED',"
+            "retention_changed_at=clock_timestamp(),"
+            "retention_reason='synthetic retention check' WHERE id=%s",
+            (artifact_id,),
+        )
+        history = diagnoses.history(conn, finding_id=first["findingId"])
+        assert all(item["analysis"] is None and item["deletedAt"] for item in history["items"])
+        assert history["items"][1]["payloadDigest"] == first["payloadDigest"]
+        state = run_store.load_run(conn, run_id=ref.run_id).state
+        assert state.status.value == "COMPLETED" and state.outcome.value == "INCONCLUSIVE"
+    response = client.get(f"/v1/workspaces/{WS}/findings/{first['findingId']}")
+    assert response.status_code == 200
+    assert all(item["analysis"] is None for item in response.json()["diagnoses"]["items"])
+    with workspace_connection(db, WS) as conn, pytest.raises(psycopg.IntegrityError):
+        conn.execute(
+            "UPDATE finding_diagnosis SET payload=%s,deleted_at=NULL WHERE id=%s",
+            (Jsonb(kwargs["analysis"]), first["diagnosisId"]),
+        )
 
 
 @pytest.fixture(scope="module")

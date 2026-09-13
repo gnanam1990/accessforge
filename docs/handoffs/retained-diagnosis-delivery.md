@@ -22,8 +22,38 @@ actual source intake or reader was run while implementing it. Changed-file Ruff/
 scoped synthetic assembly regressions are authored for CI, not locally executed. Real retained
 artifact/source integration coverage remains part of completing the delivery path.
 
-Next: immutable diagnosis revisions and conservative behavior/component grouping that preserves
-each run/source occurrence; fresh authorization and input rechecks around model execution;
-finding admission derived from verified prerequisites; reviewer-readable original hypothesis,
-alternatives, uncertainty and scoped repair brief. Existing human feedback remains separately
-attributable and must not mutate original diagnosis or machine outcomes.
+## Durable delivery added
+
+Migration 0039 and `accessforge_persistence.diagnoses` retain immutable diagnosis revisions, with
+operation/request identity and explicit predecessor linkage. Grouping binds project, journey,
+assertion contract, assertion ID and component path; every run keeps its own finding occurrence.
+There is no cross-journey merge based on generic accessibility terminology or model-written prose.
+New analysis never silently overwrites an original or changes an existing finding's status.
+
+The initial finding status is derived from the original evaluation and frozen assertion condition:
+INCONCLUSIVE always creates CANDIDATE, regardless of model support wording. REPRODUCED requires
+FAIL, the selected assertion FALSE and validated source-linked support. The generic finding summary
+contains no model-derived text. Original hypothesis, alternatives, uncertainty and repair brief stay
+in the independently labelled diagnosis payload, separate from machine outcomes and human opinions.
+
+`diagnosis.delivery.deliver` requires a current requester with run-request and evidence-read
+permission, prepares original retained inputs, invokes the existing bounded diagnosis worker outside
+database locks, then rechecks permission and all input identities before retention. A committed
+matching operation is replayed without another model call. Concurrent duplicate calls can still
+invoke the provider before either commits; durable pre-call reservation and usage accounting remain
+pending, so this remains a draft internal workflow, not a production request endpoint.
+
+The existing findings GET now returns a bounded diagnosis history with explicit truncation and
+no-store semantics. When any source artifact is marked deleted, its derived diagnosis payloads are
+cleared in the same transaction. Digests and provenance remain as tombstones; updates cannot restore
+deleted text. No actual user data was erased while implementing this behavior.
+
+The existing real-PostgreSQL stopped-artifact CI fixture now checks candidate admission, operation
+replay/conflict, explicit follow-up, API history, cross-workspace isolation, immutability and
+derived-text deletion. The forward-migration boundary includes 0039. These additions have only
+changed-file Ruff/mypy validation locally; fresh CI is required. The earlier projection-only head
+0a73231 passed all applicable CI in run 34746324460.
+
+Next: durable pre-call reservation and model usage/budget integration, authorized operator request
+delivery, reviewer UI, and real retained source/model/reader acceptance proof. No model invocation,
+physical reader run, deployment or real finding creation was performed in this implementation turn.
