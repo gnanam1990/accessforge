@@ -110,6 +110,7 @@ MAX_RULE_ACTION_SEQUENCE = 1000
 MAX_RULE_PHRASE_CHARACTERS = 8192
 MAX_RULE_PHRASE_BYTES = 32768
 MAX_RULE_EFFECT_COUNT = 1000
+MAX_READER_SEQUENCE_STEPS = 20
 
 
 def evaluation_rule_capabilities() -> dict[str, Any]:
@@ -126,7 +127,33 @@ def evaluation_rule_capabilities() -> dict[str, Any]:
             "effect": "CREATE_TEST_REQUEST",
             "maxCount": MAX_RULE_EFFECT_COUNT,
         },
+        "READER_NEXT_SEQUENCE": {
+            "assertionKind": "READING_ORDER",
+            "action": "NEXT",
+            "minSteps": 2,
+            "maxSteps": MAX_READER_SEQUENCE_STEPS,
+            "maxActionSequence": MAX_RULE_ACTION_SEQUENCE,
+            "maxPhraseCharacters": MAX_RULE_PHRASE_CHARACTERS,
+            "maxTotalPhraseBytes": MAX_RULE_PHRASE_BYTES,
+        },
     }
+
+
+@dataclass(frozen=True, slots=True)
+class ReaderSequenceStep:
+    action_sequence: int
+    phrase: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.action_sequence) is not int
+            or not 1 <= self.action_sequence <= MAX_RULE_ACTION_SEQUENCE
+            or not isinstance(self.phrase, str)
+            or not self.phrase.strip()
+            or len(self.phrase) > MAX_RULE_PHRASE_CHARACTERS
+            or len(self.phrase.encode()) > MAX_RULE_PHRASE_BYTES
+        ):
+            raise ValueError("reader sequence step requires a bounded action and exact phrase")
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +169,7 @@ class EvaluationRule:
     phrase: str | None = None
     effect: str | None = None
     count: int | None = None
+    steps: tuple[ReaderSequenceStep, ...] = ()
 
     def __post_init__(self) -> None:
         if self.rule_type == "EXACT_READER_PHRASE":
@@ -154,6 +182,7 @@ class EvaluationRule:
                 or len(self.phrase.encode()) > MAX_RULE_PHRASE_BYTES
                 or self.effect is not None
                 or self.count is not None
+                or self.steps != ()
             ):
                 raise ValueError("phrase rule requires a bounded exact action sequence and phrase")
         elif self.rule_type == "EFFECT_COUNT":
@@ -163,10 +192,27 @@ class EvaluationRule:
                 or not 0 <= self.count <= MAX_RULE_EFFECT_COUNT
                 or self.action_sequence is not None
                 or self.phrase is not None
+                or self.steps != ()
             ):
                 raise ValueError(
                     "effect rule requires a supported effect and bounded integer count"
                 )
+        elif self.rule_type == "READER_NEXT_SEQUENCE":
+            if (
+                type(self.steps) is not tuple
+                or not 2 <= len(self.steps) <= MAX_READER_SEQUENCE_STEPS
+                or any(not isinstance(step, ReaderSequenceStep) for step in self.steps)
+                or any(
+                    right.action_sequence != left.action_sequence + 1
+                    for left, right in zip(self.steps, self.steps[1:], strict=False)
+                )
+                or sum(len(step.phrase.encode()) for step in self.steps) > MAX_RULE_PHRASE_BYTES
+                or any(
+                    v is not None
+                    for v in (self.action_sequence, self.phrase, self.effect, self.count)
+                )
+            ):
+                raise ValueError("reader sequence requires bounded consecutive NEXT steps")
         else:
             raise ValueError("unsupported evaluation rule; no inferred predicate")
 
@@ -180,9 +226,30 @@ class EvaluationRule:
             )
         if set(value) == {"type", "effect", "count"}:
             return cls(value["type"], effect=value["effect"], count=value["count"])
+        if set(value) == {"type", "steps"} and isinstance(value["steps"], list):
+            if any(
+                not isinstance(step, dict) or set(step) != {"actionSequence", "phrase"}
+                for step in value["steps"]
+            ):
+                raise ValueError("reader sequence step fields are incomplete or unsupported")
+            return cls(
+                value["type"],
+                steps=tuple(
+                    ReaderSequenceStep(step["actionSequence"], step["phrase"])
+                    for step in value["steps"]
+                ),
+            )
         raise ValueError("evaluationRule fields are incomplete or unsupported")
 
     def canonical_form(self) -> dict[str, Any]:
+        if self.rule_type == "READER_NEXT_SEQUENCE":
+            return {
+                "type": self.rule_type,
+                "steps": [
+                    {"actionSequence": step.action_sequence, "phrase": step.phrase}
+                    for step in self.steps
+                ],
+            }
         if self.rule_type == "EXACT_READER_PHRASE":
             return {
                 "type": self.rule_type,
@@ -215,6 +282,7 @@ class Assertion:
             not in {
                 (AssertionKind.REQUIRED_ANNOUNCEMENT, "EXACT_READER_PHRASE"),
                 (AssertionKind.TASK_COMPLETION, "EFFECT_COUNT"),
+                (AssertionKind.READING_ORDER, "READER_NEXT_SEQUENCE"),
             }
         ):
             raise ValueError("evaluation rule is not supported by this assertion's observer")

@@ -12,6 +12,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from accessforge_domain.canonical import digest
+from accessforge_domain.evaluation.rules import ReaderSample
 from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
 from accessforge_domain.timestamps import parse_rfc3339_utc
 from accessforge_orchestrator.execution_artifacts import Refused
@@ -22,6 +23,62 @@ class RuntimeEvidence:
     preflight_passed: bool
     observed_build: str | None
     reasons: tuple[str, ...]
+
+
+def reader_samples(snapshots: dict[str, Any]) -> tuple[ReaderSample, ...]:
+    """Join already-verified original streams, never trust an observation's claimed action type.
+
+    NEXT eligibility needs its successful result and canonical intent < speech < result.
+    This does not upgrade an SDK result into independent physical or profile attestation.
+    """
+    intents: dict[str, dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
+    for event in snapshots["ACTION_TRACE"]["records"]:
+        payload = event["payload"]
+        if payload.get("serviceIdentity") != "SUPERVISOR":
+            raise Refused("reader action provenance differs")
+        if event["eventType"] not in {"ACTION_INTENT", "ACTION_RESULT"}:
+            raise Refused("unexpected reader action boundary")
+        destination = intents if event["eventType"] == "ACTION_INTENT" else results
+        action_id = payload["sourceRecord"]["actionId"]
+        if action_id in destination:
+            raise Refused("duplicate reader action boundary")
+        destination[action_id] = event
+    samples = []
+    for event in snapshots["SPEECH_TRANSCRIPT"]["records"]:
+        payload, source = event["payload"], event["payload"]["sourceRecord"]
+        if (
+            event["eventType"] != "READER_OBSERVATION"
+            or payload.get("serviceIdentity") != "SUPERVISOR"
+        ):
+            raise Refused("reader artifact provenance differs")
+        intent, result = intents.get(source["actionId"]), results.get(source["actionId"])
+        verified = False
+        if intent is not None and result is not None:
+            command, completed = (
+                intent["payload"]["sourceRecord"],
+                result["payload"]["sourceRecord"],
+            )
+            verified = (
+                command.get("action") == "NEXT"
+                and completed.get("status") == "SUCCEEDED"
+                and type(source["actionSequence"]) is int
+                and command.get("sequence") == source["actionSequence"] == completed.get("sequence")
+                and intent["sequence"] < event["sequence"] < result["sequence"]
+            )
+        samples.append(
+            ReaderSample(
+                source["actionSequence"],
+                event["eventId"],
+                source.get("phrase"),
+                capture_unknown=source.get("status") == "CAPTURE_UNKNOWN" or "phrase" not in source,
+                redacted=payload.get("submittedSourceRecordDigest")
+                != payload["sourceRecordDigest"],
+                next_action_verified=verified,
+                canonical_sequence=event["sequence"],
+            )
+        )
+    return tuple(samples)
 
 
 def _build(receipt: Any, source: dict[str, Any], context: dict[str, Any]) -> str | None:
