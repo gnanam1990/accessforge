@@ -13,9 +13,11 @@ import json
 import re
 from datetime import UTC, datetime
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 import psycopg
 
+from accessforge_domain import reducers
 from accessforge_domain.authorization import (
     MachinePrincipal,
     ServiceIdentity,
@@ -27,7 +29,9 @@ from accessforge_domain.origins import normalize_origin
 from accessforge_domain.runners.preflight import AmbiguityReason
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
-from . import runners, sequencer, supervisor_dispatch
+from . import runners, runs, sequencer, supervisor_dispatch
+from .evidence import artifacts
+from .evidence import session as session_evidence
 
 
 class Refused(Exception):
@@ -77,6 +81,8 @@ def open_session(
         "VALUES(%s,%s,%s,%s)",
         (ticket_id, workspace_id, token_digest, expires),
     )
+    row, _ = _live(conn, workspace_id, ticket_id, session_token)
+    session_evidence.start(conn, row)
     return {
         "sessionId": ticket_id,
         "workspaceId": workspace_id,
@@ -216,7 +222,8 @@ def retain_action_intent(
         text = value
     usage = conn.execute(
         "SELECT count(*) AS n,coalesce(max(action_sequence),0) AS last,"
-        "count(*) FILTER(WHERE result_at IS NULL OR result_status='AMBIGUOUS') AS unresolved "
+        "count(*) FILTER(WHERE result_at IS NULL OR result_status='AMBIGUOUS') AS unresolved,"
+        "count(*) FILTER(WHERE action='STOP') AS stops "
         "FROM runner_action WHERE run_id=%s AND attempt_id=%s",
         (row["run_id"], row["attempt_id"]),
     ).fetchone()
@@ -224,6 +231,7 @@ def retain_action_intent(
     elapsed = (datetime.now(UTC) - row["created_at"]).total_seconds()
     if (
         usage["unresolved"]
+        or usage["stops"]
         or sequence != usage["last"] + 1
         or usage["n"] >= min(manifest["actionBudget"], policy_max)
         or elapsed >= min(manifest["wallTimeBudgetSeconds"], policy_wall)
@@ -241,6 +249,22 @@ def retain_action_intent(
         origin=normalized,
         key_chord=chord,
         text_value=text,
+    )
+    session_evidence.emit(
+        conn,
+        row,
+        stream="actions",
+        sequence=2 * sequence - 1,
+        source_id=action_id + ":intent",
+        event_type="ACTION_INTENT",
+        source={
+            "actionId": action_id,
+            "sequence": sequence,
+            "action": action,
+            "origin": normalized,
+            **({"keyChord": chord} if chord is not None else {}),
+            **({"textValueRef": command["textValueRef"]} if action == "TYPE_TEXT" else {}),
+        },
     )
     return {
         "actionId": action_id,
@@ -466,6 +490,15 @@ def record_action_completion(
     action = _action(conn, row, action_id)
     if action["dispatched_at"] is None and status != "AMBIGUOUS":
         raise Refused("a non-dispatched intent cannot report a known action result")
+    session_evidence.emit(
+        conn,
+        row,
+        stream="actions",
+        sequence=2 * action["action_sequence"],
+        source_id=action_id + ":result",
+        event_type="ACTION_RESULT",
+        source={"actionId": action_id, "sequence": action["action_sequence"], "status": status},
+    )
     if status == "AMBIGUOUS":
         runners.mark_action_ambiguous(
             conn, action_id=action_id, reason=AmbiguityReason.ACTION_RESULT_NEVER_ARRIVED
@@ -486,4 +519,143 @@ def record_action_completion(
         "actionId": action_id,
         "status": status,
         "meaning": "ACTION_RESULT_RETAINED",
+    }
+
+
+def finish_session(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    session_id: str,
+    token: str,
+    stop_action_id: str,
+    reader_sequence: int,
+) -> dict[str, Any]:
+    """Acknowledge normal STOP and hand off to FINALIZING, never COMPLETED or PASS.
+
+    Missing artifacts remain declared and block outcome admission. The independent observer must
+    already have closed its own final sample; the supervisor cannot close it on its behalf.
+    """
+    row, _ = _live(conn, workspace_id, session_id, token)
+    state_before = runs.load_run(conn, run_id=str(row["run_id"])).state
+    actions = conn.execute(
+        "SELECT * FROM runner_action WHERE run_id=%s AND attempt_id=%s ORDER BY action_sequence",
+        (row["run_id"], row["attempt_id"]),
+    ).fetchall()
+    if (
+        state_before.unresolved_action
+        or not actions
+        or type(reader_sequence) is not int
+        or reader_sequence < 1
+        or str(actions[-1]["id"]) != stop_action_id
+        or actions[-1]["action"] != "STOP"
+        or actions[-1]["result_status"] != "SUCCEEDED"
+        or any(
+            a["dispatched_at"] is None
+            or a["result_at"] is None
+            or a["result_status"] == "AMBIGUOUS"
+            or str(a["lease_id"]) != str(row["lease_id"])
+            or int(a["epoch"]) != int(row["epoch"])
+            for a in actions
+        )
+    ):
+        raise Refused("current successful STOP and resolved actions are required")
+    required = session_evidence.requirements(conn, row)
+    declared = conn.execute(
+        "SELECT kind,producer_id FROM required_artifact WHERE run_id=%s",
+        (row["run_id"],),
+    ).fetchall()
+    if not set(required.items()) <= {(r["kind"], r["producer_id"]) for r in declared}:
+        raise Refused("execution has no original artifact declaration; no historical backfill")
+    reader = conn.execute(
+        "SELECT source_record_id FROM producer_source_record "
+        "WHERE attempt_id=%s AND producer_id=%s",
+        (row["attempt_id"], required["SPEECH_TRANSCRIPT"]),
+    ).fetchall()
+    if reader_sequence != len(reader) or {r["source_record_id"] for r in reader} != {
+        str(a["id"]) for a in actions if a["action"] != "STOP"
+    }:
+        raise Refused("reader evidence does not cover the complete action tail")
+    observer = conn.execute(
+        "SELECT e.payload FROM canonical_event e "
+        "JOIN producer_source_record p ON p.event_id=e.event_id "
+        "JOIN producer_stream s ON s.attempt_id=p.attempt_id AND s.producer_id=p.producer_id "
+        "WHERE p.attempt_id=%s AND p.producer_id=%s AND s.closed_at_sequence=p.producer_sequence "
+        "AND s.admitted_through=s.closed_at_sequence",
+        (row["attempt_id"], required["EFFECT_RECEIPT"]),
+    ).fetchone()
+    if (
+        observer is None
+        or observer["payload"].get("sourceRecord", {}).get("finalSample") is not True
+        or observer["payload"]["sourceRecord"].get("afterActionSequence")
+        != actions[-1]["action_sequence"]
+    ):
+        raise Refused("independent observer final sample/tail is unavailable")
+    session_evidence.emit(
+        conn,
+        row,
+        stream="lifecycle",
+        sequence=3,
+        source_id="execution-stopped",
+        event_type="RUN_FINISHED",
+        source={"stopActionId": stop_action_id, "meaning": "STOP_ACKNOWLEDGED"},
+    )
+    for producer, sequence in (
+        (required["SPEECH_TRANSCRIPT"], reader_sequence),
+        (required["ACTION_TRACE"], len(actions) * 2),
+        (required["PREFLIGHT_RECORD"], 3),
+    ):
+        sequencer.close_producer_stream(
+            conn,
+            workspace_id=workspace_id,
+            run_id=str(row["run_id"]),
+            attempt_id=str(row["attempt_id"]),
+            producer_id=producer,
+            final_producer_sequence=sequence,
+        )
+    now = to_rfc3339_utc(datetime.now(UTC))
+    conn.execute(
+        "UPDATE desktop_lease SET stop_acknowledged_at=%s,stop_acknowledged_epoch=epoch,"
+        "released_at=%s,release_reason='STOP_ACKNOWLEDGED' WHERE id=%s",
+        (now, now, row["lease_id"]),
+    )
+    conn.execute(
+        "UPDATE runner SET status='PREFLIGHT_REQUIRED',updated_at=%s,revision=revision+1 "
+        "WHERE id=%s",
+        (now, row["runner_id"]),
+    )
+    state = runs.apply_transition(
+        conn,
+        run_id=str(row["run_id"]),
+        reducer=lambda current: reducers.progress(
+            reducers.acknowledge_stop(
+                current,
+                acknowledged_at=now,
+                epoch=int(row["epoch"]),
+            )
+        ),
+        operation_id=str(uuid5(NAMESPACE_URL, "accessforge:manual-finish:" + session_id)),
+        topic="run.finalizing",
+        actor_service="authenticated-supervisor",
+        audit_action="RUN_EXECUTION_STOPPED",
+    )
+    conn.execute(
+        "UPDATE supervisor_execution_session SET revoked_at=%s WHERE ticket_id=%s",
+        (now, session_id),
+    )
+    conn.execute(
+        "UPDATE supervisor_dispatch_ticket SET revoked_at=%s WHERE id=%s", (now, session_id)
+    )
+    missing = artifacts.missing_required_artifacts(
+        conn,
+        run_id=str(row["run_id"]),
+        attempt_id=str(row["attempt_id"]),
+    )
+    return {
+        "sessionId": session_id,
+        "runId": str(row["run_id"]),
+        "status": state.status.value,
+        "outcome": state.outcome.value,
+        "missingArtifactCount": len(missing),
+        "meaning": "EXECUTION_STOPPED_AWAITING_FINALIZATION",
     }

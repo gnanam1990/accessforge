@@ -13,6 +13,7 @@ export interface ExecutionSessionPort {
   commitDispatch(actionId: string, origin: string): Promise<ActionCommand>;
   completeAction(actionId: string, status: 'SUCCEEDED' | 'FAILED' | 'AMBIGUOUS'): Promise<void>;
   retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string): Promise<void>;
+  finish(): Promise<Readonly<Record<string, unknown>>>;
 }
 
 export interface AuthenticatedRunnerOptions {
@@ -49,6 +50,8 @@ export class AuthenticatedRunner {
   #stopping = false;
   #executing = false;
   #started = false;
+  #stopSucceeded = false;
+  #commands: ActionCommand[] = [];
   #serverCommand: ActionCommand | undefined;
   #origin = '';
 
@@ -138,6 +141,7 @@ export class AuthenticatedRunner {
         throw new Error('dispatch identity');
       }
       this.#serverCommand = command;
+      this.#commands.push(command);
       this.#executing = true;
       const outcome = await this.#supervisor.performAction(command.action, {
         ...(command.keyChord === undefined ? {} : { keyChord: command.keyChord }),
@@ -148,6 +152,11 @@ export class AuthenticatedRunner {
       if (status === 'AMBIGUOUS') this.#fenced = true;
       // Supervisor result flush and observation retention have completed before this report.
       await this.options.session.completeAction(actionId, status);
+      if (command.action === 'STOP') {
+        this.#stopping = true;
+        this.#supervisor.requestCancellation(); // Local input fence, not a server cancellation.
+        this.#stopSucceeded = status === 'SUCCEEDED';
+      }
       return outcome;
     } catch {
       this.#executing = false;
@@ -157,5 +166,33 @@ export class AuthenticatedRunner {
       }
       return { status: actionId === undefined ? 'REFUSED' : 'AMBIGUOUS', detail: 'execution fenced; no retry or automatic reset' };
     } finally { this.#executing = false; this.#busy = false; }
+  }
+
+  /** Call after the independent observer has retained and closed its final sample. */
+  async finish(): Promise<Readonly<Record<string, unknown>>> {
+    if (this.#busy || this.#fenced || !this.#stopSucceeded || !this.#supervisor.mayAcknowledgeStop()) {
+      throw new Error('execution has no clean STOP acknowledgement');
+    }
+    this.#busy = true;
+    this.#fenced = true;
+    try {
+      const entries = await this.options.journal.read();
+      if (entries.length !== this.#commands.length * 2 || entries.at(-1)?.result !== 'SUCCEEDED' ||
+          entries.at(-1)?.action !== 'STOP') throw new Error('local journal tail is incomplete');
+      for (const [index, command] of this.#commands.entries()) {
+        const intent = entries[index * 2], result = entries[index * 2 + 1];
+        for (const entry of [intent, result]) {
+          if (entry === undefined || entry.serverActionId !== command.actionId ||
+              entry.sequence !== command.sequence || entry.action !== command.action ||
+              entry.leaseId !== this.options.lease.leaseId || entry.epoch !== this.options.lease.epoch) {
+            throw new Error('local journal action identity differs');
+          }
+        }
+        if (intent?.result !== undefined || !['SUCCEEDED', 'FAILED'].includes(result?.result ?? '')) {
+          throw new Error('local journal result is unresolved');
+        }
+      }
+      return await this.options.session.finish();
+    } finally { this.#busy = false; }
   }
 }

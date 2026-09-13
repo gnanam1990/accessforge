@@ -17,6 +17,7 @@ function harness(overrides = {}) {
     async commitDispatch(id) { calls.push('server-commit'); assert.equal(id, current.actionId); return current; },
     async completeAction(id, status) { calls.push(`server-result:${status}`); assert.equal(id, current.actionId); },
     async retainObservation(command) { calls.push('server-observation'); assert.equal(command.actionId, current.actionId); },
+    async finish() { calls.push('server-finish'); return { status: 'FINALIZING' }; },
   };
   const options = {
     session, journal: {
@@ -55,6 +56,28 @@ test('incomplete preflight cannot pass vacuously or create a remote intent', asy
   const h = harness({ preflight: async () => ({ checks: {} }) });
   assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'REFUSED');
   assert.deepEqual(h.calls, []);
+});
+
+test('successful STOP fences new input and only a complete local journal can close', async () => {
+  const h = harness();
+  assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'SUCCEEDED');
+  assert.equal((await h.runner.perform({ action: 'STOP' })).status, 'SUCCEEDED');
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+  assert.equal((await h.runner.finish()).status, 'FINALIZING');
+  assert.equal(h.calls.filter((item) => item === 'server-finish').length, 1);
+  await assert.rejects(h.runner.finish());
+});
+
+test('corrupted local journal and lost closing acknowledgement never permit resumed input', async () => {
+  for (const fault of ['journal', 'ack']) {
+    const h = harness();
+    assert.equal((await h.runner.perform({ action: 'STOP' })).status, 'SUCCEEDED');
+    if (fault === 'journal') h.journal.entries[0].serverActionId = randomUUID();
+    else h.session.finish = async () => { throw new Error('lost close acknowledgement'); };
+    await assert.rejects(h.runner.finish());
+    assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+    if (fault === 'journal') assert.equal(h.calls.includes('server-finish'), false);
+  }
 });
 
 test('lost reader evidence acknowledgement fences input and never reports known action success', async () => {

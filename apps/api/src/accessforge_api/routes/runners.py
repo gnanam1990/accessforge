@@ -21,7 +21,7 @@ from accessforge_domain.runners import PhysicalSession, RunnerProfile
 from accessforge_domain.runners.identity import EnrollmentError
 from accessforge_domain.runners.preflight import PreflightCheck, PreflightResult
 from accessforge_domain.states import Condition
-from accessforge_persistence import runners, supervisor_dispatch, supervisor_sessions
+from accessforge_persistence import runners, sequencer, supervisor_dispatch, supervisor_sessions
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["runners"])
 
@@ -142,7 +142,7 @@ def retain_supervisor_action_intent(
             token=credential.credentials,
             command=payload,
         )
-    except (supervisor_sessions.Refused, runners.RunnerError):
+    except (supervisor_sessions.Refused, runners.RunnerError, sequencer.SequencerError):
         raise ProblemDetail(
             ProblemCode.PERMISSION_DENIED, "action intent is not admitted"
         ) from None
@@ -180,7 +180,7 @@ def commit_supervisor_action_dispatch(
             action_id=action_id,
             origin=payload["origin"],
         )
-    except (supervisor_sessions.Refused, runners.RunnerError):
+    except (supervisor_sessions.Refused, runners.RunnerError, sequencer.SequencerError):
         raise ProblemDetail(
             ProblemCode.PERMISSION_DENIED, "action dispatch is not admitted"
         ) from None
@@ -212,7 +212,7 @@ def retain_supervisor_reader_observation(
             action_id=action_id,
             record=payload,
         )
-    except (supervisor_sessions.Refused, runners.RunnerError):
+    except (supervisor_sessions.Refused, runners.RunnerError, sequencer.SequencerError):
         raise ProblemDetail(
             ProblemCode.PERMISSION_DENIED, "reader observation is not admitted"
         ) from None
@@ -246,9 +246,45 @@ def record_supervisor_action_result(
             action_id=action_id,
             status=payload["status"],
         )
-    except (supervisor_sessions.Refused, runners.RunnerError):
+    except (supervisor_sessions.Refused, runners.RunnerError, sequencer.SequencerError):
         raise ProblemDetail(
             ProblemCode.PERMISSION_DENIED, "action result is not admitted"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/supervisor-sessions/{session_id}/finish")
+def finish_supervisor_session(
+    workspace_id: str,
+    session_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    for value in (workspace_id, session_id):
+        as_identifier(value, what="supervisor session identity")
+    if set(payload) != {"stopActionId", "readerSequence"}:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "exact supervisor closing tail is required")
+    as_identifier(payload["stopActionId"], what="STOP action identity")
+    if type(payload["readerSequence"]) is not int:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "reader sequence must be an integer")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    try:
+        result = supervisor_sessions.finish_session(
+            conn,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            token=credential.credentials,
+            stop_action_id=payload["stopActionId"],
+            reader_sequence=payload["readerSequence"],
+        )
+    except (supervisor_sessions.Refused, runners.RunnerError, sequencer.SequencerError):
+        raise ProblemDetail(
+            ProblemCode.PERMISSION_DENIED, "execution closure is not admitted"
         ) from None
     response.headers["Cache-Control"] = "no-store"
     return result
