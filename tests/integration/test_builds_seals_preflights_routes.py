@@ -2322,6 +2322,22 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
     asyncio.run(sink.retain(checkpoint))
     with pytest.raises(psycopg.IntegrityError):
         asyncio.run(sink.retain(checkpoint))
+    for invented_action in (None, str(uuid.uuid4())):
+        with pytest.raises(psycopg.IntegrityError):
+            asyncio.run(
+                sink.retain(
+                    PlanningCheckpoint.model_validate(
+                        {
+                            "run_ref": sink.expected_run_ref,
+                            "kind": "ACTION_RESOLVED",
+                            "recorded_at_utc": checkpoint.recorded_at_utc,
+                            "action": "NEXT",
+                            "dispatch_status": "SUCCEEDED",
+                            "action_id": invented_action,
+                        }
+                    )
+                )
+            )
     with workspace_connection(db, WS) as conn:
         assert conn.execute(
             "SELECT operation_id FROM navigator_planning_checkpoint WHERE run_id=%s",

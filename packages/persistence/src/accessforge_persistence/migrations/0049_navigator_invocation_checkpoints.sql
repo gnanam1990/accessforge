@@ -37,9 +37,27 @@ BEGIN
        NEW.model_id=c.model_profile->>'model_id'
        AND NEW.provider=c.model_profile->>'provider'
        AND NEW.sdk_version=c.model_profile->>'sdk_version'))
+   FOR SHARE OF i
  ) THEN
    RAISE EXCEPTION 'checkpoint requires its exact open admitted navigator invocation'
      USING ERRCODE='integrity_constraint_violation';
+ END IF;
+ IF NEW.operation_id IS NOT NULL AND NEW.kind='ACTION_RESOLVED' THEN
+   IF (NEW.dispatch_status IN ('SUCCEEDED','FAILED') AND NEW.action_id IS NULL) OR
+      (NEW.action_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM navigator_model_turn t JOIN runner_action a
+          ON a.id=NEW.action_id AND a.workspace_id=t.workspace_id
+        WHERE t.operation_id=NEW.operation_id AND t.workspace_id=NEW.workspace_id
+          AND a.run_id=t.run_id AND a.attempt_id=t.attempt_id
+          AND a.lease_id=t.lease_id AND a.epoch=t.lease_epoch
+          AND a.action_sequence=t.action_sequence+1 AND a.action=NEW.action
+          AND (NEW.dispatch_status NOT IN ('SUCCEEDED','FAILED') OR (
+            a.result_status=NEW.dispatch_status AND a.result_at IS NOT NULL
+            AND a.dispatched_at IS NOT NULL))
+      )) THEN
+     RAISE EXCEPTION 'resolved checkpoint requires its original native action result'
+       USING ERRCODE='integrity_constraint_violation';
+   END IF;
  END IF;
  RETURN NEW;
 END;
