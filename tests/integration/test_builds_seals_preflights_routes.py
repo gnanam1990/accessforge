@@ -2932,8 +2932,18 @@ def _retain_stopped_artifact_case(
                 assert response.status_code == 200 and response.json() == result
                 assert response.headers["Cache-Control"] == "no-store"
                 assert result["meaning"] == "ORIGINAL_EVALUATION_SNAPSHOT" and result["recordedAt"]
+                history = client.get(f"/v1/workspaces/{WS}/runs/{ref.run_id}/effect-deliveries")
+                assert history.status_code == 200, history.text
+                assert history.headers["Cache-Control"] == "no-store"
+                assert history.json()["items"] == []
+                assert history.json()["providesRetryAuthority"] is False
+                assert history.json()["providesResetAuthority"] is False
+                assert history.json()["meaning"] == "FORM_TRANSPORT_HISTORY_NOT_EFFECT_PROOF"
                 with workspace_connection(db, str(uuid.uuid4())) as other:
+                    from accessforge_persistence import effect_recovery
+
                     assert evaluations.read(other, run_id=ref.run_id) is None
+                    assert effect_recovery.read(other, run_id=ref.run_id) is None
                 assert (
                     client.get(f"/v1/workspaces/{WS}/runs/not-a-uuid/evaluation").status_code == 404
                 )
