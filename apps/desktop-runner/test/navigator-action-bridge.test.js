@@ -40,6 +40,16 @@ function send(capability, sequence, command, override = {}) {
   });
 }
 
+async function assertClosed(capability, sequence, command) {
+  try { assert.equal(await send(capability, sequence, command), null); }
+  catch (error) {
+    // Linux can reject a write immediately when the fenced server closes before data arrives.
+    // Only these peer-close errors are equivalent to an empty reply; never swallow assertions,
+    // protocol failures, missing sockets or timeouts. Each caller also checks no action ran.
+    assert.ok(['EPIPE', 'ECONNRESET'].includes(error.code), error);
+  }
+}
+
 test('native bridge admits references, preserves known failures and requires explicit STOP/finish', { skip: process.platform === 'win32' }, async (t) => {
   const h = await fixture(t, (command) => ({ status: command.action === 'NEXT' ? 'FAILED' : 'SUCCEEDED', serverActionId: randomUUID() }));
   assert.equal((await send(h.capability, 1, { action: 'TYPE_TEXT', textValueRef: 'fullName' })).status, 'SUCCEEDED');
@@ -47,7 +57,7 @@ test('native bridge admits references, preserves known failures and requires exp
   assert.equal((await send(h.capability, 2, { action: 'NEXT' })).status, 'FAILED');
   await assert.rejects(h.bridge.finish());
   assert.equal((await send(h.capability, 3, { action: 'STOP' })).status, 'SUCCEEDED');
-  assert.equal(await send(h.capability, 4, { action: 'NEXT' }), null);
+  await assertClosed(h.capability, 4, { action: 'NEXT' });
   assert.equal((await h.bridge.finish()).status, 'FINALIZING');
 });
 
@@ -59,7 +69,7 @@ for (const fault of ['raw-text', 'foreign', 'replay', 'unknown']) {
     const result = await send(h.capability, 1, command, fault === 'foreign'
       ? { reference: { ...h.capability.reference, runId: randomUUID() } } : {});
     assert.equal(result?.status ?? null, fault === 'unknown' ? 'AMBIGUOUS' : null);
-    assert.equal(await send(h.capability, 2, { action: 'NEXT' }), null);
+    await assertClosed(h.capability, 2, { action: 'NEXT' });
     assert.equal(h.calls.filter((item) => typeof item === 'object').length, ['replay', 'unknown'].includes(fault) ? 1 : 0);
     await assert.rejects(h.bridge.finish());
   });
@@ -105,9 +115,9 @@ test('disconnect during an entered action fences its late result and all later i
   await disconnected;
   // The server must observe the disconnect even while perform is still unresolved.
   // A concurrent authenticated request also fences, so neither ordering can allow a second input.
-  assert.equal(await send(h.capability, 2, { action: 'NEXT' }), null);
+  await assertClosed(h.capability, 2, { action: 'NEXT' });
   release({ status: 'SUCCEEDED', serverActionId: randomUUID() });
-  assert.equal(await send(h.capability, 3, { action: 'STOP' }), null);
+  await assertClosed(h.capability, 3, { action: 'STOP' });
   assert.equal(h.calls.filter((item) => typeof item === 'object').length, 1);
   await assert.rejects(h.bridge.finish());
 });

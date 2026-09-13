@@ -126,7 +126,10 @@ export async function startNavigatorActionBridge(options: NavigatorActionBridgeO
           const response = JSON.stringify({ protocol: NAVIGATOR_BRIDGE_PROTOCOL, requestId: request.requestId,
             sequence: request.sequence, reference, status: result.status, actionId: result.serverActionId ?? null });
           // No raw error/observation/credential data crosses the action port.
-          socket.end(response + '\n', () => { replied = true; });
+          socket.end(response + '\n', (error?: Error | null) => {
+            if (error) fence();
+            else replied = true;
+          });
         } catch { if (entered) fence(); socket.destroy(); }
         finally { if (claimed) busy = false; }
       })();
