@@ -116,8 +116,13 @@ New sessions declare five required artifacts and retain authenticated lifecycle/
 Successful STOP fences input; the independent observer closes its own final sample, then exact
 reader/action/lifecycle tails and STOP acknowledgement move the run only to FINALIZING. Native
 journal readback must match issued commands. Missing artifacts remain visible; no outcome is minted.
+A trusted operator artifact command now validates the private supervisor spool against retained
+actions and derives the other four artifacts from the closed canonical streams. Write-ahead
+quarantine reservations, create-only storage and bounded readback make interrupted retention
+resumable with identical bytes; corrupt, conflicting or deleted evidence is never overwritten.
+This has real PostgreSQL/MinIO/CLI proof with synthetic journals, not deployed spool attestation.
 Still pending: concrete production physical guards and reader startup, observer deployment/role
-isolation and assertion derivation, trusted post-stop artifact intake and final verdict admission,
+isolation, trusted spool/service deployment, assertion derivation and final verdict admission,
 remaining action/build UNKNOWN recovery,
 and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;

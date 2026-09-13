@@ -2095,6 +2095,16 @@ def test_independent_observer_worker(
         "unresolved-stop",
         "revoked",
         "rollback",
+        "artifacts",
+        "artifact-ack-loss",
+        "artifact-journal-tail",
+        "artifact-journal-id",
+        "artifact-canonical",
+        "artifact-deleted",
+        "artifact-cli",
+        "artifact-state",
+        "artifact-stored-corrupt",
+        "artifact-conflict",
     ],
 )
 def test_authenticated_execution_finish(
@@ -2105,6 +2115,7 @@ def test_authenticated_execution_finish(
     owned_observer_database: str,
     monkeypatch: pytest.MonkeyPatch,
     case: str,
+    tmp_path: Path,
 ) -> None:
     import secrets
 
@@ -2113,6 +2124,7 @@ def test_authenticated_execution_finish(
     from accessforge_persistence.fixtures import create_instance
 
     ticket, ref = supervisor_ticket, manual_dispatch_reference
+    closes = case == "success" or case.startswith("artifact")
     secret = secrets.token_urlsafe(32)
     assert (
         client.post(
@@ -2232,8 +2244,8 @@ def test_authenticated_execution_finish(
                 "readerSequence": 0 if case == "tail" else 1,
             },
         )
-        assert response.status_code == (200 if case == "success" else 403)
-        if case == "success":
+        assert response.status_code == (200 if closes else 403)
+        if closes:
             assert response.json()["status"] == "FINALIZING"
             assert response.json()["outcome"] == "NOT_EVALUATED"
             assert response.json()["missingArtifactCount"] == 5
@@ -2251,7 +2263,7 @@ def test_authenticated_execution_finish(
             )
     with workspace_connection(db, WS) as conn:
         state = run_store.load_run(conn, run_id=ref.run_id).state
-        assert state.status.value == ("FINALIZING" if case == "success" else "RUNNING")
+        assert state.status.value == ("FINALIZING" if closes else "RUNNING")
         assert state.outcome.value == "NOT_EVALUATED" and state.cancel_requested_at is None
         lease = conn.execute(
             "SELECT released_at,stop_acknowledged_epoch,release_reason "
@@ -2259,9 +2271,9 @@ def test_authenticated_execution_finish(
             (ref.lease_id,),
         ).fetchone()
         assert lease is not None
-        assert (lease["released_at"] is not None) == (case == "success")
+        assert (lease["released_at"] is not None) == closes
         tails = conn.execute("SELECT closed_at_sequence FROM producer_stream").fetchall()
-        if case == "success":
+        if closes:
             assert len(tails) == 4 and all(t["closed_at_sequence"] is not None for t in tails)
             assert lease["release_reason"] == "STOP_ACKNOWLEDGED"
             assert lease["stop_acknowledged_epoch"] == ref.epoch
@@ -2271,7 +2283,179 @@ def test_authenticated_execution_finish(
         finished = conn.execute(
             "SELECT 1 FROM canonical_event WHERE event_type='RUN_FINISHED'"
         ).fetchall()
-        assert len(finished) == int(case == "success")
+        assert len(finished) == int(closes)
+    if case.startswith("artifact"):
+        _retain_stopped_artifact_case(db, ref, ticket, monkeypatch, tmp_path, case)
+
+
+def _retain_stopped_artifact_case(
+    db: str,
+    ref: DispatchReference,
+    ticket: DispatchTicket,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    case: str,
+) -> None:
+    from accessforge_orchestrator.execution_artifacts import Refused, retain_bundle
+    from accessforge_persistence import evidence
+    from accessforge_persistence.evidence.session import requirements
+
+    store = evidence.S3ArtifactStore(
+        evidence.S3Settings(
+            endpoint_url=os.environ["OBJECT_STORE_ENDPOINT"],
+            access_key=os.environ["OBJECT_STORE_ACCESS_KEY"],
+            secret_key=os.environ["OBJECT_STORE_SECRET_KEY"],
+            bucket=os.environ.get("OBJECT_STORE_BUCKET", "accessforge-evidence"),
+        )
+    )
+    store.ensure_bucket()
+    entries = []
+    with workspace_connection(db, WS) as conn:
+        actions = conn.execute(
+            "SELECT * FROM runner_action WHERE run_id=%s ORDER BY action_sequence", (ref.run_id,)
+        ).fetchall()
+        for a in actions:
+            intent = {
+                "actionId": f"{ref.lease_id}:{ref.epoch}:{a['action_sequence']}",
+                "serverActionId": str(a["id"]),
+                "leaseId": ref.lease_id,
+                "epoch": ref.epoch,
+                "sequence": a["action_sequence"],
+                "action": a["action"],
+                "intentAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            }
+            entries.extend(
+                [
+                    intent,
+                    {
+                        **intent,
+                        "result": a["result_status"],
+                        "dispatchedAtMonotonic": float(a["action_sequence"]) + 0.5,
+                    },
+                ]
+            )
+    journal = b"".join(json.dumps(e).encode() + b"\n" for e in entries)
+    if case == "artifact-journal-tail":
+        journal += b'{"truncated":\n'
+    if case == "artifact-journal-id":
+        journal = journal.replace(str(actions[0]["id"]).encode(), str(uuid.uuid4()).encode())
+    if case in {"artifact-canonical", "artifact-state"}:
+        with workspace_connection(db, WS) as conn:
+            if case == "artifact-canonical":
+                conn.execute("UPDATE canonical_event SET payload='{}'::jsonb WHERE sequence=1")
+            else:
+                conn.execute("UPDATE run SET quarantined=true WHERE id=%s", (ref.run_id,))
+    kwargs: dict[str, Any] = {"workspace_id": WS, "run_id": ref.run_id, "journal": journal}
+    try:
+        if case in {
+            "artifact-journal-tail",
+            "artifact-journal-id",
+            "artifact-canonical",
+            "artifact-state",
+        }:
+            with pytest.raises(Refused):
+                retain_bundle(db, store, **kwargs)
+            with workspace_connection(db, WS) as conn:
+                assert conn.execute("SELECT 1 FROM evidence_artifact").fetchone() is None
+            return
+        if case == "artifact-ack-loss":
+            original = store.put_create_only
+
+            def lost_ack(*, key: str, payload: bytes, content_type: str) -> str:
+                original(key=key, payload=payload, content_type=content_type)
+                raise evidence.ObjectStoreUnavailable("synthetic lost write ACK")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(store, "put_create_only", lost_ack)
+                with pytest.raises(evidence.ObjectStoreUnavailable):
+                    retain_bundle(db, store, **kwargs)
+            with workspace_connection(db, WS) as conn:
+                rows = conn.execute("SELECT state,object_key FROM evidence_artifact").fetchall()
+                assert len(rows) == 5 and all(r["state"] == "QUARANTINED" for r in rows)
+                assert sum(store.exists(key=r["object_key"]) for r in rows) == 1
+        if case == "artifact-cli":
+            spool = tmp_path / "journal.ndjson"
+            spool.write_bytes(journal)
+            spool.chmod(0o600)
+            env = dict(
+                os.environ,
+                ACCESSFORGE_DATABASE_URL=db,
+                ACCESSFORGE_EVIDENCE_ENDPOINT_URL=os.environ["OBJECT_STORE_ENDPOINT"],
+                ACCESSFORGE_EVIDENCE_ACCESS_KEY=os.environ["OBJECT_STORE_ACCESS_KEY"],
+                ACCESSFORGE_EVIDENCE_SECRET_KEY=os.environ["OBJECT_STORE_SECRET_KEY"],
+                ACCESSFORGE_EVIDENCE_BUCKET=os.environ.get(
+                    "OBJECT_STORE_BUCKET", "accessforge-evidence"
+                ),
+            )
+            completed = subprocess.run(  # noqa: S603 - fixed local module and owned spool, no shell
+                [
+                    sys.executable,
+                    "-m",
+                    "accessforge_orchestrator.execution_artifacts",
+                    "--workspace-id",
+                    WS,
+                    "--run-id",
+                    ref.run_id,
+                    "--journal",
+                    str(spool),
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            assert completed.returncode == 0, completed.stdout
+            assert "count=5; outcome=NOT_EVALUATED" in completed.stdout
+        ids = retain_bundle(db, store, **kwargs)
+        assert len(ids) == 5 and retain_bundle(db, store, **kwargs) == ids
+        with workspace_connection(db, WS) as conn:
+            rows = conn.execute("SELECT * FROM evidence_artifact").fetchall()
+            assert len(rows) == 5 and all(r["state"] == "PROMOTED" for r in rows)
+            for artifact in rows:
+                raw = store.get(key=artifact["object_key"])
+                assert evidence.compute_digest(raw) == artifact["content_digest"]
+                if artifact["kind"] == "RUNNER_JOURNAL":
+                    assert raw == journal
+            required = requirements(
+                conn, {"id": ticket.ticket_id, "run_id": ref.run_id, "attempt_id": ref.attempt_id}
+            )
+            complete = evidence.assess_completeness(
+                conn,
+                store,
+                run_id=ref.run_id,
+                attempt_id=ref.attempt_id,
+                required_producers=frozenset(
+                    p for k, p in required.items() if k != "RUNNER_JOURNAL"
+                ),
+            )
+            assert complete.complete and complete.artifacts_present and complete.producers_closed
+            state = run_store.load_run(conn, run_id=ref.run_id).state
+            assert state.status.value == "FINALIZING" and state.outcome.value == "NOT_EVALUATED"
+        if case == "artifact-deleted":
+            with workspace_connection(db, WS) as conn:
+                evidence.delete_artifact_bytes(conn, store, artifact_id=ids[0], reason="owned test")
+            with pytest.raises(Refused, match="deleted"):
+                retain_bundle(db, store, **kwargs)
+        if case == "artifact-stored-corrupt":
+            key = rows[0]["object_key"]
+            store.put(
+                key=key, payload=b"synthetic corruption", content_type=rows[0]["content_type"]
+            )
+            with pytest.raises(Refused, match="stored bytes"):
+                retain_bundle(db, store, **kwargs)
+            assert store.get(key=key) == b"synthetic corruption"
+        if case == "artifact-conflict":
+            # Semantically identical JSON with different original spool bytes is not a replacement.
+            with pytest.raises(Refused, match="conflicts"):
+                retain_bundle(db, store, **{**kwargs, "journal": journal.replace(b": ", b":")})
+    finally:
+        with workspace_connection(db, WS) as conn:
+            keys = conn.execute(
+                "SELECT object_key FROM evidence_artifact WHERE run_id=%s", (ref.run_id,)
+            ).fetchall()
+        for item in keys:
+            store.delete(key=item["object_key"])
 
 
 @pytest.fixture(scope="module")
