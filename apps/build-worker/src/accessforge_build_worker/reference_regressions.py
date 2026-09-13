@@ -169,6 +169,7 @@ class ReferenceRegressions:
         on_endpoint_planned: Callable[[dict[str, Any]], None] = lambda identity: None,
         on_endpoint_bound: Callable[[dict[str, Any]], None] = lambda receipt: None,
         on_endpoint_closed: Callable[[bool], None] = lambda clean: None,
+        on_artifact_observed: Callable[[dict[str, Any]], None] = lambda observation: None,
     ) -> ReferenceRegressionResult:
         wheel = "out/accessforge_reference_app-0.0.0-py3-none-any.whl"
         if len(artifact.files) != 1 or artifact.files[0].path != wheel:
@@ -540,7 +541,7 @@ class ReferenceRegressions:
                     assert_candidate_request("GET")
                     if cancelled() or time.monotonic() >= end:
                         raise SandboxRefused("candidate artifact observation expired")
-                    return {
+                    observation = {
                         "taskId": task,
                         "candidateId": candidate,
                         "imageId": self.image,
@@ -550,6 +551,12 @@ class ReferenceRegressions:
                         "observedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                         "meaning": "DEPLOYED_FILESYSTEM_MEASUREMENT_NOT_EXECUTION_ATTESTATION",
                     }
+                    on_artifact_observed(observation)
+                    if cancelled() or time.monotonic() >= end:
+                        raise SandboxRefused("artifact retention exceeded request deadline")
+                    assert_endpoint_live()
+                    assert_candidate_request("GET")
+                    return observation
 
                 def transport(method: str, path: str, body: str) -> dict[str, Any]:
                     end = min(deadline, time.monotonic() + 5)
