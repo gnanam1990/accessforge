@@ -37,10 +37,20 @@ def publish_once(
         raise ValueError("outbox batch size must be between 1 and 100")
     workspace = str(UUID(transport.workspace_id))
     worker = f"sqs-publisher-{uuid4()}"
-    with workspace_connection(database_url, workspace) as conn:
-        messages = outbox.claim_messages(conn, claimed_by=worker, limit=limit)
-    published = unconfirmed = superseded = 0
-    for message in messages:
+    claimed = published = unconfirmed = superseded = 0
+    attempted: list[int] = []
+    for _ in range(limit):
+        # Each lease starts immediately before its own network call. Claiming the whole batch
+        # first lets a slow but healthy publisher consume later messages' five-minute leases.
+        with workspace_connection(database_url, workspace) as conn:
+            messages = outbox.claim_messages(
+                conn, claimed_by=worker, limit=1, exclude_message_ids=tuple(attempted)
+            )
+        if not messages:
+            break
+        message = messages[0]
+        attempted.append(message.id)
+        claimed += 1
         if message.workspace_id != workspace:
             raise ValueError("outbox scope differs from queue workspace")
         try:
@@ -62,7 +72,7 @@ def publish_once(
             superseded += 1
         else:
             published += 1
-    return PublicationReport(len(messages), published, unconfirmed, superseded)
+    return PublicationReport(claimed, published, unconfirmed, superseded)
 
 
 def main() -> None:

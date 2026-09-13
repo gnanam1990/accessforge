@@ -27,7 +27,9 @@ uv run python -m accessforge_orchestrator.queue_delivery \
 ```
 
 It reads the existing `ACCESSFORGE_DATABASE_URL` and boto3 credential chain. It commits the outbox
-claim before contacting SQS, then acknowledges only the same unexpired worker/attempt claim. Lost
+claim before contacting SQS, then acknowledges only the same unexpired worker/attempt claim. Each
+message is claimed immediately before sending, so slow batches do not consume
+later rows' leases. An invocation excludes previously attempted rows from further claims. Lost
 queue replies remain recoverable after the existing five-minute claim lease. No default deployment
 or service registration is changed; actually invoking this command sends billable AWS requests.
 Use least-privilege send-only IAM for the publisher and separate receive/delete IAM for consumers.
