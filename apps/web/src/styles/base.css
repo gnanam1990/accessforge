@@ -367,6 +367,21 @@ a {
   font-weight: 600;
 }
 
+.af-consent-acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--af-space-2);
+  min-height: 44px;
+  padding-block: var(--af-space-2);
+}
+
+.af-consent-acknowledgement input {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  accent-color: var(--af-foreground);
+}
+
 .af-error-summary {
   border: 2px solid var(--af-destructive);
   border-radius: var(--af-radius-md);
