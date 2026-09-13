@@ -538,6 +538,14 @@ OPERATIONS: dict[str, Operation] = {
         mutating=True,
         authenticated=True,
     ),
+    "get_evaluation": Operation(
+        operation_id="get_evaluation",
+        method="GET",
+        path="/v1/workspaces/{workspace_id}/runs/{run_id}/evaluation",
+        parameters=("workspace_id", "run_id"),
+        mutating=False,
+        authenticated=True,
+    ),
     "replay_events": Operation(
         operation_id="replay_events",
         method="GET",
@@ -779,6 +787,7 @@ PATHS: frozenset[str] = frozenset(
         "/v1/workspaces/{workspace_id}/runs/{run_id}/completeness",
         "/v1/workspaces/{workspace_id}/runs/{run_id}/deletions",
         "/v1/workspaces/{workspace_id}/runs/{run_id}/deletions/{deletion_id}/retry",
+        "/v1/workspaces/{workspace_id}/runs/{run_id}/evaluation",
         "/v1/workspaces/{workspace_id}/runs/{run_id}/events",
         "/v1/workspaces/{workspace_id}/runs/{run_id}/evidence",
         "/v1/workspaces/{workspace_id}/runs/{run_id}/timeline",

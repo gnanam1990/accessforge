@@ -9,6 +9,23 @@ constrained Strands navigator and the bounded diagnosis projection. Their rows s
 
 ## Buildable now
 
+### Current branch checkpoint — final evaluation snapshot
+
+Draft PR #37 now includes original frozen rules, independent final observer conditions, post-STOP
+artifact retention and atomic final evaluation storage/read API/export reasons. See handoff11 for
+the operator command and evidence boundaries. These branch changes are not yet merged.
+
+The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
+execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
+completion. Next build work is trusted runtime identity/probe ingestion, followed by the remaining
+typed predicate producers and rule-authoring UI. Real VoiceOver execution, deployed service/spool
+isolation and matched repair proof remain unverified; stored snapshots do not close E0/R1.
+
+Local verification remains changed-code static checks and focused regression cases only. CI is not
+disabled. The previous CI head's Node response-validation test hit a100ms scheduling race; its
+test-only override was removed in favor of the existing2-second fixture budget, preserving both
+assertions and the separate deterministic deadline-expiry case.
+
 ### ~~P1 — Purge pipeline operations~~ — merged (PR #31, `42d83cc`)
 All four acceptance criteria met; see `STATUS.md`.
 

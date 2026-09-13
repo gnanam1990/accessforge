@@ -122,7 +122,8 @@ for (const fault of ['workspaceId', 'runId', 'attemptId', 'runnerId', 'leaseId',
       res.writeHead(200, { 'Content-Type': 'application/json' }).end(fault === 'malformed' ? state.ticket.token :
         fault === 'oversize' ? ' '.repeat(4097) : JSON.stringify(result));
     });
-    f.config.timeoutMs = 100;
+    // Exercise the response boundary, not a 100ms race with CI scheduling before the socket opens.
+    // Keep the fixture's bounded 2s budget; the separate monotonic-deadline case proves expiration.
     await assert.rejects(receiveDispatch(f.config, f.envelope), (error) =>
       error instanceof ReceptionUnknown && !error.message.includes(f.ticket.token));
     await assert.rejects(receiveDispatch(f.config, f.envelope), ReceiverRefused);
