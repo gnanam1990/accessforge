@@ -2287,6 +2287,62 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
     for replacement in (operation_id, str(uuid.uuid4())):
         with pytest.raises(navigator_model_calls.Refused), workspace_connection(db, WS) as conn:
             navigator_model_calls.reserve_turn(conn, **{**arguments, "operation_id": replacement})
+
+    from accessforge_orchestrator.navigator.checkpoints import CheckpointKind, PlanningCheckpoint
+    from accessforge_orchestrator.navigator.postgres import PostgresPlanningCheckpointSink
+
+    recheck = {key: value for key, value in arguments.items() if key != "reader_records"}
+    recheck["request_digest"] = request_digest
+    with workspace_connection(db, WS) as conn:
+        navigator_model_calls.assert_turn_authorized(conn, **recheck)
+    with pytest.raises(navigator_model_calls.Refused), workspace_connection(db, WS) as conn:
+        navigator_model_calls.assert_turn_authorized(
+            conn, **{**recheck, "operation_id": str(uuid.uuid4())}
+        )
+    sink = PostgresPlanningCheckpointSink(
+        database_url=db,
+        workspace_id=WS,
+        run_id=ref.run_id,
+        attempt_id=ref.attempt_id,
+        expected_run_ref="navigator:" + digest(asdict(ref)),
+        operation_id=operation_id,
+    )
+    checkpoint = PlanningCheckpoint(
+        run_ref=sink.expected_run_ref,
+        kind=CheckpointKind.MODEL_CALL_STARTED,
+        recorded_at_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        sdk_version=default_profile()["sdk_version"],
+        provider=default_profile()["provider"],
+        model_id=default_profile()["model_id"],
+    )
+    # This is a synthetic lifecycle record, NOT proof of a provider call. The real database must
+    # still enforce its operation/attempt/profile binding before accepting the original record.
+    with pytest.raises(psycopg.IntegrityError):
+        asyncio.run(sink.retain(checkpoint.model_copy(update={"model_id": "unreviewed-model"})))
+    asyncio.run(sink.retain(checkpoint))
+    with pytest.raises(psycopg.IntegrityError):
+        asyncio.run(sink.retain(checkpoint))
+    for invented_action in (None, str(uuid.uuid4())):
+        with pytest.raises(psycopg.IntegrityError):
+            asyncio.run(
+                sink.retain(
+                    PlanningCheckpoint.model_validate(
+                        {
+                            "run_ref": sink.expected_run_ref,
+                            "kind": "ACTION_RESOLVED",
+                            "recorded_at_utc": checkpoint.recorded_at_utc,
+                            "action": "NEXT",
+                            "dispatch_status": "SUCCEEDED",
+                            "action_id": invented_action,
+                        }
+                    )
+                )
+            )
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute(
+            "SELECT operation_id FROM navigator_planning_checkpoint WHERE run_id=%s",
+            (ref.run_id,),
+        ).fetchone() == {"operation_id": uuid.UUID(operation_id)}
     with workspace_connection(db, WS) as conn:
         navigator_model_calls.finish_turn(
             conn,
@@ -2300,6 +2356,19 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
             (f"navigator:{operation_id}:usage",),
         ).fetchone()
         assert usage == {"basis": "UNAVAILABLE", "quantity": 0}
+    with pytest.raises(navigator_model_calls.Refused), workspace_connection(db, WS) as conn:
+        navigator_model_calls.assert_turn_authorized(conn, **recheck)
+    with pytest.raises(psycopg.IntegrityError):
+        asyncio.run(
+            sink.retain(
+                checkpoint.model_copy(
+                    update={
+                        "kind": CheckpointKind.MODEL_CALL_STOPPED,
+                        "stop_reason": "CANCELLED",
+                    }
+                )
+            )
+        )
     inspected = client.get(base)
     assert inspected.status_code == 200
     assert inspected.json()["invocations"][0]["operationId"] == operation_id
@@ -2311,6 +2380,8 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
             "UPDATE navigator_model_turn SET action_sequence=1",
             "DELETE FROM navigator_model_turn",
             "UPDATE navigator_model_consent SET max_calls=3",
+            "UPDATE navigator_planning_checkpoint SET operation_id=NULL",
+            "DELETE FROM navigator_planning_checkpoint WHERE operation_id IS NOT NULL",
         ):
             with pytest.raises(psycopg.IntegrityError), conn.transaction():
                 conn.execute(statement)

@@ -8,11 +8,14 @@ from .agent import (
 )
 from .checkpoints import CheckpointKind, PlanningCheckpoint, PlanningCheckpointSink
 from .config import NavigatorModelProfile, installed_strands_version
+from .coordinator import AdmittedTurnResult, NativeNavigatorSession
 from .postgres import PostgresPlanningCheckpointSink
 from .tooling import NAVIGATION_TOOL_NAME, NavigationActionTool, make_navigation_tool
 
 __all__ = [
     "NAVIGATION_TOOL_NAME",
+    "AdmittedTurnResult",
+    "NativeNavigatorSession",
     "NavigationActionTool",
     "CheckpointKind",
     "NavigatorInvocationResult",

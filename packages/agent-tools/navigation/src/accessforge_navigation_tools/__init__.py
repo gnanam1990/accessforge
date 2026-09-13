@@ -2,6 +2,7 @@
 
 from .gateway import (
     DispatchResult,
+    NavigationGateway,
     NavigationRuntimeState,
     NavigationToolGateway,
     SupervisorDispatchRequest,
@@ -18,6 +19,7 @@ from .models import (
 __all__ = [
     "ActionName",
     "DispatchResult",
+    "NavigationGateway",
     "NavigationRuntimeState",
     "NavigationToolGateway",
     "NavigatorProjection",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from accessforge_domain.runners.gate import (
     ActionRequest,
@@ -53,6 +53,12 @@ class DispatchResult:
 
 StateProvider = Callable[[], NavigationRuntimeState]
 SupervisorDispatch = Callable[[SupervisorDispatchRequest], Awaitable[DispatchResult]]
+
+
+class NavigationGateway(Protocol):
+    """A policy-enforcing handoff to the authoritative physical supervisor."""
+
+    async def submit(self, proposal: ProposedAction) -> DispatchResult: ...
 
 
 class NavigationToolGateway:
