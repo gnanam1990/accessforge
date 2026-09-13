@@ -96,8 +96,10 @@ In progress on `feat/isolated-candidate-build`. The new build-worker package pre
 immutable candidate source bytes without executing or extracting repository content on the host.
 Isolated owned-reference builds, retained canonical artifacts, protected backend regressions,
 durable endpoint lifecycle, materialized source/build identities, and live candidate seal/fixture/
-first-lease binding are implemented on draft PR #37. Still pending: canonical independently
-authorized reader/observer controller and finalization, UNKNOWN reconciliation, and actual matched
+first-lease binding, exact manual approval and one-shot committed controller handoff are implemented
+on draft PR #37. The production reader transport remains unavailable by default. Still pending:
+canonical authenticated reader/observer execution and finalization, automatic UNKNOWN recovery,
+and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;
 neither synthetic desktop metadata nor backend regressions establish an actual-reader repair.
 
