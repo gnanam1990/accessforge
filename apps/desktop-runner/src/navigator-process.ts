@@ -149,7 +149,12 @@ export async function startOwnedNavigatorExecution(
   options.signal.addEventListener('abort', cancel, { once: true });
   try {
     if (options.signal.aborted) cancel();
-    const ready = Promise.resolve().then(bootstrap).then(async bridge => {
+    const ready = Promise.resolve().then(() => {
+      if (cancelled || options.signal.aborted || performance.now() >= options.deadlineMonotonic) {
+        throw new Error('navigator cancelled before bootstrap entry');
+      }
+      return bootstrap();
+    }).then(async bridge => {
       if (cancelled || options.signal.aborted || performance.now() >= options.deadlineMonotonic) {
         await bridge.close();
         throw new Error('late navigator bootstrap fenced');

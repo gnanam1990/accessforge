@@ -86,10 +86,23 @@ test('a late bootstrap after cancellation is closed without launching a child', 
   const h = fixture(t);
   let release;
   const ready = new Promise(resolve => { release = resolve; });
-  const running = startOwnedNavigatorExecution(() => ready, h.options);
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const running = startOwnedNavigatorExecution(() => { entered(); return ready; }, h.options);
+  await started;
   h.controller.abort();
   await assert.rejects(running, /cancelled/);
   release(h.bridge);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(h.calls, ['close']);
+});
+
+test('cancellation before queued bootstrap entry prevents startup entirely', {skip: process.platform === 'win32'}, async t => {
+  const h = fixture(t);
+  let started = 0;
+  const running = startOwnedNavigatorExecution(async () => { started++; return h.bridge; }, h.options);
+  h.controller.abort();
+  await assert.rejects(running, /cancelled/);
+  assert.equal(started, 0);
+  assert.deepEqual(h.calls, []);
 });
