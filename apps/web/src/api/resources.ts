@@ -268,6 +268,20 @@ export interface RetentionPolicy {
 }
 
 export interface JourneyCapabilities {
+  /** Absent on older servers: do not offer unsupported executable authoring. */
+  readonly evaluationRules?: {
+    readonly EXACT_READER_PHRASE?: {
+      readonly assertionKind: string;
+      readonly maxActionSequence: number;
+      readonly maxPhraseCharacters: number;
+      readonly maxPhraseBytes: number;
+    };
+    readonly EFFECT_COUNT?: {
+      readonly assertionKind: string;
+      readonly effect: string;
+      readonly maxCount: number;
+    };
+  };
   readonly allowedActions: readonly string[];
   readonly allowedKeyChordsByPlatform: Readonly<
     Record<string, readonly string[]>

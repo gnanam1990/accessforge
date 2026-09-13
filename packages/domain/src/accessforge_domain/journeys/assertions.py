@@ -106,6 +106,29 @@ class UnknownReason(StrEnum):
     OBSERVER_UNREACHABLE = "OBSERVER_UNREACHABLE"
 
 
+MAX_RULE_ACTION_SEQUENCE = 1000
+MAX_RULE_PHRASE_CHARACTERS = 8192
+MAX_RULE_PHRASE_BYTES = 32768
+MAX_RULE_EFFECT_COUNT = 1000
+
+
+def evaluation_rule_capabilities() -> dict[str, Any]:
+    """Authoring limits from the same constants used by frozen rule validation."""
+    return {
+        "EXACT_READER_PHRASE": {
+            "assertionKind": "REQUIRED_ANNOUNCEMENT",
+            "maxActionSequence": MAX_RULE_ACTION_SEQUENCE,
+            "maxPhraseCharacters": MAX_RULE_PHRASE_CHARACTERS,
+            "maxPhraseBytes": MAX_RULE_PHRASE_BYTES,
+        },
+        "EFFECT_COUNT": {
+            "assertionKind": "TASK_COMPLETION",
+            "effect": "CREATE_TEST_REQUEST",
+            "maxCount": MAX_RULE_EFFECT_COUNT,
+        },
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class EvaluationRule:
     """Literal, frozen predicates; never interpret prose, run regex/code or invent a matcher.
@@ -124,11 +147,11 @@ class EvaluationRule:
         if self.rule_type == "EXACT_READER_PHRASE":
             if (
                 type(self.action_sequence) is not int
-                or not 1 <= self.action_sequence <= 1000
+                or not 1 <= self.action_sequence <= MAX_RULE_ACTION_SEQUENCE
                 or not isinstance(self.phrase, str)
                 or not self.phrase.strip()
-                or len(self.phrase) > 8192
-                or len(self.phrase.encode()) > 32768
+                or len(self.phrase) > MAX_RULE_PHRASE_CHARACTERS
+                or len(self.phrase.encode()) > MAX_RULE_PHRASE_BYTES
                 or self.effect is not None
                 or self.count is not None
             ):
@@ -137,7 +160,7 @@ class EvaluationRule:
             if (
                 self.effect != "CREATE_TEST_REQUEST"
                 or type(self.count) is not int
-                or not 0 <= self.count <= 1000
+                or not 0 <= self.count <= MAX_RULE_EFFECT_COUNT
                 or self.action_sequence is not None
                 or self.phrase is not None
             ):

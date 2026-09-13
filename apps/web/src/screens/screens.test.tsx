@@ -314,6 +314,53 @@ describe('journey authoring', () => {
     )
   })
 
+  it('freezes explicit rules without trimming the reader literal or discarding a zero count', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    await openProject(server)
+    await user.type(screen.getByLabelText(/Journey name/), 'Frozen reader rules')
+    await user.type(screen.getByLabelText(/trying to do/), 'Submit the contact form')
+    await user.type(screen.getByLabelText(/Start address/), 'https://localhost:8443/contact')
+    await user.type(screen.getByLabelText(/count as having succeeded/), 'No submission recorded')
+    await user.type(screen.getByLabelText(/Fixture template/), 'contact-form')
+    await user.type(screen.getByLabelText(/Assertion 1 description/), 'No submission recorded')
+    await user.click(screen.getByLabelText('Freeze an executable rule for assertion 1'))
+    await user.clear(screen.getByLabelText(/Assertion 1 expected request count/))
+    await user.type(screen.getByLabelText(/Assertion 1 expected request count/), '0')
+    await user.click(screen.getByRole('button', { name: 'Add a reader announcement assertion' }))
+    await user.type(screen.getByLabelText(/Assertion 2 description/), 'The exact error is announced')
+    await user.click(screen.getByLabelText('Freeze an executable rule for assertion 2'))
+    await user.type(screen.getByLabelText(/Assertion 2 exact reader phrase/), '  Email invalid  ')
+    await user.click(screen.getByRole('button', { name: 'Freeze version' }))
+    const sent = server.bodies.find((entry) => entry.url.endsWith('/journeys'))
+    const body = sent?.body as { assertions: { evaluationRule: unknown }[] }
+    expect(body.assertions.map((row) => row.evaluationRule)).toEqual([
+      { type: 'EFFECT_COUNT', effect: 'CREATE_TEST_REQUEST', count: 0 },
+      { type: 'EXACT_READER_PHRASE', actionSequence: 1, phrase: '  Email invalid  ' },
+    ])
+  })
+
+  it('keeps an invalid rule inline, links the summary to it and allows removing only draft reader assertions', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(MEMBER)
+    await openProject(server)
+    await user.click(screen.getByRole('button', { name: 'Add a reader announcement assertion' }))
+    await user.click(screen.getByLabelText('Freeze an executable rule for assertion 2'))
+    await user.clear(screen.getByLabelText(/Assertion 2 action sequence/))
+    await user.type(screen.getByLabelText(/Assertion 2 action sequence/), '41')
+    await user.click(screen.getByRole('button', { name: 'Freeze version' }))
+    const control = screen.getByLabelText(/Assertion 2 action sequence/)
+    expect(control).toHaveAttribute('aria-invalid', 'true')
+    const summary = screen.getByRole('alert')
+    expect(within(summary).getByRole('link', { name: /action sequence must be a whole number between 1 and 40/ }))
+      .toHaveAttribute('href', `#${control.id}`)
+    expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
+    expect(screen.queryByRole('button', { name: 'Remove assertion 1' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove assertion 2' }))
+    expect(screen.queryByLabelText(/Assertion 2 action sequence/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add a reader announcement assertion' })).toHaveFocus()
+  })
+
   it('refuses a budget the browser would have sent as zero or null', async () => {
     const user = userEvent.setup()
     const server = createFakeServer(MEMBER)
