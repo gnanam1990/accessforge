@@ -6,6 +6,17 @@ handoff's proposal/approval evidence or declare the module complete.
 
 ## Implemented so far
 
+### STOP-only closure correction
+
+A successful first-action STOP now permits reader sequence zero. Session creation declares an
+empty open reader stream, which can close at zero without fabricating a reader observation.
+Negative/boolean tails, mismatched observation coverage, incomplete STOP, missing independent
+observer evidence and missing historical streams still refuse closure. Finalization remains
+NOT_EVALUATED until retained-artifact evaluation; this is not physical reader proof.
+
+Normal code inspection and changed-file Ruff/mypy passed. Four scoped STOP-only closure/input/
+artifact cases are added for CI; no local test suite or OS/reader operation was run.
+
 `apps/build-worker/` is a Python workspace member with no new third-party dependency.
 Its source-preparation boundary:
 
