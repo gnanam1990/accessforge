@@ -68,3 +68,14 @@ test('absent runtime evidence stays unknown and an unbound configuration is refu
   assert.equal(report.checks.BUILD_IDENTITY_MATCHES_MANIFEST.condition, 'UNKNOWN');
   assert.throws(() => createPhysicalPreflight(options({ expectedDesktopSessionId: '' })));
 });
+
+test('configured live build probe failure cannot fall back to matching historical callback digests', async () => {
+  const probe = createPhysicalPreflight(options({ artifactProbe: {
+    expectedBuildDigest: evidence.expectedBuildDigest,
+    reference: { protocol: 'accessforge.artifact-probe.v1', socketPath: '/not-a-real-probe/read.sock',
+      token: 'c'.repeat(64), taskId: 'fixture-task', candidateId: 'fixture-candidate',
+      imageId: 'fixture-image', daemonId: 'fixture-daemon' },
+  } }));
+  await assert.rejects(probe, /unavailable/);
+  await assert.rejects(probe, /fenced/);
+});
