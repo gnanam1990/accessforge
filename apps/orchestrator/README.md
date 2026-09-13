@@ -8,7 +8,13 @@ tools, or outcome-verification capability.
 Module 13's first diagnosis slice is separate under `accessforge_orchestrator.diagnosis`: a
 zero-tool Strands worker consumes a closed privileged projection, validates every evidence/source
 reference after structured output, and reads only digest-pinned UTF-8 excerpts from the exact frozen
-commit. Finding persistence/deduplication and its real failed-reader acceptance run remain pending.
+commit. The retained-input preparation and diagnosis delivery path now connects the original
+evaluation to immutable finding occurrences, linked follow-up analysis and the findings read API.
+Request authorization and source/evidence identity are rechecked around the model call. Durable
+pre-call reservations prevent duplicate worker invocation and hold workspace admission capacity;
+unknown provider consumption stays unavailable, not invented measured usage. Diagnosis UI delivery,
+provider usage/reconciliation and the real failed-reader acceptance run remain pending; the internal
+delivery function is not started automatically or exposed as an unrestricted API.
 
 The process receives a sealed navigator projection and a control-plane supplied durable checkpoint
 sink. The Bedrock credential chain belongs to this orchestrator process; desktop-runner, target,

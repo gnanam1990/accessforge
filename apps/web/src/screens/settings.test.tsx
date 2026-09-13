@@ -39,6 +39,11 @@ describe('usage', () => {
     const table = await screen.findByRole('table', { name: /Consumption in the current window/ })
     expect(within(table).getByRole('columnheader', { name: 'Measured' })).toBeInTheDocument()
     expect(within(table).getByRole('columnheader', { name: 'Estimated' })).toBeInTheDocument()
+    expect(
+      within(table).getByRole('columnheader', { name: 'Reserved (not measured)' }),
+    ).toBeInTheDocument()
+    // Old API responses omit reservations: missing evidence is not a fabricated zero.
+    expect(within(table).getAllByText('Unavailable').length).toBeGreaterThan(0)
     // A count of events, not a quantity. Shown as zero usage it would read as nothing having
     // happened.
     expect(

@@ -18,7 +18,7 @@ from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_api.routes._common import as_body, as_identifier, authorize, workspace_scope
 from accessforge_domain.authorization.roles import Permission, Role
 from accessforge_domain.states import FindingStatus, ReviewVerdict
-from accessforge_persistence import reviews
+from accessforge_persistence import diagnoses, reviews
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["findings"])
 
@@ -81,6 +81,13 @@ def get_finding(
         }
         for h in reviews.finding_history(conn, finding_id=finding_id)
     ]
+    try:
+        view["diagnoses"] = diagnoses.history(conn, finding_id=finding_id)
+    except diagnoses.DiagnosisRefused:
+        raise ProblemDetail(
+            ProblemCode.CONFLICT, "Retained diagnosis integrity is unavailable."
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
     return view
 
 

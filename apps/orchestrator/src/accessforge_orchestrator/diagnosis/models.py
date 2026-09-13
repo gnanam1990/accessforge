@@ -28,6 +28,8 @@ class EvidenceReference(_SealedModel):
     ]
     digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     retained: bool
+    observed_text: str | None = Field(default=None, max_length=4000)
+    observation_state: Literal["RECORDED", "CAPTURE_UNKNOWN", "REDACTED"] | None = None
 
 
 class ProtectedAssertion(_SealedModel):
