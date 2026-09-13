@@ -19,6 +19,12 @@ class RequestRefused(ValueError):
     pass
 
 
+def operation_digest(key: str) -> str:
+    if not isinstance(key, str) or not 1 <= len(key) <= 200:
+        raise ValueError("diagnosis operation key must have one to two hundred characters")
+    return digest({"operationKey": key})
+
+
 def _view(row: dict[str, Any]) -> dict[str, Any]:
     if digest(row["payload"]) != row["payload_digest"]:
         raise RequestRefused("diagnosis request integrity unavailable")
@@ -79,9 +85,21 @@ def create(
     run_id: str,
     requested_by: str,
     payload: dict[str, Any],
+    idempotency_key: str,
 ) -> dict[str, Any]:
     validate(payload)
     diagnoses.authorize(conn, workspace_id, requested_by)
+    key_digest = operation_digest(idempotency_key)
+    payload_digest = digest(payload)
+    previous = conn.execute(
+        "SELECT * FROM diagnosis_request WHERE workspace_id=%s AND run_id=%s "
+        "AND requested_by=%s AND operation_key_digest=%s",
+        (workspace_id, run_id, requested_by, key_digest),
+    ).fetchone()
+    if previous is not None:
+        if previous["payload_digest"] != payload_digest:
+            raise RequestRefused("diagnosis operation identity cannot be reused for another scope")
+        return _view(previous)
     run = conn.execute("SELECT * FROM run WHERE id=%s FOR SHARE", (run_id,)).fetchone()
     evaluation = evaluations.read(conn, run_id=run_id)
     if (
@@ -103,12 +121,47 @@ def create(
         raise RequestRefused("diagnosis source evidence has been deleted")
     _predecessor(conn, run_id, payload)
     row = conn.execute(
-        "INSERT INTO diagnosis_request(id,workspace_id,run_id,requested_by,payload,payload_digest) "
-        "VALUES(%s,%s,%s,%s,%s,%s) RETURNING *",
-        (str(uuid4()), workspace_id, run_id, requested_by, Jsonb(payload), digest(payload)),
+        "INSERT INTO diagnosis_request"
+        "(id,workspace_id,run_id,requested_by,payload,payload_digest,operation_key_digest) "
+        "VALUES(%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT(workspace_id,requested_by,run_id,operation_key_digest) DO NOTHING RETURNING *",
+        (
+            str(uuid4()),
+            workspace_id,
+            run_id,
+            requested_by,
+            Jsonb(payload),
+            payload_digest,
+            key_digest,
+        ),
     ).fetchone()
-    assert row is not None
+    if row is None:
+        row = conn.execute(
+            "SELECT * FROM diagnosis_request WHERE workspace_id=%s AND run_id=%s "
+            "AND requested_by=%s AND operation_key_digest=%s",
+            (workspace_id, run_id, requested_by, key_digest),
+        ).fetchone()
+        if row is None or row["payload_digest"] != payload_digest:
+            raise RequestRefused("concurrent diagnosis operation has another scope")
     return _view(row)
+
+
+def recover(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    run_id: str,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT id FROM diagnosis_request WHERE workspace_id=%s AND run_id=%s "
+        "AND requested_by=%s AND operation_key_digest=%s",
+        (workspace_id, run_id, actor_id, operation_digest(idempotency_key)),
+    ).fetchone()
+    if row is None:
+        raise LookupError("request acceptance is not confirmed for this operation")
+    return inspect(conn, request_id=str(row["id"]))
 
 
 def inspect(conn: psycopg.Connection[Any], *, request_id: str) -> dict[str, Any]:
