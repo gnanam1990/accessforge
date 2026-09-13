@@ -1,4 +1,4 @@
-"""One durable worker invocation per diagnosis operation; uncertain calls are never replayed."""
+"""Shared model reservations (legacy table name); uncertain calls are never replayed."""
 
 from __future__ import annotations
 
@@ -23,7 +23,10 @@ def reserve(
     operation_id: str,
     request_digest: str,
     tokens: int,
+    purpose: Literal["DIAGNOSIS", "REPAIR"] = "DIAGNOSIS",
 ) -> None:
+    if purpose not in {"DIAGNOSIS", "REPAIR"}:
+        raise InvocationRefused("recognized model purpose required")
     for value in (workspace_id, run_id, operation_id):
         if str(UUID(value)) != value:
             raise InvocationRefused("canonical diagnosis invocation identity required")
@@ -51,9 +54,9 @@ def reserve(
         raise budgets.BudgetExhausted("MODEL_TOKENS", limit, total.counted_against_limit, tokens)
     conn.execute(
         "INSERT INTO diagnosis_invocation"
-        "(operation_id,workspace_id,run_id,request_digest,reserved_tokens) "
-        "VALUES(%s,%s,%s,%s,%s)",
-        (operation_id, workspace_id, run_id, request_digest, tokens),
+        "(operation_id,workspace_id,run_id,request_digest,reserved_tokens,purpose) "
+        "VALUES(%s,%s,%s,%s,%s,%s)",
+        (operation_id, workspace_id, run_id, request_digest, tokens, purpose),
     )
 
 
@@ -64,12 +67,13 @@ def finish(
     operation_id: str,
     request_digest: str,
     status: Literal["RECORDED", "UNCONFIRMED", "NOT_CALLED"],
+    purpose: Literal["DIAGNOSIS", "REPAIR"] = "DIAGNOSIS",
 ) -> None:
     row = conn.execute(
         "UPDATE diagnosis_invocation SET status=%s,finished_at=clock_timestamp() "
         "WHERE workspace_id=%s AND operation_id=%s AND request_digest=%s "
-        "AND status='STARTED' RETURNING run_id",
-        (status, workspace_id, operation_id, request_digest),
+        "AND status='STARTED' AND purpose=%s RETURNING run_id",
+        (status, workspace_id, operation_id, request_digest, purpose),
     ).fetchone()
     if row is None:
         raise InvocationRefused(
@@ -83,7 +87,7 @@ def finish(
         conn,
         workspace_id=workspace_id,
         run_id=str(row["run_id"]),
-        event_key=f"diagnosis:{operation_id}:usage",
+        event_key=f"{purpose.lower()}:{operation_id}:usage",
         kind="MODEL_TOKENS",
         quantity=0,
         basis="UNAVAILABLE",
