@@ -33,8 +33,9 @@ reuse the real completed stopped-artifact fixture for request/replay, CSRF, role
 revocation and isolation; pure request cases cover profile alignment and scope widening. No local
 full test suite, actual request against user data, billable model call or physical reader was run.
 
-The operator command is tracked separately in [PR 45](https://github.com/gnanam1990/accessforge/pull/45);
-it is not dispatched by this API. Browser request/recovery UI is a separate follow-on slice.
+The explicit operator command is described in [diagnosis-operator-command.md](diagnosis-operator-command.md)
+and tracked in [PR 45](https://github.com/gnanam1990/accessforge/pull/45). It is not dispatched by
+this API. Browser request/recovery UI is a separate follow-on slice.
 Host provisioning, provider consumption reconciliation, actual retained source/model/reader
 acceptance and remaining repair/release work are still pending.
 The existing internal `deliver` remains a privileged operator-owned library function, not a public
