@@ -259,8 +259,9 @@ class AccessForgeClient:
             return OPERATIONS[operation_id]
         except KeyError:
             raise KeyError(
-                f"no operation {operation_id!r} in this contract. The table is generated from the "
-                "published contract, so an operation missing here is one the server does not serve."
+                f"no human-client operation {operation_id!r} in this contract. "
+                "Supervisor bearer operations use the separate NativeExecutionSession protocol, "
+                "not this cookie/CSRF client. This build does not serve other absent operations."
             ) from None
 
     def _body(self, response: httpx.Response) -> Any:

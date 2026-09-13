@@ -76,9 +76,20 @@ def _context(
     seal = projects.find_sealed_manifest(conn, manifest_digest=str(run["manifest_digest"]))
     if seal is None:
         raise Refused("reader startup requires an exact canonical seal")
-    manifest = execution_approvals.assert_authorized(
-        conn, sealed_manifest_id=seal.sealed_manifest_id, run_id=run_id, workspace_id=workspace_id
-    )
+    try:
+        manifest = execution_approvals.assert_authorized(
+            conn,
+            sealed_manifest_id=seal.sealed_manifest_id,
+            run_id=run_id,
+            workspace_id=workspace_id,
+        )
+    except (
+        execution_approvals.Refused,
+        projects.ProjectError,
+        projects.SealError,
+        ValueError,
+    ) as exc:
+        raise Refused("reader startup execution seal unavailable") from exc
     if runner["profile_digest"] != manifest["runnerProfileDigest"]:
         raise Refused("reader startup profile differs from the approved run")
     return dict(run), dict(runner), manifest

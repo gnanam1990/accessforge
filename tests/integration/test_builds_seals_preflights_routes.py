@@ -1449,7 +1449,20 @@ def _ticket_url(ticket: DispatchTicket, workspace_id: str = WS) -> str:
 
 
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
-@pytest.mark.parametrize("fault", [None, "scope", "stale", "ack", "csrf", "role", "expiry"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "scope",
+        "stale",
+        "ack",
+        "csrf",
+        "role",
+        "expiry",
+        "environment-expired",
+        "environment-revoked",
+    ],
+)
 def test_operator_reader_startup_consent_routes(
     db: str,
     client: TestClient,
@@ -1457,6 +1470,7 @@ def test_operator_reader_startup_consent_routes(
     supervisor_ticket: DispatchTicket,
     manual_dispatch_reference: DispatchReference,
     fault: str | None,
+    environment: str,
 ) -> None:
     import secrets
 
@@ -1502,6 +1516,31 @@ def test_operator_reader_startup_consent_routes(
             issued = issue_session(conn, user_id=VIEWER)
         client.cookies.set(SESSION_COOKIE, issued.session_token)
         headers[CSRF_HEADER] = issued.csrf_token
+    if fault in {"environment-expired", "environment-revoked"}:
+        machine_secret = secrets.token_urlsafe(32)
+        assert (
+            client.post(
+                _ticket_url(ticket).removesuffix("accept") + "session",
+                json={"sessionSecret": machine_secret},
+                headers={"Authorization": f"Bearer {ticket.token}"},
+            ).status_code
+            == 201
+        )
+        with workspace_connection(db, WS) as conn:
+            column = "expires_at" if fault == "environment-expired" else "revoked_at"
+            conn.execute(
+                f"UPDATE environment_manifest SET {column}=now()-interval '1 day' WHERE id=%s",  # noqa: S608
+                (environment,),
+            )
+        assert client.get(base + "/scope", params={"runnerId": ref.runner_id}).status_code == 409
+        assert (
+            client.post(
+                f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}/reader-startup-consent",
+                json={},
+                headers={"Authorization": f"Bearer {machine_secret}"},
+            ).status_code
+            == 403
+        )
     issued_response = client.post(base, json=body, headers=headers)
     if fault is not None:
         assert issued_response.status_code == (
@@ -1515,6 +1554,12 @@ def test_operator_reader_startup_consent_routes(
     assert issued_response.status_code == 201
     grant = issued_response.json()
     assert grant["boundSessionId"] is None and grant["actorId"] == OWNER
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(psycopg.IntegrityError, match="retained reader consent"):
+            with conn.transaction():
+                conn.execute(
+                    "DELETE FROM reader_startup_consent WHERE id=%s", (grant["consentId"],)
+                )
     assert client.post(base, json=body, headers=headers).json() == grant
     assert client.get(base).json() == grant
     secret = secrets.token_urlsafe(32)
@@ -1585,6 +1630,17 @@ def test_operator_reader_startup_consent_routes(
         assert audit[1]["action"] == "READER_STARTUP_CONSENT_BOUND"
         assert audit[1]["actor_user"] is None and audit[1]["actor_service"] == "desktop-supervisor"
         assert audit[2]["actor_user"] == uuid.UUID(OWNER)
+        with pytest.raises(psycopg.IntegrityError, match="retained reader consent"):
+            with conn.transaction():
+                conn.execute(
+                    "DELETE FROM reader_startup_consent WHERE id=%s", (grant["consentId"],)
+                )
+    with unscoped_connection(db) as conn:
+        conn.execute("DELETE FROM workspace WHERE id=%s", (WS,))
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM reader_startup_consent").fetchone() == {
+            "n": 0
+        }
 
 
 def _seed_reader_fixture(db: str, ref: DispatchReference) -> None:

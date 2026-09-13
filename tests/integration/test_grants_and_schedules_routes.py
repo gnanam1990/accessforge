@@ -879,6 +879,7 @@ def test_the_published_contract_declares_how_authentication_works(
     for path, operations in schema["paths"].items():
         if "/supervisor-sessions/" in path or "/supervisor-dispatches/" in path:
             assert operations["post"]["security"] == [{"supervisorBearer": []}]
+            assert "429" not in operations["post"]["responses"]
 
     # Signing in cannot require a session.
     assert schema["paths"]["/v1/sessions"]["post"]["security"] == []
