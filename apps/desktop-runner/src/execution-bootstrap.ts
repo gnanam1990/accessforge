@@ -6,6 +6,7 @@ import type { ExclusiveDesktopRunner } from './desktop-claim.js';
 import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from './reader-startup-consent.js';
 import { readStartupConsentReference } from './startup-provisioning.js';
 import { startNavigatorActionBridge } from './navigator-action-bridge.js';
+import { startOwnedNavigatorExecution, type NavigatorProcessOptions } from './navigator-process.js';
 
 export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhysicalSafariRunner>[0], 'session'> & {
   /** Independently provisioned private host configuration, never navigator fields. */
@@ -40,6 +41,21 @@ export async function startProvisionedNavigatorExecution(options: Omit<Execution
   return startNavigatorActionBridge({ runner, privateDirectory: navigatorBridgeDirectory,
     reference: runtime.receiver.localReference, deadlineMonotonic: runtime.lease.deadlineMonotonic,
     maxActions: runtime.lease.maxActions });
+}
+
+/** Explicit trusted host entry: existing physical bootstrap -> private child -> verified finish.
+ * The production capability matrix and every reader-startup/effect approval remain unchanged.
+ */
+export async function runProvisionedNavigatorExecution(
+  bootstrap: Parameters<typeof startProvisionedNavigatorExecution>[0],
+  navigator: NavigatorProcessOptions,
+): Promise<Readonly<Record<string, unknown>>> {
+  if (JSON.stringify(parseReference(bootstrap.receiver.localReference)) !==
+      JSON.stringify(parseReference(navigator.reference)) ||
+      navigator.deadlineMonotonic > bootstrap.lease.deadlineMonotonic) {
+    throw new Error('navigator process does not match its native bootstrap lease');
+  }
+  return startOwnedNavigatorExecution(() => startProvisionedNavigatorExecution(bootstrap), navigator);
 }
 
 /**
