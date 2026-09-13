@@ -623,6 +623,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: true,
     authenticated: true,
   },
+  'accept_supervisor_dispatch': {
+    operationId: 'accept_supervisor_dispatch',
+    method: 'POST',
+    path: '/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/accept',
+    parameters: ['workspace_id', 'ticket_id'],
+    mutating: true,
+    authenticated: true,
+  },
   'read_usage': {
     operationId: 'read_usage',
     method: 'GET',
@@ -705,6 +713,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/schedules/{schedule_id}/resume',
   '/v1/workspaces/{workspace_id}/settings/entitlement',
   '/v1/workspaces/{workspace_id}/settings/retention',
+  '/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/accept',
   '/v1/workspaces/{workspace_id}/usage',
   '/v1/workspaces/{workspace_id}/verifications/{verification_id}',
 ]

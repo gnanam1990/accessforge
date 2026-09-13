@@ -59,6 +59,7 @@ from accessforge_persistence import (
 from accessforge_persistence import (
     runs as run_store,
 )
+from accessforge_persistence.supervisor_dispatch import DispatchTicket
 
 pytestmark = pytest.mark.integration
 
@@ -1046,12 +1047,14 @@ class SyntheticStartTransport:
     def __init__(self, db: str) -> None:
         self.db = db
         self.calls = 0
+        self.ticket: DispatchTicket | None = None
 
     def check_available(self) -> None:
         pass
 
-    async def start(self, reference: DispatchReference) -> None:
+    async def start(self, reference: DispatchReference, *, ticket: DispatchTicket) -> None:
         self.calls += 1
+        self.ticket = ticket
         # A separate connection must observe the committed claim BEFORE any transport work.
         with workspace_connection(self.db, WS) as conn:
             state = run_store.load_run(conn, run_id=reference.run_id).state
@@ -1086,7 +1089,7 @@ async def test_manual_controller_commits_before_send_and_never_replays(
         assert state.outcome.value == "NOT_EVALUATED"
         assert state.status.value == "RUNNING"
         message = conn.execute(
-            "SELECT count(*) AS n FROM outbox_message WHERE topic='run.manual_dispatch_claimed'"
+            "SELECT count(*) AS n FROM outbox_message WHERE topic='run.running'"
         ).fetchone()
         assert message is not None and message["n"] == 1
 
@@ -1175,8 +1178,8 @@ async def test_manual_handoff_uncertainty_interrupts_and_quarantines_without_sto
     failure: str,
 ) -> None:
     class FailingTransport(SyntheticStartTransport):
-        async def start(self, reference: DispatchReference) -> None:
-            await super().start(reference)
+        async def start(self, reference: DispatchReference, *, ticket: DispatchTicket) -> None:
+            await super().start(reference, ticket=ticket)
             if failure == "timeout":
                 await asyncio.Event().wait()
             if failure == "cancelled":
@@ -1253,7 +1256,7 @@ import asyncio, json, os
 from accessforge_orchestrator.manual_dispatch import DispatchReference, ManualRunController
 class CrashTransport:
     def check_available(self): pass
-    async def start(self, reference): os._exit(24)
+    async def start(self, reference, *, ticket): os._exit(24)
 asyncio.run(ManualRunController(os.environ['AF_CONTROLLER_TEST_DB'], CrashTransport()).dispatch(
     DispatchReference(**json.loads(os.environ['AF_CONTROLLER_TEST_REF'])), expected_revision=1))
 """
@@ -1290,8 +1293,8 @@ async def test_late_transport_success_does_not_clear_unknown_or_quarantine(
     finished = asyncio.Event()
 
     class LateTransport(SyntheticStartTransport):
-        async def start(self, reference: DispatchReference) -> None:
-            await super().start(reference)
+        async def start(self, reference: DispatchReference, *, ticket: DispatchTicket) -> None:
+            await super().start(reference, ticket=ticket)
             try:
                 await release.wait()
             except asyncio.CancelledError:
@@ -1373,8 +1376,362 @@ async def test_dispatch_transaction_failure_rolls_back_and_never_sends(
             is None
         )
         assert (
+            conn.execute("SELECT 1 FROM outbox_message WHERE topic='run.running'").fetchone()
+            is None
+        )
+
+
+@pytest.fixture()
+def supervisor_ticket(db: str, manual_dispatch_reference: DispatchReference) -> DispatchTicket:
+    transport = SyntheticStartTransport(db)
+    asyncio.run(
+        ManualRunController(db, transport).dispatch(manual_dispatch_reference, expected_revision=1)
+    )
+    assert transport.ticket is not None
+    return transport.ticket
+
+
+def _ticket_url(ticket: DispatchTicket, workspace_id: str = WS) -> str:
+    return f"/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket.ticket_id}/accept"
+
+
+def test_supervisor_ticket_is_machine_only_single_consumption_without_evidence(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    import hashlib
+    import json
+
+    ticket = supervisor_ticket
+    assert ticket.token not in repr(ticket)
+    with workspace_connection(db, WS) as conn:
+        stored = conn.execute(
+            "SELECT * FROM supervisor_dispatch_ticket WHERE id=%s", (ticket.ticket_id,)
+        ).fetchone()
+        assert stored is not None and stored["accepted_at"] is None
+        assert stored["token_digest"] == hashlib.sha256(ticket.token.encode()).hexdigest()
+        assert ticket.token not in str(stored)
+        assert (stored["expires_at"] - stored["created_at"]).total_seconds() <= 30
+    # A logged-in OWNER is not machine authentication.
+    assert client.post(_ticket_url(ticket), json={}).status_code == 401
+    client.cookies.clear()
+    headers = {"Authorization": f"Bearer {ticket.token}", "Idempotency-Key": "not-a-restart"}
+    accepted = client.post(_ticket_url(ticket), json={}, headers=headers)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.headers["cache-control"] == "no-store"
+    assert accepted.json() == {
+        "ticketId": ticket.ticket_id,
+        "runId": manual_dispatch_reference.run_id,
+        "leaseId": manual_dispatch_reference.lease_id,
+        "meaning": "DISPATCH_REFERENCE_ACCEPTED",
+    }
+    assert ticket.token not in accepted.text
+    assert client.post(_ticket_url(ticket), json={}, headers=headers).status_code == 401
+    assert client.get(f"/v1/workspaces/{WS}/runs", headers=headers).status_code == 401
+    with workspace_connection(db, WS) as conn:
+        state = run_store.load_run(conn, run_id=manual_dispatch_reference.run_id).state
+        assert (state.status.value, state.outcome.value) == ("RUNNING", "NOT_EVALUATED")
+        assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM runner_action").fetchone() == {"n": 0}
+        audit = conn.execute(
+            "SELECT detail FROM audit_event WHERE action='SUPERVISOR_DISPATCH_ACCEPTED'"
+        ).fetchall()
+        assert len(audit) == 1 and ticket.token not in json.dumps(audit)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wrong-token",
+        "unknown-ticket",
+        "workspace",
+        "expired",
+        "revoked-ticket",
+        "revoked-approval",
+        "cancelled",
+        "permission",
+        "preflight",
+        "body-claim",
+        "duplicate-header",
+        "human-session-token",
+    ],
+)
+def test_receiver_rechecks_fresh_authority_without_consuming_on_refusal(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+) -> None:
+    from accessforge_persistence import supervisor_dispatch
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    url = _ticket_url(ticket)
+    headers: Any = {"Authorization": f"Bearer {ticket.token}"}
+    payload: dict[str, Any] = {}
+    if fault == "wrong-token":
+        headers = {"Authorization": "Bearer " + "x" * 43}
+    elif fault == "unknown-ticket":
+        url = _ticket_url(replace(ticket, ticket_id=str(uuid.uuid4())))
+    elif fault == "workspace":
+        url = _ticket_url(ticket, str(uuid.uuid4()))
+    elif fault == "expired":
+
+        class Later(datetime):
+            @classmethod
+            def now(cls, tz: tzinfo | None = None) -> Later:
+                return cls.fromtimestamp((datetime.now(tz) + timedelta(seconds=60)).timestamp(), tz)
+
+        monkeypatch.setattr(supervisor_dispatch, "datetime", Later)
+    elif fault == "body-claim":
+        payload = {"serviceIdentity": "SUPERVISOR", "runId": ref.run_id}
+    elif fault == "duplicate-header":
+        headers = [
+            ("Authorization", f"Bearer {ticket.token}"),
+            ("Authorization", f"Bearer {ticket.token}"),
+        ]
+    elif fault == "human-session-token":
+        headers = {"Authorization": f"Bearer {client.cookies.get(SESSION_COOKIE)}"}
+    else:
+        with workspace_connection(db, WS) as conn:
+            if fault == "revoked-ticket":
+                conn.execute(
+                    "UPDATE supervisor_dispatch_ticket SET revoked_at=now() WHERE id=%s",
+                    (ticket.ticket_id,),
+                )
+            elif fault == "revoked-approval":
+                conn.execute(
+                    "UPDATE approval SET revoked_at=now() WHERE id="
+                    "(SELECT authorization_id FROM run WHERE id=%s)",
+                    (ref.run_id,),
+                )
+            elif fault == "cancelled":
+                conn.execute(
+                    "UPDATE run SET cancel_requested_at=now(),cancellation_revision=revision "
+                    "WHERE id=%s",
+                    (ref.run_id,),
+                )
+            elif fault == "permission":
+                conn.execute(
+                    "UPDATE workspace_membership SET role='VIEWER' WHERE user_id=%s", (OWNER,)
+                )
+            else:
+                conn.execute(
+                    "UPDATE runner_preflight SET successful=false WHERE runner_id=%s",
+                    (ref.runner_id,),
+                )
+    response = client.post(url, json=payload, headers=headers)
+    assert response.status_code == (400 if fault == "body-claim" else 401)
+    assert ticket.token not in response.text
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute(
+            "SELECT accepted_at FROM supervisor_dispatch_ticket WHERE id=%s", (ticket.ticket_id,)
+        ).fetchone() == {"accepted_at": None}
+
+
+def test_concurrent_receivers_consume_one_ticket_once(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    barrier = Barrier(2)
+    ticket = supervisor_ticket
+
+    def accept(_: int) -> int:
+        barrier.wait(timeout=5)
+        return client.post(
+            _ticket_url(ticket), json={}, headers={"Authorization": f"Bearer {ticket.token}"}
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(accept, range(2))) == [200, 401]
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute(
+            "SELECT count(*) AS n FROM audit_event WHERE action='SUPERVISOR_DISPATCH_ACCEPTED'"
+        ).fetchone() == {"n": 1}
+
+
+def test_dispatch_ticket_identity_and_consumption_cannot_be_rewritten(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+) -> None:
+    ticket = supervisor_ticket
+    assert (
+        client.post(
+            _ticket_url(ticket), json={}, headers={"Authorization": f"Bearer {ticket.token}"}
+        ).status_code
+        == 200
+    )
+    with workspace_connection(db, WS) as conn:
+        for statement in (
+            "UPDATE supervisor_dispatch_ticket SET token_digest=repeat('a',64)",
+            "UPDATE supervisor_dispatch_ticket SET expires_at=expires_at+interval '1 hour'",
+            "UPDATE supervisor_dispatch_ticket SET accepted_at=NULL",
+            "UPDATE supervisor_dispatch_ticket SET epoch=epoch+1",
+            "DELETE FROM supervisor_dispatch_ticket",
+        ):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(statement)
+        conn.execute("UPDATE supervisor_dispatch_ticket SET revoked_at=now()")
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute("UPDATE supervisor_dispatch_ticket SET revoked_at=NULL")
+
+
+@pytest.mark.asyncio
+async def test_accepted_http_handoff_with_lost_ack_is_revoked_not_replayed(
+    db: str,
+    client: TestClient,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    class LostResponse(SyntheticStartTransport):
+        async def start(self, reference: DispatchReference, *, ticket: DispatchTicket) -> None:
+            await super().start(reference, ticket=ticket)
+            assert (
+                client.post(
+                    _ticket_url(ticket),
+                    json={},
+                    headers={"Authorization": f"Bearer {ticket.token}"},
+                ).status_code
+                == 200
+            )
+            raise ConnectionError("synthetic lost response after receiver commit")
+
+    transport = LostResponse(db)
+    with pytest.raises(HandoffUnknown):
+        await ManualRunController(db, transport).dispatch(
+            manual_dispatch_reference, expected_revision=1
+        )
+    assert transport.ticket is not None
+    ticket = transport.ticket
+    assert (
+        client.post(
+            _ticket_url(ticket), json={}, headers={"Authorization": f"Bearer {ticket.token}"}
+        ).status_code
+        == 401
+    )
+    with workspace_connection(db, WS) as conn:
+        stored = conn.execute(
+            "SELECT accepted_at,revoked_at FROM supervisor_dispatch_ticket WHERE id=%s",
+            (ticket.ticket_id,),
+        ).fetchone()
+        assert stored is not None and stored["accepted_at"] and stored["revoked_at"]
+        assert (
+            run_store.load_run(conn, run_id=manual_dispatch_reference.run_id).state.status.value
+            == "INTERRUPTED"
+        )
+
+
+def test_real_ticket_snapshot_restore_requires_irreversible_revocation(
+    db: str,
+    backup_database_url: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+) -> None:
+    import subprocess
+    from urllib.parse import urlsplit, urlunsplit
+
+    from accessforge_persistence import connect, restore, supervisor_dispatch
+
+    ticket = supervisor_ticket
+    snapshot = subprocess.run(  # noqa: S603 - fixed test command, owned database
+        ["pg_dump", backup_database_url],  # noqa: S607 - provisioned PostgreSQL client
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert snapshot.returncode == 0, "owned dispatch snapshot failed"
+    assert (
+        client.post(
+            _ticket_url(ticket), json={}, headers={"Authorization": f"Bearer {ticket.token}"}
+        ).status_code
+        == 200
+    )
+    name = "accessforge_ticket_restore_" + uuid.uuid4().hex[:12]
+
+    def at_database(url: str, database: str) -> str:
+        parts = urlsplit(url)
+        return urlunsplit((parts.scheme, parts.netloc, "/" + database, parts.query, parts.fragment))
+
+    admin = at_database(backup_database_url, "postgres")
+    target_admin, target_app = at_database(backup_database_url, name), at_database(db, name)
+    with connect(admin) as conn:
+        conn.autocommit = True
+        conn.execute(f'CREATE DATABASE "{name}"')  # noqa: S608 - exact generated owned name
+    try:
+        loaded = subprocess.run(  # noqa: S603 - fixed command, owned target
+            ["psql", "-X", "-v", "ON_ERROR_STOP=1", target_admin],  # noqa: S607
+            input=snapshot.stdout,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert loaded.returncode == 0, "owned dispatch restore failed"
+        with workspace_connection(target_app, WS) as conn:
+            assert conn.execute(
+                "SELECT accepted_at,revoked_at FROM supervisor_dispatch_ticket WHERE id=%s",
+                (ticket.ticket_id,),
+            ).fetchone() == {"accepted_at": None, "revoked_at": None}
+        with connect(target_admin) as conn:
+            report = restore.reconcile(conn, operator="ticket-test", restore_id=str(uuid.uuid4()))
+            assert report.supervisor_tickets_revoked == 1
+        with workspace_connection(target_app, WS) as conn:
+            row = conn.execute(
+                "SELECT revoked_at FROM supervisor_dispatch_ticket WHERE id=%s", (ticket.ticket_id,)
+            ).fetchone()
+            assert row is not None and row["revoked_at"] is not None
+            with pytest.raises(supervisor_dispatch.Refused):
+                supervisor_dispatch.accept(
+                    conn, workspace_id=WS, ticket_id=ticket.ticket_id, token=ticket.token
+                )
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute("UPDATE supervisor_dispatch_ticket SET revoked_at=NULL")
+    finally:
+        with connect(admin) as conn:
+            conn.autocommit = True
+            conn.execute(f'DROP DATABASE "{name}" WITH (FORCE)')  # noqa: S608 - owned target only
+
+
+@pytest.mark.asyncio
+async def test_ticket_issue_failure_rolls_back_dispatch_and_secret(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from accessforge_persistence import supervisor_dispatch
+
+    original = supervisor_dispatch.issue
+
+    def fail_after_issue(*args: Any, **kwargs: Any) -> Any:
+        original(*args, **kwargs)
+        raise RuntimeError("synthetic ticket persistence failure")
+
+    monkeypatch.setattr(supervisor_dispatch, "issue", fail_after_issue)
+    transport = SyntheticStartTransport(db)
+    with pytest.raises(RuntimeError, match="ticket persistence"):
+        await ManualRunController(db, transport).dispatch(
+            manual_dispatch_reference, expected_revision=1
+        )
+    assert transport.calls == 0 and transport.ticket is None
+    with workspace_connection(db, WS) as conn:
+        assert (
+            run_store.load_run(conn, run_id=manual_dispatch_reference.run_id).state.status.value
+            == "LEASED"
+        )
+        assert conn.execute("SELECT count(*) AS n FROM supervisor_dispatch_ticket").fetchone() == {
+            "n": 0
+        }
+        assert (
             conn.execute(
-                "SELECT 1 FROM outbox_message WHERE topic='run.manual_dispatch_claimed'"
+                "SELECT 1 FROM audit_event WHERE action='MANUAL_DISPATCH_CLAIMED'"
             ).fetchone()
             is None
         )

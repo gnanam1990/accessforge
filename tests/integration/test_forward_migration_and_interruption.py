@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0034_manual_execution_approval.sql"
+NEWEST = "0035_supervisor_dispatch_ticket.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -139,6 +139,23 @@ def test_data_written_under_the_previous_rules_survives_the_migration(disposable
     assert row is not None and row["release_reason"] == "OPERATOR_RESET"
 
 
+def test_dispatch_migration_does_not_invent_historical_machine_credentials(disposable: str) -> None:
+    _apply_through(disposable, "0034_manual_execution_approval.sql")
+    lease = _seed_released_lease(disposable, reason="OPERATOR_RESET")
+    with connect(disposable) as conn:
+        assert conn.execute(
+            "SELECT to_regclass('supervisor_dispatch_ticket') AS name"
+        ).fetchone() == {"name": None}
+    assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM supervisor_dispatch_ticket").fetchone() == {
+            "n": 0
+        }
+        assert conn.execute(
+            "SELECT release_reason FROM desktop_lease WHERE id=%s", (lease,)
+        ).fetchone() == {"release_reason": "OPERATOR_RESET"}
+
+
 def test_manual_approval_migration_preserves_old_decisions_without_creating_consent(
     disposable: str,
 ) -> None:
@@ -154,7 +171,7 @@ def test_manual_approval_migration_preserves_old_decisions_without_creating_cons
             (approval, WS, actor, target),
         )
         before = conn.execute("SELECT * FROM approval").fetchall()
-    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == ["0034_manual_execution_approval.sql", NEWEST]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM approval").fetchall() == before
         assert conn.execute(
@@ -181,6 +198,7 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -205,6 +223,7 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -258,7 +277,11 @@ def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authori
             "repeat('f',64))",
             ids,
         )
-    assert migrate(disposable) == ["0033_canonical_execution_manifest.sql", NEWEST]
+    assert migrate(disposable) == [
+        "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
+        NEWEST,
+    ]
     with connect(disposable) as conn:
         assert conn.execute(
             "SELECT canonical_manifest,manifest_digest,authorization_id FROM sealed_manifest"
@@ -285,6 +308,7 @@ def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) ->
     assert migrate(disposable) == [
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -327,6 +351,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -356,6 +381,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -402,6 +428,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -465,6 +492,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -512,6 +540,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
         "0033_canonical_execution_manifest.sql",
+        "0034_manual_execution_approval.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:

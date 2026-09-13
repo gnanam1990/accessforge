@@ -170,6 +170,7 @@ class Reconciliation:
     candidate_regressions_fenced: int = 0
     candidate_endpoints_fenced: int = 0
     execution_approvals_revoked: int = 0
+    supervisor_tickets_revoked: int = 0
 
     @property
     def summary(self) -> str:
@@ -183,6 +184,7 @@ class Reconciliation:
             f"Fenced {self.candidate_regressions_fenced} protected regressions without redispatch. "
             f"Fenced {self.candidate_endpoints_fenced} browser endpoints without resumption. "
             f"Revoked {self.execution_approvals_revoked} exact execution approvals. "
+            f"Revoked {self.supervisor_tickets_revoked} supervisor dispatch tickets. "
             f"{len(self.grants_requiring_revalidation)} execution grants require revalidation "
             "before anything may be dispatched under them."
         )
@@ -359,6 +361,10 @@ def reconcile(
         "AND m.authorization_id=a.id)",
         (moment,),
     ).rowcount
+    supervisor_tickets = conn.execute(
+        "UPDATE supervisor_dispatch_ticket SET revoked_at=%s WHERE revoked_at IS NULL",
+        (moment,),
+    ).rowcount
 
     # Restored claim/dispatch state cannot prove that the original container stopped.
     candidate_builds = conn.execute(
@@ -396,6 +402,7 @@ def reconcile(
                     "restoreId": restore_id,
                     "sessionsRevoked": sessions,
                     "executionApprovalsRevoked": execution_approvals,
+                    "supervisorTicketsRevoked": supervisor_tickets,
                     "enrollmentTokensExpired": tokens,
                     "leasesFenced": leases,
                     "runnersQuarantined": runners,
@@ -424,6 +431,7 @@ def reconcile(
         candidate_regressions_fenced=candidate_regressions,
         candidate_endpoints_fenced=candidate_endpoints,
         execution_approvals_revoked=execution_approvals,
+        supervisor_tickets_revoked=supervisor_tickets,
     )
 
 

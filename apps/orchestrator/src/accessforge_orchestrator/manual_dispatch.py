@@ -19,7 +19,9 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from accessforge_domain import reducers
-from accessforge_persistence import runners, runs, workspace_connection
+from accessforge_domain.timestamps import parse_rfc3339_utc
+from accessforge_persistence import runners, runs, supervisor_dispatch, workspace_connection
+from accessforge_persistence.supervisor_dispatch import DispatchTicket
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +38,7 @@ class StartTransport(Protocol):
     def check_available(self) -> None:
         """Refuse before admission if authenticated, actual-reader transport is unavailable."""
 
-    async def start(self, reference: DispatchReference) -> None:
+    async def start(self, reference: DispatchReference, *, ticket: DispatchTicket) -> None:
         """Deliver once; re-read the reference, never treat it as an executable command."""
 
 
@@ -50,7 +52,7 @@ class UnavailableTransport:
             "canonical actual-reader transport is not verified; no attempt was dispatched"
         )
 
-    async def start(self, reference: DispatchReference) -> None:
+    async def start(self, reference: DispatchReference, *, ticket: DispatchTicket) -> None:
         self.check_available()
 
 
@@ -120,19 +122,26 @@ class ManualRunController:
                 reducer=reducers.progress,
                 expected_revision=expected_revision,
                 operation_id=str(uuid.uuid4()),
-                topic="run.manual_dispatch_claimed",
+                topic="run.running",
                 actor_service="manual-run-controller",
                 audit_action="MANUAL_DISPATCH_CLAIMED",
                 audit_context=asdict(reference),
             )
+            ticket = supervisor_dispatch.issue(conn, **asdict(reference))
         # The durable RUNNING claim is intentionally conservative: execution may have begun. It
         # supplies no observation, assertion, outcome, action permission, or completion evidence.
         task: asyncio.Task[None] | None = None
         try:
             timeout = min(timeout, (lease["deadline_at"] - datetime.now(UTC)).total_seconds())
+            timeout = min(
+                timeout,
+                (
+                    parse_rfc3339_utc(ticket.expires_at, field="expiresAt") - datetime.now(UTC)
+                ).total_seconds(),
+            )
             if timeout <= 0:
                 raise TimeoutError("lease expired during dispatch commitment")
-            task = asyncio.create_task(self.transport.start(reference))
+            task = asyncio.create_task(self.transport.start(reference, ticket=ticket))
             done, _ = await asyncio.wait({task}, timeout=timeout)
             if not done:
                 raise TimeoutError("manual handoff acknowledgement was not received")
