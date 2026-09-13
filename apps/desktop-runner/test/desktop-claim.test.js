@@ -43,7 +43,7 @@ function fixture(t) {
           if (overrides.adapterThrows) throw new Error('unknown physical state');
           return { status: 'SUCCEEDED' };
         } },
-      }));
+      }), overrides.initialization);
     return { runner, calls, journal, reference };
   }
   return { directory, path, create };
@@ -122,6 +122,58 @@ test('cancellation racing successful server finish keeps the claim and fences la
   h.runner.requestCancellation();
   acknowledge({ status: 'FINALIZING' });
   await rejected;
+  assert.ok(existsSync(f.path));
+  assert.throws(() => f.create(), /already held/);
+});
+
+test('initialization holds the claim before startup and admits actions only after readiness', async (t) => {
+  const f = fixture(t);
+  let release, entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const h = f.create({ initialization: { timeoutMs: 1000, run: async (guard) => {
+    guard(); assert.ok(existsSync(f.path));
+    assert.throws(() => f.create(), /already held/);
+    entered();
+    await new Promise((resolve) => { release = resolve; });
+    guard();
+  } } });
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+  const ready = h.runner.initialize();
+  await started;
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+  await assert.rejects(h.runner.initialize(), /not repeatable/);
+  release(); await ready;
+  await assert.rejects(h.runner.initialize(), /not repeatable/);
+  assert.equal((await h.runner.perform({ action: 'STOP' })).status, 'SUCCEEDED');
+  await h.runner.finish();
+  assert.equal(existsSync(f.path), false);
+});
+
+test('cancelled startup settles promptly and a late initializer cannot send subsequent input', async (t) => {
+  const f = fixture(t);
+  let release, entered, lateInput = false;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const h = f.create({ initialization: { timeoutMs: 1000, run: async (guard) => {
+    entered(); await new Promise((resolve) => { release = resolve; });
+    guard(); lateInput = true;
+  } } });
+  const rejected = assert.rejects(h.runner.initialize(), /unconfirmed/);
+  await started;
+  h.runner.requestCancellation();
+  await rejected;
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(lateInput, false);
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+  assert.ok(existsSync(f.path));
+});
+
+test('startup failure retains exclusion and cannot become a clean STOP or a retry', async (t) => {
+  const f = fixture(t);
+  const h = f.create({ initialization: { timeoutMs: 1000, run: async () => { throw new Error('readiness missing'); } } });
+  await assert.rejects(h.runner.initialize(), /unconfirmed/);
+  await assert.rejects(h.runner.initialize(), /not repeatable/);
+  await assert.rejects(h.runner.finish());
   assert.ok(existsSync(f.path));
   assert.throws(() => f.create(), /already held/);
 });

@@ -1,8 +1,9 @@
 /** Session-bound physical preflight assembly; this neither grants permissions nor starts a reader. */
 import { createHostEnvironment, runPreflight, type PreflightReport, type ProbeEnvironment,
-  type RuntimeProbeEvidence, type ProbeResult } from '@accessforge/at-voiceover';
+  type RuntimeProbeEvidence, type ProbeResult, PREFLIGHT_CHECKS, probeReaderControlConfigured,
+  assertRealReaderProven, createGuidepupVoiceOverAdapter, type VoiceOverAdapter } from '@accessforge/at-voiceover';
 import type { Clock } from './supervisor.js';
-import { createSafariAuthenticatedRunner } from './safari-origin.js';
+import { createSafariAuthenticatedRunner, createSafariOriginProbe } from './safari-origin.js';
 import { createExclusiveDesktopRunner, type ExclusiveDesktopRunner } from './desktop-claim.js';
 import { parseReference } from './dispatch-receiver.js';
 
@@ -84,14 +85,26 @@ export function createPhysicalSafariRunner(options:
     readonly physicalPreflight: Omit<PhysicalPreflightOptions, 'clock' | 'environment'>;
     /** One shared private host root across ALL runner registrations, not a per-run directory. */
     readonly desktopClaimDirectory: string;
+    readonly adapter: Parameters<typeof createSafariAuthenticatedRunner>[0]['adapter'] & { start(): Promise<void> };
+    readonly readerStartup: {
+      /** Fresh trusted controller authorization for SDK stop/restart and preference mounting. */
+      readonly authorize: (signal: AbortSignal) => Promise<void>;
+      readonly timeoutMs: number;
+    };
   },
 ): ExclusiveDesktopRunner {
-  const { physicalPreflight, desktopClaimDirectory, ...runtime } = options;
+  // Known unsupported configuration is refused before reserving a desktop or loading the SDK.
+  // First-profile proof remains a separate explicitly authorized candidate workflow.
+  assertRealReaderProven();
+  const { physicalPreflight, desktopClaimDirectory, readerStartup, ...runtime } = options;
+  const environment = createHostEnvironment();
+  const preflight = createPhysicalPreflight({ ...physicalPreflight, clock: runtime.clock, environment });
+  const startupOrigin = createSafariOriginProbe(runtime.safari);
   return createExclusiveDesktopRunner({ directory: desktopClaimDirectory,
     desktopSessionId: physicalPreflight.expectedDesktopSessionId,
     reference: parseReference(runtime.session.receipt.reference),
   }, (assertHeld) => createSafariAuthenticatedRunner({ ...runtime,
-    preflight: createPhysicalPreflight({ ...physicalPreflight, clock: runtime.clock, environment: createHostEnvironment() }),
+    preflight,
     authorizePhysicalAction: async (command) => {
       assertHeld();
       await runtime.authorizePhysicalAction(command);
@@ -101,5 +114,45 @@ export function createPhysicalSafariRunner(options:
       assertHeld(); // Synchronous final guard immediately before entering the adapter.
       return runtime.adapter.perform(request, context);
     } },
-  }));
+  }), { timeoutMs: readerStartup.timeoutMs, run: async (guard, signal) => {
+    guard();
+    await readerStartup.authorize(signal);
+    guard();
+    if (probeReaderControlConfigured(environment).condition !== 'TRUE') throw new Error('reader control not configured');
+    const before = await preflight();
+    // Only activation and speech capture may be unavailable before starting the reader. Every
+    // ownership, permission, build, reset, journal and input-source gate is still required.
+    if (PREFLIGHT_CHECKS.some((key) => key !== 'READER_ACTIVE' && key !== 'SPEECH_CAPTURE_WORKING' &&
+        before.checks[key].condition !== 'TRUE')) throw new Error('reader startup preflight unavailable');
+    guard();
+    await startupOrigin();
+    guard();
+    // Consent may expire while native probes run. Reauthorize immediately before SDK startup.
+    await readerStartup.authorize(signal);
+    guard();
+    await runtime.adapter.start();
+    guard();
+    const after = await preflight();
+    if (PREFLIGHT_CHECKS.some((key) => after.checks[key].condition !== 'TRUE')) throw new Error('reader readiness unavailable');
+    await startupOrigin();
+    guard();
+  } });
+}
+
+/** Concrete lazy driver wiring. Construction neither imports Guidepup nor touches the reader. */
+export function createGuidepupPhysicalSafariRunner(
+  options: Omit<Parameters<typeof createPhysicalSafariRunner>[0], 'adapter'>,
+): ExclusiveDesktopRunner {
+  let adapter: VoiceOverAdapter | undefined;
+  return createPhysicalSafariRunner({ ...options, adapter: {
+    async start() {
+      if (adapter !== undefined) throw new Error('reader initialization cannot be retried');
+      adapter = createGuidepupVoiceOverAdapter({ monotonicNow: () => options.clock.monotonic() });
+      await adapter.start();
+    },
+    async perform(request, context) {
+      if (adapter === undefined) throw new Error('reader not initialized');
+      return adapter.perform(request, context);
+    },
+  } });
 }

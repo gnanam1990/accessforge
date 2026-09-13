@@ -118,7 +118,16 @@ function claimDesktop(options: DesktopClaimOptions): { assertHeld(): void; relea
   };
 }
 
-export type ExclusiveDesktopRunner = Pick<AuthenticatedRunner, 'perform' | 'finish' | 'requestCancellation'>;
+export type ExclusiveDesktopRunner = Pick<AuthenticatedRunner, 'perform' | 'finish' | 'requestCancellation'> & {
+  /** One-shot initialization while the claim is held; no actions are admitted until it resolves. */
+  initialize(): Promise<void>;
+};
+
+export interface DesktopInitialization {
+  readonly timeoutMs: number;
+  /** Startup must call guard immediately before every separately awaited physical operation. */
+  readonly run: (guard: () => void, signal: AbortSignal) => Promise<void>;
+}
 
 /**
  * Trusted construction hook only: build must perform no OS work and must gate its final adapter
@@ -128,12 +137,16 @@ export type ExclusiveDesktopRunner = Pick<AuthenticatedRunner, 'perform' | 'fini
 export function createExclusiveDesktopRunner(
   options: DesktopClaimOptions,
   build: (assertHeld: () => void) => AuthenticatedRunner,
+  initialization?: DesktopInitialization,
 ): ExclusiveDesktopRunner {
+  if (initialization !== undefined && (!Number.isFinite(initialization.timeoutMs) ||
+      initialization.timeoutMs <= 0 || initialization.timeoutMs > 30000)) throw new Error('startup deadline unavailable');
   let claim: ReturnType<typeof claimDesktop> | undefined;
-  let state: 'ACTIVE' | 'FINISHING' | 'CLOSED' = 'ACTIVE';
+  let state: 'PENDING' | 'INITIALIZING' | 'ACTIVE' | 'FINISHING' | 'CLOSED' = initialization ? 'PENDING' : 'ACTIVE';
   let busy = false;
   let runner: AuthenticatedRunner | undefined;
-  const cancel = () => { state = 'CLOSED'; runner?.requestCancellation(); };
+  let startupAbort: AbortController | undefined;
+  const cancel = () => { state = 'CLOSED'; startupAbort?.abort(); runner?.requestCancellation(); };
   const guard = () => {
     try {
       if (state !== 'ACTIVE' || claim === undefined) throw new Error('desktop not claimed');
@@ -145,6 +158,39 @@ export function createExclusiveDesktopRunner(
   const inner = runner;
   return Object.freeze({
     requestCancellation: cancel,
+    async initialize() {
+      if (state !== 'PENDING' || initialization === undefined) throw new Error('desktop initialization is not repeatable');
+      state = 'INITIALIZING';
+      const controller = new AbortController();
+      startupAbort = controller;
+      const started = performance.now();
+      const deadline = started + initialization.timeoutMs;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const startupGuard = () => {
+        const now = performance.now();
+        if (state !== 'INITIALIZING' || controller.signal.aborted || now < started || now >= deadline) {
+          throw new Error('desktop initialization fenced');
+        }
+        claim.assertHeld();
+      };
+      try {
+        startupGuard();
+        const interrupted = new Promise<never>((_resolve, reject) => {
+          controller.signal.addEventListener('abort', () => reject(new Error('startup cancelled')), { once: true });
+          timer = setTimeout(() => controller.abort(), initialization.timeoutMs);
+        });
+        await Promise.race([interrupted, initialization.run(startupGuard, controller.signal)]);
+        startupGuard();
+        state = 'ACTIVE';
+      } catch {
+        cancel();
+        throw new Error('desktop initialization unconfirmed; claim retained, no retry or automatic teardown');
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        controller.abort();
+        startupAbort = undefined;
+      }
+    },
     async perform(request: Parameters<AuthenticatedRunner['perform']>[0]) {
       if (state !== 'ACTIVE' || busy) return { status: 'REFUSED' as const, detail: 'desktop runner fenced or busy' };
       busy = true;

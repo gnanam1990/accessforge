@@ -38,6 +38,7 @@ export {
   probeDesktopOwned,
   probePermission,
   probeReaderActive,
+  probeReaderControlConfigured,
   probeReaderVersion,
   probeScreenUnlocked,
   runPreflight,

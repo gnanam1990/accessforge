@@ -223,7 +223,8 @@ function unknown(detail: string): ProbeResult {
  * merely not running need different things from an operator, and collapsing them into one FALSE
  * sends somebody to the wrong settings pane.
  */
-export function probeReaderActive(env: ProbeEnvironment): ProbeResult {
+/** Startup prerequisite, separate from the running-process observation. Never enables settings. */
+export function probeReaderControlConfigured(env: ProbeEnvironment): ProbeResult {
   const paths = voiceOverPreferencePaths();
   const configured = paths.some((p) => env.pathExists(p));
   if (!configured) {
@@ -251,6 +252,12 @@ export function probeReaderActive(env: ProbeEnvironment): ProbeResult {
       true,
     );
   }
+  return ok;
+}
+
+export function probeReaderActive(env: ProbeEnvironment): ProbeResult {
+  const configured = probeReaderControlConfigured(env);
+  if (configured.condition !== 'TRUE') return configured;
   if (!env.processRunning('VoiceOver')) {
     return no('VoiceOver is configured and controllable but is not running.');
   }
