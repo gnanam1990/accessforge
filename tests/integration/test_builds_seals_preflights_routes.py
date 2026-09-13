@@ -2934,6 +2934,8 @@ def _check_diagnosis_occurrence(
 
     from accessforge_persistence import diagnoses
 
+    _check_diagnosis_request(db, ref, evaluation, client)
+
     kwargs: dict[str, Any] = {
         "workspace_id": WS,
         "run_id": ref.run_id,
@@ -3006,6 +3008,83 @@ def _check_diagnosis_occurrence(
             "UPDATE finding_diagnosis SET payload=%s,deleted_at=NULL WHERE id=%s",
             (Jsonb(kwargs["analysis"]), first["diagnosisId"]),
         )
+
+
+def _check_diagnosis_request(
+    db: str,
+    ref: DispatchReference,
+    evaluation: dict[str, Any],
+    client: TestClient,
+) -> None:
+    """Reuse retained evidence; all API calls are inert request records, not model calls."""
+    from accessforge_api.auth import issue_session
+    from accessforge_persistence import diagnosis_requests
+
+    with workspace_connection(db, WS) as conn:
+        owner = issue_session(conn, user_id=OWNER)
+    client.cookies.set(SESSION_COOKIE, owner.session_token)
+    profile = client.get(f"/v1/workspaces/{WS}/diagnosis-profile")
+    assert profile.status_code == 200 and profile.headers["Cache-Control"] == "no-store"
+    body = {
+        "manifestDigest": evaluation["snapshot"]["manifestDigest"],
+        "evaluationDigest": evaluation["snapshotDigest"],
+        "modelProfileDigest": profile.json()["modelProfileDigest"],
+        "assertionId": evaluation["snapshot"]["assertions"][0]["assertionId"],
+        "componentPath": "src/form.ts",
+        "componentName": "form",
+        "excerpts": [{"path": "src/form.ts", "lineStart": 1, "lineEnd": 2}],
+        "supersedes": None,
+        "billableCallAcknowledged": True,
+    }
+    url = f"/v1/workspaces/{WS}/runs/{ref.run_id}/diagnosis-requests"
+    headers = {CSRF_HEADER: owner.csrf_token, "Idempotency-Key": str(uuid.uuid4())}
+    assert client.post(url, json=body).status_code == 403
+    assert client.post(url, json=body, headers={CSRF_HEADER: owner.csrf_token}).status_code == 400
+    invalid = {**body, "billableCallAcknowledged": False}
+    assert client.post(url, json=invalid, headers=headers).status_code == 400
+    result = client.post(url, json=body, headers=headers)
+    assert result.status_code == 202, result.text
+    assert result.headers["Cache-Control"] == "no-store"
+    decision = result.json()
+    assert decision["meaning"] == "HUMAN_REQUEST_NOT_MODEL_COMPLETION"
+    assert client.post(url, json=body, headers=headers).json() == decision
+    assert (
+        client.post(url, json={**body, "componentName": "changed"}, headers=headers).status_code
+        == 409
+    )
+    request_id = decision["requestId"]
+    read_url = f"/v1/workspaces/{WS}/diagnosis-requests/{request_id}"
+    read = client.get(read_url)
+    assert read.status_code == 200 and read.json()["invocationState"] == "NOT_STARTED"
+    assert read.json()["findingId"] is None
+    with workspace_connection(db, WS) as conn:
+        active = diagnosis_requests.require_active(conn, workspace_id=WS, request_id=request_id)
+        assert active["scope"] == body and active["requestedBy"] == OWNER
+        assert conn.execute("SELECT * FROM diagnosis_invocation").fetchall() == []
+    with pytest.raises(LookupError), workspace_connection(db, str(uuid.uuid4())) as conn:
+        diagnosis_requests.inspect(conn, request_id=request_id)
+    revoked = client.post(read_url + "/revocation", headers={CSRF_HEADER: owner.csrf_token})
+    assert revoked.status_code == 200 and revoked.json()["revokedAt"] is not None
+    assert (
+        client.post(read_url + "/revocation", headers={CSRF_HEADER: owner.csrf_token}).json()
+        == revoked.json()
+    )
+    with pytest.raises(diagnosis_requests.RequestRefused), workspace_connection(db, WS) as conn:
+        diagnosis_requests.require_active(conn, workspace_id=WS, request_id=request_id)
+    with pytest.raises(psycopg.IntegrityError), workspace_connection(db, WS) as conn:
+        conn.execute("UPDATE diagnosis_request SET revoked_at=NULL WHERE id=%s", (request_id,))
+    with workspace_connection(db, WS) as conn:
+        viewer = issue_session(conn, user_id=VIEWER)
+    client.cookies.set(SESSION_COOKIE, viewer.session_token)
+    assert (
+        client.post(
+            url,
+            json=body,
+            headers={CSRF_HEADER: viewer.csrf_token, "Idempotency-Key": str(uuid.uuid4())},
+        ).status_code
+        == 403
+    )
+    client.cookies.set(SESSION_COOKIE, owner.session_token)
 
 
 @pytest.fixture(scope="module")
