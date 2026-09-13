@@ -54,6 +54,7 @@ export function createExecutionBootstrap(options: ExecutionBootstrapOptions): Ex
     commitDispatch: (actionId, origin) => requireMachine().commitDispatch(actionId, origin),
     completeAction: (actionId, status) => requireMachine().completeAction(actionId, status),
     retainObservation: (command, observation, capturedAt) => requireMachine().retainObservation(command, observation, capturedAt),
+    retainRuntimePreflight: (command, report, capturedAt) => requireMachine().retainRuntimePreflight(command, report, capturedAt),
     finish: () => requireMachine().finish(),
   };
   return createGuidepupPhysicalSafariRunner({ ...runtime, session, readerStartup: {

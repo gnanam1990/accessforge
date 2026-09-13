@@ -863,6 +863,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/action-intents',
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/dispatch',
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/observation',
+  '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/preflight',
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/result',
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/finish',
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/reader-startup-consent',
