@@ -22,4 +22,5 @@ Web TypeScript/Vite production build and diff checks passed. Four focused synthe
 are authored for CI only. No local test suite, browser/reader loop, actual consent or OS action was run.
 
 Still pending: this branch's GitHub CI/merge, deployed operator-to-native provisioning and actual
-physical reader/runtime proof. PR38 review findings must be corrected before that parent is merged.
+physical reader/runtime proof. Restacked onto PR38 correctiond1ce474; that parent requires its own
+fresh CI before merge. PR37 is already merged into main at30ce2f0.
