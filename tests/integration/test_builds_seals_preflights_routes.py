@@ -2408,7 +2408,7 @@ def test_authenticated_execution_finish(
                 else 1,
             },
         )
-        assert response.status_code == (200 if closes else 403)
+        assert response.status_code == (200 if closes else 400 if case == "stop-only-bool" else 403)
         if closes:
             assert response.json()["status"] == "FINALIZING"
             assert response.json()["outcome"] == "NOT_EVALUATED"
