@@ -55,6 +55,33 @@ same OS user is a deployment boundary, not established by executable ownership c
 
 ## Evidence limits
 
+### Session-bound physical preflight
+
+`createPhysicalSafariRunner` in `src/physical-preflight.ts` supplies host/session preflight and
+native Safari origin. Pass the normal runner dependencies plus `physicalPreflight` containing
+`expectedDesktopSessionId` and `observeRuntimeEvidence(signal)`. The latter reads owned setup,
+capture and deployment observations; it must not reset, type or start a reader and should honor its
+AbortSignal. The collector uses the same monotonic clock as the action supervisor.
+
+The expected audit ID must be independently assigned to the dedicated runner and match the
+controller's desktop-session binding, not derived by accepting the current foreground session.
+The host compares console and process identity using Apple's read-only
+[SessionGetInfo](https://developer.apple.com/documentation/security/sessiongetinfo(_:_:_:)).
+The ioreg parser supports arrays of registry roots and rejects ambiguous active consoles or malformed
+lock/identity values. Merely finding a signed-in console does not establish ownership.
+
+The collector samples console identity before/after its read and measures clock progress rather
+than accepting caller-supplied healthy-clock flags. Nonfinite/backwards/non-advancing clocks,
+session drift/ambiguity and concurrent/late reads fence reuse. The async evidence read has a bounded
+deadline; synchronous OS commands retain their individual timeouts, and over-budget completed
+samples are refused as stale. Missing setup/build/speech remains UNKNOWN. The collector neither
+mints a canonical runtime receipt nor changes the finalizer's missing-identity result. Session
+equality is not exclusivity against another runner/process in the same login session; deployment
+and lease isolation remain required.
+
+TypeScript builds and a compile-only Swift expression check passed. Ownership/ioreg/clock/collector
+cases are committed for CI and were not run locally. No physical-reader test loop was performed.
+
 TypeScript and native Swift compilation passed. Earlier focused guard/runner cases passed with
 synthetic physical adapters. A prior live read-only diagnostic refused outside its target; the
 controlled Safari smoke did not establish a successful observation (document unavailable/different,

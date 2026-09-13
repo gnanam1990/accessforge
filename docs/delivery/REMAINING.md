@@ -29,6 +29,11 @@ factory (desktop native README/handoff08). This supersedes earlier local/uncommi
 positive physical Safari path is not proven, and this read-only probe neither starts VoiceOver nor
 completes focus/effect authorization or full execution bootstrap. No profile gate has been relaxed.
 
+Physical preflight now binds the assigned audit session to console/process observations, samples
+the supervisor clock and rejects stale/drifted reads. The physical Safari factory wires this to the
+origin guard. Genuine setup/deployment/capture evidence and canonical runtime identity ingestion
+remain pending; matching a session ID does not establish exclusivity against another local runner.
+
 The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
 execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
 completion. Next build work is trusted runtime identity/probe ingestion and the remaining
