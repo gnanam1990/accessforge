@@ -344,27 +344,25 @@ describe('the export screen', () => {
 })
 
 describe('the repair workspace', () => {
-  it('says no repair can exist rather than showing an inert diff and a disabled button', async () => {
+  it('reads the real patch endpoint and gives no approval for an absent record', async () => {
     const server = createFakeServer(MEMBER)
     renderAt(server, '/w/ws-1/patches/p-1')
 
     await screen.findByRole('heading', { level: 1, name: 'Proposed repair' })
-    expect(
-      screen.getByRole('heading', { name: 'No repair can exist in this build' }),
-    ).toBeVisible()
+    await screen.findByText('no such repair')
+    expect(server.calls).toContain('GET /v1/workspaces/ws-1/patches/p-1')
     // No approval control of any kind: the thing that must never appear before there is something
     // to approve.
     expect(screen.queryByRole('button', { name: /approve/i })).toBeNull()
-    expect(screen.getByText(/would look the same as one waiting for data/)).toBeVisible()
+    expect(screen.queryByText(/No repair can exist in this build/)).not.toBeInTheDocument()
   })
 
-  it('says what each missing piece would have to establish', async () => {
+  it('does not substitute a fake proposal when the endpoint is unavailable', async () => {
     const server = createFakeServer(MEMBER)
     renderAt(server, '/w/ws-1/patches/p-1')
     await screen.findByRole('heading', { level: 1, name: 'Proposed repair' })
-    expect(screen.getByText(/Reviewer agreement is not a substitute for reproduction/)).toBeVisible()
-    expect(
-      screen.getByText(/does not override a failing functional requirement/),
-    ).toBeVisible()
+    await screen.findByText('no such repair')
+    expect(screen.queryByRole('heading', { name: 'Exact proposal and base' })).not.toBeInTheDocument()
+    expect(server.bodies).toHaveLength(0)
   })
 })

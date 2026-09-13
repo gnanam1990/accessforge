@@ -28,6 +28,7 @@ import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
 import { useFindingId } from './useFindingId'
+import { FindingPatchesSection } from './FindingPatchesSection'
 import { FindingDiagnosisSection } from './FindingDiagnosisSection'
 
 /** What each status means, in the words a reader needs rather than the enum's. */
@@ -158,6 +159,7 @@ export const FindingScreen = (): JSX.Element => {
               </ol>
             )}
           </section>
+          <FindingPatchesSection key={`${workspaceId}:${findingId}`} workspaceId={workspaceId} findingId={findingId} />
         </>
       )}
     </ResourceView>
