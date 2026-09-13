@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -155,3 +155,74 @@ def list_for_attempt(
         (attempt_id,),
     ).fetchall()
     return [_view(row) for row in rows]
+
+
+def for_runtime_preflight(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    session: dict[str, Any],
+    dispatched_at: datetime,
+    captured_at: datetime,
+    manifest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve server-owned measurement at the exact live action boundary, never browser JSON.
+
+    Caller holds the authenticated session/run/lease locks and has revalidated current manual
+    authority. No candidate binding or qualifying sample is missing evidence, not observed BUILD.
+    """
+    binding = conn.execute(
+        "SELECT b.*,a.policy_digest,a.image_id,a.daemon_id,e.plan FROM candidate_run_binding b "
+        "JOIN candidate_regression_attempt a ON a.id=b.regression_attempt_id "
+        "JOIN candidate_endpoint e ON e.attempt_id=a.id WHERE b.run_id=%s",
+        (session["run_id"],),
+    ).fetchone()
+    if binding is None:
+        return None
+    candidate_runs.assert_lease(
+        conn,
+        run_id=str(session["run_id"]),
+        lease_id=str(session["lease_id"]),
+        epoch=int(session["epoch"]),
+    )
+    for value in reversed(list_for_attempt(conn, attempt_id=str(binding["regression_attempt_id"]))):
+        payload = value["receipt"]
+        if any(
+            payload.get(key) != expected
+            for key, expected in {
+                "workspaceId": str(session["workspace_id"]),
+                "runId": str(session["run_id"]),
+                "leaseId": str(session["lease_id"]),
+                "leaseEpoch": int(session["epoch"]),
+            }.items()
+        ):
+            continue  # Preview/earlier context cannot be attached to this runtime report.
+        observation = payload.get("observation")
+        if not isinstance(observation, dict):
+            raise Refused("retained artifact observation malformed")
+        if any(
+            payload.get(key) != expected
+            for key, expected in {
+                "buildId": str(binding["build_id"]),
+                "runtimePolicyDigest": binding["policy_digest"],
+                "endpointBindingDigest": binding["endpoint_binding_digest"],
+                "meaning": "BUILD_RECEIPT_CONTEXT_NOT_CANONICAL_EXECUTION_EVIDENCE",
+            }.items()
+        ) or any(
+            observation.get(key) != expected
+            for key, expected in {
+                "taskId": str(binding["regression_attempt_id"]),
+                "imageId": binding["image_id"],
+                "daemonId": binding["daemon_id"],
+                "candidateId": binding["plan"]["candidateId"],
+                "artifactDigest": manifest["buildArtifactDigest"],
+                "meaning": "DEPLOYED_FILESYSTEM_MEASUREMENT_NOT_EXECUTION_ATTESTATION",
+            }.items()
+        ):
+            raise Refused("artifact receipt differs from current deployment binding")
+        try:
+            measured_at = parse_rfc3339_utc(observation["observedAt"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Refused("retained artifact measurement time unavailable") from exc
+        if max(dispatched_at, captured_at - timedelta(seconds=10)) <= measured_at <= captured_at:
+            return value
+    return None
