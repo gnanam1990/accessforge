@@ -404,7 +404,7 @@ async def test_provider_timeout_after_proposal_closes_fence_without_dispatch_or_
         return ProposalAgent(navigation_tool)
 
     navigator = StrandsNavigator(
-        profile=profile(call_timeout_seconds=0.01),
+        profile=profile(call_timeout_seconds=1),
         checkpoints=sink,
         utc_now=lambda: NOW,
         agent_builder=build,

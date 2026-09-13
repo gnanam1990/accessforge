@@ -15,6 +15,7 @@ from .exports import router as exports_router
 from .findings import router as findings_router
 from .grants import router as grants_router
 from .journeys import router as journeys_router
+from .navigator_model import router as navigator_model_router
 from .patches import router as patches_router
 from .projects import router as projects_router
 from .reader_startup import router as reader_startup_router
@@ -33,6 +34,7 @@ __all__ = [
     "patches_router",
     "grants_router",
     "journeys_router",
+    "navigator_model_router",
     "projects_router",
     "reader_startup_router",
     "repair_requests_router",

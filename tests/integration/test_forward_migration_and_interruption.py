@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0047_candidate_effect_delivery.sql"
+NEWEST = "0048_navigator_model_admission.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -139,6 +139,44 @@ def test_data_written_under_the_previous_rules_survives_the_migration(disposable
     assert row is not None and row["release_reason"] == "OPERATOR_RESET"
 
 
+def test_navigator_admission_upgrade_preserves_prior_holds_without_inventing_consent(
+    disposable: str,
+) -> None:
+    _apply_through(disposable, "0047_candidate_effect_delivery.sql")
+    lease = _seed_released_lease(disposable, reason="OPERATOR_RESET")
+    with connect(disposable) as conn:
+        run = conn.execute("SELECT run_id FROM desktop_lease WHERE id=%s", (lease,)).fetchone()
+        assert run is not None
+        insert = (
+            "INSERT INTO diagnosis_invocation(operation_id,workspace_id,run_id,request_digest,"
+            "reserved_tokens,purpose) VALUES(%s,%s,%s,repeat('a',64),%s,%s)"
+        )
+        for purpose in ("DIAGNOSIS", "REPAIR"):
+            conn.execute(insert, (str(uuid.uuid4()), WS, run["run_id"], 50000, purpose))
+        before = conn.execute("SELECT * FROM diagnosis_invocation ORDER BY purpose").fetchall()
+        assert conn.execute("SELECT to_regclass('navigator_model_consent') AS name").fetchone() == {
+            "name": None
+        }
+    migrate(disposable)
+    with connect(disposable) as conn:
+        assert (
+            conn.execute("SELECT * FROM diagnosis_invocation ORDER BY purpose").fetchall() == before
+        )
+        assert conn.execute("SELECT count(*) AS n FROM navigator_model_consent").fetchone() == {
+            "n": 0
+        }
+        assert conn.execute("SELECT count(*) AS n FROM navigator_model_turn").fetchone() == {"n": 0}
+        conn.execute(insert, (str(uuid.uuid4()), WS, run["run_id"], 150000, "NAVIGATOR"))
+        for purpose, tokens in (("NAVIGATOR", 150001), ("DIAGNOSIS", 50001), ("REPAIR", 50001)):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(insert, (str(uuid.uuid4()), WS, run["run_id"], tokens, purpose))
+        for table in ("navigator_model_consent", "navigator_model_turn"):
+            assert conn.execute(
+                "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE relname=%s",
+                (table,),
+            ).fetchone() == {"relrowsecurity": True, "relforcerowsecurity": True}
+
+
 def test_dispatch_migration_does_not_invent_historical_machine_credentials(disposable: str) -> None:
     _apply_through(disposable, "0034_manual_execution_approval.sql")
     lease = _seed_released_lease(disposable, reason="OPERATOR_RESET")
@@ -159,6 +197,7 @@ def test_dispatch_migration_does_not_invent_historical_machine_credentials(dispo
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -185,6 +224,7 @@ def test_session_migration_does_not_mint_historical_execution_authority(disposab
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -234,6 +274,7 @@ def test_manual_approval_migration_preserves_old_decisions_without_creating_cons
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -275,6 +316,7 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -312,6 +354,7 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -380,6 +423,7 @@ def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authori
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -421,6 +465,7 @@ def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) ->
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -476,6 +521,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -518,6 +564,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -577,6 +624,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -653,6 +701,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -713,6 +762,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0044_repair_delivery.sql",
         "0045_candidate_artifact_observation.sql",
         "0046_candidate_action_effect_permit.sql",
+        "0047_candidate_effect_delivery.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:

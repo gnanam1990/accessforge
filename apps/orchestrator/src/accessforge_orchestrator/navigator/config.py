@@ -7,6 +7,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from accessforge_domain.navigator_model import validate_profile
+
 PINNED_STRANDS_VERSION = "1.55.1"
 PINNED_NAVIGATOR_MODEL_ID = "global.anthropic.claude-sonnet-4-6"
 PINNED_NAVIGATOR_REGION = "us-east-1"
@@ -42,15 +44,16 @@ class NavigatorModelProfile(BaseModel):
     invocation_output_tokens: int = Field(default=1024, ge=64, le=4096)
     invocation_total_tokens: int = Field(default=12000, ge=512, le=50000)
     max_context_characters: int = Field(default=24000, ge=1000, le=100000)
-    call_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    # Integral floats are accepted for existing JSON clients; the shared validator rejects
+    # fractional seconds so every accepted profile can be sealed canonically.
+    call_timeout_seconds: float = Field(default=30, ge=1, le=120)
     model_attempts: int = Field(default=2, ge=1, le=3)
     retry_initial_delay_seconds: int = Field(default=1, ge=1, le=5)
     retry_max_delay_seconds: int = Field(default=2, ge=1, le=10)
 
     @model_validator(mode="after")
     def retry_delays_are_ordered(self) -> Self:
-        if self.retry_max_delay_seconds < self.retry_initial_delay_seconds:
-            raise ValueError("retry max delay cannot be below the initial delay")
+        validate_profile(self.model_dump(mode="json"))
         return self
 
     def assert_installed_sdk(self) -> None:
