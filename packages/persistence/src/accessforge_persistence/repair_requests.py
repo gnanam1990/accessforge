@@ -14,7 +14,7 @@ from accessforge_domain.patch_policy import ProposedChange, inspect_patch
 from accessforge_domain.repair_requests import model_profile, validate
 from accessforge_domain.timestamps import to_rfc3339_utc
 
-from . import evaluations
+from . import evaluations, repair_deliveries
 from .diagnosis_requests import operation_digest
 
 
@@ -170,6 +170,7 @@ def inspect(conn: psycopg.Connection[Any], *, request_id: str) -> dict[str, Any]
     return {
         **_view(row),
         "invocationState": "NOT_STARTED" if invocation is None else invocation["status"],
+        "delivery": repair_deliveries.by_request(conn, request_id=request_id),
     }
 
 
