@@ -1,8 +1,7 @@
 """Finalize a stopped manual attempt from immutable retained inputs, never caller verdict JSON.
 
-Current control-plane receipts do not supply physical source/build/profile identity observations.
-Those missing identities therefore remain INCONCLUSIVE; a stored preflight admission is not an
-execution preflight. This command still persists the deterministic reasons and evidence snapshot.
+Runtime preflight and server-bound deployed artifact measurements are interpreted separately from
+stored admission. Missing source/profile/environment/model identities remain INCONCLUSIVE.
 """
 
 from __future__ import annotations
@@ -36,12 +35,13 @@ from accessforge_orchestrator.execution_artifacts import (
     _bundle,
     _context,
 )
+from accessforge_orchestrator.runtime_evidence import interpret as interpret_runtime
 from accessforge_persistence import evaluations, journeys, runs, workspace_connection
 from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements
 
-EVALUATOR_VERSION = "1.0.0"
+EVALUATOR_VERSION = "1.1.0"
 
 
 def _retained(
@@ -199,12 +199,15 @@ def _decide(
         IdentityKind.EVALUATOR: EVALUATOR_VERSION,
         IdentityKind.ASSERTION_SET: digest(assertions.canonical_form()),
     }
+    runtime = interpret_runtime(snapshots, row)
+    if runtime.observed_build is not None:
+        observed[IdentityKind.BUILD] = runtime.observed_build
     identity = revalidate(sealed_identities, observed)
     evidence_digest = digest({"manifestDigest": row["manifest_digest"], "artifacts": artifact_ids})
     verdict = decide(
         identity=identity,
         completeness_reasons=(),
-        preflight_passed=False,
+        preflight_passed=runtime.preflight_passed,
         assertions=evaluated,
         completion=CompletionObservation(
             completion,
@@ -222,8 +225,7 @@ def _decide(
         "evidenceSetDigest": evidence_digest,
         "evaluatorVersion": EVALUATOR_VERSION,
         "outcome": verdict.outcome.value,
-        "reasons": list(verdict.reasons)
-        + ["stored preflight admission is not physical execution preflight proof"],
+        "reasons": list(verdict.reasons) + list(runtime.reasons),
         "scope": verdict.scope,
         "sealedIdentities": dict(sealed_identities),
         "observedIdentities": dict(observed),
