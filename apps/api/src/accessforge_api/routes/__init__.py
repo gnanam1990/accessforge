@@ -18,6 +18,7 @@ from .journeys import router as journeys_router
 from .patches import router as patches_router
 from .projects import router as projects_router
 from .reader_startup import router as reader_startup_router
+from .repair_requests import router as repair_requests_router
 from .runners import router as runners_router
 from .runs import router as runs_router
 from .schedules import router as schedules_router
@@ -34,6 +35,7 @@ __all__ = [
     "journeys_router",
     "projects_router",
     "reader_startup_router",
+    "repair_requests_router",
     "runners_router",
     "runs_router",
     "schedules_router",
