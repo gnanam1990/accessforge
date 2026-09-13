@@ -7,13 +7,14 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_orchestrator.navigator.projection import ProjectionRefused, _observation
 
 
 def test_unknown_and_genuine_silence_are_not_conflated() -> None:
     identifier, now = str(uuid4()), datetime.now(UTC)
     action = {"id": identifier, "action_sequence": 1, "dispatched_at": now, "result_at": now}
-    base = {"actionId": identifier, "actionSequence": 1, "capturedAtUtc": now.isoformat()}
+    base = {"actionId": identifier, "actionSequence": 1, "capturedAtUtc": to_rfc3339_utc(now)}
     unknown = _observation(
         {**base, "provenance": "CAPTURE_UNKNOWN", "reason": "unavailable"}, action
     )
@@ -38,7 +39,7 @@ def test_changed_extra_or_oversized_reader_content_is_refused(change: dict[str, 
     source = {
         "actionId": identifier,
         "actionSequence": 1,
-        "capturedAtUtc": now.isoformat(),
+        "capturedAtUtc": to_rfc3339_utc(now),
         "phrase": "Name",
         **change,
     }
