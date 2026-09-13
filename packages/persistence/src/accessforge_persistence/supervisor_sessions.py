@@ -29,7 +29,14 @@ from accessforge_domain.origins import normalize_origin
 from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS, AmbiguityReason
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
-from . import reader_startup_consents, runners, runs, sequencer, supervisor_dispatch
+from . import (
+    candidate_observations,
+    reader_startup_consents,
+    runners,
+    runs,
+    sequencer,
+    supervisor_dispatch,
+)
 from .evidence import artifacts
 from .evidence import session as session_evidence
 
@@ -454,7 +461,7 @@ def retain_runtime_preflight(
     historical admission records or arbitrary diagnostic text being substituted for this report.
     FALSE and UNKNOWN stay visible; retention does not authorize an action or promote an outcome.
     """
-    row, _ = _live(conn, workspace_id, session_id, token)
+    row, manifest = _live(conn, workspace_id, session_id, token)
     action = _action(conn, row, action_id)
     if action["dispatched_at"] is None:
         raise Refused("runtime preflight requires a dispatched unresolved action")
@@ -510,6 +517,16 @@ def retain_runtime_preflight(
             or stream["admitted_through"] < 2
         ):
             raise Refused("original open lifecycle stream required")
+        try:
+            artifact_receipt = candidate_observations.for_runtime_preflight(
+                conn,
+                session=row,
+                dispatched_at=action["dispatched_at"],
+                captured_at=captured,
+                manifest=manifest,
+            )
+        except candidate_observations.Refused as exc:
+            raise Refused("runtime build measurement authority unavailable") from exc
         event_id = session_evidence.emit(
             conn,
             row,
@@ -519,6 +536,7 @@ def retain_runtime_preflight(
             event_type="PREFLIGHT_RESULT",
             source=source,
             provenance="RUNTIME_PROBE_REPORT",
+            build_artifact_receipt=artifact_receipt,
         )
     return {
         "sessionId": session_id,
