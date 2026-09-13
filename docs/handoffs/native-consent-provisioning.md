@@ -2,7 +2,9 @@
 
 This change connects an existing operator consent decision to the native bootstrap. It adds no
 consent issuance, OS permission changes, reader startup, deployment or production profile proof.
-It builds on PR #38; the separate operator UI is PR #39.
+PR #38 is merged into main at dd1324c; this branch is restacked onto that commit. The separate
+operator UI is PR #39. Original provisioning head dc615d0 passed Node, documentation and security
+CI; the restacked head requires fresh exact-head CI before merge.
 
 ## Operator export
 
