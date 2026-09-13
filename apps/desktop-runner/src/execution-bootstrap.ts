@@ -4,6 +4,7 @@ import { NativeExecutionSession, parseReference, parseDispatchEnvelope, type Rec
 import { createGuidepupPhysicalSafariRunner } from './physical-preflight.js';
 import type { ExclusiveDesktopRunner } from './desktop-claim.js';
 import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from './reader-startup-consent.js';
+import { readStartupConsentReference } from './startup-provisioning.js';
 
 export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhysicalSafariRunner>[0], 'session'> & {
   /** Independently provisioned private host configuration, never navigator fields. */
@@ -13,6 +14,17 @@ export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhy
   /** Exact grant and sealed identities from private operator provisioning, never navigator input. */
   readonly readerStartupConsent: ReaderStartupConsentScope;
 };
+
+/** Operator CLI export -> private host reference -> existing exact authenticated startup path.
+ * Loading the file neither creates consent nor bypasses the production profile/physical gates.
+ */
+export function createProvisionedExecutionBootstrap(options: Omit<ExecutionBootstrapOptions, 'readerStartupConsent'> & {
+  readonly readerStartupConsentPath: string;
+}): ExclusiveDesktopRunner {
+  const { readerStartupConsentPath, ...runtime } = options;
+  const readerStartupConsent = readStartupConsentReference(readerStartupConsentPath, runtime.receiver.localReference);
+  return createExecutionBootstrap({ ...runtime, readerStartupConsent });
+}
 
 /**
  * Construction claims the desktop and validates inert runner configuration. initialize() then
