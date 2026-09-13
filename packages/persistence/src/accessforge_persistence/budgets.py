@@ -304,7 +304,7 @@ def usage_since(
     reservation = conn.execute(
         "SELECT coalesce(sum(greatest(0,i.reserved_tokens-coalesce(u.quantity,0))),0) AS reserved "
         "FROM diagnosis_invocation i LEFT JOIN usage_event u ON u.workspace_id=i.workspace_id "
-        "AND u.event_key='diagnosis:'||i.operation_id::text||':usage' "
+        "AND u.event_key=lower(i.purpose)||':'||i.operation_id::text||':usage' "
         "AND u.kind='MODEL_TOKENS' AND u.basis IN ('MEASURED','ESTIMATED') "
         "AND u.occurred_at>%s "
         "WHERE i.workspace_id=%s AND (i.status IN ('STARTED','UNCONFIRMED') "

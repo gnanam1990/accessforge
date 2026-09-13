@@ -2949,6 +2949,7 @@ def _check_diagnosis_occurrence(
         "analysis": {
             "support": "SOURCE_LINKED",
             "hypothesis": {"uncertainty": "synthetic fixture"},
+            "repair_brief": {"allowed_files": ["src/form.ts"], "stop_recommendation": None},
         },
     }
     with workspace_connection(db, WS) as conn:
@@ -2963,6 +2964,8 @@ def _check_diagnosis_occurrence(
             diagnoses.retain(conn, **{**kwargs, "projection_digest": "c" * 64})
         with conn.transaction(), pytest.raises(diagnoses.DiagnosisRefused):
             diagnoses.retain(conn, **{**kwargs, "operation_id": str(uuid.uuid4())})
+    _check_repair_request(db, ref, first, client)
+    with workspace_connection(db, WS) as conn:
         second = diagnoses.retain(
             conn,
             **{
@@ -3008,6 +3011,107 @@ def _check_diagnosis_occurrence(
             "UPDATE finding_diagnosis SET payload=%s,deleted_at=NULL WHERE id=%s",
             (Jsonb(kwargs["analysis"]), first["diagnosisId"]),
         )
+
+
+def _check_repair_request(
+    db: str, ref: DispatchReference, diagnosis: dict[str, Any], client: TestClient
+) -> None:
+    """CI-only real DB/API consent and shared reservation; no model invocation."""
+    from accessforge_api.auth import issue_session
+    from accessforge_persistence import budgets, diagnosis_invocations, idempotency, patches
+    from accessforge_persistence import repair_requests as store
+
+    finding = diagnosis["findingId"]
+    with workspace_connection(db, WS) as conn:
+        project = conn.execute("SELECT project_id FROM run WHERE id=%s", (ref.run_id,)).fetchone()
+        assert project is not None
+        conn.execute(
+            "UPDATE project SET repository_authorized_by=%s WHERE id=%s",
+            (OWNER, project["project_id"]),
+        )
+        patches.configure_repair_surface(
+            conn,
+            workspace_id=WS,
+            project_id=str(project["project_id"]),
+            paths=("src",),
+            configured_by=OWNER,
+        )
+        owner = issue_session(conn, user_id=OWNER)
+    client.cookies.set(SESSION_COOKIE, owner.session_token)
+    base = f"/v1/workspaces/{WS}/findings/{finding}"
+    options = client.get(base + "/repair-options", params={"diagnosisId": diagnosis["diagnosisId"]})
+    assert options.status_code == 200, options.text
+    assert options.headers["Cache-Control"] == "no-store"
+    body = options.json()["scope"]
+    key = str(uuid.uuid4())
+    headers = {CSRF_HEADER: owner.csrf_token, "Idempotency-Key": key}
+    assert client.post(base + "/repair-requests", json=body, headers=headers).status_code == 400
+    body["billableCallAcknowledged"] = True
+    assert client.post(base + "/repair-requests", json=body).status_code == 403
+    accepted = client.post(base + "/repair-requests", json=body, headers=headers)
+    assert accepted.status_code == 202, accepted.text
+    request_id = accepted.json()["requestId"]
+    endpoint = f"/v1/workspaces/{WS}/repair-requests/{request_id}"
+    assert accepted.json()["invocationState"] == "NOT_STARTED"
+    assert (
+        client.get(base + "/repair-requests/operation", params={"operationKey": key}).json()[
+            "requestId"
+        ]
+        == request_id
+    )
+    with workspace_connection(db, WS) as conn:
+        assert store.require_active(conn, request_id=request_id)["scope"] == body
+        entitlement = budgets.current_entitlement(conn, workspace_id=WS)
+
+        def counted() -> int:
+            return next(
+                x
+                for x in budgets.usage_since(conn, workspace_id=WS, entitlement=entitlement)
+                if x.kind == "MODEL_TOKENS"
+            ).counted_against_limit
+
+        before = counted()
+        diagnosis_invocations.reserve(
+            conn,
+            workspace_id=WS,
+            run_id=ref.run_id,
+            operation_id=request_id,
+            request_digest="c" * 64,
+            tokens=10,
+            purpose="REPAIR",
+        )
+        assert counted() == before + 10
+        diagnosis_invocations.finish(
+            conn,
+            workspace_id=WS,
+            operation_id=request_id,
+            request_digest="c" * 64,
+            status="UNCONFIRMED",
+            purpose="REPAIR",
+        )
+        assert counted() == before + 10
+    revoked = client.post(endpoint + "/revocation", headers={CSRF_HEADER: owner.csrf_token})
+    assert revoked.status_code == 200 and revoked.json()["invocationState"] == "UNCONFIRMED"
+    with workspace_connection(db, WS) as conn:
+        idempotency.purge_expired(conn, now=datetime.now(UTC) + timedelta(days=2))
+    replay = client.post(base + "/repair-requests", json=body, headers=headers)
+    assert replay.status_code == 202 and replay.json()["requestId"] == request_id
+    assert replay.json()["expiresAt"] == accepted.json()["expiresAt"]
+    assert replay.json()["revokedAt"] == revoked.json()["revokedAt"]
+    assert (
+        client.post(
+            base + "/repair-requests",
+            json={**body, "supersedes": request_id},
+            headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
+        ).status_code
+        == 409
+    )
+    with workspace_connection(db, WS) as conn, pytest.raises(store.RequestRefused):
+        store.require_active(conn, request_id=request_id)
+    with workspace_connection(db, WS) as conn, pytest.raises(psycopg.IntegrityError):
+        conn.execute("UPDATE repair_request SET revoked_at=NULL WHERE id=%s", (request_id,))
+    with workspace_connection(db, str(uuid.uuid4())) as conn, pytest.raises(LookupError):
+        store.inspect(conn, request_id=request_id)
 
 
 def _check_diagnosis_request(
