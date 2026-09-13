@@ -24,6 +24,7 @@ from accessforge_orchestrator.navigator.native_transport import (
 
 @pytest.mark.skipif(os.name != "posix", reason="private Unix transport requires POSIX")
 @pytest.mark.parametrize("fault", [None, "foreign-reply", "lost-reply"])
+@pytest.mark.asyncio
 async def test_native_client_transmits_only_fixture_ref_and_never_retries(
     fault: str | None,
 ) -> None:
