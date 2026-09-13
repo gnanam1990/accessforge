@@ -106,8 +106,11 @@ Native machine sessions, current-authority action intents, one-shot dispatch com
 result acknowledgements are connected through real HTTP. The authenticated runner now composes
 the local fsynced journal, mandatory live physical guards and existing reader-adapter interface.
 Lost acknowledgements or ambiguity fence further input; ambiguous results interrupt/quarantine.
-This bridge was exercised with synthetic physical adapters, not a live reader. Still pending:
-concrete production physical guards and reader startup, observer ingestion/closure and finalization,
+Reader observations now travel through the session into the canonical sequencer, bound to one
+dispatched action, with source digests and explicit fixture redaction; capture UNKNOWN remains
+distinct from silence. This bridge was exercised with synthetic physical adapters, not a live reader.
+Still pending: concrete production physical guards and reader startup, independent application
+observer ingestion, producer closure, full action/lifecycle evidence, artifacts and finalization,
 remaining action/build UNKNOWN recovery,
 and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;

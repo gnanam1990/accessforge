@@ -12,6 +12,7 @@ export interface ExecutionSessionPort {
   retainIntent(command: unknown): Promise<Readonly<Record<string, unknown>>>;
   commitDispatch(actionId: string, origin: string): Promise<ActionCommand>;
   completeAction(actionId: string, status: 'SUCCEEDED' | 'FAILED' | 'AMBIGUOUS'): Promise<void>;
+  retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string): Promise<void>;
 }
 
 export interface AuthenticatedRunnerOptions {
@@ -58,7 +59,16 @@ export class AuthenticatedRunner {
       throw new Error('local supervisor does not match the authenticated session');
     }
     const physicalDispatch = createVoiceOverDispatch(options.adapter, {
-      utc: options.clock.utc, recordObservation: options.recordObservation,
+      utc: options.clock.utc,
+      recordObservation: async (observation) => {
+        const command = this.#serverCommand;
+        if (command === undefined || !this.#executing || this.#fenced || this.#stopping) {
+          throw new Error('reader evidence outside active dispatch');
+        }
+        await options.recordObservation(observation);
+        if (!this.#executing || this.#fenced || this.#stopping) throw new Error('reader evidence fenced');
+        await options.session.retainObservation(command, observation, options.clock.utc());
+      },
     });
     this.#supervisor = new Supervisor({
       clock: options.clock, actionTimeoutMs: options.actionTimeoutMs,

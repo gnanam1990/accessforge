@@ -5,6 +5,8 @@ import {
 } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { digest } from '@accessforge/contracts';
+import type { RawObservation, UnknownObservation } from '@accessforge/at-voiceover';
 import type { ActionCommand } from './supervisor.js';
 
 export interface DispatchReference {
@@ -239,6 +241,8 @@ export class NativeExecutionSession {
   #committed = false;
   #busy = false;
   #fenced = false;
+  #observationSequence = 0;
+  #observationPending = false;
   readonly receipt: Readonly<Record<string, unknown>>;
 
   private constructor(config: ReceiverConfig, secret: string, receipt: Record<string, unknown>) {
@@ -360,9 +364,45 @@ export class NativeExecutionSession {
       this.#current = undefined;
       this.#intentPending = false;
       this.#committed = false;
+      this.#observationPending = false;
     } catch {
       this.#fenced = true;
       throw new ReceptionUnknown('action result acknowledgement unknown; retain fencing');
+    } finally { this.#busy = false; }
+  }
+
+  async retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string): Promise<void> {
+    if (this.#busy || this.#fenced || !this.#committed || this.#observationPending ||
+        this.#current?.id !== command.actionId || this.#current.sequence !== command.sequence) {
+      throw new ReceiverRefused('reader observation identity unavailable');
+    }
+    this.#busy = true;
+    this.#observationPending = true;
+    try {
+      const unknown = 'provenance' in observation && observation.provenance === 'CAPTURE_UNKNOWN';
+      if (!unknown && (!('actionId' in observation) || observation.actionId !== command.actionId ||
+          observation.actionSequence !== command.sequence)) throw new Error('reader action identity');
+      // Construct a closed source vocabulary. Diagnostic DOM, selectors, paths and answer keys
+      // never cross this channel. The server independently redacts exact fixture values.
+      const sourceRecord = unknown
+        ? { actionId: command.actionId, actionSequence: command.sequence, capturedAtUtc,
+            provenance: 'CAPTURE_UNKNOWN', reason: (observation as UnknownObservation).reason }
+        : { actionId: command.actionId, actionSequence: command.sequence,
+            capturedAtUtc: (observation as RawObservation).capturedAtUtc,
+            phrase: (observation as RawObservation).phrase };
+      if (Buffer.byteLength(JSON.stringify(sourceRecord)) > 32768) throw new Error('reader source bound');
+      const sourceRecordDigest = digest(sourceRecord);
+      const producerSequence = ++this.#observationSequence;
+      const result = exactObject(await this.#post(`actions/${command.actionId}/observation`,
+        { producerSequence, sourceRecordDigest, sourceRecord }),
+        ['sessionId', 'actionId', 'eventId', 'producerSequence', 'submittedSourceRecordDigest', 'meaning']);
+      if (uuid(result.sessionId) !== this.#sessionId || uuid(result.actionId) !== command.actionId ||
+          result.producerSequence !== producerSequence || result.submittedSourceRecordDigest !== sourceRecordDigest ||
+          result.meaning !== 'READER_OBSERVATION_RETAINED') throw new Error('reader acknowledgement identity');
+      uuid(result.eventId);
+    } catch {
+      this.#fenced = true;
+      throw new ReceptionUnknown('reader evidence acknowledgement unknown; retain fencing');
     } finally { this.#busy = false; }
   }
 }

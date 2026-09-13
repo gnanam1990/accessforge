@@ -9,19 +9,25 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
 
+from accessforge_domain.authorization import (
+    MachinePrincipal,
+    ServiceIdentity,
+    assert_may_submit_event,
+)
 from accessforge_domain.canonical import digest
 from accessforge_domain.journeys.dsl import ALLOWED_ACTIONS, ALLOWED_KEY_CHORDS
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.runners.preflight import AmbiguityReason
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
-from . import runners, supervisor_dispatch
+from . import runners, sequencer, supervisor_dispatch
 
 
 class Refused(Exception):
@@ -314,6 +320,130 @@ def commit_action_dispatch(
     if action["text_value"] is not None:
         command["text"] = action["text_value"]
     return {"sessionId": session_id, "command": command, "meaning": "ACTION_DISPATCH_COMMITTED"}
+
+
+def retain_reader_observation(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    session_id: str,
+    token: str,
+    action_id: str,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    """Retain bounded, action-bound reader evidence; never an independent effect receipt.
+
+    This serial client has one in-flight action and refuses gaps rather than acknowledging a
+    staged record as durable canonical evidence. The submitted digest covers the original source;
+    the retained source/digest explicitly cover a fixture-redacted projection. Raw text is not
+    logged or persisted here. Neither digest proves that a physical reader produced the bytes.
+    """
+    row, _ = _live(conn, workspace_id, session_id, token)
+    action = _action(conn, row, action_id)
+    if action["dispatched_at"] is None:
+        raise Refused("reader evidence requires a dispatched unresolved action")
+    if set(record) != {"producerSequence", "sourceRecordDigest", "sourceRecord"}:
+        raise Refused("invalid reader source envelope")
+    sequence, source = record["producerSequence"], record["sourceRecord"]
+    if (
+        type(sequence) is not int
+        or not 1 <= sequence <= action["action_sequence"]
+        or not isinstance(source, dict)
+    ):
+        raise Refused("invalid reader source envelope")
+    unknown = source.get("provenance") == "CAPTURE_UNKNOWN"
+    fields = {"actionId", "actionSequence", "capturedAtUtc"} | (
+        {"provenance", "reason"} if unknown else {"phrase"}
+    )
+    if (
+        set(source) != fields
+        or source["actionId"] != action_id
+        or type(source["actionSequence"]) is not int
+        or source["actionSequence"] != action["action_sequence"]
+        or not isinstance(source["capturedAtUtc"], str)
+        or len(source["capturedAtUtc"]) > 40
+    ):
+        raise Refused("reader source identity unavailable")
+    text_key = "reason" if unknown else "phrase"
+    if not isinstance(source[text_key], str) or len(source[text_key]) > 8192:
+        raise Refused("reader source exceeds text bound")
+    try:
+        if len(json.dumps(source, ensure_ascii=False).encode("utf-8")) > 32768:
+            raise ValueError("size")
+        original_digest = digest(source)
+        source_time = parse_rfc3339_utc(source["capturedAtUtc"])
+    except (ValueError, UnicodeError) as exc:
+        raise Refused("invalid reader source content") from exc
+    if record["sourceRecordDigest"] != original_digest:
+        raise Refused("reader source digest mismatch")
+    principal = MachinePrincipal(
+        service_identity=ServiceIdentity.SUPERVISOR,
+        workspace_id=workspace_id,
+        credential_id=session_id,
+        run_id=str(row["run_id"]),
+        lease_id=str(row["lease_id"]),
+    )
+    assert_may_submit_event(principal, "READER_OBSERVATION")
+    fixture = conn.execute(
+        "SELECT f.navigator_values,f.observer_config,f.nonce,r.manifest_digest "
+        "FROM run_fixture_instance f JOIN run r ON r.id=f.run_id WHERE f.run_id=%s",
+        (row["run_id"],),
+    ).fetchone()
+    if fixture is None:
+        raise Refused("reader evidence redaction context unavailable")
+    private_values = {
+        value
+        for value in [
+            *fixture["navigator_values"].values(),
+            *fixture["observer_config"].values(),
+            fixture["nonce"],
+        ]
+        if isinstance(value, str) and value
+    }
+    retained = dict(source)
+    # One substitution pass: a replacement marker must not itself be rewritten by another value.
+    if private_values:
+        pattern = "|".join(
+            re.escape(value) for value in sorted(private_values, key=len, reverse=True)
+        )
+        retained[text_key] = re.sub(pattern, "[REDACTED_FIXTURE]", source[text_key])
+    producer = f"supervisor:{session_id}:reader"
+    payload = {
+        "producerId": producer,
+        "producerSequence": sequence,
+        "sourceRecordId": action_id,
+        "submittedSourceRecordDigest": original_digest,
+        "sourceRecordDigest": digest(retained),
+        "sourceRecord": retained,
+        "redaction": "EXACT_FIXTURE_VALUES",
+        "serviceIdentity": "SUPERVISOR",
+        "eventType": "READER_OBSERVATION",
+    }
+    try:
+        admitted = sequencer.admit_record(
+            conn,
+            workspace_id=workspace_id,
+            run_id=str(row["run_id"]),
+            attempt_id=str(row["attempt_id"]),
+            lease_epoch=int(row["epoch"]),
+            producer_id=producer,
+            source_record_id=action_id,
+            producer_sequence=sequence,
+            event_type="READER_OBSERVATION",
+            manifest_digest=str(fixture["manifest_digest"]),
+            payload=payload,
+            source_time=source_time,
+        )
+    except sequencer.SequencerError as exc:
+        raise Refused("reader evidence conflict, gap or closed stream") from exc
+    return {
+        "sessionId": session_id,
+        "actionId": action_id,
+        "eventId": admitted.event_id,
+        "producerSequence": sequence,
+        "submittedSourceRecordDigest": original_digest,
+        "meaning": "READER_OBSERVATION_RETAINED",
+    }
 
 
 def record_action_completion(
