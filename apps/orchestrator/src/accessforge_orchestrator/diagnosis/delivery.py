@@ -10,8 +10,14 @@ from threading import Event
 from typing import Any
 
 from accessforge_domain.canonical import digest
+from accessforge_domain.diagnosis_requests import model_profile
 from accessforge_orchestrator.execution_artifacts import ExecutionArtifactStore, Refused
-from accessforge_persistence import diagnoses, diagnosis_invocations, workspace_connection
+from accessforge_persistence import (
+    diagnoses,
+    diagnosis_invocations,
+    diagnosis_requests,
+    workspace_connection,
+)
 
 from .agent import DiagnosisAgentProfile, DiagnosisWorker, build_diagnosis_agent
 from .projection import ExcerptRequest, prepare
@@ -34,11 +40,43 @@ async def deliver(
     profile: DiagnosisAgentProfile,
     supersedes: str | None = None,
     cancel_signal: Event | None = None,
+    authorized_request_id: str | None = None,
 ) -> dict[str, Any]:
     fence = cancel_signal or Event()
     if fence.is_set() or component_path not in {item.path for item in excerpts}:
         raise Refused("diagnosis cancelled or component outside the supplied source excerpts")
     profile_digest = digest(profile.model_dump(mode="json"))
+
+    def check_request(conn: Any, evaluation_digest: str, manifest_digest: str) -> None:
+        if authorized_request_id is None:
+            return  # Internal operator-owned callers predate the public request workflow.
+        decision = diagnosis_requests.require_active(
+            conn,
+            workspace_id=workspace_id,
+            request_id=authorized_request_id,
+        )
+        expected = {
+            "manifestDigest": manifest_digest,
+            "evaluationDigest": evaluation_digest,
+            "modelProfileDigest": profile_digest,
+            "assertionId": assertion_id,
+            "componentPath": component_path,
+            "componentName": component_name,
+            "excerpts": [
+                {"path": item.path, "lineStart": item.line_start, "lineEnd": item.line_end}
+                for item in excerpts
+            ],
+            "supersedes": supersedes,
+            "billableCallAcknowledged": True,
+        }
+        if (
+            operation_id != authorized_request_id
+            or decision["runId"] != run_id
+            or decision["requestedBy"] != requested_by
+            or decision["scope"] != expected
+        ):
+            raise Refused("diagnosis worker inputs differ from the human request")
+
     with workspace_connection(database_url, workspace_id) as conn:
         diagnoses.authorize(conn, workspace_id, requested_by)
         before = prepare(
@@ -53,6 +91,7 @@ async def deliver(
         )
         if assertion_id not in {item.assertion_id for item in before.projection.assertions}:
             raise Refused("requested diagnosis assertion is outside the original evaluation")
+        check_request(conn, before.evaluation_digest, before.manifest_digest)
         identity = diagnoses.request_digest(
             workspace_id=workspace_id,
             run_id=run_id,
@@ -123,6 +162,7 @@ async def deliver(
                 or before.projection_digest != after.projection_digest
             ):
                 raise Refused("diagnosis inputs changed during model work; no finding created")
+            check_request(conn, after.evaluation_digest, after.manifest_digest)
             retained = diagnoses.retain(
                 conn,
                 workspace_id=workspace_id,
@@ -161,3 +201,47 @@ async def deliver(
             # it. If storage is unavailable, the durable STARTED hold still prevents replay.
             exc.add_note("Invocation settlement unavailable; reconcile the original operation.")
         raise
+
+
+async def deliver_requested(
+    database_url: str,
+    store: ExecutionArtifactStore,
+    *,
+    workspace_id: str,
+    request_id: str,
+    source_scope: FrozenSourceScope,
+    cancel_signal: Event | None = None,
+) -> dict[str, Any]:
+    """Explicit worker entry point. Provider credentials and source scope belong to the host.
+
+    The caller cannot choose a requester, run, provider, source excerpt or output status. Those
+    come from the authenticated immutable decision, with current membership and scope rechecks.
+    This is potentially billable and is never called by request API handlers or app startup.
+    """
+    with workspace_connection(database_url, workspace_id) as conn:
+        decision = diagnosis_requests.require_active(
+            conn,
+            workspace_id=workspace_id,
+            request_id=request_id,
+        )
+    body = decision["scope"]
+    return await deliver(
+        database_url,
+        store,
+        workspace_id=workspace_id,
+        run_id=decision["runId"],
+        requested_by=decision["requestedBy"],
+        operation_id=request_id,
+        assertion_id=body["assertionId"],
+        component_path=body["componentPath"],
+        component_name=body["componentName"],
+        source_scope=source_scope,
+        excerpts=tuple(
+            ExcerptRequest(item["path"], item["lineStart"], item["lineEnd"])
+            for item in body["excerpts"]
+        ),
+        profile=DiagnosisAgentProfile.model_validate(model_profile()),
+        supersedes=body["supersedes"],
+        cancel_signal=cancel_signal,
+        authorized_request_id=request_id,
+    )
