@@ -7,7 +7,7 @@ OS action physically happened. Its separate local journal remains a required art
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import psycopg
 
@@ -55,7 +55,8 @@ def emit(
     source_id: str,
     event_type: str,
     source: dict[str, Any],
-) -> None:
+    provenance: Literal["CONTROL_PLANE_RECEIPT", "RUNTIME_PROBE_REPORT"] = "CONTROL_PLANE_RECEIPT",
+) -> str:
     principal = MachinePrincipal(
         service_identity=ServiceIdentity.SUPERVISOR,
         workspace_id=str(row["workspace_id"]),
@@ -68,7 +69,7 @@ def emit(
     if run is None:
         raise ValueError("sealed run missing")
     producer = f"supervisor:{row['id']}:{stream}"
-    sequencer.admit_record(
+    admitted = sequencer.admit_record(
         conn,
         workspace_id=str(row["workspace_id"]),
         run_id=str(row["run_id"]),
@@ -86,10 +87,11 @@ def emit(
             "sourceRecordDigest": digest(source),
             "sourceRecord": source,
             "serviceIdentity": "SUPERVISOR",
-            "provenance": "CONTROL_PLANE_RECEIPT",
+            "provenance": provenance,
         },
         source_time=datetime.now(UTC),
     )
+    return admitted.event_id
 
 
 def start(conn: psycopg.Connection[Any], row: dict[str, Any]) -> None:

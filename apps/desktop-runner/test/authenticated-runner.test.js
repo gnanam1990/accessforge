@@ -17,6 +17,7 @@ function harness(overrides = {}) {
     async commitDispatch(id) { calls.push('server-commit'); assert.equal(id, current.actionId); return current; },
     async completeAction(id, status) { calls.push(`server-result:${status}`); assert.equal(id, current.actionId); },
     async retainObservation(command) { calls.push('server-observation'); assert.equal(command.actionId, current.actionId); },
+    async retainRuntimePreflight(command) { calls.push('server-preflight'); assert.equal(command.actionId, current.actionId); },
     async finish() { calls.push('server-finish'); return { status: 'FINALIZING' }; },
   };
   const options = {
@@ -46,7 +47,7 @@ function harness(overrides = {}) {
 test('server claim -> fsynced local intent -> physical checks -> adapter -> observation/result -> server result', async () => {
   const h = harness();
   assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'SUCCEEDED');
-  assert.deepEqual(h.calls, ['server-intent', 'server-commit', 'local-intent', 'effect-check',
+  assert.deepEqual(h.calls, ['server-intent', 'server-commit', 'local-intent', 'server-preflight', 'effect-check',
     'adapter', 'observation', 'server-observation', 'local-result', 'server-result:SUCCEEDED']);
   assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'SUCCEEDED');
   assert.equal(h.journal.entries.length, 4);
@@ -87,6 +88,25 @@ test('lost reader evidence acknowledgement fences input and never reports known 
   assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
   assert.equal(h.calls.filter((item) => item === 'adapter').length, 1);
   assert.equal(h.calls.includes('server-result:SUCCEEDED'), false);
+});
+
+test('lost runtime preflight acknowledgement prevents adapter entry and fences the action', async () => {
+  const h = harness();
+  h.session.retainRuntimePreflight = async () => { throw new Error('lost runtime receipt'); };
+  assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'AMBIGUOUS');
+  assert.equal(h.calls.includes('adapter'), false);
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+});
+
+test('a newly UNKNOWN physical check is retained but never dispatched to the adapter', async () => {
+  let probes = 0;
+  const h = harness({ preflight: async () => ({ checks: Object.fromEntries(PREFLIGHT_CHECKS.map((key) =>
+    [key, { condition: ++probes > PREFLIGHT_CHECKS.length && key === 'SCREEN_UNLOCKED' ? 'UNKNOWN' : 'TRUE' }])) }) });
+  let observed;
+  h.session.retainRuntimePreflight = async (_command, report) => { observed = report.checks.SCREEN_UNLOCKED.condition; };
+  assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'AMBIGUOUS');
+  assert.equal(observed, 'UNKNOWN');
+  assert.equal(h.calls.includes('adapter'), false);
 });
 
 test('journal flush failure cannot invoke a physical adapter', async () => {

@@ -25,6 +25,7 @@ function fixture(t) {
       async commitDispatch() { return current; },
       async completeAction() {},
       async retainObservation() {},
+      async retainRuntimePreflight() {},
       async finish() { calls.push('finish'); return { status: 'FINALIZING' }; },
       ...overrides.session,
     };
