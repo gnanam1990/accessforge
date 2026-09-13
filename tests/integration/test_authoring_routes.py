@@ -219,14 +219,28 @@ def test_frozen_evaluation_rules_are_stored_bound_and_not_navigator_visible(
     reordered = client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers)
     assert reordered.status_code == 201
     assert reordered.json()["assertionSetDigest"] != changed.json()["assertionSetDigest"]
-    draft["budget"]["maxActions"] = 4
+    draft["budget"]["maxActions"] = 5
     assert (
         client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 400
+    )
+    draft["budget"]["maxActions"] = 6
+    assert (
+        client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 201
     )
     draft["budget"]["maxActions"] = 40
     draft["allowedActions"].remove("NEXT")
     assert (
         client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 400
+    )
+    # The existing exact-phrase rule also must not consume the final STOP slot.
+    draft["assertions"].pop()
+    draft["budget"]["maxActions"] = 3
+    assert (
+        client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 400
+    )
+    draft["budget"]["maxActions"] = 4
+    assert (
+        client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 201
     )
 
 
