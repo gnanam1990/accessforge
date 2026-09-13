@@ -2,7 +2,8 @@
 
 Journey API authoring now accepts `READER_NEXT_SEQUENCE` for `READING_ORDER` assertions. A rule
 contains 2–20 consecutive action ordinals and exact expected reader phrases. Its last ordinal must
-fit the frozen action budget and the action policy must allow NEXT. No regex, selector, inferred
+leave one frozen action-budget slot for the required STOP, and the action policy must allow NEXT.
+Exact-reader phrase rules also reserve this final slot. No regex, selector, inferred
 wording or mutable expectation list is accepted. Phrase limits are exposed by journey-capabilities.
 The rule is included in the assertion/journey digests and reviewer contract, not navigator policy.
 
