@@ -454,6 +454,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         const patchId = url.split('/patches/')[1]?.split('/')[0]
         const patch = data.patches.find((p) => p.patchId === patchId)
         if (patch === undefined) return problem(404, 'RESOURCE_NOT_FOUND', 'no such repair', 'Not found')
+        if (url.endsWith('/source-comparison')) return problem(404, 'RESOURCE_NOT_FOUND', 'no accessible comparison', 'Not found')
         return url.endsWith('/verifications') ? json({ items: data.verifications.filter((v) => v.patchId === patchId) }) : json(patch)
       }
       if (url.includes('/findings/') && method === 'GET') {
