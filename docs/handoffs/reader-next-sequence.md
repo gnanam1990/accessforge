@@ -6,6 +6,9 @@ leave one frozen action-budget slot for the required STOP, and the action policy
 Exact-reader phrase rules also reserve this final slot. No regex, selector, inferred
 wording or mutable expectation list is accepted. Phrase limits are exposed by journey-capabilities.
 The rule is included in the assertion/journey digests and reviewer contract, not navigator policy.
+All newly frozen journeys must explicitly include STOP in their selected action policy: a reserved
+slot is insufficient if the action itself is forbidden. Existing frozen policies are not widened or
+backfilled; an older policy without STOP needs a separately reviewed successor version before reuse.
 
 Example evaluationRule:
 

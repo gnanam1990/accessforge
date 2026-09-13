@@ -127,7 +127,7 @@ def _draft(project_id: str, **overrides: Any) -> dict[str, Any]:
             "observerConfig": {"expectedSubmissions": "1"},
         },
         "budget": {"maxActions": 40, "wallTimeSeconds": 300},
-        "allowedActions": ["NEXT", "ACTIVATE", "TYPE_TEXT", "KEY_CHORD", "READ_CURRENT"],
+        "allowedActions": ["NEXT", "ACTIVATE", "TYPE_TEXT", "KEY_CHORD", "READ_CURRENT", "STOP"],
         "allowedKeyChords": ["TAB", "ENTER"],
         "allowedEffects": ["FIXTURE_SUBMIT"],
     }
@@ -241,6 +241,10 @@ def test_frozen_evaluation_rules_are_stored_bound_and_not_navigator_visible(
     draft["budget"]["maxActions"] = 4
     assert (
         client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 201
+    )
+    draft["allowedActions"].remove("STOP")
+    assert (
+        client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 400
     )
 
 
