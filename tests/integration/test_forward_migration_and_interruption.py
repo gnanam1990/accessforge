@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0037_run_evaluation.sql"
+NEWEST = "0038_reader_startup_consent.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -149,6 +149,7 @@ def test_dispatch_migration_does_not_invent_historical_machine_credentials(dispo
     assert migrate(disposable) == [
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -163,7 +164,11 @@ def test_dispatch_migration_does_not_invent_historical_machine_credentials(dispo
 def test_session_migration_does_not_mint_historical_execution_authority(disposable: str) -> None:
     _apply_through(disposable, "0035_supervisor_dispatch_ticket.sql")
     lease = _seed_released_lease(disposable, reason="OPERATOR_RESET")
-    assert migrate(disposable) == ["0036_supervisor_execution_session.sql", NEWEST]
+    assert migrate(disposable) == [
+        "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
+        NEWEST,
+    ]
     with connect(disposable) as conn:
         assert conn.execute(
             "SELECT count(*) AS n FROM supervisor_execution_session"
@@ -201,6 +206,7 @@ def test_manual_approval_migration_preserves_old_decisions_without_creating_cons
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -232,6 +238,7 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -259,6 +266,7 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -317,6 +325,7 @@ def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authori
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -348,6 +357,7 @@ def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) ->
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -393,6 +403,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -425,6 +436,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -474,6 +486,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -540,6 +553,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -590,6 +604,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0034_manual_execution_approval.sql",
         "0035_supervisor_dispatch_ticket.sql",
         "0036_supervisor_execution_session.sql",
+        "0037_run_evaluation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
