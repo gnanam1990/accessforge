@@ -21,6 +21,7 @@ import type {
   Schedule,
   SealedManifest,
 } from '../api/resources'
+import type { RunEvaluation } from '../api/evaluation'
 
 export interface SessionResponse {
   readonly userId: string
@@ -48,6 +49,7 @@ export interface WorkspaceData {
   journeyVersions: JourneyVersion[]
   runners: Runner[]
   runs: Run[]
+  evaluations: RunEvaluation[]
   sealedManifests: SealedManifest[]
   attempts: AttemptRow[]
   timeline: Record<string, unknown>
@@ -121,6 +123,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     journeyVersions: [],
     runners: [],
     runs: [],
+    evaluations: [],
     sealedManifests: [],
     attempts: [],
     timeline: {
@@ -437,6 +440,12 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       }
       if (url.includes('/findings/') && method === 'GET') {
         return json(data.findings)
+      }
+      if (url.includes('/runs/') && url.endsWith('/evaluation') && method === 'GET') {
+        const id = (url.split('/runs/')[1] ?? '').split('/')[0]
+        const found = data.evaluations.find((evaluation) => evaluation.snapshot.runId === id)
+        return found === undefined
+          ? problem(404, 'RESOURCE_NOT_FOUND', 'no such resource', 'Not found') : json(found)
       }
       if (url.includes('/runs/') && method === 'GET') {
         const id = (url.split('/runs/')[1] ?? '').split('?')[0] ?? ''

@@ -19,6 +19,11 @@ The rule-authoring UI now supports the implemented exact phrase/action and indep
 families, with server-provided bounds and field-linked errors (handoff22). Further predicate families
 still need both trusted producers and their own authoring controls.
 
+The Run screen now displays the original retained evaluation, per-assertion provenance/references,
+outcome reasons and sealed/observed identity comparison (handoff23). It does not derive a new verdict
+or present historical snapshots as proof of current artifact retention. Missing/mismatched records
+remain unavailable, not invented results.
+
 The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
 execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
 completion. Next build work is trusted runtime identity/probe ingestion and the remaining
