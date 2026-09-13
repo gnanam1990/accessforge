@@ -2,6 +2,14 @@
 
 Separate branch: `feat/reader-startup-consent`, includes PR37 correction6d244ab. Not part of PR37.
 
+PR37 merged into main at30ce2f0; this branch is restacked onto that commit. PR38 baselinea45c15e
+passed all applicable CI in34743969093. The following normal-review corrections need fresh CI:
+direct consent deletion is refused while its run/workspace remain, with parent cascades preserved;
+unusable seals are normalized to consent refusal instead of500; supervisor operations are excluded
+from the human cookie/CSRF operation tables (all server paths remain in PATHS and native machine
+transport remains supported); supervisor OpenAPI no longer promises a human-limiter429 response.
+Scoped deletion/cascade, stale-environment and contract checks are authored for CI, not run locally.
+
 Implemented locally: migration0038 and persistence methods for exact per-run operator consent,
 reviewable pinned Guidepup0.34.0 effect scope, infrastructure-operator attribution, bounded expiry,
 irreversible revocation and one-time binding to an authenticated execution session. Run, runner,

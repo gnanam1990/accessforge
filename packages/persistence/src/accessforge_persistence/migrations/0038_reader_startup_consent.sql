@@ -26,6 +26,14 @@ CREATE POLICY workspace_isolation ON reader_startup_consent
 
 CREATE FUNCTION guard_reader_startup_consent() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+ IF TG_OP='DELETE' THEN
+   IF EXISTS(SELECT 1 FROM run r JOIN workspace w ON w.id=r.workspace_id
+             WHERE r.id=OLD.run_id AND r.workspace_id=OLD.workspace_id) THEN
+     RAISE EXCEPTION 'retained reader consent cannot be deleted and reissued'
+       USING ERRCODE='integrity_constraint_violation';
+   END IF;
+   RETURN OLD;
+ END IF;
  IF (to_jsonb(NEW)-'revoked_at'-'bound_session_id') IS DISTINCT FROM
     (to_jsonb(OLD)-'revoked_at'-'bound_session_id') OR
     (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at) OR
@@ -46,5 +54,5 @@ BEGIN
  RETURN NEW;
 END;
 $$;
-CREATE TRIGGER reader_startup_consent_immutable BEFORE UPDATE ON reader_startup_consent
+CREATE TRIGGER reader_startup_consent_immutable BEFORE UPDATE OR DELETE ON reader_startup_consent
  FOR EACH ROW EXECUTE FUNCTION guard_reader_startup_consent();

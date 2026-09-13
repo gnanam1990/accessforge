@@ -210,6 +210,12 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
         for method, operation in operations.items():
             if not isinstance(operation, dict):
                 continue
+            machine = path.startswith(
+                (
+                    "/v1/workspaces/{workspace_id}/supervisor-dispatches/",
+                    "/v1/workspaces/{workspace_id}/supervisor-sessions/",
+                )
+            )
             responses = operation.setdefault("responses", {})
             responses.pop(_FASTAPI_DEFAULT_VALIDATION, None)
             for status_code in ("400", "401", "403", "404", "409", "428", "429", "503"):
@@ -224,18 +230,19 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
             # documents a refusal the server cannot produce is worse than one that omits it: a
             # client writes a retry path for a response that never arrives, and the omission is
             # invisible until something depends on it.
-            if method.upper() in MUTATING_METHODS and path.startswith(_RATE_LIMITED_PREFIX):
+            if (
+                not machine
+                and method.upper() in MUTATING_METHODS
+                and path.startswith(_RATE_LIMITED_PREFIX)
+            ):
                 responses["429"] = dict(rate_limited_response)
+            if machine:
+                responses.pop("429", None)
             operation["security"] = (
                 []
                 if path in _UNAUTHENTICATED
                 else [{"supervisorBearer": []}]
-                if path.startswith(
-                    (
-                        "/v1/workspaces/{workspace_id}/supervisor-dispatches/",
-                        "/v1/workspaces/{workspace_id}/supervisor-sessions/",
-                    )
-                )
+                if machine
                 else [{"sessionCookie": []}]
                 if operation is operations.get("get")
                 else [{"sessionCookie": [], "csrfHeader": []}]

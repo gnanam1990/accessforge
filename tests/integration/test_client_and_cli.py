@@ -170,6 +170,10 @@ def test_every_generated_operation_names_a_route_the_server_serves(server: str) 
     for identifier, operation in OPERATIONS.items():
         assert operation.path in published, identifier
         assert operation.method.lower() in published[operation.path], identifier
+        assert published[operation.path][operation.method.lower()]["security"] != [
+            {"supervisorBearer": []}
+        ]
+    assert "check_supervisor_reader_startup_consent" not in OPERATIONS
 
 
 def test_rendering_a_path_without_its_parameters_is_refused() -> None:
@@ -452,6 +456,8 @@ def test_the_cli_lists_only_operations_this_build_can_call(
     assert "propose_patch" in result.stdout
     assert "approve_patch" in result.stdout
     assert "get_verification" in result.stdout
+    assert "check_supervisor_reader_startup_consent" not in result.stdout
+    assert "open_supervisor_session" not in result.stdout
 
 
 @pytest.fixture()
