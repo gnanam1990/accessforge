@@ -48,8 +48,10 @@ from accessforge_build_worker.sandbox import (
 from accessforge_build_worker.snapshot import SnapshotRefused, SourceFile, SourceSnapshot
 from accessforge_build_worker.source_broker import read_persisted_source
 from accessforge_build_worker.toolchain import REFERENCE_BUILD_COMMAND
+from accessforge_contracts import validate
 from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_domain.authority import AuthorityError
+from accessforge_domain.canonical import digest
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.patch_policy import ProposedChange
 from accessforge_domain.states import FindingStatus, Outcome
@@ -345,6 +347,7 @@ def _prepare_owned_build(
     image: str | None = None,
     command: tuple[str, ...] = ("/usr/local/bin/node", "build.js"),
     change: ProposedChange | None = None,
+    canonical_execution: bool = False,
 ) -> tuple[ClaimedCandidate, DockerSandbox, tuple[str, ...]]:
     """Actual build pipeline over owned synthetic source, not reference-app or reader proof."""
     image = image or os.environ.get("ACCESSFORGE_SANDBOX_IMAGE")
@@ -376,6 +379,20 @@ def _prepare_owned_build(
             artifact_digest="a" * 64,
             identity_observable=True,
         )
+        reserved_run = str(uuid.uuid4()) if canonical_execution else None
+        reserved_approval = str(uuid.uuid4()) if canonical_execution else None
+        execution = None
+        if canonical_execution:
+            journey = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,"
+                "journey_digest,"
+                "assertion_set_digest,fixture_digest,navigator_policy_digest,navigator_policy,"
+                "reviewer_summary) VALUES (%s,%s,%s,'synthetic metadata','web',repeat('a',64),"
+                "repeat('a',64),repeat('a',64),repeat('a',64),'{}'::jsonb,'{}'::jsonb)",
+                (journey, binding.workspace, binding.project),
+            )
+            execution = projects.ExecutionInputs(journey, expiry, 10, 20, frozenset())
         seal = projects.seal_run(
             conn,
             workspace_id=binding.workspace,
@@ -383,6 +400,9 @@ def _prepare_owned_build(
             source_snapshot_id=binding.snapshot,
             build_artifact_id=artifact,
             environment_manifest_id=env,
+            run_id=reserved_run,
+            authorization_id=reserved_approval,
+            execution=execution,
             inputs=projects.SealInputs(
                 journey_digest="a" * 64,
                 assertion_set_digest="a" * 64,
@@ -398,6 +418,8 @@ def _prepare_owned_build(
             workspace_id=binding.workspace,
             project_id=binding.project,
             manifest_digest=seal.manifest_digest,
+            run_id=reserved_run,
+            authorization_id=reserved_approval,
         )
         finding = reviews.create_finding(
             conn,
@@ -978,6 +1000,7 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
         image=image,
         command=REFERENCE_BUILD_COMMAND,
         change=ProposedChange(path, original.decode() + "\n# Candidate session binding probe.\n"),
+        canonical_execution=True,
     )
     store = isolated_archives[0].store
     execute_claim(
@@ -1081,9 +1104,38 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             assert material is not None
             assert sealed["source_snapshot_id"] == material["source_snapshot_id"]
             assert sealed["build_artifact_id"] == material["build_artifact_id"]
+            manifest = sealed["canonical_manifest"]
+            validate("run-manifest.schema.json", manifest)
+            assert digest(manifest) == sealed["manifest_digest"]
+            assert manifest["runId"] == run_id
+            assert manifest["authorizationId"] == str(sealed["authorization_id"])
+            assert manifest["authorizationId"] != base["canonical_manifest"]["authorizationId"]
+            assert manifest["journeyVersionId"] == base["canonical_manifest"]["journeyVersionId"]
+            assert manifest["actionBudget"] == 10
+            assert manifest["wallTimeBudgetSeconds"] == 20
             assert conn.execute(
                 "SELECT status,authorization_id FROM run WHERE id=%s", (run_id,)
-            ).fetchone() == {"status": "QUEUED", "authorization_id": None}
+            ).fetchone() == {"status": "QUEUED", "authorization_id": sealed["authorization_id"]}
+            assert (
+                conn.execute(
+                    "SELECT 1 FROM approval WHERE id=%s", (sealed["authorization_id"],)
+                ).fetchone()
+                is None
+            )
+            for statement, value in (
+                ("UPDATE run SET authorization_id=%s WHERE id=%s", str(uuid.uuid4())),
+                ("UPDATE run SET manifest_digest=%s WHERE id=%s", "f" * 64),
+            ):
+                with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                    conn.execute(statement, (value, run_id))
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                runs.create_run(
+                    conn,
+                    workspace_id=binding.workspace,
+                    project_id=binding.project,
+                    manifest_digest=sealed["manifest_digest"],
+                    authorization_id=str(sealed["authorization_id"]),
+                )
             with pytest.raises(psycopg.IntegrityError), conn.transaction():
                 conn.execute(
                     "UPDATE run_fixture_instance SET observer_config='{}'::jsonb WHERE run_id=%s",

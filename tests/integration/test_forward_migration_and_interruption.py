@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0032_candidate_run_binding.sql"
+NEWEST = "0033_canonical_execution_manifest.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -151,6 +151,7 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         "0029_candidate_regressions.sql",
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
+        "0032_candidate_run_binding.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -171,7 +172,11 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
         assert conn.execute(
             "SELECT to_regclass('candidate_materialization') AS name"
         ).fetchone() == {"name": None}
-    assert migrate(disposable) == ["0031_candidate_materialization.sql", NEWEST]
+    assert migrate(disposable) == [
+        "0031_candidate_materialization.sql",
+        "0032_candidate_run_binding.sql",
+        NEWEST,
+    ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM candidate_materialization").fetchall() == []
         assert conn.execute(
@@ -183,8 +188,59 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
         ).fetchone() == {"relrowsecurity": True, "relforcerowsecurity": True}
 
 
-def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) -> None:
+def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authority(
+    disposable: str,
+) -> None:
     _apply_through(disposable, _previous())
+    build = _seed_legacy_candidate(disposable, "BUILT")
+    with connect(disposable) as conn:
+        row = conn.execute(
+            "SELECT b.workspace_id AS ws,b.project_id AS project,b.source_snapshot_id AS source,"
+            "v.baseline_run_id AS run,a.actor_user AS actor FROM candidate_build_attempt b "
+            "JOIN patch_verification v ON v.id=b.verification_id "
+            "JOIN approval a ON a.id=b.approval_id "
+            "WHERE b.id=%s",
+            (build,),
+        ).fetchone()
+        assert row is not None
+        ids = {**row, **{key: str(uuid.uuid4()) for key in ("env", "artifact", "seal")}}
+        conn.execute(
+            "INSERT INTO environment_manifest(id,workspace_id,project_id,name,allowed_origins,"
+            "fixture_reset_strategy,observer_credential_ref,reset_credential_ref,permitted_effects,"
+            "authorized_by,config_digest,expires_at) VALUES (%(env)s,%(ws)s,%(project)s,'legacy',"
+            "ARRAY['http://127.0.0.1:1'],'reset','observer','reset',ARRAY[]::text[],%(actor)s,"
+            "repeat('a',64),now()+interval '1 hour')",
+            ids,
+        )
+        conn.execute(
+            "INSERT INTO build_artifact(id,workspace_id,project_id,source_snapshot_id,"
+            "artifact_digest,identity_observable) VALUES (%(artifact)s,%(ws)s,%(project)s,"
+            "%(source)s,repeat('a',64),true)",
+            ids,
+        )
+        conn.execute(
+            "INSERT INTO sealed_manifest(id,workspace_id,project_id,run_id,source_snapshot_id,"
+            "build_artifact_id,environment_manifest_id,environment_config_digest,journey_digest,"
+            "assertion_set_digest,fixture_digest,runner_profile_digest,navigator_policy_digest,"
+            "evaluator_version,model_config_digest,manifest_digest) VALUES (%(seal)s,%(ws)s,"
+            "%(project)s,%(run)s,%(source)s,%(artifact)s,%(env)s,repeat('a',64),repeat('a',64),"
+            "repeat('a',64),repeat('a',64),repeat('a',64),repeat('a',64),'legacy',repeat('a',64),"
+            "repeat('f',64))",
+            ids,
+        )
+    assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        assert conn.execute(
+            "SELECT canonical_manifest,manifest_digest,authorization_id FROM sealed_manifest"
+        ).fetchall() == [
+            {"canonical_manifest": None, "manifest_digest": "f" * 64, "authorization_id": None}
+        ]
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute("UPDATE sealed_manifest SET canonical_manifest='{}'::jsonb")
+
+
+def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) -> None:
+    _apply_through(disposable, "0031_candidate_materialization.sql")
     legacy_lease = _seed_released_lease(disposable, reason="OPERATOR_RESET")
     with connect(disposable) as conn:
         conn.execute(
@@ -196,7 +252,7 @@ def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) ->
         assert conn.execute("SELECT to_regclass('candidate_run_binding') AS name").fetchone() == {
             "name": None
         }
-    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == ["0032_candidate_run_binding.sql", NEWEST]
     with connect(disposable) as conn:
         assert conn.execute(
             "SELECT captured_contract_digest FROM run_fixture_instance"
@@ -235,6 +291,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
     assert migrate(disposable) == [
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
+        "0032_candidate_run_binding.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -262,6 +319,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
         "0029_candidate_regressions.sql",
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
+        "0032_candidate_run_binding.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -306,6 +364,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0029_candidate_regressions.sql",
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
+        "0032_candidate_run_binding.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -367,6 +426,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0029_candidate_regressions.sql",
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
+        "0032_candidate_run_binding.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -412,6 +472,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0029_candidate_regressions.sql",
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
+        "0032_candidate_run_binding.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:

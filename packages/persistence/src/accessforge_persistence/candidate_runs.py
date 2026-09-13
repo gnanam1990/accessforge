@@ -9,9 +9,11 @@ from typing import Any
 
 import psycopg
 
+from accessforge_contracts import validate
+from accessforge_domain.canonical import digest
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.states import TERMINAL_STATUSES, RunStatus
-from accessforge_domain.timestamps import to_rfc3339_utc
+from accessforge_domain.timestamps import is_expired, parse_rfc3339_utc, to_rfc3339_utc
 
 from . import candidate_builds as builds
 from . import candidate_endpoints as endpoints
@@ -131,6 +133,16 @@ def prepare(
             raise Refused(
                 "candidate requires the exact completed failed baseline with closed producers"
             )
+        base_manifest = baseline["canonical_manifest"]
+        if base_manifest is None:
+            raise Refused("baseline has no canonical execution manifest; no historical backfill")
+        validate("run-manifest.schema.json", base_manifest)
+        if (
+            digest(base_manifest) != baseline["manifest_digest"]
+            or base_manifest["runId"] != baseline_id
+            or base_manifest["authorizationId"] != str(baseline_run["authorization_id"])
+        ):
+            raise Refused("baseline canonical run/authorization identity differs")
         base_env = _environment(conn, str(baseline["environment_manifest_id"]))
         env = _authorized_environment(
             conn,
@@ -166,11 +178,20 @@ def prepare(
             observed_artifact_digest=observed_artifact_digest,
         )
         run_id = str(uuid.uuid4())
+        authorization_id = str(uuid.uuid4())
         seal = projects.seal_run(
             conn,
             workspace_id=workspace,
             project_id=str(build["project_id"]),
             run_id=run_id,
+            authorization_id=authorization_id,
+            execution=projects.ExecutionInputs(
+                journey_version_id=base_manifest["journeyVersionId"],
+                expires_at=to_rfc3339_utc(env["expires_at"]),
+                action_budget=base_manifest["actionBudget"],
+                wall_time_budget_seconds=base_manifest["wallTimeBudgetSeconds"],
+                permitted_effects=frozenset(base_manifest["permittedEffects"]),
+            ),
             source_snapshot_id=str(materialized["source_snapshot_id"]),
             build_artifact_id=str(materialized["build_artifact_id"]),
             environment_manifest_id=environment_id,
@@ -184,6 +205,7 @@ def prepare(
             project_id=str(build["project_id"]),
             run_id=run_id,
             manifest_digest=seal.manifest_digest,
+            authorization_id=authorization_id,
         )
         conn.execute(
             "INSERT INTO run_fixture_instance(id,workspace_id,run_id,template_id,template_digest,"
@@ -290,6 +312,22 @@ def assert_live(conn: psycopg.Connection[dict[str, Any]], *, run_id: str) -> dic
         or endpoint["binding_digest"] != binding["endpoint_binding_digest"]
     ):
         raise Refused("candidate run no longer matches its exact source/build/endpoint seal")
+    manifest = seal["canonical_manifest"]
+    if manifest is None:
+        raise Refused(
+            "candidate has no canonical execution manifest; historical metadata is not proof"
+        )
+    validate("run-manifest.schema.json", manifest)
+    if (
+        digest(manifest) != seal["manifest_digest"]
+        or manifest["runId"] != run_id
+        or manifest["authorizationId"] != str(run["authorization_id"])
+        or manifest["authorizationId"] != str(seal["authorization_id"])
+        or is_expired(
+            now=to_rfc3339_utc(builds._moment(conn, None)), expires_at=manifest["expiresAt"]
+        )
+    ):
+        raise Refused("candidate canonical identity or execution expiry differs")
     fixture = conn.execute(
         "SELECT * FROM run_fixture_instance WHERE run_id=%s", (run_id,)
     ).fetchone()
@@ -313,6 +351,7 @@ def assert_live(conn: psycopg.Connection[dict[str, Any]], *, run_id: str) -> dic
     return {
         **binding,
         "endpoint_expires_at": endpoint["expires_at"],
+        "execution_expires_at": parse_rfc3339_utc(manifest["expiresAt"], field="expiresAt"),
         "runner_profile_digest": seal["runner_profile_digest"],
     }
 
@@ -334,6 +373,7 @@ def record_lease(
         or lease["epoch"] != epoch
         or lease["released_at"] is not None
         or lease["deadline_at"] > binding["endpoint_expires_at"]
+        or lease["deadline_at"] > binding["execution_expires_at"]
         or lease["deadline_at"] <= builds._moment(conn, None)
         or lease["profile_digest"] != binding["runner_profile_digest"]
     ):
@@ -374,6 +414,7 @@ def assert_lease(
         or lease["released_at"] is not None
         or lease["cancel_requested_at"] is not None
         or lease["deadline_at"] > binding["endpoint_expires_at"]
+        or lease["deadline_at"] > binding["execution_expires_at"]
         or lease["deadline_at"] <= builds._moment(conn, None)
     ):
         raise Refused("candidate reader lease is expired, released or foreign")

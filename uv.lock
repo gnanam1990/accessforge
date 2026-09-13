@@ -142,6 +142,7 @@ name = "accessforge-persistence"
 version = "0.0.0"
 source = { editable = "packages/persistence" }
 dependencies = [
+    { name = "accessforge-contracts" },
     { name = "accessforge-domain" },
     { name = "accessforge-evidence" },
     { name = "boto3" },
@@ -150,6 +151,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "accessforge-contracts", editable = "packages/contracts/python" },
     { name = "accessforge-domain", editable = "packages/domain" },
     { name = "accessforge-evidence", editable = "packages/evidence" },
     { name = "boto3", specifier = ">=1.35" },

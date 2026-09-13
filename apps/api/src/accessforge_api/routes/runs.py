@@ -158,6 +158,34 @@ def request_run(
                 request_id=context.request_id,
             )
 
+        reserved_run: str | None = None
+        reserved_authorization = body.get("authorizationId")
+        if sealed.canonical_manifest is not None:
+            # Serialize admission of this exact reserved identity across different HTTP keys.
+            conn.execute(
+                "SELECT id FROM sealed_manifest WHERE id=%s FOR UPDATE",
+                (sealed.sealed_manifest_id,),
+            )
+            canonical = sealed.canonical_manifest
+            reserved_run = str(canonical["runId"])
+            if (
+                reserved_authorization is not None
+                and reserved_authorization != canonical["authorizationId"]
+            ):
+                raise ProblemDetail(
+                    ProblemCode.INVALID_INPUT,
+                    "authorizationId differs from the exact canonical manifest",
+                    request_id=context.request_id,
+                )
+            reserved_authorization = str(canonical["authorizationId"])
+            if conn.execute("SELECT 1 FROM run WHERE id=%s", (reserved_run,)).fetchone():
+                raise ProblemDetail(
+                    ProblemCode.INVALID_INPUT,
+                    "this canonical manifest already belongs to a run; "
+                    "retry requires a new run and seal",
+                    request_id=context.request_id,
+                )
+
         try:
             runners.assert_queue_capacity(conn)
         except runners.QueueFull as exc:
@@ -217,7 +245,8 @@ def request_run(
             # From the seal, never from the body. The manifest is the run's identity, so the
             # project that sealed it is the project the run belongs to.
             project_id=sealed.project_id,
-            authorization_id=body.get("authorizationId"),
+            authorization_id=reserved_authorization,
+            run_id=reserved_run,
             retry_of=body.get("retryOf"),
         )
         return {"runId": run_id, "status": "QUEUED", "outcome": "NOT_EVALUATED"}
