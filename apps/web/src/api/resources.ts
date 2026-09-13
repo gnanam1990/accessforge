@@ -226,6 +226,8 @@ export interface UsageRow {
   readonly estimated: number;
   /** A count of events whose quantity could not be obtained. Not zero usage. */
   readonly unavailableEvents: number;
+  /** Admission capacity held, not measured consumption. Older servers may omit it. */
+  readonly reserved?: number;
   readonly countedAgainstLimit: number;
   readonly limit: number;
   readonly remaining: number;
