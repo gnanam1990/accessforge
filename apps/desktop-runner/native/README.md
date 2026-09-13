@@ -58,7 +58,8 @@ same OS user is a deployment boundary, not established by executable ownership c
 ### Session-bound physical preflight
 
 `createPhysicalSafariRunner` in `src/physical-preflight.ts` supplies host/session preflight and
-native Safari origin. Pass the normal runner dependencies plus `physicalPreflight` containing
+native Safari origin. Pass `desktopClaimDirectory` (the shared private host claim root), the normal
+runner dependencies and `physicalPreflight` containing
 `expectedDesktopSessionId` and `observeRuntimeEvidence(signal)`. The latter reads owned setup,
 capture and deployment observations; it must not reset, type or start a reader and should honor its
 AbortSignal. The collector uses the same monotonic clock as the action supervisor.
@@ -76,8 +77,34 @@ session drift/ambiguity and concurrent/late reads fence reuse. The async evidenc
 deadline; synchronous OS commands retain their individual timeouts, and over-budget completed
 samples are refused as stale. Missing setup/build/speech remains UNKNOWN. The collector neither
 mints a canonical runtime receipt nor changes the finalizer's missing-identity result. Session
-equality is not exclusivity against another runner/process in the same login session; deployment
-and lease isolation remain required.
+equality alone is not exclusivity against another runner/process in the same login session.
+
+### Durable desktop exclusion
+
+The physical factory now returns a restricted runner holding `desktop-<assigned audit ID>.json`
+inside `desktopClaimDirectory`. Provision ONE canonical absolute private directory owned by the
+runner OS user, shared across ALL its run and runner registrations on this host. A different root
+per registration defeats this cooperative exclusion and is not a supported deployment. Neither
+the factory nor the preflight starts a reader: bootstrap must construct this claimed runner before
+starting the reader, and must not start one when construction refuses.
+
+Creation is exclusive, mode0600, and flushes both the exact session/reference/nonce payload and
+parent directory before returning. Each action checks the original directory and file ownership,
+permissions, device/inode and bounded content; the physical factory rechecks around authorization
+and synchronously immediately before the adapter. Claims contain dispatch identities, not tickets,
+execution session secrets or reader content. The private root is not replaced/restored concurrently.
+This is cooperative isolation, not a sandbox against malicious same-user/root code or manual input.
+
+Only successful STOP, complete exact local journal readback and successful server finish ACK allow
+release. Cancellation, unknown execution, lost ACK, changed claim or partial/crash creation keeps
+the claim; no age/PID check, startup cleanup or automatic reclaim exists. Reconcile the exact
+attempt and physical state independently before any operator removal. A release I/O failure is
+reported as unconfirmed, never blindly retried. The finished wrapper cannot send more input.
+Low-level `AuthenticatedRunner`, `createSafariAuthenticatedRunner` and candidate proof helpers
+remain primitives: they do not themselves acquire this claim or establish host-wide exclusivity.
+
+Desktop-claim regressions are authored for CI, not executed locally. Physical runtime identity
+ingestion, production bootstrap, real reader proof and deployed isolation remain incomplete.
 
 TypeScript builds and a compile-only Swift expression check passed. Ownership/ioreg/clock/collector
 cases are committed for CI and were not run locally. No physical-reader test loop was performed.
