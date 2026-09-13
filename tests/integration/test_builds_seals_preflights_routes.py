@@ -1419,6 +1419,21 @@ def _ticket_url(ticket: DispatchTicket, workspace_id: str = WS) -> str:
     return f"/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket.ticket_id}/accept"
 
 
+def _seed_reader_fixture(db: str, ref: DispatchReference) -> None:
+    from accessforge_persistence.fixtures import create_instance
+
+    with workspace_connection(db, WS) as conn:
+        create_instance(
+            conn,
+            workspace_id=WS,
+            run_id=ref.run_id,
+            template_id="reader-wire-test",
+            template_digest=_digest("reader-wire-test"),
+            navigator_values={"name": "Synthetic Private Fixture"},
+            observer_config={"receipt": "synthetic-private-receipt"},
+        )
+
+
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
 @pytest.mark.parametrize(
     "fault",
@@ -1734,6 +1749,111 @@ def test_automatic_handoff_recovery(
             assert row is not None and row["revoked_at"] is not None
 
 
+@pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "digest",
+        "gap",
+        "identity",
+        "before-dispatch",
+        "revoked",
+        "extra-field",
+        "oversize",
+    ],
+)
+def test_authenticated_reader_evidence(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    fault: str | None,
+) -> None:
+    import secrets
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    _seed_reader_fixture(db, ref)
+    secret = secrets.token_urlsafe(32)
+    assert (
+        client.post(
+            _ticket_url(ticket).removesuffix("accept") + "session",
+            json={"sessionSecret": secret},
+            headers={"Authorization": f"Bearer {ticket.token}"},
+        ).status_code
+        == 201
+    )
+    headers = {"Authorization": f"Bearer {secret}"}
+    base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
+    intent = client.post(
+        base + "/action-intents",
+        headers=headers,
+        json={"action": "READ_CURRENT", "origin": "https://app.example.test", "sequence": 1},
+    )
+    assert intent.status_code == 201
+    action_id = intent.json()["actionId"]
+    url = base + f"/actions/{action_id}"
+    if fault != "before-dispatch":
+        assert (
+            client.post(
+                url + "/dispatch",
+                headers=headers,
+                json={"origin": "https://app.example.test"},
+            ).status_code
+            == 200
+        )
+    with workspace_connection(db, WS) as conn:
+        fixture = conn.execute(
+            "SELECT navigator_values FROM run_fixture_instance WHERE run_id=%s",
+            (ref.run_id,),
+        ).fetchone()
+        assert fixture is not None
+        fixture_text = next(iter(fixture["navigator_values"].values()))
+        if fault == "revoked":
+            conn.execute(
+                "UPDATE approval SET revoked_at=now() WHERE id=("
+                "SELECT authorization_id FROM run WHERE id=%s)",
+                (ref.run_id,),
+            )
+    source: dict[str, Any] = {
+        "actionId": str(uuid.uuid4()) if fault == "identity" else action_id,
+        "actionSequence": 1,
+        "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "phrase": "x" * 8193 if fault == "oversize" else f"Speech {fixture_text}",
+    }
+    if fault == "extra-field":
+        source["eventType"] = "EFFECT_RECEIPT"
+    body = {
+        "producerSequence": 2 if fault == "gap" else 1,
+        "sourceRecordDigest": "0" * 64 if fault == "digest" else digest(source),
+        "sourceRecord": source,
+    }
+    result = client.post(url + "/observation", json=body, headers=headers)
+    assert result.status_code == (200 if fault is None else 403)
+    with workspace_connection(db, WS) as conn:
+        events = conn.execute("SELECT payload FROM canonical_event").fetchall()
+        assert len(events) == int(fault is None)
+        if fault is None:
+            payload = events[0]["payload"]
+            assert fixture_text not in json.dumps(payload["sourceRecord"])
+            assert "[REDACTED_FIXTURE]" in payload["sourceRecord"]["phrase"]
+            assert payload["sourceRecordDigest"] == digest(payload["sourceRecord"])
+            assert payload["submittedSourceRecordDigest"] == digest(source)
+        assert run_store.load_run(conn, run_id=ref.run_id).state.outcome.value == "NOT_EVALUATED"
+    if fault is None:
+        # Same content is idempotent evidence admission, not permission to repeat an OS action.
+        replay = client.post(url + "/observation", json=body, headers=headers)
+        assert replay.status_code == 200 and replay.json() == result.json()
+        source["phrase"] = "conflicting evidence"
+        body["sourceRecordDigest"] = digest(source)
+        assert client.post(url + "/observation", json=body, headers=headers).status_code == 403
+        assert (
+            client.post(url + "/result", json={"status": "SUCCEEDED"}, headers=headers).status_code
+            == 200
+        )
+        assert client.post(url + "/observation", json=body, headers=headers).status_code == 403
+
+
 @pytest.fixture(scope="module")
 def native_receiver_command() -> Path:
     root = Path(__file__).resolve().parents[2]
@@ -1779,7 +1899,7 @@ def native_receiver_api(settings: ApiSettings, db: str) -> Iterator[str]:
 
 
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
-@pytest.mark.parametrize("mode", ["intent", "execution", "ambiguity"])
+@pytest.mark.parametrize("mode", ["intent", "execution", "ambiguity", "capture-unknown"])
 def test_native_execution_session_real_http(
     db: str,
     native_receiver_command: Path,
@@ -1790,6 +1910,7 @@ def test_native_execution_session_real_http(
     mode: str,
 ) -> None:
     ref, ticket = manual_dispatch_reference, supervisor_ticket
+    _seed_reader_fixture(db, ref)
     node = shutil.which("node")
     assert node is not None
     reference = {
@@ -1847,10 +1968,15 @@ def test_native_execution_session_real_http(
               PREFLIGHT_CHECKS.map((key) => [key, { condition: 'TRUE' }])) }),
             observeOrigin: async () => 'https://app.example.test',
             authorizePhysicalAction: async () => {},
-            adapter: { async perform() {
+            adapter: { async perform(request, context) {
               calls++;
               if (process.argv[3] === 'ambiguity') throw new Error('synthetic adapter lost result');
-              return { status: 'SUCCEEDED' };
+              return { status: 'SUCCEEDED', observation: process.argv[3] === 'capture-unknown'
+                ? { provenance: 'CAPTURE_UNKNOWN', reason: 'synthetic capture timeout' }
+                : { phrase: 'Synthetic test speech', capturedAtUtc: context.capturedAtUtc(),
+                    actionId: context.actionId, actionSequence: context.actionSequence,
+                    domSnapshot: 'FORBIDDEN_DIAGNOSTIC',
+                    fixtureAnswers: { secret: 'do not send' } } };
             } },
             recordObservation: async () => {},
           });
@@ -1925,7 +2051,22 @@ def test_native_execution_session_real_http(
                 if mode == "ambiguity"
                 else ("RUNNING", "NOT_EVALUATED")
             )
-            assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
+            events = conn.execute(
+                "SELECT event_type,payload FROM canonical_event ORDER BY sequence"
+            ).fetchall()
+            assert len(events) == (0 if mode == "ambiguity" else 2)
+            for event in events:
+                assert event["event_type"] == "READER_OBSERVATION"
+                payload = event["payload"]
+                assert payload["serviceIdentity"] == "SUPERVISOR"
+                assert payload["sourceRecordDigest"] == digest(payload["sourceRecord"])
+                assert "FORBIDDEN_DIAGNOSTIC" not in json.dumps(payload)
+                assert "fixtureAnswers" not in json.dumps(payload)
+                source = payload["sourceRecord"]
+                if mode == "capture-unknown":
+                    assert source["provenance"] == "CAPTURE_UNKNOWN" and "phrase" not in source
+                else:
+                    assert source["phrase"] == "Synthetic test speech"
         for statement in (
             "UPDATE supervisor_execution_session SET token_digest=repeat('a',64)",
             "UPDATE supervisor_execution_session SET expires_at=expires_at+interval '1 second'",

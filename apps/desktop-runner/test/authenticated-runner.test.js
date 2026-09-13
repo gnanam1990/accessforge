@@ -16,6 +16,7 @@ function harness(overrides = {}) {
     async retainIntent(command) { calls.push('server-intent'); current = { ...command, actionId: randomUUID() }; return current; },
     async commitDispatch(id) { calls.push('server-commit'); assert.equal(id, current.actionId); return current; },
     async completeAction(id, status) { calls.push(`server-result:${status}`); assert.equal(id, current.actionId); },
+    async retainObservation(command) { calls.push('server-observation'); assert.equal(command.actionId, current.actionId); },
   };
   const options = {
     session, journal: {
@@ -45,7 +46,7 @@ test('server claim -> fsynced local intent -> physical checks -> adapter -> obse
   const h = harness();
   assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'SUCCEEDED');
   assert.deepEqual(h.calls, ['server-intent', 'server-commit', 'local-intent', 'effect-check',
-    'adapter', 'observation', 'local-result', 'server-result:SUCCEEDED']);
+    'adapter', 'observation', 'server-observation', 'local-result', 'server-result:SUCCEEDED']);
   assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'SUCCEEDED');
   assert.equal(h.journal.entries.length, 4);
 });
@@ -54,6 +55,15 @@ test('incomplete preflight cannot pass vacuously or create a remote intent', asy
   const h = harness({ preflight: async () => ({ checks: {} }) });
   assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'REFUSED');
   assert.deepEqual(h.calls, []);
+});
+
+test('lost reader evidence acknowledgement fences input and never reports known action success', async () => {
+  const h = harness();
+  h.session.retainObservation = async () => { throw new Error('lost reader receipt'); };
+  assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'AMBIGUOUS');
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+  assert.equal(h.calls.filter((item) => item === 'adapter').length, 1);
+  assert.equal(h.calls.includes('server-result:SUCCEEDED'), false);
 });
 
 test('journal flush failure cannot invoke a physical adapter', async () => {
