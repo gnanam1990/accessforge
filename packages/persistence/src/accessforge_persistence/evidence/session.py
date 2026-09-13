@@ -56,7 +56,10 @@ def emit(
     event_type: str,
     source: dict[str, Any],
     provenance: Literal["CONTROL_PLANE_RECEIPT", "RUNTIME_PROBE_REPORT"] = "CONTROL_PLANE_RECEIPT",
+    build_artifact_receipt: dict[str, Any] | None = None,
 ) -> str:
+    if build_artifact_receipt is not None and provenance != "RUNTIME_PROBE_REPORT":
+        raise ValueError("build receipt requires an authenticated runtime preflight")
     principal = MachinePrincipal(
         service_identity=ServiceIdentity.SUPERVISOR,
         workspace_id=str(row["workspace_id"]),
@@ -88,6 +91,11 @@ def emit(
             "sourceRecord": source,
             "serviceIdentity": "SUPERVISOR",
             "provenance": provenance,
+            **(
+                {"buildArtifactReceipt": build_artifact_receipt}
+                if build_artifact_receipt is not None
+                else {}
+            ),
         },
         source_time=datetime.now(UTC),
     )
