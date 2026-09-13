@@ -98,7 +98,11 @@ class DiagnosisWorker:
         self._validator = validator or DiagnosisValidator()
 
     async def diagnose(
-        self, projection: DiagnosisProjection, *, cancel_signal: Event | None = None
+        self,
+        projection: DiagnosisProjection,
+        *,
+        cancel_signal: Event | None = None,
+        on_provider_invoke: Callable[[], None] | None = None,
     ) -> DiagnosisValidation:
         payload = json.dumps(
             projection.model_dump(mode="json"),
@@ -123,6 +127,10 @@ class DiagnosisWorker:
         }
         try:
             agent = self._agent_builder(fence)
+            if fence.is_set():
+                return self._unsupported("diagnosis cancelled before provider invocation")
+            if on_provider_invoke is not None:
+                on_provider_invoke()
             result = await asyncio.wait_for(
                 agent.invoke_async(
                     prompt,

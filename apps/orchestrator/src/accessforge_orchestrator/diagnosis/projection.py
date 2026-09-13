@@ -55,6 +55,7 @@ def prepare(
     *,
     workspace_id: str,
     run_id: str,
+    assertion_id: str,
     component_name: str,
     source_scope: FrozenSourceScope,
     excerpts: tuple[ExcerptRequest, ...],
@@ -117,6 +118,8 @@ def prepare(
     outcomes = {item["assertionId"]: item for item in values}
     if len(outcomes) != len(values) or set(outcomes) != {a.assertion_id for a in contract.required}:
         raise Refused("original assertion identities differ")
+    if assertion_id not in outcomes:
+        raise Refused("selected assertion is outside the original evaluation")
     assertions = tuple(
         ProtectedAssertion(
             assertion_id=assertion.assertion_id,
@@ -124,6 +127,7 @@ def prepare(
             condition=outcomes[assertion.assertion_id]["condition"],
         )
         for assertion in contract.required
+        if assertion.assertion_id == assertion_id
     )
     evidence = [
         EvidenceReference(

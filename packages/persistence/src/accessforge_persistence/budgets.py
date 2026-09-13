@@ -124,6 +124,10 @@ def configure_entitlement(
     reconfiguration into a refusal rather than a silent overwrite of somebody else's decision — and
     two administrators raising a limit at the same moment is exactly when that matters.
     """
+    conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+        ("accessforge:budget:" + workspace_id,),
+    )
     current = conn.execute(
         "SELECT coalesce(max(revision), 0) AS revision FROM workspace_entitlement "
         "WHERE workspace_id = %s",
