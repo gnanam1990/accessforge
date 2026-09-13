@@ -50,15 +50,15 @@ def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> Co
         and (
             (
                 a.evaluation_rule.action_sequence is not None
-                and a.evaluation_rule.action_sequence > draft.budget.max_actions
+                and a.evaluation_rule.action_sequence >= draft.budget.max_actions
             )
             or any(
-                step.action_sequence > draft.budget.max_actions for step in a.evaluation_rule.steps
+                step.action_sequence >= draft.budget.max_actions for step in a.evaluation_rule.steps
             )
         )
         for a in draft.assertions.assertions
     ):
-        raise JourneyError("assertion action sequence exceeds the frozen action budget")
+        raise JourneyError("reader assertion must leave one frozen action-budget slot for STOP")
 
     assertion_set_digest = digest(draft.assertions.canonical_form())
 
