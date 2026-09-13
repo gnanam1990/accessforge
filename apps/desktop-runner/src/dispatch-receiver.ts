@@ -256,6 +256,7 @@ export class NativeExecutionSession {
   #observationPending = false;
   #runtimePreflightPending = false;
   #formPermitPending = false;
+  #formPermitId: string | undefined;
   #stopActionId: string | undefined;
   #finishStarted = false;
   readonly receipt: Readonly<Record<string, unknown>>;
@@ -374,13 +375,17 @@ export class NativeExecutionSession {
   }
 
   async #post(path: string, payload: object, signal?: AbortSignal): Promise<unknown> {
+    return this.#request('POST', path, payload, signal);
+  }
+
+  async #request(method: 'GET' | 'POST', path: string, payload?: object, signal?: AbortSignal): Promise<unknown> {
     const remaining = this.#deadline - performance.now();
     if (remaining <= 0) { this.#fenced = true; throw new ReceiverRefused('session expired'); }
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), Math.max(1, Math.floor(Math.min(remaining, this.#config.timeoutMs ?? 5000))));
     try {
       const url = new URL(`/v1/workspaces/${this.#config.localReference.workspaceId}/supervisor-sessions/${this.#sessionId}/${path}`, this.#config.apiOrigin);
-      const response = await fetch(url, { method: 'POST', body: JSON.stringify(payload),
+      const response = await fetch(url, { method, ...(method === 'POST' ? { body: JSON.stringify(payload) } : {}),
         headers: { Authorization: `Bearer ${this.#secret}`, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         redirect: 'error', credentials: 'omit', signal: signal === undefined ? abort.signal : AbortSignal.any([abort.signal, signal]) });
       if (response.status !== 200) throw new Error('response');
@@ -428,6 +433,7 @@ export class NativeExecutionSession {
     }
     this.#busy = true;
     try {
+      if (status !== 'AMBIGUOUS' && this.#formPermitId !== undefined) await this.#waitForFormWindow(actionId);
       const result = exactObject(await this.#post(`actions/${actionId}/result`, { status }),
         ['sessionId', 'actionId', 'status', 'meaning']);
       if (uuid(result.sessionId) !== this.#sessionId || uuid(result.actionId) !== actionId ||
@@ -441,6 +447,7 @@ export class NativeExecutionSession {
       this.#observationPending = false;
       this.#runtimePreflightPending = false;
       this.#formPermitPending = false;
+      this.#formPermitId = undefined;
     } catch {
       this.#fenced = true;
       throw new ReceptionUnknown('action result acknowledgement unknown; retain fencing');
@@ -462,10 +469,26 @@ export class NativeExecutionSession {
           !uuid(result.permitId) || result.meaning !== 'ACTION_FORM_PERMISSION_NOT_EFFECT_PROOF' ||
           typeof result.expiresAt !== 'string' || !Number.isFinite(Date.parse(result.expiresAt)) ||
           Date.parse(result.expiresAt) <= Date.now()) throw new Error('permission binding');
+      this.#formPermitId = uuid(result.permitId);
     } catch {
       this.#fenced = true;
       throw new ReceptionUnknown('form permission acknowledgement unavailable; no action replay');
     } finally { this.#busy = false; }
+  }
+
+  async #waitForFormWindow(actionId: string): Promise<void> {
+    const deadline = Math.min(this.#deadline, performance.now() + 7000);
+    while (performance.now() < deadline) {
+      const signal = AbortSignal.timeout(Math.max(1, Math.floor(deadline - performance.now())));
+      const result = exactObject(await this.#request('GET', `actions/${actionId}/form-effect-permit`, undefined, signal),
+        ['sessionId', 'actionId', 'permitId', 'phase', 'meaning']);
+      if (uuid(result.sessionId) !== this.#sessionId || uuid(result.actionId) !== actionId ||
+          uuid(result.permitId) !== this.#formPermitId || result.meaning !== 'FORM_TRANSPORT_STATE_NOT_EFFECT_PROOF') throw new Error('transport identity');
+      if (result.phase === 'RESPONSE_RETAINED' || result.phase === 'CLOSED_UNUSED') return;
+      if (result.phase !== 'OPEN' && result.phase !== 'IN_FLIGHT') throw new Error('transport phase');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new ReceptionUnknown('candidate form transport unresolved; no action result or replay');
   }
 
   async retainRuntimePreflight(command: ActionCommand, report: PreflightReport, capturedAtUtc: string): Promise<void> {

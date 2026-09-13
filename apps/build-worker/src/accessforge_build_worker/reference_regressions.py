@@ -170,6 +170,13 @@ class ReferenceRegressions:
         on_endpoint_bound: Callable[[dict[str, Any]], None] = lambda receipt: None,
         on_endpoint_closed: Callable[[bool], None] = lambda clean: None,
         on_artifact_observed: Callable[[dict[str, Any]], None] = lambda observation: None,
+        begin_candidate_effect: Callable[[str, str], dict[str, Any] | None] = lambda path, body: (
+            None
+        ),
+        assert_candidate_effect: Callable[[dict[str, Any]], None] = lambda permission: None,
+        on_candidate_effect_response: Callable[
+            [dict[str, Any], dict[str, Any]], None
+        ] = lambda permission, response: None,
     ) -> ReferenceRegressionResult:
         wheel = "out/accessforge_reference_app-0.0.0-py3-none-any.whl"
         if len(artifact.files) != 1 or artifact.files[0].path != wheel:
@@ -561,7 +568,18 @@ class ReferenceRegressions:
                 def transport(method: str, path: str, body: str) -> dict[str, Any]:
                     end = min(deadline, time.monotonic() + 5)
                     observe_deployment(end)
-                    assert_candidate_request(method)
+                    permission = begin_candidate_effect(path, body) if method == "POST" else None
+                    if permission is None:
+                        assert_candidate_request(method)  # Bound POST cannot fall back to preview.
+                    else:
+                        remaining = (
+                            datetime.fromisoformat(permission["expiresAt"].replace("Z", "+00:00"))
+                            - datetime.now(UTC)
+                        ).total_seconds()
+                        end = min(end, time.monotonic() + remaining)
+                        assert_candidate_effect(permission)
+                    if cancelled() or time.monotonic() >= end:
+                        raise SandboxRefused("candidate effect permission expired before HTTP")
                     response = http(
                         method,
                         path,
@@ -573,7 +591,14 @@ class ReferenceRegressions:
                     # These are filesystem samples, not proof against change-and-restore between
                     # samples or arbitrary process-memory behavior inside the isolated candidate.
                     observe_deployment(end)
-                    assert_candidate_request(method)
+                    if permission is None:
+                        assert_candidate_request(method)
+                    else:
+                        assert_candidate_effect(permission)
+                        on_candidate_effect_response(permission, response)
+                        assert_candidate_request("GET")
+                    if cancelled() or time.monotonic() >= end:
+                        raise SandboxRefused("candidate response retention exceeded its deadline")
                     return response
 
                 with CandidateGateway(
