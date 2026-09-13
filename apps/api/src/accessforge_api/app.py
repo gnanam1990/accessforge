@@ -24,6 +24,7 @@ from .health import (
 )
 from .problems import ProblemCode, ProblemDetail
 from .routes import (
+    diagnosis_requests_router,
     exports_router,
     findings_router,
     grants_router,
@@ -399,6 +400,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         ).to_response()
 
     for router in (
+        diagnosis_requests_router,
         session_router,
         projects_router,
         reader_startup_router,
