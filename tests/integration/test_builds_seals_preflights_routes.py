@@ -2130,6 +2130,10 @@ def test_independent_observer_worker(
         "artifact-state",
         "artifact-stored-corrupt",
         "artifact-conflict",
+        "artifact-finalize",
+        "artifact-finalize-rollback",
+        "artifact-finalize-corrupt",
+        "artifact-finalize-incomplete",
         "observer-unknown",
     ],
 )
@@ -2330,7 +2334,7 @@ def test_authenticated_execution_finish(
         ).fetchall()
         assert len(finished) == int(closes)
     if case.startswith("artifact"):
-        _retain_stopped_artifact_case(db, ref, ticket, monkeypatch, tmp_path, case)
+        _retain_stopped_artifact_case(db, ref, ticket, monkeypatch, tmp_path, case, client)
 
 
 def _retain_stopped_artifact_case(
@@ -2340,6 +2344,7 @@ def _retain_stopped_artifact_case(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     case: str,
+    client: TestClient,
 ) -> None:
     from accessforge_orchestrator.execution_artifacts import Refused, retain_bundle
     from accessforge_persistence import evidence
@@ -2392,6 +2397,16 @@ def _retain_stopped_artifact_case(
                 conn.execute("UPDATE run SET quarantined=true WHERE id=%s", (ref.run_id,))
     kwargs: dict[str, Any] = {"workspace_id": WS, "run_id": ref.run_id, "journal": journal}
     try:
+        if case == "artifact-finalize-incomplete":
+            from accessforge_orchestrator.finalize_execution import finalize
+
+            with pytest.raises(Refused, match="five retained"):
+                finalize(db, store, workspace_id=WS, run_id=ref.run_id)
+            with workspace_connection(db, WS) as conn:
+                state = run_store.load_run(conn, run_id=ref.run_id).state
+                assert state.status.value == "FINALIZING" and state.outcome.value == "NOT_EVALUATED"
+                assert conn.execute("SELECT 1 FROM run_evaluation").fetchone() is None
+            return
         if case in {
             "artifact-journal-tail",
             "artifact-journal-id",
@@ -2494,6 +2509,88 @@ def _retain_stopped_artifact_case(
             # Semantically identical JSON with different original spool bytes is not a replacement.
             with pytest.raises(Refused, match="conflicts"):
                 retain_bundle(db, store, **{**kwargs, "journal": journal.replace(b": ", b":")})
+        if case.startswith("artifact-finalize"):
+            from accessforge_orchestrator.finalize_execution import finalize
+            from accessforge_persistence import evaluations
+
+            endpoint = f"/v1/workspaces/{WS}/runs/{ref.run_id}/evaluation"
+            assert client.get(endpoint).status_code == 404
+            if case == "artifact-finalize-corrupt":
+                store.put(
+                    key=rows[0]["object_key"],
+                    payload=b"corrupt",
+                    content_type=rows[0]["content_type"],
+                )
+                with pytest.raises(Refused):
+                    finalize(db, store, workspace_id=WS, run_id=ref.run_id)
+            elif case == "artifact-finalize-rollback":
+                original_read = evaluations.read
+
+                def fail_after_insert(conn: Any, *, run_id: str) -> Any:
+                    result = original_read(conn, run_id=run_id)
+                    if result is not None:
+                        raise RuntimeError("synthetic failure after evaluation insert")
+                    return result
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(evaluations, "read", fail_after_insert)
+                    with pytest.raises(RuntimeError, match="synthetic failure"):
+                        finalize(db, store, workspace_id=WS, run_id=ref.run_id)
+            else:
+                result = finalize(db, store, workspace_id=WS, run_id=ref.run_id)
+                assert result["snapshot"]["outcome"] == "INCONCLUSIVE"
+                assert result["snapshot"]["assertions"][0]["condition"] == "FALSE"
+                assert any("BUILD" in reason for reason in result["snapshot"]["reasons"])
+                assert set(result["snapshot"]["observedIdentities"]) == {
+                    "EVALUATOR",
+                    "ASSERTION_SET",
+                }
+                assert finalize(db, store, workspace_id=WS, run_id=ref.run_id) == result
+                response = client.get(endpoint)
+                assert response.status_code == 200 and response.json() == result
+                assert response.headers["Cache-Control"] == "no-store"
+                assert result["meaning"] == "ORIGINAL_EVALUATION_SNAPSHOT" and result["recordedAt"]
+                with workspace_connection(db, str(uuid.uuid4())) as other:
+                    assert evaluations.read(other, run_id=ref.run_id) is None
+                assert (
+                    client.get(f"/v1/workspaces/{WS}/runs/not-a-uuid/evaluation").status_code == 404
+                )
+                client.cookies.clear()
+                assert client.get(endpoint).status_code == 401
+                with workspace_connection(db, WS) as conn:
+                    bundle, _ = evidence.build_bundle(
+                        conn,
+                        store,
+                        evidence.ExportRequest(
+                            workspace_id=WS,
+                            run_id=ref.run_id,
+                            attempt_id=ref.attempt_id,
+                            requested_by=OWNER,
+                        ),
+                    )
+                    assert bundle.outcome_reasons == tuple(result["snapshot"]["reasons"])
+                with workspace_connection(db, WS) as conn:
+                    with pytest.raises(psycopg.IntegrityError):
+                        conn.execute(
+                            "UPDATE run_evaluation SET outcome='PASS' WHERE run_id=%s",
+                            (ref.run_id,),
+                        )
+            with workspace_connection(db, WS) as conn:
+                state = run_store.load_run(conn, run_id=ref.run_id).state
+                expected = case == "artifact-finalize"
+                assert state.status.value == ("COMPLETED" if expected else "FINALIZING")
+                assert state.outcome.value == ("INCONCLUSIVE" if expected else "NOT_EVALUATED")
+                assert (evaluations.read(conn, run_id=ref.run_id) is not None) == expected
+                audits = conn.execute(
+                    "SELECT 1 FROM audit_event WHERE action='RUN_EVALUATED'"
+                ).fetchall()
+                assert len(audits) == int(expected)
+                outbox = conn.execute(
+                    "SELECT 1 FROM outbox_message WHERE topic='run.completed'"
+                ).fetchall()
+                assert len(outbox) == int(expected)
+                identities = conn.execute("SELECT 1 FROM run_identity").fetchall()
+                assert len(identities) == (9 if expected else 0)
     finally:
         with workspace_connection(db, WS) as conn:
             keys = conn.execute(

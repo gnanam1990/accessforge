@@ -26,6 +26,7 @@ from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import (
     budgets,
     deletion,
+    evaluations,
     evidence,
     projects,
     runners,
@@ -284,6 +285,28 @@ def get_run(
     view = _run_view(row)
     response.headers["ETag"] = f'"{view["revision"]}"'
     return view
+
+
+@router.get("/runs/{run_id}/evaluation")
+def get_evaluation(
+    workspace_id: str, run_id: str, request: Request, conn: Conn, response: Response
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    try:
+        uuid.UUID(run_id)
+    except ValueError:
+        raise not_found() from None
+    try:
+        result = evaluations.read(conn, run_id=run_id)
+    except evaluations.EvaluationError:
+        raise ProblemDetail(
+            ProblemCode.CONFLICT, "Retained evaluation integrity is unavailable."
+        ) from None
+    if result is None:
+        raise not_found()
+    response.headers["ETag"] = f'"{result["snapshotDigest"]}"'
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.get("/runs")
