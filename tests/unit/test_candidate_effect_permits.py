@@ -73,7 +73,9 @@ class Store:
         return Cursor(self.stored)
 
 
-@pytest.mark.parametrize("fault", [None, "effect", "stop", "read", "unknown", "measurement", "stale"])
+@pytest.mark.parametrize(
+    "fault", [None, "effect", "stop", "read", "unknown", "measurement", "stale"]
+)
 def test_exact_action_permission_is_bounded_and_never_rearmed(
     monkeypatch: pytest.MonkeyPatch,
     fault: str | None,
