@@ -6,6 +6,7 @@ import { parseReaderConsentScope, type ReaderConsent, type ReaderConsentScope } 
 import type { Run } from '../api/resources'
 import { SessionProvider } from '../session/SessionProvider'
 import { ReaderStartupSection } from './ReaderStartupSection'
+import { PATHS } from '../../../../packages/clients/ts/src/operations'
 
 const id = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`
 const run: Run = { runId: id(1), status: 'RUNNING', outcome: 'NOT_EVALUATED', revision: 2,
@@ -24,6 +25,7 @@ function fixture(role = 'OWNER') {
   const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input), headers = new Headers(init?.headers)
+    expect(PATHS).toContain(path.split('?')[0]?.replace(id(4), '{workspace_id}').replace(id(1), '{run_id}'))
     if (path === '/v1/session') return json({ userId: id(3), email: 'operator@example.test', workspaces: [{ workspaceId: id(4), name: 'Fixture', role }] })
     if (path.endsWith('/runners')) return json({ items: [{ runnerId: id(2), name: 'Dedicated desktop', platform: 'darwin', revoked: false }], nextCursor: null, readinessMeaning: 'REGISTRATIONS_ONLY' })
     if (path.includes('/scope?')) return json(reviewed)
