@@ -10,6 +10,7 @@ import { ResourceView } from '../components/ResourceView'
 import { StatusBadge } from '../components/StatusBadge'
 import { useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
+import { PatchComparisonSection } from './PatchComparisonSection'
 
 const reviewable = (patch: Patch): boolean => patch.changes.every((c) => !c.binary && [null, '100644', '100755'].includes(c.mode))
 const escapedSource = (content: string): string => JSON.stringify(content).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
@@ -67,6 +68,7 @@ const PatchWorkspace = ({ workspaceId, patchId }: { readonly workspaceId: string
           <ul>{patch.separatelyReviewedPaths.map((path) => <li key={path}><code>{JSON.stringify(path)}</code></li>)}</ul>
         </Notice>}
       </section>
+      <PatchComparisonSection key={`comparison:${patch.patchDigest}:${patch.revision}`} workspaceId={workspaceId} patch={patch} />
       <PatchFiles key={`${patch.patchDigest}:${patch.revision}`} patch={patch} />
       <section className="af-stack"><h2>Isolated candidate approval</h2>
         <p>PATCH_APPLY authorizes only application in an isolated candidate workspace. It does not merge, deploy, publish or assert that this repair works. The worker rechecks current authority, source identity, expiry and revocation.</p>
@@ -95,7 +97,7 @@ const PatchWorkspace = ({ workspaceId, patchId }: { readonly workspaceId: string
         <p>Patch <code>{preview.patch.patchId}</code>, revision {preview.patch.revision}, digest <code>{preview.patch.patchDigest}</code>.</p>
         <p>Base source tree <code>{preview.patch.baseSourceDigest}</code>. Changed bytes or revision require a new review.</p>
         {preview.kind === 'approval' ? <>
-          <p>This approves the displayed full proposed file content. Original base text is not available on this page; inspect the exact base separately before deciding. No unified diff or functional repair proof is claimed here.</p>
+          <p>This approves the displayed full proposed file content. Review the original-source comparison above when available; otherwise inspect the exact base separately before deciding. A comparison is not functional repair proof.</p>
           <label>Approval duration (seconds, 1–86400)<input value={seconds} disabled={busy} inputMode="numeric" aria-invalid={!validSeconds || undefined} onChange={(e) => { setSeconds(e.target.value); setAck(false) }} /></label>
           {!validSeconds && <p role="alert">Use a whole number from 1 to 86400 seconds.</p>}
           <p>PATCH_APPLY only. Does not merge or deploy. Dependency/build paths, if listed above, require separate review.</p>
@@ -111,12 +113,12 @@ const PatchFiles = ({ patch }: { readonly patch: Patch }): JSX.Element => {
   const [index, setIndex] = useState(0)
   const change = patch.changes[index]!
   return <section className="af-stack"><h2>Proposed file content</h2>
-    <p>This is the exact full replacement text or deletion request, not a unified diff. The API does not supply original base-file text; unchanged versus modified lines cannot be inferred here.</p>
+    <p>This section is the exact full replacement text or deletion request, not a unified diff. The separate original-source comparison above is available only when retained from the authorized base.</p>
     <label>Changed file<select value={index} onChange={(e) => setIndex(Number(e.target.value))}>
       {patch.changes.map((c, i) => <option key={c.path} value={i}>{JSON.stringify(c.path)} — {c.operation}</option>)}
     </select></label>
     <p>File mode: <code>{change.mode ?? 'Preserve existing mode'}</code>. Binary flag: {change.binary ? 'Yes — inspect before any decision' : 'No'}.</p>
-    {change.content === null ? <p>DELETE the whole file. Original content is unavailable on this page.</p> : <>
+    {change.content === null ? <p>DELETE the whole file. Consult the original-source comparison above, if available, for its original content.</p> : <>
       <textarea aria-label={`Exact proposed text for ${JSON.stringify(change.path)}`} readOnly rows={14} value={change.content} spellCheck={false} />
       <p>The text control may normalize line endings for display. The escaped representation below preserves them and makes directional control characters explicit.</p>
       <details><summary>Escaped source text and line endings</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{escapedSource(change.content)}</pre></details>
