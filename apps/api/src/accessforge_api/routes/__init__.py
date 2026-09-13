@@ -10,6 +10,7 @@ The consequence is that these files are thin and slightly repetitive, which is t
 The repetition is in the plumbing; the decisions all live in one place each.
 """
 
+from .diagnosis_requests import router as diagnosis_requests_router
 from .exports import router as exports_router
 from .findings import router as findings_router
 from .grants import router as grants_router
@@ -25,6 +26,7 @@ from .settings import router as settings_router
 from .stream import router as stream_router
 
 __all__ = [
+    "diagnosis_requests_router",
     "exports_router",
     "findings_router",
     "patches_router",

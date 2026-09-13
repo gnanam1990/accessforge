@@ -80,6 +80,18 @@ def _view(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def group_digest(manifest: dict[str, Any], assertion_id: str, component_identity: str) -> str:
+    return digest(
+        {
+            "projectId": manifest["projectId"],
+            "journeyDigest": manifest["journeyDigest"],
+            "assertionSetDigest": manifest["assertionSetDigest"],
+            "assertionId": assertion_id,
+            "component": component_identity,
+        }
+    )
+
+
 def retain(
     conn: psycopg.Connection[Any],
     *,
@@ -140,15 +152,7 @@ def retain(
     if sealed is None or digest(sealed["canonical_manifest"]) != run["manifest_digest"]:
         raise DiagnosisRefused("original diagnosis manifest unavailable")
     manifest = sealed["canonical_manifest"]
-    group = digest(
-        {
-            "projectId": manifest["projectId"],
-            "journeyDigest": manifest["journeyDigest"],
-            "assertionSetDigest": manifest["assertionSetDigest"],
-            "assertionId": assertion_id,
-            "component": component_identity,
-        }
-    )
+    group = group_digest(manifest, assertion_id, component_identity)
     payload_digest = digest(analysis)
     request_identity = request_digest(
         workspace_id=workspace_id,
