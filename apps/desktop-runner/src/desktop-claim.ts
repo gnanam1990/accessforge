@@ -119,7 +119,7 @@ function claimDesktop(options: DesktopClaimOptions): { assertHeld(): void; relea
   };
 }
 
-export type ExclusiveDesktopRunner = Pick<AuthenticatedRunner, 'perform' | 'finish' | 'requestCancellation'> & {
+export type ExclusiveDesktopRunner = Pick<AuthenticatedRunner, 'reference' | 'perform' | 'finish' | 'requestCancellation'> & {
   /** One-shot initialization while the claim is held; no actions are admitted until it resolves. */
   initialize(): Promise<void>;
 };
@@ -159,9 +159,13 @@ export function createExclusiveDesktopRunner(
     } catch (error) { cancel(); throw error; }
   };
   runner = build(guard); // Validate the inert runtime before leaving a durable claim.
+  if (JSON.stringify(parseReference(options.reference)) !== JSON.stringify(runner.reference)) {
+    throw new Error('desktop claim differs from the authenticated runner reference');
+  }
   claim = claimDesktop(options);
   const inner = runner;
   return Object.freeze({
+    reference: runner.reference,
     requestCancellation: cancel,
     async initialize() {
       if (state !== 'PENDING' || initialization === undefined) throw new Error('desktop initialization is not repeatable');

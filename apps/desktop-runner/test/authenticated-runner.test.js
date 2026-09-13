@@ -47,7 +47,10 @@ function harness(overrides = {}) {
 
 test('server claim -> fsynced local intent -> physical checks -> adapter -> observation/result -> server result', async () => {
   const h = harness();
-  assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'SUCCEEDED');
+  const result = await h.runner.perform({ action: 'READ_CURRENT' });
+  assert.equal(result.status, 'SUCCEEDED');
+  assert.equal(result.serverActionId, h.journal.entries[0].serverActionId);
+  assert.notEqual(result.serverActionId, h.journal.entries[0].actionId);
   assert.deepEqual(h.calls, ['server-intent', 'server-commit', 'local-intent', 'server-preflight', 'effect-check',
     'adapter', 'observation', 'server-observation', 'local-result', 'server-result:SUCCEEDED']);
   assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'SUCCEEDED');

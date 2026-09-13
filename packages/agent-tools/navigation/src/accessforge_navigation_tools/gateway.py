@@ -40,6 +40,8 @@ class SupervisorDispatchRequest:
     action: str
     key_chord: str | None = None
     text: str | None = None
+    # Native transports resolve this reference again under the supervisor's frozen policy.
+    text_value_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,5 +142,6 @@ class NavigationToolGateway:
                 action=proposal.action.value,
                 key_chord=proposal.key_chord,
                 text=text,
+                text_value_ref=proposal.text_value_ref,
             )
         )

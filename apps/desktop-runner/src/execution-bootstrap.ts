@@ -5,6 +5,7 @@ import { createGuidepupPhysicalSafariRunner } from './physical-preflight.js';
 import type { ExclusiveDesktopRunner } from './desktop-claim.js';
 import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from './reader-startup-consent.js';
 import { readStartupConsentReference } from './startup-provisioning.js';
+import { startNavigatorActionBridge } from './navigator-action-bridge.js';
 
 export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhysicalSafariRunner>[0], 'session'> & {
   /** Independently provisioned private host configuration, never navigator fields. */
@@ -24,6 +25,21 @@ export function createProvisionedExecutionBootstrap(options: Omit<ExecutionBoots
   const { readerStartupConsentPath, ...runtime } = options;
   const readerStartupConsent = readStartupConsentReference(readerStartupConsentPath, runtime.receiver.localReference);
   return createExecutionBootstrap({ ...runtime, readerStartupConsent });
+}
+
+/** Same private provisioned bootstrap, with one bounded native action port for the planner.
+ * Does not invoke a provider or feed unretained observations to the model. The controller still
+ * owns independent observer closure and explicit finish; the verified reader matrix is unchanged.
+ */
+export async function startProvisionedNavigatorExecution(options: Omit<ExecutionBootstrapOptions, 'readerStartupConsent'> & {
+  readonly readerStartupConsentPath: string;
+  readonly navigatorBridgeDirectory: string;
+}): ReturnType<typeof startNavigatorActionBridge> {
+  const { navigatorBridgeDirectory, ...runtime } = options;
+  const runner = createProvisionedExecutionBootstrap(runtime);
+  return startNavigatorActionBridge({ runner, privateDirectory: navigatorBridgeDirectory,
+    reference: runtime.receiver.localReference, deadlineMonotonic: runtime.lease.deadlineMonotonic,
+    maxActions: runtime.lease.maxActions });
 }
 
 /**
