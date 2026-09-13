@@ -100,8 +100,9 @@ first-lease binding, exact manual approval and one-shot committed controller han
 on draft PR #37. One-time exact supervisor-ticket reception and a private-config/stdin native
 bootstrap receiver with durable replay fencing are implemented; production reader action
 transport remains unavailable by default. A bootstrap receipt does not authorize an OS action.
-Still pending:
-canonical authenticated reader/observer execution and finalization, automatic UNKNOWN recovery,
+Automatic expired/revoked/lease-lost manual-handoff recovery now has a scoped periodic worker;
+it interrupts/quarantines but never restarts the desktop. Still pending:
+canonical authenticated reader/observer execution and finalization, remaining action/build UNKNOWN recovery,
 and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;
 neither synthetic desktop metadata nor backend regressions establish an actual-reader repair.
