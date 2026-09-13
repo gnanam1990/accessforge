@@ -90,7 +90,7 @@ def _journey(db: str) -> str:
             fixture=FixtureBinding(template_id="contact-form", navigator_values={"name": "Rowan"}),
             budget=ActionBudget(max_actions=40, wall_time_seconds=300),
             platform="darwin",
-            allowed_actions=frozenset({"NEXT", "ACTIVATE", "TYPE_TEXT"}),
+            allowed_actions=frozenset({"NEXT", "ACTIVATE", "TYPE_TEXT", "STOP"}),
             allowed_key_chords=frozenset(),
             allowed_effects=frozenset({"FIXTURE_SUBMIT"}),
         )

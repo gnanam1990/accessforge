@@ -24,7 +24,7 @@ from accessforge_domain.evaluation.assertions import (
 )
 from accessforge_domain.evaluation.identity import IdentityKind, revalidate
 from accessforge_domain.evaluation.observer import CompletionObservation
-from accessforge_domain.evaluation.rules import ReaderSample, derive_reader_assertion
+from accessforge_domain.evaluation.rules import derive_reader_assertion
 from accessforge_domain.evaluation.verdict import decide
 from accessforge_domain.journeys.assertions import AssertionKind
 from accessforge_domain.states import Condition
@@ -36,12 +36,13 @@ from accessforge_orchestrator.execution_artifacts import (
     _context,
 )
 from accessforge_orchestrator.runtime_evidence import interpret as interpret_runtime
+from accessforge_orchestrator.runtime_evidence import reader_samples
 from accessforge_persistence import evaluations, journeys, runs, workspace_connection
 from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements
 
-EVALUATOR_VERSION = "1.1.0"
+EVALUATOR_VERSION = "1.2.0"
 
 
 def _retained(
@@ -130,22 +131,7 @@ def _decide(
         expected_digest=manifest["assertionSetDigest"],
     )
     values: dict[str, AssertionOutcome] = {}
-    samples = []
-    for event in snapshots["SPEECH_TRANSCRIPT"]["records"]:
-        payload = event["payload"]
-        source = payload["sourceRecord"]
-        if event["eventType"] != "READER_OBSERVATION" or payload["serviceIdentity"] != "SUPERVISOR":
-            raise Refused("reader artifact provenance differs")
-        samples.append(
-            ReaderSample(
-                source["actionSequence"],
-                event["eventId"],
-                source.get("phrase"),
-                capture_unknown=source.get("status") == "CAPTURE_UNKNOWN" or "phrase" not in source,
-                redacted=payload.get("submittedSourceRecordDigest")
-                != payload["sourceRecordDigest"],
-            )
-        )
+    samples = reader_samples(snapshots)
     last = snapshots["EFFECT_RECEIPT"]["records"][-1]
     source = last["payload"]["sourceRecord"]
     if (
@@ -173,8 +159,8 @@ def _decide(
             item.get("unknownReason"),
         )
     for assertion in assertions.required:
-        if assertion.kind is AssertionKind.REQUIRED_ANNOUNCEMENT:
-            values[assertion.assertion_id] = derive_reader_assertion(assertion, tuple(samples))
+        if assertion.kind in {AssertionKind.REQUIRED_ANNOUNCEMENT, AssertionKind.READING_ORDER}:
+            values[assertion.assertion_id] = derive_reader_assertion(assertion, samples)
     evaluated = evaluate_assertions(assertions.required, values)
     task_values = [
         a.condition for a in evaluated.outcomes if a.kind is AssertionKind.TASK_COMPLETION

@@ -40,13 +40,27 @@ class CompiledJourney:
 def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> CompiledJourney:
     """Validate and compile a draft. Deterministic for a given draft."""
     validate_draft(draft)
-    if any(
-        a.evaluation_rule is not None
-        and a.evaluation_rule.action_sequence is not None
-        and a.evaluation_rule.action_sequence > draft.budget.max_actions
+    if "STOP" not in draft.allowed_actions:
+        raise JourneyError("a frozen journey must explicitly permit STOP for normal completion")
+    if "NEXT" not in draft.allowed_actions and any(
+        a.evaluation_rule is not None and a.evaluation_rule.rule_type == "READER_NEXT_SEQUENCE"
         for a in draft.assertions.assertions
     ):
-        raise JourneyError("assertion action sequence exceeds the frozen action budget")
+        raise JourneyError("reader sequence requires NEXT in the frozen action policy")
+    if any(
+        a.evaluation_rule is not None
+        and (
+            (
+                a.evaluation_rule.action_sequence is not None
+                and a.evaluation_rule.action_sequence >= draft.budget.max_actions
+            )
+            or any(
+                step.action_sequence >= draft.budget.max_actions for step in a.evaluation_rule.steps
+            )
+        )
+        for a in draft.assertions.assertions
+    ):
+        raise JourneyError("reader assertion must leave one frozen action-budget slot for STOP")
 
     assertion_set_digest = digest(draft.assertions.canonical_form())
 
