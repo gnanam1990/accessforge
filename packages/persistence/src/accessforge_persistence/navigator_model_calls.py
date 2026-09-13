@@ -96,6 +96,13 @@ def inspect_consent(conn: psycopg.Connection[Any], *, run_id: str) -> dict[str, 
         or reserved_tokens(row["model_profile"]) != row["tokens_per_call"]
     ):
         raise Refused("retained navigator consent profile changed")
+    calls = conn.execute(
+        "SELECT t.operation_id,t.action_sequence,i.status,i.reserved_tokens,i.created_at,"
+        "i.finished_at FROM navigator_model_turn t JOIN diagnosis_invocation i "
+        "ON i.operation_id=t.operation_id AND i.workspace_id=t.workspace_id "
+        "WHERE t.consent_id=%s AND i.purpose='NAVIGATOR' ORDER BY t.action_sequence LIMIT 501",
+        (row["id"],),
+    ).fetchall()
     return {
         "consentId": str(row["id"]),
         "runId": str(row["run_id"]),
@@ -107,6 +114,19 @@ def inspect_consent(conn: psycopg.Connection[Any], *, run_id: str) -> dict[str, 
         "tokensPerCall": row["tokens_per_call"],
         "expiresAt": to_rfc3339_utc(row["expires_at"]),
         "revokedAt": None if row["revoked_at"] is None else to_rfc3339_utc(row["revoked_at"]),
+        "invocations": [
+            {
+                "operationId": str(call["operation_id"]),
+                "afterActionSequence": call["action_sequence"],
+                "status": call["status"],
+                "reservedTokens": call["reserved_tokens"],
+                "createdAt": to_rfc3339_utc(call["created_at"]),
+                "finishedAt": None
+                if call["finished_at"] is None
+                else to_rfc3339_utc(call["finished_at"]),
+            }
+            for call in calls
+        ],
         "meaning": "STORED_MODEL_CONSENT_NOT_INVOCATION_OR_FINANCIAL_CAP",
         "disclosure": "Approved task intent, safe fixture values and retained reader announcements "
         "may be disclosed to this provider. Calls and configured retries may be billable. "

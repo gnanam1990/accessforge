@@ -77,6 +77,20 @@ CREATE POLICY workspace_isolation ON navigator_model_turn
  USING(workspace_id=current_workspace_id()) WITH CHECK(workspace_id=current_workspace_id());
 CREATE FUNCTION guard_navigator_model_turn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+ IF TG_OP='INSERT' THEN
+   IF NOT EXISTS(
+     SELECT 1 FROM diagnosis_invocation i JOIN desktop_lease l ON l.id=NEW.lease_id
+       AND l.workspace_id=NEW.workspace_id
+     WHERE i.operation_id=NEW.operation_id AND i.workspace_id=NEW.workspace_id
+       AND i.run_id=NEW.run_id AND i.purpose='NAVIGATOR' AND i.status='STARTED'
+       AND l.run_id=NEW.run_id AND l.attempt_id=NEW.attempt_id
+       AND l.runner_id=NEW.runner_id AND l.epoch=NEW.lease_epoch
+   ) THEN
+     RAISE EXCEPTION 'navigator turn requires its own reservation and exact desktop attempt'
+       USING ERRCODE='integrity_constraint_violation';
+   END IF;
+   RETURN NEW;
+ END IF;
  IF TG_OP='DELETE' AND NOT EXISTS(SELECT 1 FROM workspace WHERE id=OLD.workspace_id) THEN
    RETURN OLD;
  END IF;
@@ -84,5 +98,5 @@ BEGIN
    USING ERRCODE='integrity_constraint_violation';
 END;
 $$;
-CREATE TRIGGER navigator_model_turn_guard BEFORE UPDATE OR DELETE ON navigator_model_turn
+CREATE TRIGGER navigator_model_turn_guard BEFORE INSERT OR UPDATE OR DELETE ON navigator_model_turn
  FOR EACH ROW EXECUTE FUNCTION guard_navigator_model_turn();
