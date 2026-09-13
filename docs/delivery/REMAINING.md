@@ -97,8 +97,10 @@ immutable candidate source bytes without executing or extracting repository cont
 Isolated owned-reference builds, retained canonical artifacts, protected backend regressions,
 durable endpoint lifecycle, materialized source/build identities, and live candidate seal/fixture/
 first-lease binding, exact manual approval and one-shot committed controller handoff are implemented
-on draft PR #37. One-time exact supervisor-ticket reception is also implemented; production reader
-transport remains unavailable by default. Still pending:
+on draft PR #37. One-time exact supervisor-ticket reception and a private-config/stdin native
+bootstrap receiver with durable replay fencing are implemented; production reader action
+transport remains unavailable by default. A bootstrap receipt does not authorize an OS action.
+Still pending:
 canonical authenticated reader/observer execution and finalization, automatic UNKNOWN recovery,
 and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;
