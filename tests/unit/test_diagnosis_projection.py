@@ -38,7 +38,10 @@ def test_preparation_uses_original_evaluation_and_checked_artifacts(
         "manifestDigest": run["manifest_digest"],
         "attemptId": attempt,
         "artifacts": artifact_ids,
-        "assertions": [{"assertionId": "announcement", "condition": "UNKNOWN"}],
+        "assertions": [
+            {"assertionId": "announcement", "condition": "UNKNOWN"},
+            {"assertionId": "unrelated", "condition": "FALSE"},
+        ],
     }
     original = {
         "evaluationId": evaluation,
@@ -68,6 +71,7 @@ def test_preparation_uses_original_evaluation_and_checked_artifacts(
         lambda *args, **kwargs: SimpleNamespace(
             required=(
                 SimpleNamespace(assertion_id="announcement", description="Announce the error"),
+                SimpleNamespace(assertion_id="unrelated", description="An unrelated failed step"),
             )
         ),
     )
@@ -123,6 +127,7 @@ def test_preparation_uses_original_evaluation_and_checked_artifacts(
     args: dict[str, Any] = {
         "workspace_id": workspace,
         "run_id": run_id,
+        "assertion_id": "announcement",
         "component_name": "form",
         "source_scope": scope,
         "excerpts": (delivery.ExcerptRequest("form.ts", 1, 1),),
@@ -137,6 +142,7 @@ def test_preparation_uses_original_evaluation_and_checked_artifacts(
     assert prepared.evaluation_digest == original["snapshotDigest"]
     assert prepared.projection.run_outcome == "INCONCLUSIVE"
     assert prepared.projection.assertions[0].condition == "UNKNOWN"
+    assert len(prepared.projection.assertions) == 1
     assert checks == ["artifacts", "source", "source"]
     event = prepared.projection.evidence[1]
     assert event.observed_text == ("recorded announcement" if fault is None else None)

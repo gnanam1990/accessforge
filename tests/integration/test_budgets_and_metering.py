@@ -194,6 +194,27 @@ def test_a_workspace_with_no_entitlement_is_refused_rather_than_unlimited(db: st
             )
 
 
+def test_configuration_uses_the_same_workspace_lock_as_admission(db: str) -> None:
+    with workspace_connection(db, WS) as conn:
+        budgets.configure_entitlement(
+            conn,
+            workspace_id=WS,
+            configured_by=ADMIN,
+            reason="serialized allowance",
+            max_runs_per_day=5,
+            max_actions_per_day=100,
+            max_wall_seconds_per_day=3600,
+            max_model_tokens_per_day=1000,
+            max_concurrent_runs=2,
+        )
+        with workspace_connection(db, WS) as other:
+            observed = other.execute(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,0)) AS acquired",
+                ("accessforge:budget:" + WS,),
+            ).fetchone()
+            assert observed is not None and observed["acquired"] is False
+
+
 def test_configuring_appends_a_revision_and_never_edits_one(db: str) -> None:
     first = _entitle(db)
     assert first == 1

@@ -22,6 +22,13 @@ actual source intake or reader was run while implementing it. Changed-file Ruff/
 scoped synthetic assembly regressions are authored for CI, not locally executed. Real retained
 artifact/source integration coverage remains part of completing the delivery path.
 
+Normal review corrections: preparation requires one selected assertion and exposes only that
+assertion to the worker, while preserving the full original evaluation digest. Another false
+assertion cannot lend its condition to the requested one. Entitlement configuration and admissions
+now take the same workspace lock. The worker reports provider entry only after successful agent
+construction and the last pre-call cancellation check; known pre-call failures release their hold
+as NOT_CALLED rather than indefinitely reserving capacity for a call that never began.
+
 ## Durable delivery added
 
 Migration 0039 and `accessforge_persistence.diagnoses` retain immutable diagnosis revisions, with

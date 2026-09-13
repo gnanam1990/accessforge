@@ -46,6 +46,7 @@ async def deliver(
             store,
             workspace_id=workspace_id,
             run_id=run_id,
+            assertion_id=assertion_id,
             component_name=component_name,
             source_scope=source_scope,
             excerpts=excerpts,
@@ -80,14 +81,22 @@ async def deliver(
     # The STARTED reservation commits before any provider work. A process crash or uncertain
     # commit leaves an operation that must be reconciled, never automatically invoked again.
     provider_possible = False
+
+    def provider_entered() -> None:
+        nonlocal provider_possible
+        provider_possible = True
+
     try:
         if fence.is_set():
             raise Refused("diagnosis cancelled before model invocation")
         worker = DiagnosisWorker(
             profile=profile, agent_builder=lambda _: build_diagnosis_agent(profile)
         )
-        provider_possible = True
-        result = await worker.diagnose(before.projection, cancel_signal=fence)
+        result = await worker.diagnose(
+            before.projection,
+            cancel_signal=fence,
+            on_provider_invoke=provider_entered,
+        )
         if fence.is_set():
             raise Refused("diagnosis was interrupted; no finding created")
         # No database locks span the provider call. Recheck source, retention and permission.
@@ -103,6 +112,7 @@ async def deliver(
                 store,
                 workspace_id=workspace_id,
                 run_id=run_id,
+                assertion_id=assertion_id,
                 component_name=component_name,
                 source_scope=source_scope,
                 excerpts=excerpts,
@@ -132,7 +142,7 @@ async def deliver(
                 workspace_id=workspace_id,
                 operation_id=operation_id,
                 request_digest=identity,
-                status="RECORDED",
+                status="RECORDED" if provider_possible else "NOT_CALLED",
             )
         return retained
     except BaseException as exc:
