@@ -309,6 +309,18 @@ def build_parser() -> argparse.ArgumentParser:
     runners.add_argument("--workspace", required=True)
     runners.set_defaults(handler=_runner_list)
 
+    consent = runner.add_parser(
+        "export-startup-consent",
+        help="export an existing consent reference; does not start a reader",
+    )
+    consent.add_argument("--workspace", required=True)
+    consent.add_argument("--run", required=True)
+    consent.add_argument("--runner", required=True)
+    consent.add_argument(
+        "--output", type=Path, required=True, help="new file in an existing private directory"
+    )
+    consent.set_defaults(handler=_export_startup_consent)
+
     export = sub.add_parser("export", help="evidence bundles").add_subparsers(
         dest="export_command", required=True
     )
@@ -321,6 +333,31 @@ def build_parser() -> argparse.ArgumentParser:
     operations.set_defaults(handler=_operations)
 
     return parser
+
+
+def _export_startup_consent(args: argparse.Namespace) -> int:
+    import httpx
+
+    from .reader_provisioning import read_provisioning_reference, write_private_reference
+
+    try:
+        with _client(args) as client:
+            reference = read_provisioning_reference(
+                client, workspace_id=args.workspace, run_id=args.run, runner_id=args.runner
+            )
+        write_private_reference(args.output, reference)
+    except (OSError, ValueError, httpx.HTTPError):
+        print(
+            "consent export refused or incomplete; inspect the exact output before retrying. "
+            "No consent was issued and no reader was started.",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        "Private consent reference written (mode 600). "
+        "Native live authority checks remain required."
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
