@@ -1448,6 +1448,201 @@ def _ticket_url(ticket: DispatchTicket, workspace_id: str = WS) -> str:
     return f"/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket.ticket_id}/accept"
 
 
+@pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "scope",
+        "stale",
+        "ack",
+        "csrf",
+        "role",
+        "expiry",
+        "environment-expired",
+        "environment-revoked",
+    ],
+)
+def test_operator_reader_startup_consent_routes(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    fault: str | None,
+    environment: str,
+) -> None:
+    import secrets
+
+    from accessforge_api.auth import issue_session
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    base = f"/v1/workspaces/{WS}/runs/{ref.run_id}/reader-startup-consent"
+    scope = client.get(base + "/scope", params={"runnerId": ref.runner_id})
+    assert scope.status_code == 200
+    assert scope.headers["cache-control"] == "no-store"
+    reviewed = scope.json()
+    assert reviewed["meaning"] == "REVIEW_SCOPE_ONLY_NOT_STARTUP_CONSENT"
+    assert digest(reviewed["effects"]) == reviewed["effectsDigest"]
+    assert client.get(base).status_code == 404
+    body = {
+        key: reviewed[key]
+        for key in (
+            "runnerId",
+            "manifestDigest",
+            "desktopSessionKey",
+            "runnerProfileDigest",
+            "effectsDigest",
+        )
+    }
+    body.update(expiresAt=reviewed["maximumExpiresAt"], dedicatedDesktopAcknowledged=True)
+    headers = {
+        CSRF_HEADER: csrf,
+        "If-Match": str(reviewed["revision"]),
+        "Idempotency-Key": str(uuid.uuid4()),
+    }
+    if fault == "scope":
+        body["effectsDigest"] = _digest("different-startup-effects")
+    if fault == "stale":
+        headers["If-Match"] = str(reviewed["revision"] + 1)
+    if fault == "ack":
+        body["dedicatedDesktopAcknowledged"] = 1
+    if fault == "expiry":
+        body["expiresAt"] = "2000-01-01T00:00:00Z"
+    if fault == "csrf":
+        del headers[CSRF_HEADER]
+    if fault == "role":
+        with workspace_connection(db, WS) as conn:
+            issued = issue_session(conn, user_id=VIEWER)
+        client.cookies.set(SESSION_COOKIE, issued.session_token)
+        headers[CSRF_HEADER] = issued.csrf_token
+    if fault in {"environment-expired", "environment-revoked"}:
+        machine_secret = secrets.token_urlsafe(32)
+        assert (
+            client.post(
+                _ticket_url(ticket).removesuffix("accept") + "session",
+                json={"sessionSecret": machine_secret},
+                headers={"Authorization": f"Bearer {ticket.token}"},
+            ).status_code
+            == 201
+        )
+        with workspace_connection(db, WS) as conn:
+            column = "expires_at" if fault == "environment-expired" else "revoked_at"
+            conn.execute(
+                f"UPDATE environment_manifest SET {column}=now()-interval '1 day' WHERE id=%s",  # noqa: S608
+                (environment,),
+            )
+        assert client.get(base + "/scope", params={"runnerId": ref.runner_id}).status_code == 409
+        assert (
+            client.post(
+                f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}/reader-startup-consent",
+                json={},
+                headers={"Authorization": f"Bearer {machine_secret}"},
+            ).status_code
+            == 403
+        )
+    issued_response = client.post(base, json=body, headers=headers)
+    if fault is not None:
+        assert issued_response.status_code == (
+            400 if fault == "ack" else 403 if fault in {"csrf", "role"} else 409
+        )
+        with workspace_connection(db, WS) as conn:
+            assert conn.execute("SELECT count(*) AS n FROM reader_startup_consent").fetchone() == {
+                "n": 0
+            }
+        return
+    assert issued_response.status_code == 201
+    grant = issued_response.json()
+    assert grant["boundSessionId"] is None and grant["actorId"] == OWNER
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(psycopg.IntegrityError, match="retained reader consent"):
+            with conn.transaction():
+                conn.execute(
+                    "DELETE FROM reader_startup_consent WHERE id=%s", (grant["consentId"],)
+                )
+    assert client.post(base, json=body, headers=headers).json() == grant
+    assert client.get(base).json() == grant
+    secret = secrets.token_urlsafe(32)
+    assert (
+        client.post(
+            _ticket_url(ticket).removesuffix("accept") + "session",
+            json={"sessionSecret": secret},
+            headers={"Authorization": f"Bearer {ticket.token}"},
+        ).status_code
+        == 201
+    )
+    machine_url = (
+        f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}/reader-startup-consent"
+    )
+    machine_headers = {"Authorization": f"Bearer {secret}"}
+    assert client.post(machine_url, json={}).status_code == 401
+    assert (
+        client.post(
+            machine_url, json={}, headers={"Authorization": f"Bearer {ticket.token}"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            machine_url, json={"consentId": grant["consentId"]}, headers=machine_headers
+        ).status_code
+        == 400
+    )
+    for _ in range(2):
+        bound = client.post(machine_url, json={}, headers=machine_headers)
+        assert bound.status_code == 200
+        assert bound.json()["consentId"] == grant["consentId"]
+        assert bound.json()["reference"]["runId"] == ref.run_id
+        assert bound.json()["meaning"] == "OPERATOR_STARTUP_CONSENT_RECHECKED_NOT_PHYSICAL_PROOF"
+        assert datetime.fromisoformat(
+            bound.json()["expiresAt"].replace("Z", "+00:00")
+        ) <= datetime.fromisoformat(grant["expiresAt"].replace("Z", "+00:00"))
+        assert secret not in bound.text and ticket.token not in bound.text
+    assert client.get(base).json()["boundSessionId"] == ticket.ticket_id
+    assert (
+        client.post(
+            base + "/revocation", json={"consentId": str(uuid.uuid4())}, headers={CSRF_HEADER: csrf}
+        ).status_code
+        == 409
+    )
+    for _ in range(2):
+        revoked = client.post(
+            base + "/revocation",
+            json={"consentId": grant["consentId"]},
+            headers={CSRF_HEADER: csrf},
+        )
+        assert revoked.status_code == 200 and revoked.json()["revokedAt"] is not None
+    assert client.post(machine_url, json={}, headers=machine_headers).status_code == 403
+    assert (
+        client.post(
+            base, json=body, headers={CSRF_HEADER: csrf, "If-Match": headers["If-Match"]}
+        ).status_code
+        == 409
+    )
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM runner_action").fetchone() == {"n": 0}
+        audit = conn.execute(
+            "SELECT actor_user,actor_service,action FROM audit_event "
+            "WHERE action LIKE 'READER_STARTUP_CONSENT_%' ORDER BY id"
+        ).fetchall()
+        assert len(audit) == 3
+        assert audit[0]["actor_user"] == uuid.UUID(OWNER)
+        assert audit[1]["action"] == "READER_STARTUP_CONSENT_BOUND"
+        assert audit[1]["actor_user"] is None and audit[1]["actor_service"] == "desktop-supervisor"
+        assert audit[2]["actor_user"] == uuid.UUID(OWNER)
+        with pytest.raises(psycopg.IntegrityError, match="retained reader consent"):
+            with conn.transaction():
+                conn.execute(
+                    "DELETE FROM reader_startup_consent WHERE id=%s", (grant["consentId"],)
+                )
+    with unscoped_connection(db) as conn:
+        conn.execute("DELETE FROM workspace WHERE id=%s", (WS,))
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM reader_startup_consent").fetchone() == {
+            "n": 0
+        }
+
+
 def _seed_reader_fixture(db: str, ref: DispatchReference) -> None:
     from accessforge_persistence.fixtures import create_instance
 

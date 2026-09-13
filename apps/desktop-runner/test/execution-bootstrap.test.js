@@ -8,6 +8,7 @@ import { RealReaderUnavailable } from '@accessforge/at-voiceover';
 import { createExecutionBootstrap } from '../dist/execution-bootstrap.js';
 import { parseDispatchEnvelope } from '../dist/dispatch-receiver.js';
 import { MemoryJournal } from '../dist/journal.js';
+import { READER_STARTUP_EFFECTS_DIGEST } from '../dist/reader-startup-consent.js';
 
 function input() {
   const reference = { workspaceId: randomUUID(), runId: randomUUID(), attemptId: randomUUID(),
@@ -38,6 +39,8 @@ test('unproven production profile refuses before claim creation, network, callba
   assert.throws(() => createExecutionBootstrap({
     receiver: { apiOrigin: 'https://api.example.test', claimsDirectory: directory, localReference: envelope.reference },
     dispatchEnvelope: envelope, desktopClaimDirectory: directory,
+    readerStartupConsent: { consentId: randomUUID(), manifestDigest: '1'.repeat(64),
+      desktopSessionKey: '2'.repeat(64), runnerProfileDigest: '3'.repeat(64), effectsDigest: READER_STARTUP_EFFECTS_DIGEST },
     lease: { leaseId: envelope.reference.leaseId, epoch: 1, deadlineMonotonic: performance.now() + 10000,
       maxActions: 5, maxWallTimeSeconds: 10 },
     journal: new MemoryJournal(), clock: { monotonic: () => performance.now(), utc: () => new Date().toISOString() },

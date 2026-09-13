@@ -875,6 +875,11 @@ def test_the_published_contract_declares_how_authentication_works(
 
     mutating = schema["paths"]["/v1/workspaces/{workspace_id}/execution-grants"]["post"]
     assert mutating["security"] == [{"sessionCookie": [], "csrfHeader": []}]
+    assert schemes["supervisorBearer"]["scheme"] == "bearer"
+    for path, operations in schema["paths"].items():
+        if "/supervisor-sessions/" in path or "/supervisor-dispatches/" in path:
+            assert operations["post"]["security"] == [{"supervisorBearer": []}]
+            assert "429" not in operations["post"]["responses"]
 
     # Signing in cannot require a session.
     assert schema["paths"]["/v1/sessions"]["post"]["security"] == []
