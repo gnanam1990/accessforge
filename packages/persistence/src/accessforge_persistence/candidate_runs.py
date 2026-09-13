@@ -425,8 +425,8 @@ def assert_request(
 ) -> None:
     """Preview has no run; sealed sessions cannot outlive their first reader lease.
 
-    GET before lease admission is trusted setup only. Effects stay closed until the canonical
-    controller supplies independently checked RUN_EFFECTS authority, not merely a live lease.
+    GET before lease admission is trusted setup only. This legacy method-only gate never opens
+    bound POSTs; candidate_effect_delivery owns committed one-shot RUN_EFFECTS consumption.
     """
     row = conn.execute(
         "SELECT b.run_id,l.lease_id,l.lease_epoch FROM candidate_run_binding b "
@@ -442,7 +442,7 @@ def assert_request(
     else:
         assert_lease(conn, run_id=run_id, lease_id=str(row["lease_id"]), epoch=row["lease_epoch"])
     if method != "GET":
-        raise Refused("canonical RUN_EFFECTS transport authorization is not yet available")
+        raise Refused("bound POST requires original one-shot RUN_EFFECTS delivery authority")
 
 
 def assert_reader_released(conn: psycopg.Connection[dict[str, Any]], *, attempt_id: str) -> None:

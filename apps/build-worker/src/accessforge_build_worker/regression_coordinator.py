@@ -8,8 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
+from accessforge_persistence import (
+    candidate_effect_delivery,
+    candidate_observations,
+    candidate_runs,
+    workspace_connection,
+)
 from accessforge_persistence import candidate_endpoints as endpoints
-from accessforge_persistence import candidate_observations, candidate_runs, workspace_connection
 from accessforge_persistence import candidate_regressions as regressions
 
 from .artifact_probe import ArtifactProbe
@@ -106,6 +111,27 @@ def execute_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             candidate_runs.assert_request(conn, attempt_id=claim.attempt_id, method=method)
 
+    def begin_effect(path: str, body: str) -> dict[str, Any] | None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            permission = candidate_effect_delivery.begin(
+                conn,
+                claim=claim,
+                path=path,
+                body=body,
+                allow_preview=on_candidate_session is None,
+            )
+        return permission  # Commit (including consumption) MUST finish before HTTP can be sent.
+
+    def check_effect(permission: dict[str, Any]) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            candidate_effect_delivery.check(conn, claim=claim, permission=permission)
+
+    def effect_response(permission: dict[str, Any], response: dict[str, Any]) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            candidate_effect_delivery.retain_response(
+                conn, claim=claim, permission=permission, response=response
+            )
+
     def endpoint_planned(identity: dict[str, Any]) -> None:
         with workspace_connection(database_url, workspace_id) as conn:
             endpoints.plan(conn, claim=claim, identity=identity)
@@ -162,6 +188,9 @@ def execute_regressions(
             assert_endpoint_authority=endpoint_authority,
             assert_endpoint_live=endpoint_live,
             assert_candidate_request=candidate_request,
+            begin_candidate_effect=begin_effect,
+            assert_candidate_effect=check_effect,
+            on_candidate_effect_response=effect_response,
             on_endpoint_planned=endpoint_planned,
             on_endpoint_bound=endpoint_bound,
             on_endpoint_closed=endpoint_closed,
