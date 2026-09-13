@@ -7,9 +7,10 @@ produces a diff in three places on the same commit, and CI fails if any of them 
 
 **What is generated, and what deliberately is not.**
 
-Generated: the operation table — one entry per route, with its method, path, path parameters, and
-whether it is a mutation. That is the part that drifts, silently, and that a person cannot check by
-reading.
+Generated: the human-client operation table, with each public/cookie route's method, path,
+parameters and mutation flag. Supervisor bearer routes are excluded from this surface: the native
+machine protocol owns their separate credentials and one-shot semantics. PATHS still lists every
+server route so independent clients can check their URLs against the complete contract.
 
 Not generated: the transport. Cookies, CSRF, `If-Match`, `Idempotency-Key`, retry semantics and the
 handling of a problem document are decisions about how to talk to this API safely, and generating
@@ -65,6 +66,7 @@ def _operations() -> list[dict[str, Any]]:
                     "parameters": _PATH_PARAM.findall(path),
                     "mutating": method in MUTATING,
                     "authenticated": bool(operation.get("security")),
+                    "machine_only": operation.get("security") == [{"supervisorBearer": []}],
                     "summary": (operation.get("summary") or "").strip(),
                 }
             )
@@ -75,10 +77,10 @@ def _python(operations: list[dict[str, Any]]) -> str:
     lines = [
         '"""' + BANNER,
         "",
-        "The operation table, derived from contracts/openapi.json, which is itself derived",
+        "The human-client operation table, derived from contracts/openapi.json, which is derived",
         "from the live application. Every entry names a real route; a route removed from the API",
-        "disappears from here on the same commit, and a client calling it stops compiling rather",
-        "than receiving a 404 in production.",
+        "disappears from here on the same commit. Supervisor bearer routes are excluded: use",
+        "NativeExecutionSession for the private machine protocol, never a browser session.",
         '"""',
         "",
         "from __future__ import annotations",
@@ -121,6 +123,8 @@ def _python(operations: list[dict[str, Any]]) -> str:
         "OPERATIONS: dict[str, Operation] = {",
     ]
     for op in operations:
+        if op["machine_only"]:
+            continue
         params = ", ".join(f'"{p}"' for p in op["parameters"])
         params = f"({params},)" if len(op["parameters"]) == 1 else f"({params})"
         lines.append(f'    "{op["operation_id"]}": Operation(')
@@ -150,9 +154,10 @@ def _typescript(operations: list[dict[str, Any]]) -> str:
     lines = [
         f"// {BANNER}",
         "//",
-        "// The operation table, derived from contracts/openapi.json, which is itself derived from",
+        "// The human-client operation table, derived from contracts/openapi.json, is derived from",
         "// the live application. `PATHS` exists so a hand-written client can assert every URL",
         "// it builds is one the API actually serves -- drift that a type checker cannot see.",
+        "// Supervisor bearer routes are not human operations; use NativeExecutionSession instead.",
         "",
         "export interface Operation {",
         "  readonly operationId: string",
@@ -167,6 +172,8 @@ def _typescript(operations: list[dict[str, Any]]) -> str:
         "export const OPERATIONS: Readonly<Record<string, Operation>> = {",
     ]
     for op in operations:
+        if op["machine_only"]:
+            continue
         params = ", ".join(f"'{p}'" for p in op["parameters"])
         lines.append(f"  '{op['operation_id']}': {{")
         lines.append(f"    operationId: '{op['operation_id']}',")

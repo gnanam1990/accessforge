@@ -3,12 +3,15 @@ import type { ExecutionSessionPort } from './authenticated-runner.js';
 import { NativeExecutionSession, parseReference, parseDispatchEnvelope, type ReceiverConfig } from './dispatch-receiver.js';
 import { createGuidepupPhysicalSafariRunner } from './physical-preflight.js';
 import type { ExclusiveDesktopRunner } from './desktop-claim.js';
+import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from './reader-startup-consent.js';
 
 export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhysicalSafariRunner>[0], 'session'> & {
   /** Independently provisioned private host configuration, never navigator fields. */
   readonly receiver: ReceiverConfig;
   /** Controller-delivered one-shot envelope. Neither it nor session credentials are returned. */
   readonly dispatchEnvelope: unknown;
+  /** Exact grant and sealed identities from private operator provisioning, never navigator input. */
+  readonly readerStartupConsent: ReaderStartupConsentScope;
 };
 
 /**
@@ -18,7 +21,8 @@ export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhy
  * recovery must reconcile, never replay this envelope. No default authority/evidence callbacks.
  */
 export function createExecutionBootstrap(options: ExecutionBootstrapOptions): ExclusiveDesktopRunner {
-  const { receiver, dispatchEnvelope, readerStartup, ...runtime } = options;
+  const { receiver, dispatchEnvelope, readerStartup, readerStartupConsent, ...runtime } = options;
+  const consent = parseReaderStartupConsentScope(readerStartupConsent);
   const reference = Object.freeze(parseReference(receiver.localReference));
   const config = Object.freeze({ ...receiver, localReference: reference });
   const envelope = parseDispatchEnvelope(dispatchEnvelope);
@@ -69,9 +73,9 @@ export function createExecutionBootstrap(options: ExecutionBootstrapOptions): Ex
       check();
       await readerStartup.authorize(signal);
       check();
-      // Operator consent to SDK side effects is separate from live server run/lease authority.
-      // This read is last so slow operator authorization cannot cache an earlier server decision.
-      await requireMachine().checkStartupAuthority(signal);
+      // The server authenticates live run/lease authority and the separate immutable operator
+      // grant together. Recheck last so a slow host callback cannot cache an earlier decision.
+      await requireMachine().checkReaderStartupConsent(consent, signal);
       check();
     },
   } });
