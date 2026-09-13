@@ -173,6 +173,22 @@ def test_frozen_evaluation_rules_are_stored_bound_and_not_navigator_visible(
         "actionSequence": 3,
         "phrase": "Private literal expectation",
     }
+    draft["assertions"].append(
+        {
+            "assertionId": "reading-order",
+            "kind": "READING_ORDER",
+            "description": "Name then email",
+            "required": True,
+            "unknownReasons": ["OBSERVATION_MISSING"],
+            "evaluationRule": {
+                "type": "READER_NEXT_SEQUENCE",
+                "steps": [
+                    {"actionSequence": 4, "phrase": "Private name phrase"},
+                    {"actionSequence": 5, "phrase": "Private email phrase"},
+                ],
+            },
+        }
+    )
     created = client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers)
     assert created.status_code == 201, created.text
     body = created.json()
@@ -185,6 +201,12 @@ def test_frozen_evaluation_rules_are_stored_bound_and_not_navigator_visible(
         )
         assert contract.assertions[1].evaluation_rule is not None
         assert "Private literal expectation" not in str(row["navigator_policy"])
+        assert "Private name phrase" not in str(row["navigator_policy"])
+        assert contract.assertions[2].evaluation_rule is not None
+        assert (
+            contract.assertions[2].evaluation_rule.canonical_form()
+            == draft["assertions"][2]["evaluationRule"]
+        )
         with pytest.raises(JourneyPersistenceError):
             load_assertion_contract(conn, version_id=str(row["id"]), expected_digest="0" * 64)
     draft["assertions"][1]["evaluationRule"]["phrase"] = "Changed expectation"
@@ -193,6 +215,19 @@ def test_frozen_evaluation_rules_are_stored_bound_and_not_navigator_visible(
     assert changed.json()["assertionSetDigest"] != body["assertionSetDigest"]
     assert changed.json()["journeyDigest"] != body["journeyDigest"]
     assert changed.json()["navigatorPolicyDigest"] == body["navigatorPolicyDigest"]
+    draft["assertions"][2]["evaluationRule"]["steps"][1]["phrase"] = "A different frozen sequence"
+    reordered = client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers)
+    assert reordered.status_code == 201
+    assert reordered.json()["assertionSetDigest"] != changed.json()["assertionSetDigest"]
+    draft["budget"]["maxActions"] = 4
+    assert (
+        client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 400
+    )
+    draft["budget"]["maxActions"] = 40
+    draft["allowedActions"].remove("NEXT")
+    assert (
+        client.post(f"/v1/workspaces/{WS}/journeys", json=draft, headers=headers).status_code == 400
+    )
 
 
 @pytest.mark.parametrize(

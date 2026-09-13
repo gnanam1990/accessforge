@@ -23,6 +23,9 @@ class ReaderSample:
     phrase: str | None
     capture_unknown: bool = False
     redacted: bool = False
+    # Supplied only by the trusted retained-action join, never reader/navigator JSON.
+    next_action_verified: bool = False
+    canonical_sequence: int | None = None
 
 
 def derive_reader_assertion(
@@ -31,6 +34,58 @@ def derive_reader_assertion(
     rule = assertion.evaluation_rule
     reason = "no supported frozen reader predicate; descriptions are not executable expectations"
     refs: tuple[str, ...] = ()
+    if rule is not None and rule.rule_type == "READER_NEXT_SEQUENCE":
+        selected = [
+            sample
+            for sample in samples
+            if sample.action_sequence in {step.action_sequence for step in rule.steps}
+        ]
+        refs = tuple(dict.fromkeys(sample.event_id for sample in selected if sample.event_id))
+        ordered = []
+        for step in rule.steps:
+            matches = [
+                sample for sample in selected if sample.action_sequence == step.action_sequence
+            ]
+            if len(matches) != 1:
+                break
+            ordered.append(matches[0])
+        known = (
+            len(ordered) == len(rule.steps)
+            and len(refs) == len(rule.steps)
+            and all(
+                sample.next_action_verified is True
+                and type(sample.canonical_sequence) is int
+                and sample.canonical_sequence > 0
+                and not sample.capture_unknown
+                and not sample.redacted
+                and sample.phrase is not None
+                and bool(sample.event_id)
+                for sample in ordered
+            )
+            and all(
+                left.canonical_sequence is not None
+                and right.canonical_sequence is not None
+                and left.canonical_sequence < right.canonical_sequence
+                for left, right in zip(ordered, ordered[1:], strict=False)
+            )
+        )
+        if known:
+            return AssertionOutcome(
+                assertion.assertion_id,
+                assertion.kind,
+                Condition.TRUE
+                if all(
+                    sample.phrase == step.phrase
+                    for sample, step in zip(ordered, rule.steps, strict=True)
+                )
+                else Condition.FALSE,
+                Provenance.EVALUATOR_DERIVED,
+                tuple(sample.event_id for sample in ordered),
+            )
+        reason = (
+            "consecutive successful NEXT actions or original ordered reader captures "
+            "are missing, conflicting, unknown or redacted"
+        )
     if rule is not None and rule.rule_type == "EXACT_READER_PHRASE":
         matches = [sample for sample in samples if sample.action_sequence == rule.action_sequence]
         if len(matches) == 1:
