@@ -1,7 +1,8 @@
 /** Frozen predicates are explicit controls, not inferred from the reviewer's description. */
-import type { JSX } from 'react'
+import { useEffect, useRef, type JSX } from 'react'
 import type { JourneyCapabilities } from '../api/resources'
 import { FormField } from '../components/FormField'
+import { Button } from '../components/Button'
 
 export interface AssertionRow {
   readonly assertionId: string
@@ -13,6 +14,16 @@ export interface AssertionRow {
   readonly phrase?: string
   readonly actionSequence?: string
   readonly effectCount?: string
+  readonly sequencePhrases?: readonly string[]
+}
+
+/** Only the supported bounded NEXT profile is offered; absent/malformed capability is not a default. */
+export function readingOrderCapability(policy: JourneyCapabilities) {
+  const rule = policy.evaluationRules?.READER_NEXT_SEQUENCE
+  return rule && rule.assertionKind === 'READING_ORDER' && rule.action === 'NEXT' && rule.minSteps === 2 &&
+    Number.isSafeInteger(rule.maxSteps) && rule.maxSteps >= 2 && rule.maxSteps <= 20 &&
+    [rule.maxActionSequence, rule.maxPhraseCharacters, rule.maxTotalPhraseBytes].every((v) => Number.isSafeInteger(v) && v > 0)
+    ? rule : null
 }
 
 type FieldError = { readonly fieldId: string; readonly message: string }
@@ -21,6 +32,7 @@ export const assertionFieldId = (prefix: string, row: AssertionRow, field: strin
 
 export function validateAssertionRules(
   rows: readonly AssertionRow[], policy: JourneyCapabilities, actionBudget: number | null, prefix: string,
+  selectedActions: readonly string[],
 ): FieldError[] {
   const errors: FieldError[] = []
   rows.forEach((row, index) => {
@@ -33,7 +45,7 @@ export function validateAssertionRules(
       const rule = policy.evaluationRules?.EXACT_READER_PHRASE
       if (!rule || rule.assertionKind !== row.kind) { add('enabled', 'this server cannot freeze a reader phrase rule.'); return }
       const position = row.actionSequence ?? ''
-      const max = Math.min(actionBudget ?? policy.maxActions, rule.maxActionSequence)
+      const max = Math.min((actionBudget ?? policy.maxActions) - 1, rule.maxActionSequence)
       if (!/^\d+$/.test(position) || !Number.isSafeInteger(Number(position)) || Number(position) < 1 || Number(position) > max) {
         add('action', `the action sequence must be a whole number between 1 and ${max}.`)
       }
@@ -51,6 +63,27 @@ export function validateAssertionRules(
       if (!/^\d+$/.test(count) || !Number.isSafeInteger(Number(count)) || Number(count) > rule.maxCount) {
         add('count', `the expected count must be a whole number between 0 and ${rule.maxCount}.`)
       }
+    } else if (row.kind === 'READING_ORDER') {
+      const rule = readingOrderCapability(policy)
+      if (!rule) { add('enabled', 'this server cannot freeze the supported reading-order rule.'); return }
+      if (!selectedActions.includes('NEXT')) add('enabled', 'enable NEXT in permitted actions before freezing this sequence.')
+      const phrases = row.sequencePhrases ?? []
+      if (phrases.length < rule.minSteps || phrases.length > rule.maxSteps) {
+        add('action', `the sequence needs ${rule.minSteps}–${rule.maxSteps} steps.`)
+      }
+      const start = row.actionSequence ?? ''
+      const last = Number(start) + phrases.length - 1
+      const max = Math.min((actionBudget ?? policy.maxActions) - 1, rule.maxActionSequence)
+      if (!/^\d+$/.test(start) || !Number.isSafeInteger(Number(start)) || Number(start) < 1 || last > max) {
+        add('action', `consecutive steps must start at a whole number and finish within action ${max}, leaving one slot for STOP.`)
+      }
+      phrases.forEach((phrase, step) => {
+        if (!phrase.trim()) add(`step-${step}`, `enter the exact reader phrase for step ${step + 1}.`)
+        else if (Array.from(phrase).length > rule.maxPhraseCharacters) add(`step-${step}`, `step ${step + 1} exceeds ${rule.maxPhraseCharacters} characters.`)
+      })
+      if (phrases.reduce((sum, phrase) => sum + new TextEncoder().encode(phrase).length, 0) > rule.maxTotalPhraseBytes) {
+        add('action', `all step phrases together exceed ${rule.maxTotalPhraseBytes} UTF-8 bytes.`)
+      }
     } else add('enabled', 'this assertion kind has no supported executable rule.')
   })
   return errors
@@ -61,6 +94,9 @@ export function serializeAssertionRule(row: AssertionRow): Record<string, unknow
   if (row.kind === 'TASK_COMPLETION') {
     return { evaluationRule: { type: 'EFFECT_COUNT', effect: 'CREATE_TEST_REQUEST', count: Number(row.effectCount) } }
   }
+  if (row.kind === 'READING_ORDER') return { evaluationRule: { type: 'READER_NEXT_SEQUENCE',
+    steps: (row.sequencePhrases ?? []).map((phrase, index) => ({ actionSequence: Number(row.actionSequence) + index, phrase })),
+  } }
   return { evaluationRule: { type: 'EXACT_READER_PHRASE', actionSequence: Number(row.actionSequence), phrase: row.phrase } }
 }
 
@@ -79,13 +115,23 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
     return found ? { error: found.message } : {}
   }
   const reader = row.kind === 'REQUIRED_ANNOUNCEMENT'
+  const order = row.kind === 'READING_ORDER'
+  const sequenceRule = readingOrderCapability(policy)
+  const pendingStepFocus = useRef<number | null>(null)
+  useEffect(() => {
+    if (pendingStepFocus.current !== null) {
+      document.getElementById(assertionFieldId(prefix, row, `step-${pendingStepFocus.current}`))?.focus()
+      pendingStepFocus.current = null
+    }
+  }, [prefix, row.assertionId, row.sequencePhrases?.length])
   const available = reader
     ? policy.evaluationRules?.EXACT_READER_PHRASE?.assertionKind === row.kind
+    : order ? sequenceRule !== null
     : row.kind === 'TASK_COMPLETION' && policy.evaluationRules?.EFFECT_COUNT?.assertionKind === row.kind &&
       policy.evaluationRules.EFFECT_COUNT.effect === 'CREATE_TEST_REQUEST'
   return (
     <fieldset className="af-panel af-stack" disabled={disabled}>
-      <legend>Assertion {index + 1} — {reader ? 'Reader announcement' : 'Independent completion'}</legend>
+      <legend>Assertion {index + 1} — {reader ? 'Reader announcement' : order ? 'Consecutive NEXT reading order' : 'Independent completion'}</legend>
       <FormField id={fieldId('description')} label={`Assertion ${index + 1} description`}
         hint="Describe the requirement for a reviewer. This description is not an executable matcher." required {...error('description')}>
         {({ id, describedBy, invalid }) => <input id={id} value={row.description} aria-describedby={describedBy}
@@ -97,12 +143,13 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
         {({ id, describedBy, invalid }) => <input id={id} type="checkbox" checked={row.ruleEnabled ?? false}
           disabled={!available} aria-describedby={describedBy} aria-invalid={invalid || undefined}
           onChange={(event) => onChange({ ...row, ruleEnabled: event.target.checked,
-            actionSequence: row.actionSequence ?? '1', effectCount: row.effectCount ?? '1', phrase: row.phrase ?? '' })} />}
+            actionSequence: row.actionSequence ?? '1', effectCount: row.effectCount ?? '1', phrase: row.phrase ?? '',
+            sequencePhrases: row.sequencePhrases ?? ['', ''] })} />}
       </FormField>
       {!row.ruleEnabled && <p className="af-secondary">No executable rule: this condition remains UNKNOWN when evaluated; prose alone cannot establish it.</p>}
       {row.ruleEnabled && reader && <>
         <FormField id={fieldId('action')} label={`Assertion ${index + 1} action sequence`} required {...error('action')}
-          hint="The exact action after which to compare the retained utterance. Must fit within the journey action budget.">
+          hint="The exact action after which to compare the retained utterance. Leave one action-budget slot for the required STOP.">
           {({ id, describedBy, invalid }) => <input id={id} type="text" inputMode="numeric" value={row.actionSequence ?? ''}
             aria-describedby={describedBy} aria-invalid={invalid || undefined}
             onChange={(event) => onChange({ ...row, actionSequence: event.target.value })} />}
@@ -114,7 +161,37 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
             onChange={(event) => onChange({ ...row, phrase: event.target.value })} />}
         </FormField>
       </>}
-      {row.ruleEnabled && !reader && <FormField id={fieldId('count')} label={`Assertion ${index + 1} expected request count`}
+      {row.ruleEnabled && order && <div className="af-stack">
+        <p>Checks literal reader phrases after consecutive successful NEXT actions, not DOM/tab order or focus coordinates. Missing or redacted capture remains UNKNOWN. NEXT must be permitted.</p>
+        <FormField id={fieldId('action')} label={`Assertion ${index + 1} starting NEXT action`} required {...error('action')}
+          hint={`Leave one action-budget slot for STOP. ${sequenceRule?.minSteps ?? 2}–${sequenceRule?.maxSteps ?? 'unavailable'} steps; spaces and line breaks are preserved.`}>
+          {({ id, describedBy, invalid }) => <input id={id} type="text" inputMode="numeric" value={row.actionSequence ?? ''}
+            aria-describedby={describedBy} aria-invalid={invalid || undefined}
+            onChange={(event) => onChange({ ...row, actionSequence: event.target.value })} />}
+        </FormField>
+        {(row.sequencePhrases ?? []).map((phrase, step) => <FormField key={step} id={fieldId(`step-${step}`)}
+          label={`Assertion ${index + 1} step ${step + 1} exact reader phrase`} required {...error(`step-${step}`)}
+          hint={`NEXT offset ${step} from the starting action. Literal, case-sensitive; no regex or inferred wording.`}>
+          {({ id, describedBy, invalid }) => <textarea id={id} rows={2} value={phrase} aria-describedby={describedBy}
+            aria-invalid={invalid || undefined} onChange={(event) => onChange({ ...row,
+              sequencePhrases: (row.sequencePhrases ?? []).map((text, position) => position === step ? event.target.value : text) })} />}
+        </FormField>)}
+        <div className="af-row">
+          <Button disabled={sequenceRule === null || (row.sequencePhrases?.length ?? 0) >= sequenceRule.maxSteps}
+            onClick={() => {
+              const phrases = row.sequencePhrases ?? []
+              pendingStepFocus.current = phrases.length
+              onChange({ ...row, sequencePhrases: [...phrases, ''] })
+            }}>Add NEXT step to assertion {index + 1}</Button>
+          <Button disabled={sequenceRule === null || (row.sequencePhrases?.length ?? 0) <= sequenceRule.minSteps}
+            onClick={() => {
+              const phrases = row.sequencePhrases ?? []
+              pendingStepFocus.current = phrases.length - 2
+              onChange({ ...row, sequencePhrases: phrases.slice(0, -1) })
+            }}>Remove last NEXT step from assertion {index + 1}</Button>
+        </div>
+      </div>}
+      {row.ruleEnabled && row.kind === 'TASK_COMPLETION' && <FormField id={fieldId('count')} label={`Assertion ${index + 1} expected request count`}
         hint={`Independent final observer count for CREATE_TEST_REQUEST. Zero is valid; maximum ${policy.evaluationRules?.EFFECT_COUNT?.maxCount ?? 'unavailable'}.`} required {...error('count')}>
         {({ id, describedBy, invalid }) => <input id={id} type="text" inputMode="numeric" value={row.effectCount ?? ''}
           aria-describedby={describedBy} aria-invalid={invalid || undefined}
