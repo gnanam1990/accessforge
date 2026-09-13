@@ -109,8 +109,11 @@ Lost acknowledgements or ambiguity fence further input; ambiguous results interr
 Reader observations now travel through the session into the canonical sequencer, bound to one
 dispatched action, with source digests and explicit fixture redaction; capture UNKNOWN remains
 distinct from silence. This bridge was exercised with synthetic physical adapters, not a live reader.
-Still pending: concrete production physical guards and reader startup, independent application
-observer ingestion, producer closure, full action/lifecycle evidence, artifacts and finalization,
+An operator-configured independent observer worker now binds the sealed credential reference and
+fixture to a bounded read-only application-database measurement, then revalidates before retaining
+an OBSERVER effect record. It has real PostgreSQL/CLI proof, not production deployment or reader proof.
+Still pending: concrete production physical guards and reader startup, observer deployment/role
+isolation and assertion derivation, producer closure, full action/lifecycle evidence, artifacts and finalization,
 remaining action/build UNKNOWN recovery,
 and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;

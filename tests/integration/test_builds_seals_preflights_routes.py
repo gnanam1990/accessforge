@@ -34,6 +34,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
@@ -1852,6 +1853,226 @@ def test_authenticated_reader_evidence(
             == 200
         )
         assert client.post(url + "/observation", json=body, headers=headers).status_code == 403
+
+
+@pytest.fixture()
+def owned_observer_database(db: str, backup_database_url: str) -> Iterator[str]:
+    """A separate, exactly-owned app database. Never truncate the user's reference app."""
+    from psycopg import sql
+
+    from reference_app.db import SCHEMA
+
+    def database(url: str, name: str) -> str:
+        parts = urlsplit(url)
+        return urlunsplit((parts.scheme, parts.netloc, "/" + name, parts.query, parts.fragment))
+
+    name = "accessforge_observer_" + uuid.uuid4().hex[:12]
+    owner = urlsplit(db).username
+    assert owner is not None
+    with psycopg.connect(database(backup_database_url, "postgres"), autocommit=True) as conn:
+        conn.execute(
+            sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                sql.Identifier(name),
+                sql.Identifier(owner),
+            )
+        )
+    try:
+        url = database(db, name)
+        with psycopg.connect(url) as conn:
+            conn.execute(SCHEMA)
+        yield url
+    finally:
+        with psycopg.connect(database(backup_database_url, "postgres"), autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+@pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        "one",
+        "zero",
+        "missing-fixture",
+        "revoked-during-read",
+        "action-during-read",
+        "wrong-template",
+        "app-unreachable",
+        "wrong-reference",
+        "cli",
+    ],
+)
+def test_independent_observer_worker(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    owned_observer_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    import secrets
+
+    from accessforge_orchestrator.completion_observer import Refused, measure_once
+    from accessforge_persistence.evidence.observer import ApplicationObserver
+    from accessforge_persistence.fixtures import create_instance
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    secret = secrets.token_urlsafe(32)
+    assert (
+        client.post(
+            _ticket_url(ticket).removesuffix("accept") + "session",
+            json={"sessionSecret": secret},
+            headers={"Authorization": f"Bearer {ticket.token}"},
+        ).status_code
+        == 201
+    )
+    headers = {"Authorization": f"Bearer {secret}"}
+    base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
+    intended = client.post(
+        base + "/action-intents",
+        headers=headers,
+        json={
+            "action": "READ_CURRENT",
+            "origin": "https://app.example.test",
+            "sequence": 1,
+        },
+    )
+    assert intended.status_code == 201
+    action_url = base + "/actions/" + intended.json()["actionId"]
+    assert (
+        client.post(
+            action_url + "/dispatch", headers=headers, json={"origin": "https://app.example.test"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            action_url + "/result", headers=headers, json={"status": "SUCCEEDED"}
+        ).status_code
+        == 200
+    )
+    with workspace_connection(db, WS) as conn:
+        fixture = create_instance(
+            conn,
+            workspace_id=WS,
+            run_id=ref.run_id,
+            template_id="reference-service-request",
+            template_digest=_digest("fixture"),
+            navigator_values={"name": "Private Fixture Name"},
+            observer_config={"effect": "CREATE_TEST_REQUEST"},
+        )
+    with psycopg.connect(owned_observer_database, row_factory=psycopg.rows.dict_row) as conn:
+        if case != "missing-fixture":
+            conn.execute(
+                "INSERT INTO fixture_instance(nonce,template_digest,variant) "
+                "VALUES(%s,%s,'accessible')",
+                (
+                    fixture.nonce,
+                    _digest("wrong") if case == "wrong-template" else fixture.template_digest,
+                ),
+            )
+        if case in {"one", "cli"}:
+            conn.execute(
+                "INSERT INTO service_request"
+                "(id,fixture_nonce,full_name,email,category,description) "
+                "VALUES(%s,%s,'Private Fixture Name','private@example.test','test','test')",
+                (str(uuid.uuid4()), fixture.nonce),
+            )
+    if case in {"revoked-during-read", "action-during-read"}:
+        original = ApplicationObserver.count_effects
+
+        def revoked(observer: ApplicationObserver, **kwargs: Any) -> Any:
+            measured = original(observer, **kwargs)
+            if case == "revoked-during-read":
+                with workspace_connection(db, WS) as conn:
+                    conn.execute(
+                        "UPDATE approval SET revoked_at=now() WHERE id=("
+                        "SELECT authorization_id FROM run WHERE id=%s)",
+                        (ref.run_id,),
+                    )
+            else:
+                assert (
+                    client.post(
+                        base + "/action-intents",
+                        headers=headers,
+                        json={
+                            "action": "READ_CURRENT",
+                            "origin": "https://app.example.test",
+                            "sequence": 2,
+                        },
+                    ).status_code
+                    == 201
+                )
+            return measured
+
+        monkeypatch.setattr(ApplicationObserver, "count_effects", revoked)
+    source_id = str(uuid.uuid4())
+    kwargs = {
+        "workspace_id": WS,
+        "run_id": ref.run_id,
+        "source_record_id": source_id,
+        "credential_ref": "wrong" if case == "wrong-reference" else "observer-profile",
+    }
+    refused_cases = {"wrong-reference", "revoked-during-read", "action-during-read"}
+    unknown_cases = {"missing-fixture", "wrong-template", "app-unreachable"}
+    if case in refused_cases:
+        with pytest.raises((Refused, runner_store.DispatchRefused)):
+            measure_once(db, owned_observer_database, **kwargs)
+    elif case == "cli":
+        process = subprocess.run(  # noqa: S603 - owned observer entry point, no shell
+            [
+                sys.executable,
+                "-m",
+                "accessforge_orchestrator.completion_observer",
+                "--workspace-id",
+                WS,
+                "--run-id",
+                ref.run_id,
+                "--source-record-id",
+                source_id,
+                "--observer-credential-ref",
+                "observer-profile",
+            ],
+            env={
+                "PATH": os.environ["PATH"],
+                "ACCESSFORGE_DATABASE_URL": db,
+                "ACCESSFORGE_OBSERVER_DATABASE_URL": owned_observer_database,
+            },
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert process.returncode == 0 and process.stdout.strip().endswith("KNOWN")
+        assert db not in process.stdout + process.stderr
+        assert owned_observer_database not in process.stdout + process.stderr
+    else:
+        application = (
+            "postgresql://invalid@127.0.0.1:1/absent"
+            if case == "app-unreachable"
+            else owned_observer_database
+        )
+        receipt = measure_once(db, application, **kwargs)
+        assert receipt.known == (case not in unknown_cases)
+        # Replay uses retained bytes and never re-reads a now-unreachable application.
+        replay = measure_once(db, "postgresql://invalid@127.0.0.1:1/absent", **kwargs)
+        assert replay.replay and replay.event_id == receipt.event_id
+    with workspace_connection(db, WS) as conn:
+        events = conn.execute(
+            "SELECT event_type,payload FROM canonical_event WHERE event_type='EFFECT_RECEIPT'",
+        ).fetchall()
+        assert len(events) == int(case not in refused_cases)
+        if events:
+            payload = events[0]["payload"]
+            assert payload["serviceIdentity"] == "OBSERVER"
+            source = payload["sourceRecord"]
+            assert source["count"] == (
+                None if case in unknown_cases else int(case in {"one", "cli"})
+            )
+            assert source["measurement"] == ("UNKNOWN" if case in unknown_cases else "KNOWN")
+            assert payload["sourceRecordDigest"] == digest(source)
+            assert fixture.nonce not in json.dumps(payload)
+            assert "Private Fixture Name" not in json.dumps(payload)
+        assert run_store.load_run(conn, run_id=ref.run_id).state.outcome.value == "NOT_EVALUATED"
 
 
 @pytest.fixture(scope="module")
