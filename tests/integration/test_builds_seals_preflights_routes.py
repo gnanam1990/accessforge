@@ -218,7 +218,7 @@ def execution_body(
     body = _seal_body(build.json()["buildId"], environment)
     policy: dict[str, Any] = {}
     reviewer_summary: dict[str, Any] = {}
-    if getattr(request, "param", None) in {"action-policy", "stop-policy"}:
+    if getattr(request, "param", None) in {"action-policy", "stop-policy", "navigator-policy"}:
         policy = {
             "allowedActions": ["READ_CURRENT", "NEXT", "TYPE_TEXT", "KEY_CHORD"],
             "allowedKeyChords": [],
@@ -226,6 +226,23 @@ def execution_body(
             "wallTimeSeconds": 30,
         }
         body["navigatorPolicyDigest"] = str(digest(policy))
+        if request.param == "navigator-policy":
+            policy.update(
+                taskSummary="Inspect the form with the reader",
+                successCondition="Find the form heading",
+                startUrl="https://app.example.test",
+                fixtureValues={"name": "Synthetic Private Fixture"},
+                forbiddenObservations=[
+                    "DOM",
+                    "SELECTORS",
+                    "SCREENSHOTS",
+                    "SOURCE",
+                    "OBSERVER_RECEIPTS",
+                    "ASSERTION_EXPECTATIONS",
+                ],
+            )
+            policy["allowedActions"].append("STOP")
+            body["navigatorPolicyDigest"] = str(digest(policy))
         if request.param == "stop-policy":
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
@@ -2177,6 +2194,111 @@ def test_authenticated_reader_evidence(
             == 200
         )
         assert client.post(url + "/observation", json=body, headers=headers).status_code == 403
+
+
+@pytest.mark.parametrize("execution_body", ["navigator-policy"], indirect=True)
+def test_navigator_loads_only_original_resolved_reader_boundary(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    """Real DB/HTTP retention, synthetic supervisor speech; no model or actual AT invoked."""
+    import secrets
+
+    from accessforge_orchestrator.navigator.projection import ProjectionRefused, load_retained_turn
+    from accessforge_persistence.fixtures import create_instance
+
+    ref, ticket = manual_dispatch_reference, supervisor_ticket
+    with workspace_connection(db, WS) as conn:
+        sealed = conn.execute(
+            "SELECT s.canonical_manifest,j.navigator_policy FROM sealed_manifest s "
+            "JOIN journey_version j ON j.id=(s.canonical_manifest->>'journeyVersionId')::uuid "
+            "WHERE s.run_id=%s",
+            (ref.run_id,),
+        ).fetchone()
+        assert sealed is not None
+        create_instance(
+            conn,
+            workspace_id=WS,
+            run_id=ref.run_id,
+            template_id="navigator-projection",
+            template_digest=sealed["canonical_manifest"]["fixtureDigest"],
+            navigator_values=sealed["navigator_policy"]["fixtureValues"],
+            observer_config={"privateReceipt": "must-never-enter-model-context"},
+        )
+    secret = secrets.token_urlsafe(32)
+    assert (
+        client.post(
+            _ticket_url(ticket).removesuffix("accept") + "session",
+            json={"sessionSecret": secret},
+            headers={"Authorization": f"Bearer {ticket.token}"},
+        ).status_code
+        == 201
+    )
+    initial = load_retained_turn(database_url=db, reference=ref, expected_action_sequence=0)
+    assert initial.projection.reader_observations == () and initial.reader_event_ids == ()
+    headers = {"Authorization": f"Bearer {secret}"}
+    base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
+    intent = client.post(
+        base + "/action-intents",
+        headers=headers,
+        json={"action": "READ_CURRENT", "origin": "https://app.example.test", "sequence": 1},
+    )
+    assert intent.status_code == 201
+    action_id = intent.json()["actionId"]
+    url = base + f"/actions/{action_id}"
+    assert (
+        client.post(
+            url + "/dispatch", headers=headers, json={"origin": "https://app.example.test"}
+        ).status_code
+        == 200
+    )
+    with pytest.raises((ProjectionRefused, runner_store.DispatchRefused)):
+        load_retained_turn(database_url=db, reference=ref, expected_action_sequence=1)
+    source = {
+        "actionId": action_id,
+        "actionSequence": 1,
+        "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "phrase": "Name Synthetic Private Fixture",
+    }
+    observed = client.post(
+        url + "/observation",
+        headers=headers,
+        json={"producerSequence": 1, "sourceRecordDigest": digest(source), "sourceRecord": source},
+    )
+    assert observed.status_code == 200
+    assert (
+        client.post(url + "/result", headers=headers, json={"status": "SUCCEEDED"}).status_code
+        == 200
+    )
+    turn = load_retained_turn(database_url=db, reference=ref, expected_action_sequence=1)
+    assert turn.reader_event_ids == (observed.json()["eventId"],)
+    assert turn.projection.reader_observations[0].phrase == "Name [REDACTED_FIXTURE]"
+    assert turn.projection.reader_observations[0].action_id == action_id
+    assert turn.projection.run_ref == initial.projection.run_ref
+    payload = turn.projection.model_payload()
+    assert set(payload) == {"runRef", "policy", "readerObservations"}
+    assert not any(
+        forbidden in json.dumps(payload)
+        for forbidden in (secret, ticket.token, "must-never-enter-model-context", "sourceRecord")
+    )
+    with pytest.raises(ProjectionRefused):
+        load_retained_turn(database_url=db, reference=ref, expected_action_sequence=0)
+    with pytest.raises(runner_store.DispatchRefused):
+        load_retained_turn(
+            database_url=db,
+            reference=replace(ref, attempt_id=str(uuid.uuid4())),
+            expected_action_sequence=1,
+        )
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE approval SET revoked_at=clock_timestamp() WHERE id=("
+            "SELECT authorization_id FROM run WHERE id=%s)",
+            (ref.run_id,),
+        )
+    with pytest.raises(runner_store.DispatchRefused):
+        load_retained_turn(database_url=db, reference=ref, expected_action_sequence=1)
 
 
 @pytest.fixture()
