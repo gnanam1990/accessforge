@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import psycopg
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from accessforge_api.dependencies import run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
@@ -53,6 +53,7 @@ def request_diagnosis(
         )
     try:
         validate(body)
+        diagnosis_requests.operation_digest(context.idempotency_key)
     except ValueError:
         raise ProblemDetail(
             ProblemCode.INVALID_INPUT, "exact reviewed diagnosis scope required"
@@ -66,6 +67,7 @@ def request_diagnosis(
                 run_id=run_id,
                 requested_by=context.principal.user_id,
                 payload=body,
+                idempotency_key=context.idempotency_key or "",
             )
         except (diagnosis_requests.RequestRefused, diagnoses.DiagnosisRefused):
             raise ProblemDetail(
@@ -81,6 +83,35 @@ def request_diagnosis(
     )
     response.headers["Cache-Control"] = "no-store"
     return result.response or {}
+
+
+@router.get("/runs/{run_id}/diagnosis-requests/operation")
+def recover_request(
+    workspace_id: str,
+    run_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    operation_key: Annotated[str, Query(alias="operationKey", min_length=1, max_length=200)],
+) -> dict[str, Any]:
+    context = authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    as_identifier(run_id, what="run")
+    try:
+        result = diagnosis_requests.recover(
+            conn,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            actor_id=context.principal.user_id,
+            idempotency_key=operation_key,
+        )
+    except LookupError:
+        raise not_found() from None
+    except (diagnosis_requests.RequestRefused, diagnoses.DiagnosisRefused):
+        raise ProblemDetail(
+            ProblemCode.CONFLICT, "diagnosis recovery integrity unavailable"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.get("/diagnosis-requests/{request_id}")

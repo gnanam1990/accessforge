@@ -3018,7 +3018,7 @@ def _check_diagnosis_request(
 ) -> None:
     """Reuse retained evidence; all API calls are inert request records, not model calls."""
     from accessforge_api.auth import issue_session
-    from accessforge_persistence import diagnosis_requests
+    from accessforge_persistence import diagnosis_requests, idempotency
 
     with workspace_connection(db, WS) as conn:
         owner = issue_session(conn, user_id=OWNER)
@@ -3057,6 +3057,11 @@ def _check_diagnosis_request(
     read = client.get(read_url)
     assert read.status_code == 200 and read.json()["invocationState"] == "NOT_STARTED"
     assert read.json()["findingId"] is None
+    recovery_url = url + "/operation"
+    recovery_params = {"operationKey": headers["Idempotency-Key"]}
+    recovered = client.get(recovery_url, params=recovery_params)
+    assert recovered.status_code == 200 and recovered.json() == read.json()
+    assert recovered.headers["Cache-Control"] == "no-store"
     with workspace_connection(db, WS) as conn:
         active = diagnosis_requests.require_active(conn, workspace_id=WS, request_id=request_id)
         assert active["scope"] == body and active["requestedBy"] == OWNER
@@ -3073,9 +3078,25 @@ def _check_diagnosis_request(
         diagnosis_requests.require_active(conn, workspace_id=WS, request_id=request_id)
     with pytest.raises(psycopg.IntegrityError), workspace_connection(db, WS) as conn:
         conn.execute("UPDATE diagnosis_request SET revoked_at=NULL WHERE id=%s", (request_id,))
+    # The permanent identity survives generic retry-cache expiry without renewing approval.
+    with workspace_connection(db, WS) as conn:
+        idempotency.purge_expired(conn, now=datetime.now(UTC) + timedelta(days=2))
+    replay = client.post(url, json=body, headers=headers)
+    assert replay.status_code == 202
+    assert replay.json()["requestId"] == request_id
+    assert replay.json()["expiresAt"] == decision["expiresAt"]
+    assert replay.json()["revokedAt"] == revoked.json()["revokedAt"]
+    assert client.get(recovery_url, params=recovery_params).json() == revoked.json()
+    with workspace_connection(db, WS) as conn:
+        idempotency.purge_expired(conn, now=datetime.now(UTC) + timedelta(days=2))
+    assert (
+        client.post(url, json={**body, "componentName": "changed"}, headers=headers).status_code
+        == 409
+    )
     with workspace_connection(db, WS) as conn:
         viewer = issue_session(conn, user_id=VIEWER)
     client.cookies.set(SESSION_COOKIE, viewer.session_token)
+    assert client.get(recovery_url, params=recovery_params).status_code == 404
     assert (
         client.post(
             url,

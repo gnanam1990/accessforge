@@ -33,18 +33,21 @@ export interface ErrorSummaryProps {
   /** Increments once per submission attempt. */
   readonly submissionId: number
   readonly heading?: string
+  readonly headingLevel?: 2 | 3 | 4
 }
 
 export const ErrorSummary = ({
   errors,
   submissionId,
   heading = 'This form could not be submitted',
+  headingLevel = 2,
 }: ErrorSummaryProps): JSX.Element | null => {
   const ref = useRef<HTMLDivElement | null>(null)
   // Generated, not fixed. A page with two forms would otherwise have two elements sharing one id,
   // and `aria-labelledby` resolves to the first — so one summary would be announced with the other
   // one's heading.
   const headingId = useId()
+  const Heading = `h${headingLevel}` as 'h2' | 'h3' | 'h4'
 
   useEffect(() => {
     if (errors.length === 0) return
@@ -66,9 +69,9 @@ export const ErrorSummary = ({
       aria-labelledby={headingId}
       className="af-error-summary"
     >
-      <h2 id={headingId} className="af-notice__heading">
+      <Heading id={headingId} className="af-notice__heading">
         {heading}
-      </h2>
+      </Heading>
       <ul>
         {errors.map((error) => (
           <li key={error.fieldId}>
