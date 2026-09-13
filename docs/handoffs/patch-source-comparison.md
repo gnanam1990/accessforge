@@ -30,14 +30,16 @@ python -m accessforge_build_worker.compare_command --workspace-id WORKSPACE_UUID
 
 Use canonical UUIDs and an already provisioned repository; these uppercase placeholders are not
 executable project identities. The trusted host supplies `ACCESSFORGE_DATABASE_URL`. Source output
-to stdout requires `--include-source`; omission refuses before repository/database access. Error
-output excludes source, repository paths and connection strings. No DB row, artifact or application
-file is written, and no provider/build/reader is dispatched. The command was not executed against
+to stdout requires `--include-source`. Without either that flag or the separate `--retain-record`
+action, invocation refuses before repository/database access. Error output excludes source,
+repository paths and connection strings. The export-only mode writes no DB row, artifact or
+application file, and no provider/build/reader is dispatched. The command was not executed against
 user data during development.
 
 Changed-file Ruff/mypy and diff checks are local validation. CI-only fixtures cover all file-change
 kinds, exact line endings, absent/binary/budget refusal and a real owned Git repository whose dirty
 checkout must survive unchanged. These tests were authored, not locally run. DB-bound operator
-runtime acceptance, durable comparison retention/read API and integration into the browser's
-unified/plain-text repair view remain unfinished next steps. Physical repair verification and the
+runtime acceptance and integration into the browser's unified/plain-text repair view remain
+unfinished next steps. Explicit retention and its read/retirement API are described in
+[retained comparisons](retained-patch-comparison.md). Physical repair verification and the
 full project goal remain unproven.

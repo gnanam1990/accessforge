@@ -35,7 +35,7 @@ from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.patch_policy import ProposedChange
 from accessforge_domain.states import PatchStatus
 from accessforge_domain.timestamps import to_rfc3339_utc
-from accessforge_persistence import patches
+from accessforge_persistence import patch_comparisons, patches
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["patches"])
 
@@ -517,6 +517,65 @@ def get_patch(
         }
     )
     return view
+
+
+@router.get("/patches/{patch_id}/source-comparison")
+def get_source_comparison(
+    workspace_id: str, patch_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    as_identifier(patch_id, what="patchId")
+    try:
+        result = patch_comparisons.read(conn, patch_id=patch_id)
+    except (LookupError, patches.PatchError):
+        raise not_found() from None
+    except patch_comparisons.ComparisonRefused:
+        raise ProblemDetail(
+            ProblemCode.CONFLICT, "source comparison integrity unavailable"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/patches/{patch_id}/source-comparison/retirement")
+def retire_source_comparison(
+    workspace_id: str,
+    patch_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.WORKSPACE_CONFIGURE,
+        body=body,
+        allowed_fields=frozenset({"comparisonId"}),
+    )
+    as_identifier(patch_id, what="patchId")
+    comparison_id = body.get("comparisonId")
+    if not isinstance(comparison_id, str):
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "exact comparisonId required")
+    as_identifier(comparison_id, what="comparisonId")
+    try:
+        result = patch_comparisons.retire(
+            conn,
+            workspace_id=workspace_id,
+            patch_id=patch_id,
+            comparison_id=comparison_id,
+            actor_id=context.principal.user_id,
+        )
+    except (LookupError, patches.PatchError):
+        raise not_found() from None
+    except patch_comparisons.ComparisonRefused:
+        raise ProblemDetail(
+            ProblemCode.CONFLICT, "source comparison retirement unavailable"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.get("/findings/{finding_id}/patches")

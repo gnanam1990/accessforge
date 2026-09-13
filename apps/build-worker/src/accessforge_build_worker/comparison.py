@@ -14,7 +14,7 @@ from accessforge_domain.authorization.roles import Permission, Role, permissions
 from accessforge_domain.canonical import digest
 from accessforge_domain.patch_policy import inspect_patch
 from accessforge_persistence import candidate_builds as builds
-from accessforge_persistence import patches, workspace_connection
+from accessforge_persistence import patch_comparisons, patches, workspace_connection
 
 from .snapshot import SnapshotRefused, SourceFile
 from .source_broker import BoundCommitSource, read_persisted_source
@@ -214,3 +214,31 @@ def prepare_comparison(
             "requestedBy": actor_id,
         }
         return {"comparisonDigest": digest(payload), "comparison": payload}
+
+
+def prepare_and_retain_comparison(
+    database_url: str,
+    *,
+    workspace_id: str,
+    patch_id: str,
+    actor_id: str,
+    repositories: Mapping[str, Path],
+    cancelled: Callable[[], bool] = lambda: False,
+) -> dict[str, Any]:
+    """Explicit trusted materialization, separate from read-only preparation and patch approval."""
+    with workspace_connection(database_url, workspace_id) as conn:
+        patch_comparisons.authorize(conn, workspace_id, actor_id, Permission.PROJECT_CONFIGURE)
+    prepared = prepare_comparison(
+        database_url,
+        workspace_id=workspace_id,
+        patch_id=patch_id,
+        actor_id=actor_id,
+        repositories=repositories,
+        cancelled=cancelled,
+    )
+    if cancelled():
+        raise SnapshotRefused("comparison retention cancelled before writing")
+    with workspace_connection(database_url, workspace_id) as conn:
+        return patch_comparisons.retain_prepared(
+            conn, workspace_id=workspace_id, patch_id=patch_id, actor_id=actor_id, prepared=prepared
+        )

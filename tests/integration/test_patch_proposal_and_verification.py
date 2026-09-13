@@ -18,11 +18,14 @@ Requirements: FR-002, FR-007, FR-010, FR-011. Invariants: INV-02, INV-03, INV-04
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+import psycopg
 import pytest
 
 from accessforge_domain.authority import AuthorityError
@@ -35,6 +38,7 @@ from accessforge_persistence import (
     assert_row_level_security_enforced,
     connect,
     migrate,
+    patch_comparisons,
     patches,
     restore,
     reviews,
@@ -181,6 +185,132 @@ def _build_claim(
     patch, inputs = ready
     with workspace_connection(db, WS) as conn:
         return builds.claim_build(conn, workspace_id=WS, patch_id=patch.patch_id, inputs=inputs)
+
+
+@pytest.mark.parametrize("retirement", ["owner", "repository-revocation"])
+def test_synthetic_retained_comparison_http_authority_and_permanent_retirement(
+    db: str,
+    build_ready: tuple[patches.PatchProposal, builds.BuildInputs],
+    api: Any,
+    retirement: str,
+) -> None:
+    """Synthetic source receipt tests retention, not trusted-broker or actual repair proof."""
+    from accessforge_api.auth import CSRF_HEADER
+
+    patch, inputs = build_ready
+    original = "<input id='email'>\r\n"
+    proposed = patch.changes[0].content
+    assert proposed is not None
+
+    def side(text: str) -> dict[str, Any]:
+        return {
+            "text": text,
+            "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "byteLength": len(text.encode()),
+            "mode": "100644",
+        }
+
+    with workspace_connection(db, WS) as conn:
+        baseline = builds._baseline(conn, patch.patch_id, WS)
+        payload = {
+            "schemaVersion": 1,
+            "workspaceId": WS,
+            "projectId": str(baseline["project_id"]),
+            "sourceSnapshotId": inputs.source_snapshot_id,
+            "requestedBy": OWNER,
+            "patchId": patch.patch_id,
+            "patchDigest": patch.patch_digest,
+            "patchRevision": patch.revision,
+            "baseManifestDigest": patch.base_manifest_digest,
+            "baseSourceDigest": patch.base_source_digest,
+            "baseCommitSha": inputs.source_commit,
+            "baseArchiveDigest": "a" * 64,
+            "meaning": "ORIGINAL_SOURCE_COMPARISON_NOT_APPLICATION_OR_VERIFICATION",
+            "files": [
+                {
+                    "path": patch.changes[0].path,
+                    "before": side(original),
+                    "after": side(proposed),
+                    "operation": "MODIFY",
+                    "changed": True,
+                    "unifiedDiff": "synthetic diff fixture, not runtime proof",
+                }
+            ],
+        }
+        prepared = {"comparison": payload, "comparisonDigest": digest(payload)}
+        retained = patch_comparisons.retain_prepared(
+            conn, workspace_id=WS, patch_id=patch.patch_id, actor_id=OWNER, prepared=prepared
+        )
+        with pytest.raises(patch_comparisons.ComparisonRefused):
+            patch_comparisons.retain_prepared(
+                conn,
+                workspace_id=WS,
+                patch_id=patch.patch_id,
+                actor_id=REVIEWER,
+                prepared=prepared,
+            )
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "DELETE FROM patch_source_comparison WHERE id=%s", (retained["comparisonId"],)
+            )
+
+    route = f"/v1/workspaces/{WS}/patches/{patch.patch_id}/source-comparison"
+    csrf = _sign_in(db, api, user_id=REVIEWER)
+    response = api.get(route)
+    assert response.status_code == 200 and response.headers["Cache-Control"] == "no-store"
+    assert response.json()["comparison"]["files"][0]["before"]["text"] == original
+    assert (
+        api.post(
+            route + "/retirement",
+            json={"comparisonId": retained["comparisonId"]},
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 403
+    )
+    csrf = _sign_in(db, api)
+    assert (
+        api.post(route + "/retirement", json={"comparisonId": retained["comparisonId"]}).status_code
+        == 403
+    )
+    assert (
+        api.post(
+            route + "/retirement",
+            json={"comparisonId": str(uuid.uuid4())},
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 409
+    )
+    if retirement == "owner":
+        response = api.post(
+            route + "/retirement",
+            json={"comparisonId": retained["comparisonId"]},
+            headers={CSRF_HEADER: csrf},
+        )
+        assert response.status_code == 200 and response.headers["Cache-Control"] == "no-store"
+    else:
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "UPDATE project SET repository_authorized_by=NULL WHERE id=%s",
+                (baseline["project_id"],),
+            )
+            conn.execute(
+                "UPDATE project SET repository_authorized_by=%s WHERE id=%s",
+                (OWNER, baseline["project_id"]),
+            )
+    tombstone = api.get(route).json()
+    assert tombstone["comparison"] is None and tombstone["retiredAt"] is not None
+    with workspace_connection(db, WS) as conn:
+        replay = patch_comparisons.retain_prepared(
+            conn, workspace_id=WS, patch_id=patch.patch_id, actor_id=OWNER, prepared=prepared
+        )
+        assert replay == tombstone
+        assert patches.load_patch(conn, patch_id=patch.patch_id) == patch
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE patch_source_comparison SET retired_at=NULL,payload='{}'::jsonb "
+                "WHERE id=%s",
+                (retained["comparisonId"],),
+            )
 
 
 def test_candidate_claim_dispatch_and_receipt_are_not_a_verification_conclusion(
