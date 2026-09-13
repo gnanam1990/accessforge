@@ -331,12 +331,24 @@ describe('journey authoring', () => {
     await user.type(screen.getByLabelText(/Assertion 2 description/), 'The exact error is announced')
     await user.click(screen.getByLabelText('Freeze an executable rule for assertion 2'))
     await user.type(screen.getByLabelText(/Assertion 2 exact reader phrase/), '  Email invalid  ')
+    await user.click(screen.getByRole('button', { name: 'Add a consecutive reading-order assertion' }))
+    expect(screen.getByLabelText(/Assertion 3 description/)).toHaveFocus()
+    await user.type(screen.getByLabelText(/Assertion 3 description/), 'Name then email through NEXT')
+    await user.click(screen.getByLabelText('Freeze an executable rule for assertion 3'))
+    await user.clear(screen.getByLabelText(/Assertion 3 starting NEXT action/))
+    await user.type(screen.getByLabelText(/Assertion 3 starting NEXT action/), '2')
+    await user.type(screen.getByLabelText(/Assertion 3 step 1 exact reader phrase/), '  Name\nedit text  ')
+    await user.type(screen.getByLabelText(/Assertion 3 step 2 exact reader phrase/), 'Email, edit text')
     await user.click(screen.getByRole('button', { name: 'Freeze version' }))
     const sent = server.bodies.find((entry) => entry.url.endsWith('/journeys'))
     const body = sent?.body as { assertions: { evaluationRule: unknown }[] }
+    expect((sent?.body as { allowedActions: string[] }).allowedActions).toContain('STOP')
     expect(body.assertions.map((row) => row.evaluationRule)).toEqual([
       { type: 'EFFECT_COUNT', effect: 'CREATE_TEST_REQUEST', count: 0 },
       { type: 'EXACT_READER_PHRASE', actionSequence: 1, phrase: '  Email invalid  ' },
+      { type: 'READER_NEXT_SEQUENCE', steps: [
+        { actionSequence: 2, phrase: '  Name\nedit text  ' }, { actionSequence: 3, phrase: 'Email, edit text' },
+      ] },
     ])
   })
 
@@ -352,13 +364,56 @@ describe('journey authoring', () => {
     const control = screen.getByLabelText(/Assertion 2 action sequence/)
     expect(control).toHaveAttribute('aria-invalid', 'true')
     const summary = screen.getByRole('alert')
-    expect(within(summary).getByRole('link', { name: /action sequence must be a whole number between 1 and 40/ }))
+    expect(within(summary).getByRole('link', { name: /action sequence must be a whole number between 1 and 39/ }))
       .toHaveAttribute('href', `#${control.id}`)
     expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
     expect(screen.queryByRole('button', { name: 'Remove assertion 1' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove assertion 2' }))
     expect(screen.queryByLabelText(/Assertion 2 action sequence/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add a reader announcement assertion' })).toHaveFocus()
+  })
+
+  it('validates every NEXT step and maintains focus when editing the bounded sequence', async () => {
+    const user = userEvent.setup(), server = createFakeServer(MEMBER)
+    await openProject(server)
+    await user.click(screen.getByRole('button', { name: 'Add a consecutive reading-order assertion' }))
+    await user.click(screen.getByLabelText('Freeze an executable rule for assertion 2'))
+    await user.click(screen.getByRole('button', { name: 'Add NEXT step to assertion 2' }))
+    expect(screen.getByLabelText(/Assertion 2 step 3 exact reader phrase/)).toHaveFocus()
+    await user.click(screen.getByRole('button', { name: 'Remove last NEXT step from assertion 2' }))
+    expect(screen.getByLabelText(/Assertion 2 step 2 exact reader phrase/)).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Remove last NEXT step from assertion 2' })).toBeDisabled()
+    await user.clear(screen.getByLabelText(/Assertion 2 starting NEXT action/))
+    await user.type(screen.getByLabelText(/Assertion 2 starting NEXT action/), '40')
+    await user.click(within(screen.getByRole('group', { name: 'Permitted actions' })).getByRole('checkbox', { name: 'NEXT' }))
+    await user.click(screen.getByRole('button', { name: 'Freeze version' }))
+    const start = screen.getByLabelText(/Assertion 2 starting NEXT action/)
+    expect(start).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByLabelText(/Assertion 2 step 1 exact reader phrase/)).toHaveAttribute('aria-invalid', 'true')
+    const summary = screen.getByRole('alert')
+    expect(within(summary).getByRole('link', { name: /finish within action 39/ })).toHaveAttribute('href', `#${start.id}`)
+    expect(within(summary).getByRole('link', { name: /enable NEXT in permitted actions/ })).toBeInTheDocument()
+    expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
+    await user.click(screen.getByRole('button', { name: 'Remove assertion 2' }))
+    expect(screen.getByRole('button', { name: 'Add a consecutive reading-order assertion' })).toHaveFocus()
+  })
+
+  it('keeps STOP explicit and links a missing STOP refusal to the action controls', async () => {
+    const user = userEvent.setup(), server = createFakeServer(MEMBER)
+    await openProject(server)
+    const actions = screen.getByRole('group', { name: 'Permitted actions' })
+    const stop = within(actions).getByRole('checkbox', { name: 'STOP' })
+    expect(stop).toBeChecked()
+    await user.click(stop)
+    await user.click(screen.getByRole('button', { name: 'Freeze version' }))
+    const summary = screen.getByRole('alert')
+    const link = within(summary).getByRole('link', { name: /Select STOP in permitted actions/ })
+    expect(link).toHaveAttribute('href', `#${actions.id}`)
+    expect(within(actions).getByText(/Select STOP in permitted actions/)).toBeInTheDocument()
+    await user.click(link)
+    expect(actions).toHaveFocus()
+    expect(stop).not.toBeChecked()
+    expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
   })
 
   it('refuses a budget the browser would have sent as zero or null', async () => {

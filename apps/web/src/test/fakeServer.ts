@@ -332,14 +332,16 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
 
       if (url.endsWith('/journey-capabilities')) {
         return json({
-          allowedActions: ['NEXT', 'ACTIVATE', 'TYPE_TEXT', 'KEY_CHORD', 'READ_CURRENT'],
+          allowedActions: ['NEXT', 'ACTIVATE', 'TYPE_TEXT', 'KEY_CHORD', 'READ_CURRENT', 'STOP'],
           allowedKeyChordsByPlatform: {
             darwin: ['TAB', 'ENTER', 'CTRL+OPT+RIGHT'],
             win32: ['TAB', 'ENTER', 'DOWN'],
           },
           allowedEffects: ['FIXTURE_SUBMIT', 'FIXTURE_RESET'],
-          assertionKinds: ['TASK_COMPLETION', 'REQUIRED_ANNOUNCEMENT'],
+          assertionKinds: ['TASK_COMPLETION', 'REQUIRED_ANNOUNCEMENT', 'READING_ORDER'],
           evaluationRules: {
+            READER_NEXT_SEQUENCE: { assertionKind: 'READING_ORDER', action: 'NEXT', minSteps: 2,
+              maxSteps: 20, maxActionSequence: 1000, maxPhraseCharacters: 8192, maxTotalPhraseBytes: 32768 },
             EXACT_READER_PHRASE: { assertionKind: 'REQUIRED_ANNOUNCEMENT', maxActionSequence: 1000,
               maxPhraseCharacters: 8192, maxPhraseBytes: 32768 },
             EFFECT_COUNT: { assertionKind: 'TASK_COMPLETION', effect: 'CREATE_TEST_REQUEST', maxCount: 1000 },
