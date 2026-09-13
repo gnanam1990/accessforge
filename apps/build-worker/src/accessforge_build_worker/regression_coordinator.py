@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
@@ -11,6 +12,7 @@ from accessforge_persistence import candidate_endpoints as endpoints
 from accessforge_persistence import candidate_observations, candidate_runs, workspace_connection
 from accessforge_persistence import candidate_regressions as regressions
 
+from .artifact_probe import ArtifactProbe
 from .artifacts import CandidateArchiveStore, read_retained_candidate
 from .candidate_gateway import CandidateGateway
 from .process import CommandStopped
@@ -24,6 +26,10 @@ class CandidateSession:
 
     gateway: CandidateGateway
     prepare_run: Callable[[str], dict[str, Any]]
+
+    def artifact_probe(self, *, private_directory: Path) -> ArtifactProbe:
+        """Opt-in private same-host measurement; lifetime must be inside this candidate session."""
+        return ArtifactProbe(self.gateway, private_directory=private_directory)
 
 
 def execute_regressions(
