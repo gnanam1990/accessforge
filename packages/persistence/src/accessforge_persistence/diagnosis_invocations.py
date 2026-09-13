@@ -23,14 +23,15 @@ def reserve(
     operation_id: str,
     request_digest: str,
     tokens: int,
-    purpose: Literal["DIAGNOSIS", "REPAIR"] = "DIAGNOSIS",
+    purpose: Literal["DIAGNOSIS", "REPAIR", "NAVIGATOR"] = "DIAGNOSIS",
 ) -> None:
-    if purpose not in {"DIAGNOSIS", "REPAIR"}:
+    if purpose not in {"DIAGNOSIS", "REPAIR", "NAVIGATOR"}:
         raise InvocationRefused("recognized model purpose required")
     for value in (workspace_id, run_id, operation_id):
         if str(UUID(value)) != value:
             raise InvocationRefused("canonical diagnosis invocation identity required")
-    if type(tokens) is not int or not 1 <= tokens <= 50000:
+    maximum = 150000 if purpose == "NAVIGATOR" else 50000
+    if type(tokens) is not int or not 1 <= tokens <= maximum:
         raise InvocationRefused("bounded diagnosis token reservation required")
     row = budgets._current_row(conn, workspace_id=workspace_id, lock=True)
     previous = conn.execute(
@@ -67,7 +68,7 @@ def finish(
     operation_id: str,
     request_digest: str,
     status: Literal["RECORDED", "UNCONFIRMED", "NOT_CALLED"],
-    purpose: Literal["DIAGNOSIS", "REPAIR"] = "DIAGNOSIS",
+    purpose: Literal["DIAGNOSIS", "REPAIR", "NAVIGATOR"] = "DIAGNOSIS",
 ) -> None:
     row = conn.execute(
         "UPDATE diagnosis_invocation SET status=%s,finished_at=clock_timestamp() "

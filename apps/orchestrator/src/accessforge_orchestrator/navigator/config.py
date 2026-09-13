@@ -7,6 +7,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from accessforge_domain.navigator_model import validate_profile
+
 PINNED_STRANDS_VERSION = "1.55.1"
 PINNED_NAVIGATOR_MODEL_ID = "global.anthropic.claude-sonnet-4-6"
 PINNED_NAVIGATOR_REGION = "us-east-1"
@@ -49,8 +51,7 @@ class NavigatorModelProfile(BaseModel):
 
     @model_validator(mode="after")
     def retry_delays_are_ordered(self) -> Self:
-        if self.retry_max_delay_seconds < self.retry_initial_delay_seconds:
-            raise ValueError("retry max delay cannot be below the initial delay")
+        validate_profile(self.model_dump(mode="json"))
         return self
 
     def assert_installed_sdk(self) -> None:

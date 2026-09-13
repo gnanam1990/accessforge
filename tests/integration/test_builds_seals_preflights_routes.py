@@ -218,7 +218,7 @@ def execution_body(
     body = _seal_body(build.json()["buildId"], environment)
     policy: dict[str, Any] = {}
     reviewer_summary: dict[str, Any] = {}
-    if getattr(request, "param", None) in {"action-policy", "stop-policy"}:
+    if getattr(request, "param", None) in {"action-policy", "stop-policy", "model-policy"}:
         policy = {
             "allowedActions": ["READ_CURRENT", "NEXT", "TYPE_TEXT", "KEY_CHORD"],
             "allowedKeyChords": [],
@@ -226,6 +226,10 @@ def execution_body(
             "wallTimeSeconds": 30,
         }
         body["navigatorPolicyDigest"] = str(digest(policy))
+        if request.param == "model-policy":
+            from accessforge_domain.navigator_model import default_profile
+
+            body["modelConfigDigest"] = digest(default_profile())
         if request.param == "stop-policy":
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
@@ -2177,6 +2181,123 @@ def test_authenticated_reader_evidence(
             == 200
         )
         assert client.post(url + "/observation", json=body, headers=headers).status_code == 403
+
+
+@pytest.mark.parametrize("execution_body", ["model-policy"], indirect=True)
+def test_navigator_model_consent_and_non_replayable_budget_admission(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    """Real human API/session/ledger boundaries; no model or physical reader invocation."""
+    import secrets
+
+    from accessforge_domain.navigator_model import default_profile, reserved_tokens
+    from accessforge_persistence import navigator_model_calls
+
+    ref, ticket = manual_dispatch_reference, supervisor_ticket
+    _seed_reader_fixture(db, ref)
+    base = f"/v1/workspaces/{WS}/runs/{ref.run_id}/navigator-model-consent"
+    scope = client.get(base + "/scope")
+    assert scope.status_code == 200
+    assert scope.json()["billableCallAcknowledged"] is False
+    body = {
+        "manifestDigest": scope.json()["manifestDigest"],
+        "modelProfile": default_profile(),
+        "maxCalls": 2,
+        "expiresAt": scope.json()["maximumExpiresAt"],
+        "billableCallAcknowledged": True,
+    }
+    headers = {
+        CSRF_HEADER: csrf,
+        "If-Match": scope.headers["ETag"],
+        "Idempotency-Key": str(uuid.uuid4()),
+    }
+    assert (
+        client.post(
+            base, json={**body, "billableCallAcknowledged": False}, headers=headers
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(base, json=body, headers={"If-Match": headers["If-Match"]}).status_code == 403
+    )
+    with workspace_connection(db, WS) as conn:
+        conn.execute("UPDATE workspace_membership SET role='VIEWER' WHERE user_id=%s", (OWNER,))
+    assert client.get(base + "/scope").status_code == 403
+    with workspace_connection(db, WS) as conn:
+        conn.execute("UPDATE workspace_membership SET role='OWNER' WHERE user_id=%s", (OWNER,))
+    created = client.post(base, json=body, headers=headers)
+    assert created.status_code == 201, created.text
+    assert client.post(base, json=body, headers=headers).json() == created.json()
+    consent_id = created.json()["consentId"]
+    assert created.json()["tokensPerCall"] == reserved_tokens(default_profile()) == 24000
+    secret = secrets.token_urlsafe(32)
+    assert (
+        client.post(
+            _ticket_url(ticket).removesuffix("accept") + "session",
+            json={"sessionSecret": secret},
+            headers={"Authorization": f"Bearer {ticket.token}"},
+        ).status_code
+        == 201
+    )
+    operation_id = str(uuid.uuid4())
+    arguments: dict[str, Any] = {
+        **asdict(ref),
+        "consent_id": consent_id,
+        "operation_id": operation_id,
+        "model_config_digest": digest(default_profile()),
+        "projection_digest": digest({"synthetic": "initial-reader-projection"}),
+        "action_sequence": 0,
+        "reader_records": (),
+    }
+    with workspace_connection(db, WS) as conn:
+        request_digest = navigator_model_calls.reserve_turn(conn, **arguments)
+    with workspace_connection(db, WS) as conn:
+        row = conn.execute(
+            "SELECT status,purpose,reserved_tokens FROM diagnosis_invocation WHERE operation_id=%s",
+            (operation_id,),
+        ).fetchone()
+        assert row == {"status": "STARTED", "purpose": "NAVIGATOR", "reserved_tokens": 24000}
+        assert conn.execute("SELECT count(*) AS n FROM runner_action").fetchone() == {"n": 0}
+    for replacement in (operation_id, str(uuid.uuid4())):
+        with pytest.raises(navigator_model_calls.Refused), workspace_connection(db, WS) as conn:
+            navigator_model_calls.reserve_turn(conn, **{**arguments, "operation_id": replacement})
+    with workspace_connection(db, WS) as conn:
+        navigator_model_calls.finish_turn(
+            conn,
+            workspace_id=WS,
+            operation_id=operation_id,
+            request_digest=request_digest,
+            status="UNCONFIRMED",
+        )
+        usage = conn.execute(
+            "SELECT basis,quantity FROM usage_event WHERE event_key=%s",
+            (f"navigator:{operation_id}:usage",),
+        ).fetchone()
+        assert usage == {"basis": "UNAVAILABLE", "quantity": 0}
+    with pytest.raises(navigator_model_calls.Refused), workspace_connection(db, WS) as conn:
+        navigator_model_calls.reserve_turn(conn, **{**arguments, "operation_id": str(uuid.uuid4())})
+    with workspace_connection(db, WS) as conn:
+        for statement in (
+            "UPDATE navigator_model_turn SET action_sequence=1",
+            "DELETE FROM navigator_model_turn",
+            "UPDATE navigator_model_consent SET max_calls=3",
+        ):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(statement)
+    revoked = client.post(
+        base + "/revocation", json={"consentId": consent_id}, headers={CSRF_HEADER: csrf}
+    )
+    assert revoked.status_code == 200 and revoked.json()["revokedAt"] is not None
+    assert (
+        client.post(
+            base, json=body, headers={**headers, "Idempotency-Key": str(uuid.uuid4())}
+        ).status_code
+        == 409
+    )
 
 
 @pytest.fixture()
