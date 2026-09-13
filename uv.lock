@@ -123,6 +123,7 @@ name = "accessforge-orchestrator"
 version = "0.0.0"
 source = { editable = "apps/orchestrator" }
 dependencies = [
+    { name = "accessforge-build-worker" },
     { name = "accessforge-navigation-tools" },
     { name = "accessforge-persistence" },
     { name = "pydantic" },
@@ -131,6 +132,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "accessforge-build-worker", editable = "apps/build-worker" },
     { name = "accessforge-navigation-tools", editable = "packages/agent-tools/navigation" },
     { name = "accessforge-persistence", editable = "packages/persistence" },
     { name = "pydantic", specifier = ">=2.10" },
