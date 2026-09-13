@@ -46,6 +46,7 @@ class AdmittedTurnResult:
     invocation: NavigatorInvocationResult
     disposition: Literal["RECORDED", "UNCONFIRMED", "NOT_CALLED"]
     next_action_sequence: int | None
+    stop_acknowledged: bool = False
 
 
 class _InvocationCheckpoints:
@@ -241,7 +242,14 @@ class NativeNavigatorSession:
             else:
                 self.close()
             return AdmittedTurnResult(
-                operation_id, outcome, disposition, self._sequence if can_continue else None
+                operation_id,
+                outcome,
+                disposition,
+                self._sequence if can_continue else None,
+                disposition == "RECORDED"
+                and action is not None
+                and action.action is ActionName.STOP
+                and action.dispatch_status == "SUCCEEDED",
             )
         except BaseException:
             # A pre-admission reader-not-ready refusal is safe to poll. Once the reservation
