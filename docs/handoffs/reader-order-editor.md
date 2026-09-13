@@ -20,6 +20,11 @@ rule, missing captures remain UNKNOWN, and expected phrases stay in the protecte
 contract rather than navigator input. Existing tokens and native controls are reused without a new
 layout system or animation. Older unsupported rule families are not silently converted into this one.
 
+Error-summary links explicitly focus the target control or focusable group on ordinary activation,
+including keyboard Enter. Modified link activation retains native navigation; missing or non-focusable
+targets retain fragment fallback. This removes reliance on implicit fragment focus in the authoring
+flow; the CI DOM regression is not a claim of physical browser or screen-reader verification.
+
 Validation: production web build/typecheck and diff checks locally; targeted authoring/payload,
 budget/UTF-8 and focus cases added to existing CI only. No local test suite, actual reader run,
 provider invocation or deployment. This completes the UI continuation of the API/evaluator rule;
