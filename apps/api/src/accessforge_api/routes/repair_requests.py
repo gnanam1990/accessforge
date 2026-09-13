@@ -11,7 +11,7 @@ from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_api.routes._common import as_body, as_identifier, authorize, workspace_scope
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.repair_requests import validate
-from accessforge_persistence import evaluations, repair_requests
+from accessforge_persistence import evaluations, repair_deliveries, repair_requests
 from accessforge_persistence.diagnosis_requests import operation_digest
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["patches"])
@@ -23,7 +23,11 @@ def _read(action: Callable[[], dict[str, Any]], response: Response) -> dict[str,
         result = action()
     except LookupError:
         raise not_found() from None
-    except (repair_requests.RequestRefused, evaluations.EvaluationError):
+    except (
+        repair_requests.RequestRefused,
+        repair_deliveries.DeliveryRefused,
+        evaluations.EvaluationError,
+    ):
         raise ProblemDetail(
             ProblemCode.CONFLICT, "repair request scope or integrity unavailable"
         ) from None
