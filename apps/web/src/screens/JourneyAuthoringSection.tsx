@@ -96,7 +96,7 @@ export const JourneyAuthoringSection = ({
   const [observerConfig, setObserverConfig] = useState('')
   const [maxActions, setMaxActions] = useState('40')
   const [wallTime, setWallTime] = useState('300')
-  const [actions, setActions] = useState<readonly string[]>(['NEXT', 'ACTIVATE', 'READ_CURRENT'])
+  const [actions, setActions] = useState<readonly string[]>(['NEXT', 'ACTIVATE', 'READ_CURRENT', 'STOP'])
   const [chords, setChords] = useState<readonly string[]>([])
   const [effects, setEffects] = useState<readonly string[]>(['FIXTURE_SUBMIT'])
   const [assertions, setAssertions] = useState<readonly AssertionRow[]>(STARTING_ASSERTIONS)
@@ -175,6 +175,8 @@ export const JourneyAuthoringSection = ({
         fieldId: actionsId,
         message: 'Choose at least one action. A journey that may take none cannot do anything.',
       })
+    } else if (!actions.includes('STOP') || !limits.allowedActions.includes('STOP')) {
+      found.push({ fieldId: actionsId, message: 'Select STOP in permitted actions. Normal completion requires an explicit final STOP.' })
     }
 
     // Checked here rather than left to `min` and `max`: the form is `noValidate`, so the browser
@@ -437,12 +439,16 @@ export const JourneyAuthoringSection = ({
                 )}
               </FormField>
 
-              <fieldset id={actionsId} style={{ border: 0, padding: 0, margin: 0 }}>
+              <fieldset id={actionsId} tabIndex={-1} style={{ border: 0, padding: 0, margin: 0 }}
+                aria-describedby={errors.some((error) => error.fieldId === actionsId) ? `${actionsId}-error` : undefined}>
                 <legend>Permitted actions</legend>
                 <p className="af-secondary">
                   The complete vocabulary, read from the server. A journey cannot invent a
-                  capability.
+                  capability. STOP must remain selected for normal completion; freezing does not run it.
                 </p>
+                {errors.find((error) => error.fieldId === actionsId) && <p id={`${actionsId}-error`} className="af-field__error">
+                  {errors.find((error) => error.fieldId === actionsId)?.message}
+                </p>}
                 {policy.allowedActions.map((action) => (
                   <label key={action} className="af-row" style={{ gap: 'var(--af-space-2)' }}>
                     <input
