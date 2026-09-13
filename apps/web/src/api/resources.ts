@@ -716,6 +716,8 @@ export const listFindings = (
  * ACCEPT read as the system having verified something (INV-12).
  */
 export interface FindingDetail {
+  /** Absent on older servers is unavailable, not an empty successful diagnosis history. */
+  readonly diagnoses?: import('./diagnosis').DiagnosisHistory;
   readonly machineOutcome: {
     readonly runId: string;
     readonly runStatus: string;

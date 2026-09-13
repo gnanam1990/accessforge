@@ -14,6 +14,7 @@
 import type {
   Environment,
   ExecutionGrant,
+  Finding,
   JourneyVersion,
   Project,
   Run,
@@ -55,6 +56,7 @@ export interface WorkspaceData {
   timeline: Record<string, unknown>
   completeness: Record<string, unknown>
   findings: Record<string, unknown>
+  findingRows: Finding[]
   reviewRequests: Record<string, unknown>[]
   review: Record<string, unknown>
   exportRecord: Record<string, unknown>
@@ -142,6 +144,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       meaning: 'This describes the evidence, not the run.',
     },
     findings: {},
+    findingRows: [],
     reviewRequests: [],
     review: {},
     // Empty by default. A settings test that is about an allowance should not have to think about
@@ -440,6 +443,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       }
       if (url.includes('/findings/') && method === 'GET') {
         return json(data.findings)
+      }
+      if (url.endsWith('/findings') && method === 'GET') {
+        return json({ items: data.findingRows, nextCursor: null })
       }
       if (url.includes('/runs/') && url.endsWith('/evaluation') && method === 'GET') {
         const id = (url.split('/runs/')[1] ?? '').split('/')[0]
