@@ -671,6 +671,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: true,
     authenticated: true,
   },
+  'finish_supervisor_session': {
+    operationId: 'finish_supervisor_session',
+    method: 'POST',
+    path: '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/finish',
+    parameters: ['workspace_id', 'session_id'],
+    mutating: true,
+    authenticated: true,
+  },
   'read_usage': {
     operationId: 'read_usage',
     method: 'GET',
@@ -759,6 +767,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/dispatch',
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/observation',
   '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/result',
+  '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/finish',
   '/v1/workspaces/{workspace_id}/usage',
   '/v1/workspaces/{workspace_id}/verifications/{verification_id}',
 ]

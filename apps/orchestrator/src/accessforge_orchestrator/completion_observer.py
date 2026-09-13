@@ -29,6 +29,7 @@ from accessforge_domain.origins import normalize_origin
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import fixtures, projects, runners, sequencer, workspace_connection
 from accessforge_persistence.evidence.observer import ApplicationObserver
+from accessforge_persistence.evidence.session import observer_producer
 
 
 class Refused(Exception):
@@ -126,6 +127,12 @@ def _context(
     ).fetchone()
     if actions is None or not actions["n"] or actions["unresolved"]:
         raise Refused("observer requires a settled action boundary")
+    last = conn.execute(
+        "SELECT action,result_status FROM runner_action WHERE run_id=%s AND attempt_id=%s "
+        "ORDER BY action_sequence DESC LIMIT 1",
+        (run_id, ticket["attempt_id"]),
+    ).fetchone()
+    assert last is not None
     return {
         "workspace": workspace_id,
         "run": run_id,
@@ -138,8 +145,9 @@ def _context(
         "templateDigest": fixture["template_digest"],
         "fixtureContract": contract,
         "afterActionSequence": int(actions["last"]),
-        "producer": "observer:"
-        + digest({"credentialRef": credential_ref, "attempt": str(ticket["attempt_id"])}),
+        "lastAction": last["action"],
+        "lastResult": last["result_status"],
+        "producer": observer_producer(credential_ref, str(ticket["attempt_id"])),
     }
 
 
@@ -147,6 +155,7 @@ def _existing(
     conn: psycopg.Connection[Any],
     context: dict[str, Any],
     source_record_id: str,
+    final_sample: bool,
 ) -> MeasurementReceipt | None:
     row = conn.execute(
         "SELECT e.event_id,e.payload,e.lease_epoch,e.manifest_digest "
@@ -165,6 +174,7 @@ def _existing(
         or source.get("afterActionSequence") != context["afterActionSequence"]
         or row["lease_epoch"] != context["epoch"]
         or row["manifest_digest"] != context["manifestDigest"]
+        or source.get("finalSample", False) is not final_sample
     ):
         raise Refused("previous observation content is no longer available")
     return MeasurementReceipt(str(row["event_id"]), source["measurement"] == "KNOWN", True)
@@ -178,6 +188,7 @@ def measure_once(
     run_id: str,
     credential_ref: str,
     source_record_id: str,
+    final_sample: bool = False,
 ) -> MeasurementReceipt:
     """Read application state outside product locks, then revalidate before atomic evidence commit.
 
@@ -195,7 +206,9 @@ def measure_once(
         conn.execute("SET LOCAL statement_timeout='5s'")
         conn.execute("SET LOCAL lock_timeout='1s'")
         before = _context(conn, workspace_id, run_id, credential_ref)
-        existing = _existing(conn, before, source_record_id)
+        if final_sample and (before["lastAction"] != "STOP" or before["lastResult"] != "SUCCEEDED"):
+            raise Refused("a final observer sample requires successful STOP")
+        existing = _existing(conn, before, source_record_id, final_sample)
         if existing is not None:
             return existing
     count: int | None = None
@@ -221,7 +234,7 @@ def measure_once(
         after = _context(conn, workspace_id, run_id, credential_ref)
         if after != before:
             raise Refused("execution identity changed during application observation")
-        existing = _existing(conn, after, source_record_id)
+        existing = _existing(conn, after, source_record_id, final_sample)
         if existing is not None:
             return existing
         principal = MachinePrincipal(
@@ -245,6 +258,7 @@ def measure_once(
             "observedAt": observed_at,
             "measurement": "UNKNOWN" if count is None else "KNOWN",
             "count": count,
+            "finalSample": final_sample,
         }
         event = sequencer.admit_record(
             conn,
@@ -267,6 +281,15 @@ def measure_once(
             },
             source_time=datetime.fromisoformat(observed_at.replace("Z", "+00:00")),
         )
+        if final_sample:
+            sequencer.close_producer_stream(
+                conn,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                attempt_id=after["attempt"],
+                producer_id=after["producer"],
+                final_producer_sequence=sequence,
+            )
         return MeasurementReceipt(event.event_id, count is not None, False)
 
 
@@ -276,6 +299,9 @@ def main() -> None:
     parser.add_argument("--run-id", type=uuid.UUID, required=True)
     parser.add_argument("--source-record-id", type=uuid.UUID, required=True)
     parser.add_argument("--observer-credential-ref", required=True)
+    parser.add_argument(
+        "--final", action="store_true", help="measure after STOP and close this observer's stream"
+    )
     args = parser.parse_args()
     product = os.environ.get("ACCESSFORGE_DATABASE_URL")
     application = os.environ.get("ACCESSFORGE_OBSERVER_DATABASE_URL")
@@ -289,6 +315,7 @@ def main() -> None:
             run_id=str(args.run_id),
             source_record_id=str(args.source_record_id),
             credential_ref=args.observer_credential_ref,
+            final_sample=args.final,
         )
     except (Refused, runners.RunnerError, psycopg.Error, ValueError, sequencer.SequencerError):
         print("observer measurement refused; no completion or retry claim")

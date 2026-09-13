@@ -698,6 +698,14 @@ OPERATIONS: dict[str, Operation] = {
         mutating=True,
         authenticated=True,
     ),
+    "finish_supervisor_session": Operation(
+        operation_id="finish_supervisor_session",
+        method="POST",
+        path="/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/finish",
+        parameters=("workspace_id", "session_id"),
+        mutating=True,
+        authenticated=True,
+    ),
     "read_usage": Operation(
         operation_id="read_usage",
         method="GET",
@@ -788,6 +796,7 @@ PATHS: frozenset[str] = frozenset(
         "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/dispatch",
         "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/observation",
         "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/actions/{action_id}/result",
+        "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/finish",
         "/v1/workspaces/{workspace_id}/usage",
         "/v1/workspaces/{workspace_id}/verifications/{verification_id}",
     }

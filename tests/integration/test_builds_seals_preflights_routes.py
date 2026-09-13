@@ -217,7 +217,7 @@ def execution_body(
     journey_id = str(uuid.uuid4())
     body = _seal_body(build.json()["buildId"], environment)
     policy: dict[str, Any] = {}
-    if getattr(request, "param", None) == "action-policy":
+    if getattr(request, "param", None) in {"action-policy", "stop-policy"}:
         policy = {
             "allowedActions": ["READ_CURRENT", "NEXT", "TYPE_TEXT", "KEY_CHORD"],
             "allowedKeyChords": [],
@@ -225,6 +225,9 @@ def execution_body(
             "wallTimeSeconds": 30,
         }
         body["navigatorPolicyDigest"] = str(digest(policy))
+        if request.param == "stop-policy":
+            policy["allowedActions"].append("STOP")
+            body["navigatorPolicyDigest"] = str(digest(policy))
     with workspace_connection(db, WS) as conn:
         conn.execute(
             "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,journey_digest,"
@@ -1534,7 +1537,9 @@ def test_supervisor_session_action_intent(
         assert len(actions) == (1 if fault is None else 0)
         for action in actions:
             assert action["dispatched_at"] is None and action["result_at"] is None
-        assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {
+            "n": 3 if fault is None else 2,
+        }
 
 
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
@@ -1626,7 +1631,9 @@ def test_authenticated_action_dispatch_and_result(
             assert conn.execute(
                 "SELECT status FROM runner WHERE id=%s", (ref.runner_id,)
             ).fetchone() == {"status": "QUARANTINED"}
-        assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
+        assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {
+            "n": 4 if case == "ambiguity" else 5,
+        }
 
 
 @pytest.mark.parametrize(
@@ -1832,7 +1839,9 @@ def test_authenticated_reader_evidence(
     result = client.post(url + "/observation", json=body, headers=headers)
     assert result.status_code == (200 if fault is None else 403)
     with workspace_connection(db, WS) as conn:
-        events = conn.execute("SELECT payload FROM canonical_event").fetchall()
+        events = conn.execute(
+            "SELECT payload FROM canonical_event WHERE event_type='READER_OBSERVATION'"
+        ).fetchall()
         assert len(events) == int(fault is None)
         if fault is None:
             payload = events[0]["payload"]
@@ -2007,7 +2016,7 @@ def test_independent_observer_worker(
 
         monkeypatch.setattr(ApplicationObserver, "count_effects", revoked)
     source_id = str(uuid.uuid4())
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "workspace_id": WS,
         "run_id": ref.run_id,
         "source_record_id": source_id,
@@ -2073,6 +2082,196 @@ def test_independent_observer_worker(
             assert fixture.nonce not in json.dumps(payload)
             assert "Private Fixture Name" not in json.dumps(payload)
         assert run_store.load_run(conn, run_id=ref.run_id).state.outcome.value == "NOT_EVALUATED"
+
+
+@pytest.mark.parametrize("execution_body", ["stop-policy"], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        "success",
+        "missing-observer",
+        "tail",
+        "no-stop",
+        "unresolved-stop",
+        "revoked",
+        "rollback",
+    ],
+)
+def test_authenticated_execution_finish(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    owned_observer_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    import secrets
+
+    from accessforge_orchestrator.completion_observer import measure_once
+    from accessforge_persistence.evidence import missing_required_artifacts
+    from accessforge_persistence.fixtures import create_instance
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    secret = secrets.token_urlsafe(32)
+    assert (
+        client.post(
+            _ticket_url(ticket).removesuffix("accept") + "session",
+            json={"sessionSecret": secret},
+            headers={"Authorization": f"Bearer {ticket.token}"},
+        ).status_code
+        == 201
+    )
+    headers = {"Authorization": f"Bearer {secret}"}
+    base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
+    with workspace_connection(db, WS) as conn:
+        fixture = create_instance(
+            conn,
+            workspace_id=WS,
+            run_id=ref.run_id,
+            template_id="reference-service-request",
+            template_digest=_digest("fixture"),
+            navigator_values={"name": "Private Fixture"},
+            observer_config={"effect": "CREATE_TEST_REQUEST"},
+        )
+    with psycopg.connect(owned_observer_database, row_factory=psycopg.rows.dict_row) as conn:
+        conn.execute(
+            "INSERT INTO fixture_instance(nonce,template_digest,variant) "
+            "VALUES(%s,%s,'accessible')",
+            (fixture.nonce, fixture.template_digest),
+        )
+    stop_id = ""
+    for sequence, action in enumerate(
+        ["READ_CURRENT"] if case == "no-stop" else ["READ_CURRENT", "STOP"],
+        start=1,
+    ):
+        intent = client.post(
+            base + "/action-intents",
+            headers=headers,
+            json={
+                "action": action,
+                "sequence": sequence,
+                "origin": "https://app.example.test",
+            },
+        )
+        assert intent.status_code == 201
+        stop_id = intent.json()["actionId"]
+        action_url = base + "/actions/" + stop_id
+        assert (
+            client.post(
+                action_url + "/dispatch",
+                headers=headers,
+                json={"origin": "https://app.example.test"},
+            ).status_code
+            == 200
+        )
+        if action != "STOP":
+            source = {
+                "actionId": stop_id,
+                "actionSequence": sequence,
+                "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "phrase": "Synthetic reader evidence",
+            }
+            assert (
+                client.post(
+                    action_url + "/observation",
+                    headers=headers,
+                    json={
+                        "producerSequence": 1,
+                        "sourceRecordDigest": digest(source),
+                        "sourceRecord": source,
+                    },
+                ).status_code
+                == 200
+            )
+        if case != "unresolved-stop" or action != "STOP":
+            assert (
+                client.post(
+                    action_url + "/result", headers=headers, json={"status": "SUCCEEDED"}
+                ).status_code
+                == 200
+            )
+    if case not in {"missing-observer", "no-stop", "unresolved-stop"}:
+        receipt = measure_once(
+            db,
+            owned_observer_database,
+            workspace_id=WS,
+            run_id=ref.run_id,
+            credential_ref="observer-profile",
+            source_record_id=str(uuid.uuid4()),
+            final_sample=True,
+        )
+        assert receipt.known
+    if case == "revoked":
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "UPDATE approval SET revoked_at=now() WHERE id=("
+                "SELECT authorization_id FROM run WHERE id=%s)",
+                (ref.run_id,),
+            )
+    if case == "rollback":
+        original = run_store.apply_transition
+
+        def fail_after_transition(*args: Any, **kwargs: Any) -> Any:
+            original(*args, **kwargs)
+            raise RuntimeError("synthetic closing transaction failure")
+
+        monkeypatch.setattr(run_store, "apply_transition", fail_after_transition)
+        with pytest.raises(RuntimeError, match="synthetic closing"):
+            client.post(
+                base + "/finish",
+                headers=headers,
+                json={"stopActionId": stop_id, "readerSequence": 1},
+            )
+    else:
+        response = client.post(
+            base + "/finish",
+            headers=headers,
+            json={
+                "stopActionId": stop_id,
+                "readerSequence": 0 if case == "tail" else 1,
+            },
+        )
+        assert response.status_code == (200 if case == "success" else 403)
+        if case == "success":
+            assert response.json()["status"] == "FINALIZING"
+            assert response.json()["outcome"] == "NOT_EVALUATED"
+            assert response.json()["missingArtifactCount"] == 5
+            assert (
+                client.post(
+                    base + "/action-intents",
+                    headers=headers,
+                    json={
+                        "action": "READ_CURRENT",
+                        "sequence": 3,
+                        "origin": "https://app.example.test",
+                    },
+                ).status_code
+                == 403
+            )
+    with workspace_connection(db, WS) as conn:
+        state = run_store.load_run(conn, run_id=ref.run_id).state
+        assert state.status.value == ("FINALIZING" if case == "success" else "RUNNING")
+        assert state.outcome.value == "NOT_EVALUATED" and state.cancel_requested_at is None
+        lease = conn.execute(
+            "SELECT released_at,stop_acknowledged_epoch,release_reason "
+            "FROM desktop_lease WHERE id=%s",
+            (ref.lease_id,),
+        ).fetchone()
+        assert lease is not None
+        assert (lease["released_at"] is not None) == (case == "success")
+        tails = conn.execute("SELECT closed_at_sequence FROM producer_stream").fetchall()
+        if case == "success":
+            assert len(tails) == 4 and all(t["closed_at_sequence"] is not None for t in tails)
+            assert lease["release_reason"] == "STOP_ACKNOWLEDGED"
+            assert lease["stop_acknowledged_epoch"] == ref.epoch
+        assert (
+            len(missing_required_artifacts(conn, run_id=ref.run_id, attempt_id=ref.attempt_id)) == 5
+        )
+        finished = conn.execute(
+            "SELECT 1 FROM canonical_event WHERE event_type='RUN_FINISHED'"
+        ).fetchall()
+        assert len(finished) == int(case == "success")
 
 
 @pytest.fixture(scope="module")
@@ -2273,7 +2472,8 @@ def test_native_execution_session_real_http(
                 else ("RUNNING", "NOT_EVALUATED")
             )
             events = conn.execute(
-                "SELECT event_type,payload FROM canonical_event ORDER BY sequence"
+                "SELECT event_type,payload FROM canonical_event "
+                "WHERE event_type='READER_OBSERVATION' ORDER BY sequence"
             ).fetchall()
             assert len(events) == (0 if mode == "ambiguity" else 2)
             for event in events:

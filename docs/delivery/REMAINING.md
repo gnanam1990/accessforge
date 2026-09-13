@@ -112,8 +112,12 @@ distinct from silence. This bridge was exercised with synthetic physical adapter
 An operator-configured independent observer worker now binds the sealed credential reference and
 fixture to a bounded read-only application-database measurement, then revalidates before retaining
 an OBSERVER effect record. It has real PostgreSQL/CLI proof, not production deployment or reader proof.
+New sessions declare five required artifacts and retain authenticated lifecycle/action receipts.
+Successful STOP fences input; the independent observer closes its own final sample, then exact
+reader/action/lifecycle tails and STOP acknowledgement move the run only to FINALIZING. Native
+journal readback must match issued commands. Missing artifacts remain visible; no outcome is minted.
 Still pending: concrete production physical guards and reader startup, observer deployment/role
-isolation and assertion derivation, producer closure, full action/lifecycle evidence, artifacts and finalization,
+isolation and assertion derivation, trusted post-stop artifact intake and final verdict admission,
 remaining action/build UNKNOWN recovery,
 and actual matched
 failure-to-repair proof. See `docs/handoffs/14-candidate-build.md` for checkpoint-specific tests;

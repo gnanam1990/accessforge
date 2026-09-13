@@ -243,6 +243,8 @@ export class NativeExecutionSession {
   #fenced = false;
   #observationSequence = 0;
   #observationPending = false;
+  #stopActionId: string | undefined;
+  #finishStarted = false;
   readonly receipt: Readonly<Record<string, unknown>>;
 
   private constructor(config: ReceiverConfig, secret: string, receipt: Record<string, unknown>) {
@@ -261,7 +263,8 @@ export class NativeExecutionSession {
   }
 
   async retainIntent(command: unknown): Promise<Readonly<Record<string, unknown>>> {
-    if (this.#fenced || this.#intentPending || performance.now() >= this.#deadline) {
+    if (this.#fenced || this.#finishStarted || this.#stopActionId !== undefined ||
+        this.#intentPending || performance.now() >= this.#deadline) {
       throw new ReceiverRefused('session expired or has an unresolved intent; never replay');
     }
     if (command === null || typeof command !== 'object' || Array.isArray(command)) {
@@ -360,6 +363,7 @@ export class NativeExecutionSession {
       if (uuid(result.sessionId) !== this.#sessionId || uuid(result.actionId) !== actionId ||
           result.status !== status || result.meaning !== 'ACTION_RESULT_RETAINED') throw new Error('identity');
       if (status === 'AMBIGUOUS') this.#fenced = true;
+      if (this.#current.command.action === 'STOP' && status === 'SUCCEEDED') this.#stopActionId = actionId;
       // Only this exact successful acknowledgement clears the pending gate. A lost reply does not.
       this.#current = undefined;
       this.#intentPending = false;
@@ -404,5 +408,24 @@ export class NativeExecutionSession {
       this.#fenced = true;
       throw new ReceptionUnknown('reader evidence acknowledgement unknown; retain fencing');
     } finally { this.#busy = false; }
+  }
+
+  async finish(): Promise<Readonly<Record<string, unknown>>> {
+    if (this.#fenced || this.#busy || this.#intentPending || this.#finishStarted ||
+        this.#stopActionId === undefined) throw new ReceiverRefused('no acknowledged STOP to close');
+    this.#finishStarted = true;
+    try {
+      const result = exactObject(await this.#post('finish', {
+        stopActionId: this.#stopActionId, readerSequence: this.#observationSequence,
+      }), ['sessionId', 'runId', 'status', 'outcome', 'missingArtifactCount', 'meaning']);
+      if (uuid(result.sessionId) !== this.#sessionId ||
+          uuid(result.runId) !== this.#config.localReference.runId ||
+          result.status !== 'FINALIZING' || result.outcome !== 'NOT_EVALUATED' ||
+          !Number.isSafeInteger(result.missingArtifactCount) || Number(result.missingArtifactCount) < 0 ||
+          result.meaning !== 'EXECUTION_STOPPED_AWAITING_FINALIZATION') throw new Error('closing identity');
+      return Object.freeze(result);
+    } catch {
+      throw new ReceptionUnknown('execution closure unknown; reconcile without restarting or replay');
+    } finally { this.#fenced = true; }
   }
 }
