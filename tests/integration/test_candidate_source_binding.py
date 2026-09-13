@@ -483,6 +483,7 @@ def _prepare_owned_build(
         ("", "cancelled", False),
         ("", "fenced", False),
         ("", "endpoint-fenced", False),
+        ("", "deployed-artifact-changed", False),
         ("", "endpoint-bind-failed", False),
         ("", "endpoint-before-admission-fenced", False),
         (
@@ -524,6 +525,7 @@ def _prepare_owned_build(
         "cancelled",
         "fenced",
         "endpoint-fenced",
+        "deployed-artifact-changed",
         "endpoint-bind-failed",
         "endpoint-before-admission-fenced",
         "fixture-declaration-tampered",
@@ -738,7 +740,7 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
                 (bound_observations[0]["taskId"],),
             ).fetchone() == {"state": "FAILED" if failure == "endpoint-bind-failed" else "UNKNOWN"}
         return
-    if failure is not None and failure != "endpoint-fenced":
+    if failure is not None and failure not in {"endpoint-fenced", "deployed-artifact-changed"}:
         with pytest.raises(SandboxRefused, match=failure):
             execute_regressions(
                 binding.database,
@@ -780,6 +782,23 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
 
     def browser_endpoint_probe(gateway: CandidateGateway) -> None:
         receipt = gateway.receipt()
+        observation = gateway.observe_artifact()
+        assert observation["artifactDigest"] == retained.archive_digest
+        assert observation["artifactTreeDigest"] == retained.tree_digest
+        assert observation["candidateId"] == gateway.binding.candidate_id
+        assert observation["meaning"] == "DEPLOYED_FILESYSTEM_MEASUREMENT_NOT_EXECUTION_ATTESTATION"
+        if failure == "deployed-artifact-changed":
+            # CI-owned container only: change the deployed file mode, not the retained archive.
+            runner.sandbox._checked(
+                "exec",
+                gateway.binding.candidate_id,
+                "/bin/chmod",
+                "755",
+                "/work/src/out/accessforge_reference_app-0.0.0-py3-none-any.whl",
+                deadline=time.monotonic() + 5,
+            )
+            gateway.observe_artifact()
+            pytest.fail("changed deployed artifact was accepted")
         assert receipt["artifactDigest"] == retained.archive_digest
         assert receipt["imageId"] == image
         assert receipt["daemonId"] == sandbox.daemon.daemon_id
@@ -852,6 +871,23 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
         finally:
             connection.close()
 
+    if failure == "deployed-artifact-changed":
+        with pytest.raises(SandboxRefused, match="artifact measurement unavailable"):
+            execute_regressions(
+                binding.database,
+                workspace_id=binding.workspace,
+                build_id=claimed.claim.build_id,
+                runner=runner,
+                store=store,
+                on_candidate_endpoint=browser_endpoint_probe,
+            )
+        with workspace_connection(binding.database, binding.workspace) as conn:
+            assert conn.execute(
+                "SELECT state,cleanup_confirmed FROM candidate_regression_attempt "
+                "WHERE build_id=%s",
+                (claimed.claim.build_id,),
+            ).fetchone() == {"state": "FAILED", "cleanup_confirmed": True}
+        return
     if failure == "endpoint-fenced":
         with pytest.raises(builds.BuildClaimRefused):
             execute_regressions(
