@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -48,6 +49,42 @@ def request(
         return response.status, response.read(), dict(response.getheaders())
     finally:
         client.close()
+
+
+@pytest.mark.parametrize("fault", [None, "artifact", "old", "extra"])
+def test_controller_artifact_measurement_requires_fresh_exact_binding(fault: str | None) -> None:
+    identity = binding()
+
+    def observe() -> dict[str, Any]:
+        result = {
+            "taskId": identity.task_id,
+            "candidateId": identity.candidate_id,
+            "imageId": identity.image_id,
+            "daemonId": identity.daemon.daemon_id,
+            "artifactDigest": "f" * 64 if fault == "artifact" else identity.artifact_digest,
+            "artifactTreeDigest": "e" * 64,
+            "observedAt": "2000-01-01T00:00:00Z"
+            if fault == "old"
+            else datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "meaning": "DEPLOYED_FILESYSTEM_MEASUREMENT_NOT_EXECUTION_ATTESTATION",
+        }
+        if fault == "extra":
+            result["sourceDigest"] = "unmeasured source identity"
+        return result
+
+    with CandidateGateway(
+        binding=identity,
+        nonce="test-fixture-nonce",
+        transport=lambda *args: {"status": 200, "body": "ok"},
+        observe_artifact=observe,
+    ) as gateway:
+        if fault is None:
+            assert gateway.observe_artifact()["artifactDigest"] == identity.artifact_digest
+        else:
+            with pytest.raises(SandboxRefused, match="artifact measurement unavailable"):
+                gateway.observe_artifact()
+            with pytest.raises(SandboxRefused):
+                _ = gateway.origin
 
 
 @pytest.mark.parametrize("fail_at", [None, "plan", "bound", "admit", "cleanup"])
