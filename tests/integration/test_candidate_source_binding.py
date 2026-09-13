@@ -797,6 +797,13 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
             assert measured["receipt"]["runId"] is None
             assert measured["receipt"]["leaseId"] is None
             assert measured["receiptDigest"] == digest(measured["receipt"])
+            lineage = measured["receipt"]["sourceLineage"]
+            assert lineage["sourceTreeDigest"] == claimed.candidate.source.tree_digest
+            assert lineage["sourceArchiveDigest"] == claimed.candidate.source.archive_digest
+            assert lineage["artifactDigest"] == retained.archive_digest
+            assert lineage["buildId"] == claimed.claim.build_id
+            assert lineage["imageId"] == image
+            assert lineage["meaning"] == "CAPTURED_BUILD_INPUT_LINEAGE_NOT_RUNTIME_SOURCE_READ"
             for statement in (
                 "UPDATE candidate_artifact_observation SET ordinal=99",
                 "DELETE FROM candidate_artifact_observation",
@@ -1480,6 +1487,16 @@ def test_candidate_materialization_uses_actual_patched_source_and_retained_outpu
                         **arguments,
                         observed_artifact_digest=built.artifact.archive_digest,
                     )
+                original_build = conn.execute(
+                    "SELECT * FROM candidate_build_attempt WHERE id=%s",
+                    (claimed.claim.build_id,),
+                ).fetchone()
+                assert original_build is not None
+                if sql.startswith("DELETE FROM candidate_materialization"):
+                    assert materializations.source_lineage(conn, build=original_build) is None
+                else:
+                    with pytest.raises(builds.BuildClaimRefused):
+                        materializations.source_lineage(conn, build=original_build)
         with conn.transaction(force_rollback=True):
             conn.execute(
                 "UPDATE approval SET revoked_at=clock_timestamp() WHERE id="
