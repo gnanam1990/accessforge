@@ -7,12 +7,85 @@ from typing import Any
 
 import psycopg
 
+from accessforge_domain.timestamps import to_rfc3339_utc
+
 from . import candidate_builds as builds
 from . import candidate_regressions as regressions
 from . import patches, projects
 from .source_intake import SourceIdentity
 
 Refused = builds.BuildClaimRefused
+
+
+def source_lineage(
+    conn: psycopg.Connection[dict[str, Any]], *, build: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Read the captured input-to-output chain; never publish or backfill historical builds.
+
+    The trusted measuring coordinator must already have checked current build authority and
+    measured the deployed artifact. This is build-input lineage, not a live source filesystem read.
+    """
+    row = conn.execute(
+        "SELECT * FROM candidate_materialization WHERE build_id=%s AND workspace_id=%s FOR SHARE",
+        (build["id"], build["workspace_id"]),
+    ).fetchone()
+    if row is None or row["published_at"] is None:
+        return None
+    source = conn.execute(
+        "SELECT * FROM source_snapshot WHERE id=%s AND workspace_id=%s FOR SHARE",
+        (row["source_snapshot_id"], build["workspace_id"]),
+    ).fetchone()
+    artifact = conn.execute(
+        "SELECT * FROM build_artifact WHERE id=%s AND workspace_id=%s FOR SHARE",
+        (row["build_artifact_id"], build["workspace_id"]),
+    ).fetchone()
+    process = conn.execute(
+        "SELECT * FROM candidate_process_receipt WHERE build_id=%s AND workspace_id=%s FOR SHARE",
+        (build["id"], build["workspace_id"]),
+    ).fetchone()
+    if (
+        source is None
+        or artifact is None
+        or process is None
+        or build["state"] != "BUILT"
+        or not build["cleanup_confirmed"]
+        or source["project_id"] != build["project_id"]
+        or source["commit_sha"] != build["source_commit"]
+        or source["tree_digest"] != row["source_tree_digest"]
+        or source["dirty"] != bool(row["changed_paths"])
+        or source["dirty_path_count"] != len(row["changed_paths"])
+        or source["requested_revision"] != "approved-patch:" + build["patch_digest"]
+        or artifact["project_id"] != build["project_id"]
+        or artifact["source_snapshot_id"] != row["source_snapshot_id"]
+        or artifact["artifact_digest"] != build["artifact_digest"]
+        or row["artifact_digest"] != build["artifact_digest"]
+        or not artifact["identity_observable"]
+        or build["dispatched_at"] is None
+        or build["finished_at"] is None
+        or not row["created_at"]
+        <= build["dispatched_at"]
+        <= process["recorded_at"]
+        <= build["finished_at"]
+        <= row["published_at"]
+    ):
+        raise Refused("captured source-to-build lineage is inconsistent")
+    return {
+        "meaning": "CAPTURED_BUILD_INPUT_LINEAGE_NOT_RUNTIME_SOURCE_READ",
+        "workspaceId": str(build["workspace_id"]),
+        "buildId": str(build["id"]),
+        "sourceSnapshotId": str(row["source_snapshot_id"]),
+        "sourceTreeDigest": row["source_tree_digest"],
+        "sourceArchiveDigest": build["candidate_archive_digest"],
+        "buildArtifactId": str(row["build_artifact_id"]),
+        "artifactDigest": build["artifact_digest"],
+        "buildContainerId": process["container_id"],
+        "imageId": process["image_id"],
+        "daemonId": build["daemon_id"],
+        "sourceCapturedAt": to_rfc3339_utc(row["created_at"]),
+        "buildDispatchedAt": to_rfc3339_utc(build["dispatched_at"]),
+        "buildFinishedAt": to_rfc3339_utc(build["finished_at"]),
+        "artifactPublishedAt": to_rfc3339_utc(row["published_at"]),
+    }
 
 
 def capture_source(

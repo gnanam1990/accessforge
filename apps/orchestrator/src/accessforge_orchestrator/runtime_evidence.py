@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from accessforge_domain.canonical import digest
 from accessforge_domain.evaluation.rules import ReaderSample
@@ -23,6 +23,7 @@ class RuntimeEvidence:
     preflight_passed: bool
     observed_build: str | None
     reasons: tuple[str, ...]
+    observed_source: str | None = None
 
 
 def reader_samples(snapshots: dict[str, Any]) -> tuple[ReaderSample, ...]:
@@ -127,6 +128,64 @@ def _build(receipt: Any, source: dict[str, Any], context: dict[str, Any]) -> str
     return build
 
 
+def _source_lineage(receipt: dict[str, Any], build: str) -> str | None:
+    """Only after _build verifies this original, server-resolved measurement receipt."""
+    payload = receipt["receipt"]
+    lineage = payload.get("sourceLineage")
+    if lineage is None:
+        return None  # Older receipts cannot be enriched from today's mutable control-plane rows.
+    fields = {
+        "meaning",
+        "workspaceId",
+        "buildId",
+        "sourceSnapshotId",
+        "sourceTreeDigest",
+        "sourceArchiveDigest",
+        "buildArtifactId",
+        "artifactDigest",
+        "buildContainerId",
+        "imageId",
+        "daemonId",
+        "sourceCapturedAt",
+        "buildDispatchedAt",
+        "buildFinishedAt",
+        "artifactPublishedAt",
+    }
+    if (
+        not isinstance(lineage, dict)
+        or set(lineage) != fields
+        or any(not isinstance(value, str) or not value for value in lineage.values())
+        or lineage["meaning"] != "CAPTURED_BUILD_INPUT_LINEAGE_NOT_RUNTIME_SOURCE_READ"
+        or lineage["workspaceId"] != payload["workspaceId"]
+        or lineage["buildId"] != payload.get("buildId")
+        or lineage["artifactDigest"] != build
+        or lineage["imageId"] != payload["observation"].get("imageId")
+        or lineage["daemonId"] != payload["observation"].get("daemonId")
+        or any(
+            len(lineage[key]) != 64 or any(char not in "0123456789abcdef" for char in lineage[key])
+            for key in ("sourceTreeDigest", "sourceArchiveDigest", "buildContainerId")
+        )
+    ):
+        raise Refused("runtime source lineage differs from the measured build")
+    try:
+        for key in ("sourceSnapshotId", "buildArtifactId", "buildId"):
+            UUID(lineage[key])
+        moments = [
+            parse_rfc3339_utc(lineage[key])
+            for key in (
+                "sourceCapturedAt",
+                "buildDispatchedAt",
+                "buildFinishedAt",
+                "artifactPublishedAt",
+            )
+        ] + [parse_rfc3339_utc(payload["observation"]["observedAt"])]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise Refused("runtime source lineage identity or time malformed") from exc
+    if any(left > right for left, right in zip(moments, moments[1:], strict=False)):
+        raise Refused("runtime source lineage does not precede the measured deployment")
+    return str(lineage["sourceTreeDigest"])
+
+
 def interpret(snapshots: dict[str, Any], context: dict[str, Any]) -> RuntimeEvidence:
     intents: dict[str, tuple[int, int]] = {}
     results: dict[str, int] = {}
@@ -147,6 +206,7 @@ def interpret(snapshots: dict[str, Any], context: dict[str, Any]) -> RuntimeEvid
         raise Refused("complete runtime action boundaries required")
     reports: dict[str, dict[str, Any]] = {}
     builds: list[str] = []
+    sources: list[str] = []
     for event in snapshots["PREFLIGHT_RECORD"]["records"]:
         payload = event["payload"]
         if payload.get("provenance") != "RUNTIME_PROBE_REPORT":
@@ -175,6 +235,9 @@ def interpret(snapshots: dict[str, Any], context: dict[str, Any]) -> RuntimeEvid
         build = _build(payload.get("buildArtifactReceipt"), source, context)
         if build is not None and checks["BUILD_IDENTITY_MATCHES_MANIFEST"] == "TRUE":
             builds.append(build)
+            source_tree = _source_lineage(payload["buildArtifactReceipt"], build)
+            if source_tree is not None:
+                sources.append(source_tree)
     reasons: list[str] = []
     covered = set(reports) == set(intents)
     passed = covered and all(
@@ -189,4 +252,9 @@ def interpret(snapshots: dict[str, Any], context: dict[str, Any]) -> RuntimeEvid
         observed_build = None
     else:
         observed_build = builds[0]
-    return RuntimeEvidence(passed, observed_build, tuple(reasons))
+    observed_source = None
+    if observed_build is not None and len(sources) == len(intents) and len(set(sources)) == 1:
+        observed_source = sources[0]
+    else:
+        reasons.append("captured source-to-build lineage does not cover every original action")
+    return RuntimeEvidence(passed, observed_build, tuple(reasons), observed_source)
