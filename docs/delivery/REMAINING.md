@@ -31,8 +31,11 @@ completes focus/effect authorization or full execution bootstrap. No profile gat
 
 Physical preflight now binds the assigned audit session to console/process observations, samples
 the supervisor clock and rejects stale/drifted reads. The physical Safari factory wires this to the
-origin guard. Genuine setup/deployment/capture evidence and canonical runtime identity ingestion
-remain pending; matching a session ID does not establish exclusivity against another local runner.
+origin guard. The physical factory now also acquires a durable per-desktop claim shared across
+runner registrations, guards the adapter, and releases only after clean STOP/journal/server ACK.
+Crash/cancellation/unknown claims are retained for reconciliation. This requires one trusted host
+root; it does not sandbox malicious same-user code or protect arbitrary low-level runner callers.
+Genuine setup/deployment/capture evidence and canonical runtime identity ingestion remain pending.
 
 The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
 execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
@@ -40,8 +43,9 @@ completion. Next build work is trusted runtime identity/probe ingestion and the 
 typed predicate producers. Real VoiceOver execution, deployed service/spool
 isolation and matched repair proof remain unverified; stored snapshots do not close E0/R1.
 
-Local verification remains changed-code static checks and focused regression cases only. CI is not
-disabled. The previous CI head's Node response-validation test hit a100ms scheduling race; its
+Local verification now defaults to changed-code build/typecheck only; newly authored regressions
+run on CI, not in repeated local suites. CI is not disabled. The previous CI head's Node
+response-validation test hit a100ms scheduling race; its
 test-only override was removed in favor of the existing2-second fixture budget, preserving both
 assertions and the separate deterministic deadline-expiry case.
 

@@ -3,6 +3,8 @@ import { createHostEnvironment, runPreflight, type PreflightReport, type ProbeEn
   type RuntimeProbeEvidence, type ProbeResult } from '@accessforge/at-voiceover';
 import type { Clock } from './supervisor.js';
 import { createSafariAuthenticatedRunner } from './safari-origin.js';
+import { createExclusiveDesktopRunner, type ExclusiveDesktopRunner } from './desktop-claim.js';
+import { parseReference } from './dispatch-receiver.js';
 
 export interface PhysicalPreflightOptions {
   /** The assigned dedicated audit session, provisioned independently of observed current state. */
@@ -80,10 +82,24 @@ export function createPhysicalPreflight(options: PhysicalPreflightOptions): () =
 export function createPhysicalSafariRunner(options:
   Omit<Parameters<typeof createSafariAuthenticatedRunner>[0], 'preflight'> & {
     readonly physicalPreflight: Omit<PhysicalPreflightOptions, 'clock' | 'environment'>;
+    /** One shared private host root across ALL runner registrations, not a per-run directory. */
+    readonly desktopClaimDirectory: string;
   },
-): ReturnType<typeof createSafariAuthenticatedRunner> {
-  const { physicalPreflight, ...runtime } = options;
-  return createSafariAuthenticatedRunner({ ...runtime,
+): ExclusiveDesktopRunner {
+  const { physicalPreflight, desktopClaimDirectory, ...runtime } = options;
+  return createExclusiveDesktopRunner({ directory: desktopClaimDirectory,
+    desktopSessionId: physicalPreflight.expectedDesktopSessionId,
+    reference: parseReference(runtime.session.receipt.reference),
+  }, (assertHeld) => createSafariAuthenticatedRunner({ ...runtime,
     preflight: createPhysicalPreflight({ ...physicalPreflight, clock: runtime.clock, environment: createHostEnvironment() }),
-  });
+    authorizePhysicalAction: async (command) => {
+      assertHeld();
+      await runtime.authorizePhysicalAction(command);
+      assertHeld();
+    },
+    adapter: { perform(request, context) {
+      assertHeld(); // Synchronous final guard immediately before entering the adapter.
+      return runtime.adapter.perform(request, context);
+    } },
+  }));
 }
