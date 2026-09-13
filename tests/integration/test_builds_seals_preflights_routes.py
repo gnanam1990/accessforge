@@ -25,6 +25,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -36,12 +37,19 @@ from accessforge_domain.canonical import digest
 from accessforge_persistence import (
     assert_row_level_security_enforced,
     budgets,
+    execution_approvals,
     migrate,
     unscoped_connection,
     workspace_connection,
 )
 from accessforge_persistence import (
     projects as project_store,
+)
+from accessforge_persistence import (
+    runners as runner_store,
+)
+from accessforge_persistence import (
+    runs as run_store,
 )
 
 pytestmark = pytest.mark.integration
@@ -502,6 +510,554 @@ def test_incomplete_stored_seal_operation_refuses_without_reexecution(
         assert conn.execute("SELECT count(*) AS n FROM sealed_manifest").fetchone() == {"n": 0}
         assert conn.execute("SELECT count(*) AS n FROM run").fetchone() == {"n": 0}
         assert conn.execute("SELECT count(*) AS n FROM approval").fetchone() == {"n": 0}
+
+
+@pytest.fixture()
+def manual_seal(
+    client: TestClient, csrf: str, project: str, execution_body: dict[str, Any]
+) -> dict[str, Any]:
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=execution_body,
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 201, response.text
+    return dict(response.json())
+
+
+def _approval_url(project: str, sealed: dict[str, Any]) -> str:
+    return f"/v1/workspaces/{WS}/projects/{project}/seals/{sealed['sealedManifestId']}/approval"
+
+
+def _approval_body(sealed: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "manifestDigest": sealed["manifestDigest"],
+        "expiresAt": (datetime.now(UTC) + timedelta(minutes=10)).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def test_manual_approval_is_exact_independent_audited_and_revocable(
+    db: str, client: TestClient, csrf: str, project: str, manual_seal: dict[str, Any]
+) -> None:
+    url = _approval_url(project, manual_seal)
+    manifest = manual_seal["canonicalManifest"]
+    assert client.get(url).status_code == 404
+    assert client.get(url.removesuffix("/approval")).json()["revision"] == 0
+    headers = {CSRF_HEADER: csrf, "If-Match": "0", "Idempotency-Key": str(uuid.uuid4())}
+    body = _approval_body(manual_seal)
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(execution_approvals.Refused, match="no approval"):
+            execution_approvals.assert_authorized(
+                conn,
+                sealed_manifest_id=manual_seal["sealedManifestId"],
+                run_id=manifest["runId"],
+                workspace_id=WS,
+            )
+    issued = client.post(url, json=body, headers=headers)
+    assert issued.status_code == 201, issued.text
+    decision = issued.json()
+    assert decision["approvalId"] == manifest["authorizationId"]
+    assert decision["targetId"] == manual_seal["sealedManifestId"]
+    assert decision["targetDigest"] == manual_seal["manifestDigest"]
+    assert decision["scope"] == "RUN_EFFECTS" and decision["actorId"] == OWNER
+    assert decision["expectedRevision"] == 0 and decision["revokedAt"] is None
+    assert client.post(url, json=body, headers=headers).json() == decision
+    assert client.post(url, json=body, headers={**headers, "If-Match": "1"}).status_code == 409
+    with workspace_connection(db, WS) as conn:
+        assert (
+            execution_approvals.assert_authorized(
+                conn,
+                sealed_manifest_id=manual_seal["sealedManifestId"],
+                run_id=manifest["runId"],
+                workspace_id=WS,
+            )
+            == manifest
+        )
+        assert conn.execute("SELECT count(*) AS n FROM run").fetchone() == {"n": 0}
+        assert conn.execute(
+            "SELECT actor_user,action FROM audit_event WHERE target_id=%s",
+            (manifest["authorizationId"],),
+        ).fetchall() == [{"actor_user": uuid.UUID(OWNER), "action": "RUN_EFFECTS_APPROVAL_ISSUED"}]
+    revoked = client.post(
+        url + "/revocation",
+        json={"manifestDigest": manual_seal["manifestDigest"]},
+        headers={CSRF_HEADER: csrf, "If-Match": "0"},
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["revokedAt"] is not None
+    assert client.get(url).json() == revoked.json()
+    assert (
+        client.post(
+            url + "/revocation",
+            json={"manifestDigest": manual_seal["manifestDigest"]},
+            headers={CSRF_HEADER: csrf, "If-Match": "0"},
+        ).json()
+        == revoked.json()
+    )
+    assert (
+        client.post(url, json=body, headers={CSRF_HEADER: csrf, "If-Match": "0"}).status_code == 409
+    )
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(execution_approvals.Refused, match="revoked"):
+            execution_approvals.assert_authorized(
+                conn,
+                sealed_manifest_id=manual_seal["sealedManifestId"],
+                run_id=manifest["runId"],
+                workspace_id=WS,
+            )
+        assert conn.execute("SELECT count(*) AS n FROM approval").fetchone() == {"n": 1}
+        assert conn.execute(
+            "SELECT count(*) AS n FROM audit_event WHERE target_id=%s",
+            (manifest["authorizationId"],),
+        ).fetchone() == {"n": 2}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "digest",
+        "revision",
+        "missing-revision",
+        "past",
+        "too-long",
+        "malformed-expiry",
+        "actor",
+        "csrf",
+        "viewer",
+        "reviewer",
+    ],
+)
+def test_manual_approval_refuses_wrong_scope_or_actor_without_recording_consent(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    manual_seal: dict[str, Any],
+    case: str,
+) -> None:
+    from accessforge_api.auth import issue_session
+
+    body = _approval_body(manual_seal)
+    headers = {CSRF_HEADER: csrf, "If-Match": "0"}
+    expected = 409
+    if case == "digest":
+        body["manifestDigest"] = "0" * 64
+    elif case == "revision":
+        headers["If-Match"] = "1"
+    elif case == "missing-revision":
+        del headers["If-Match"]
+        expected = 428
+    elif case == "past":
+        body["expiresAt"] = "2000-01-01T00:00:00Z"
+    elif case == "too-long":
+        body["expiresAt"] = "2099-01-01T00:00:00Z"
+    elif case == "malformed-expiry":
+        body["expiresAt"] = "invalid"
+        expected = 400
+    elif case == "actor":
+        body["actorId"] = OWNER
+        expected = 400
+    elif case == "csrf":
+        del headers[CSRF_HEADER]
+        expected = 403
+    else:
+        with workspace_connection(db, WS) as conn:
+            if case == "reviewer":
+                conn.execute(
+                    "UPDATE workspace_membership SET role='REVIEWER' WHERE user_id=%s", (VIEWER,)
+                )
+            session = issue_session(conn, user_id=VIEWER)
+        client.cookies.set(SESSION_COOKIE, session.session_token)
+        headers[CSRF_HEADER] = session.csrf_token
+        expected = 403
+    response = client.post(_approval_url(project, manual_seal), json=body, headers=headers)
+    assert response.status_code == expected, response.text
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM approval").fetchone() == {"n": 0}
+
+
+@pytest.mark.parametrize("changed", ["expiry", "actor", "environment", "other-run"])
+def test_manual_authority_is_reloaded_not_cached(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    environment: str,
+    manual_seal: dict[str, Any],
+    changed: str,
+) -> None:
+    assert (
+        client.post(
+            _approval_url(project, manual_seal),
+            json=_approval_body(manual_seal),
+            headers={CSRF_HEADER: csrf, "If-Match": "0"},
+        ).status_code
+        == 201
+    )
+    run_id = manual_seal["canonicalManifest"]["runId"]
+    now = datetime.now(UTC)
+    with workspace_connection(db, WS) as conn:
+        if changed == "expiry":
+            now += timedelta(minutes=20)
+        elif changed == "actor":
+            conn.execute("DELETE FROM workspace_membership WHERE user_id=%s", (OWNER,))
+        elif changed == "environment":
+            conn.execute(
+                "UPDATE environment_manifest SET revoked_at=now() WHERE id=%s", (environment,)
+            )
+        else:
+            run_id = str(uuid.uuid4())
+        with pytest.raises((execution_approvals.Refused, project_store.ProjectError)):
+            execution_approvals.assert_authorized(
+                conn,
+                sealed_manifest_id=manual_seal["sealedManifestId"],
+                run_id=run_id,
+                workspace_id=WS,
+                now=now.isoformat().replace("+00:00", "Z"),
+            )
+
+
+def test_exact_approval_cannot_be_rewritten_deleted_or_unrevoked(
+    db: str, client: TestClient, csrf: str, project: str, manual_seal: dict[str, Any]
+) -> None:
+    assert (
+        client.post(
+            _approval_url(project, manual_seal),
+            json=_approval_body(manual_seal),
+            headers={CSRF_HEADER: csrf, "If-Match": "0"},
+        ).status_code
+        == 201
+    )
+    approval_id = manual_seal["canonicalManifest"]["authorizationId"]
+    with workspace_connection(db, WS) as conn:
+        for assignment in (
+            "target_digest=repeat('f',64)",
+            "expected_revision=1",
+            "expires_at=expires_at+interval '1 hour'",
+            "scope='PATCH_APPLY'",
+        ):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(f"UPDATE approval SET {assignment} WHERE id=%s", (approval_id,))  # noqa: S608
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute("DELETE FROM approval WHERE id=%s", (approval_id,))
+        conn.execute("UPDATE approval SET revoked_at=now() WHERE id=%s", (approval_id,))
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute("UPDATE approval SET revoked_at=NULL WHERE id=%s", (approval_id,))
+
+
+@pytest.mark.parametrize(
+    "field", ["scope", "target_id", "target_digest", "expected_revision", "expires_at"]
+)
+def test_database_refuses_misbound_reserved_approval_even_if_api_is_bypassed(
+    db: str,
+    manual_seal: dict[str, Any],
+    field: str,
+) -> None:
+    from accessforge_domain.states import ApprovalScope
+    from accessforge_persistence import approvals
+
+    values: dict[str, Any] = {
+        "workspace_id": WS,
+        "actor_id": OWNER,
+        "scope": ApprovalScope.RUN_EFFECTS,
+        "target_id": manual_seal["sealedManifestId"],
+        "target_digest": manual_seal["manifestDigest"],
+        "expected_revision": 0,
+        "expires_at": manual_seal["canonicalManifest"]["expiresAt"],
+        "approval_id": manual_seal["canonicalManifest"]["authorizationId"],
+    }
+    replacements: dict[str, Any] = {
+        "scope": ApprovalScope.PATCH_APPLY,
+        "target_id": str(uuid.uuid4()),
+        "target_digest": "0" * 64,
+        "expected_revision": 1,
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+    values[field] = replacements[field]
+    with workspace_connection(db, WS) as conn:
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            approvals.record_approval(conn, **values)
+        assert conn.execute("SELECT count(*) AS n FROM approval").fetchone() == {"n": 0}
+
+
+def test_concurrent_issuance_cannot_duplicate_an_exact_decision(
+    db: str, client: TestClient, csrf: str, project: str, manual_seal: dict[str, Any]
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    barrier = Barrier(2)
+    body = _approval_body(manual_seal)
+
+    def issue() -> int:
+        barrier.wait(timeout=5)
+        return client.post(
+            _approval_url(project, manual_seal),
+            json=body,
+            headers={CSRF_HEADER: csrf, "If-Match": "0", "Idempotency-Key": str(uuid.uuid4())},
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(issue) for _ in range(2)]
+        assert sorted(f.result(timeout=10) for f in futures) == [201, 409]
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM approval").fetchone() == {"n": 1}
+        assert conn.execute(
+            "SELECT count(*) AS n FROM audit_event WHERE action='RUN_EFFECTS_APPROVAL_ISSUED'"
+        ).fetchone() == {"n": 1}
+
+
+def test_approval_routes_match_exact_project_and_workspace_and_allow_maintainers(
+    db: str, client: TestClient, csrf: str, project: str, manual_seal: dict[str, Any]
+) -> None:
+    with workspace_connection(db, WS) as conn:
+        conn.execute("UPDATE workspace_membership SET role='MAINTAINER' WHERE user_id=%s", (OWNER,))
+        other_project = project_store.create_project(conn, workspace_id=WS, name="Other")
+    assert (
+        client.post(
+            _approval_url(project, manual_seal),
+            json=_approval_body(manual_seal),
+            headers={CSRF_HEADER: csrf, "If-Match": "0"},
+        ).status_code
+        == 201
+    )
+    other_ws = str(uuid.uuid4())
+    with unscoped_connection(db) as conn:
+        conn.execute("INSERT INTO workspace(id,name) VALUES(%s,'Other')", (other_ws,))
+    with workspace_connection(db, other_ws) as conn:
+        conn.execute(
+            "INSERT INTO workspace_membership(workspace_id,user_id,role) VALUES(%s,%s,'OWNER')",
+            (other_ws, OWNER),
+        )
+        tenant_project = project_store.create_project(conn, workspace_id=other_ws, name="Tenant")
+    for workspace, target_project in ((WS, other_project), (other_ws, tenant_project)):
+        url = (
+            f"/v1/workspaces/{workspace}/projects/{target_project}/seals/"
+            f"{manual_seal['sealedManifestId']}/approval"
+        )
+        assert client.get(url).status_code == 404
+        assert (
+            client.post(
+                url, json=_approval_body(manual_seal), headers={CSRF_HEADER: csrf, "If-Match": "0"}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.post(
+                url + "/revocation",
+                json={"manifestDigest": manual_seal["manifestDigest"]},
+                headers={CSRF_HEADER: csrf, "If-Match": "0"},
+            ).status_code
+            == 404
+        )
+    assert client.get(_approval_url(project, manual_seal)).json()["revokedAt"] is None
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "none",
+        "revoked",
+        "lease-expiry",
+        "lease-run",
+        "profile",
+        "cancelled",
+        "dispatched",
+        "preflight",
+    ],
+)
+def test_manual_dispatch_survives_lease_revision_but_rechecks_exact_live_prerequisites(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    execution_body: dict[str, Any],
+    runner: dict[str, Any],
+    changed: str,
+) -> None:
+    """Synthetic preflight/desktop metadata tests the gate, never actual screen-reader readiness."""
+    execution_body["runnerProfileDigest"] = runner["profileDigest"]
+    created = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=execution_body,
+        headers={CSRF_HEADER: csrf},
+    ).json()
+    assert (
+        client.post(
+            _approval_url(project, created),
+            json=_approval_body(created),
+            headers={CSRF_HEADER: csrf, "If-Match": "0"},
+        ).status_code
+        == 201
+    )
+    manifest = created["canonicalManifest"]
+    preflight = client.post(
+        f"/v1/workspaces/{WS}/runners/{runner['runnerId']}/preflights",
+        json=_preflight_body(
+            runner,
+            manifestDigest=created["manifestDigest"],
+            environmentConfigDigest=manifest["environmentConfigDigest"],
+        ),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert preflight.status_code == 201, preflight.text
+    admitted = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": created["manifestDigest"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert admitted.status_code == 202, admitted.text
+    run_id = manifest["runId"]
+    with workspace_connection(db, WS) as conn:
+        attempt = run_store.start_attempt(conn, run_id=run_id, workspace_id=WS, lease_epoch=1)
+        lease = runner_store.admit_lease(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            attempt_id=attempt,
+            runner_id=runner["runnerId"],
+        )
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT revision FROM run WHERE id=%s", (run_id,)).fetchone() == {
+            "revision": 1
+        }
+        runner_store.assert_manual_dispatch_authorized(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            runner_id=runner["runnerId"],
+            lease_id=lease.lease_id,
+            epoch=lease.epoch,
+        )
+        if changed == "none":
+            return
+        if changed == "revoked":
+            conn.execute(
+                "UPDATE approval SET revoked_at=now() WHERE id=%s", (manifest["authorizationId"],)
+            )
+        elif changed == "lease-expiry":
+            conn.execute(
+                "UPDATE desktop_lease SET deadline_at=now()-interval '1 second' WHERE id=%s",
+                (lease.lease_id,),
+            )
+        elif changed == "lease-run":
+            other = run_store.create_run(conn, workspace_id=WS, manifest_digest="a" * 64)
+            conn.execute("UPDATE desktop_lease SET run_id=%s WHERE id=%s", (other, lease.lease_id))
+        elif changed == "profile":
+            conn.execute(
+                "UPDATE runner SET profile_digest=repeat('e',64) WHERE id=%s", (runner["runnerId"],)
+            )
+        elif changed == "cancelled":
+            conn.execute(
+                "UPDATE run SET cancel_requested_at=now(),cancellation_revision=revision "
+                "WHERE id=%s",
+                (run_id,),
+            )
+        elif changed == "dispatched":
+            conn.execute("UPDATE run SET status='RUNNING' WHERE id=%s", (run_id,))
+        else:
+            conn.execute(
+                "UPDATE runner_preflight SET manifest_digest=repeat('b',64) WHERE runner_id=%s",
+                (runner["runnerId"],),
+            )
+        with pytest.raises(runner_store.DispatchRefused):
+            runner_store.assert_manual_dispatch_authorized(
+                conn,
+                workspace_id=WS,
+                run_id=run_id,
+                runner_id=runner["runnerId"],
+                lease_id=lease.lease_id,
+                epoch=lease.epoch,
+            )
+
+
+def test_restored_exact_approval_is_revoked_and_cannot_be_revalidated_in_place(
+    db: str,
+    backup_database_url: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    manual_seal: dict[str, Any],
+) -> None:
+    import subprocess
+    from urllib.parse import urlsplit, urlunsplit
+
+    from accessforge_persistence import connect, restore
+
+    assert (
+        client.post(
+            _approval_url(project, manual_seal),
+            json=_approval_body(manual_seal),
+            headers={CSRF_HEADER: csrf, "If-Match": "0"},
+        ).status_code
+        == 201
+    )
+    snapshot = subprocess.run(  # noqa: S603 - fixed test command, no shell
+        ["pg_dump", backup_database_url],  # noqa: S607 - operator-provisioned PostgreSQL client
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert snapshot.returncode == 0, "owned approval snapshot failed"
+    # A later revocation is deliberately absent from the saved snapshot.
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE approval SET revoked_at=now() WHERE id=%s",
+            (manual_seal["canonicalManifest"]["authorizationId"],),
+        )
+    name = "accessforge_manual_restore_" + uuid.uuid4().hex[:12]
+
+    def database_url(url: str, database: str) -> str:
+        parts = urlsplit(url)
+        return urlunsplit((parts.scheme, parts.netloc, "/" + database, parts.query, parts.fragment))
+
+    admin = database_url(backup_database_url, "postgres")
+    target_admin, target_app = database_url(backup_database_url, name), database_url(db, name)
+    with connect(admin) as conn:
+        conn.autocommit = True
+        conn.execute(f'CREATE DATABASE "{name}"')  # noqa: S608 - exact owned generated name
+    try:
+        loaded = subprocess.run(  # noqa: S603 - fixed test command, no shell
+            ["psql", "-X", "-v", "ON_ERROR_STOP=1", target_admin],  # noqa: S607
+            input=snapshot.stdout,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert loaded.returncode == 0, "owned approval restore failed"
+        with workspace_connection(target_app, WS) as conn:
+            # This is why a restored server must not serve until reconciliation completes.
+            execution_approvals.assert_authorized(
+                conn,
+                sealed_manifest_id=manual_seal["sealedManifestId"],
+                run_id=manual_seal["canonicalManifest"]["runId"],
+                workspace_id=WS,
+            )
+        with connect(target_admin) as conn:
+            report = restore.reconcile(conn, operator="owned-test", restore_id=str(uuid.uuid4()))
+            assert report.execution_approvals_revoked == 1
+            assert "Revoked 1 exact execution approvals" in report.summary
+        with workspace_connection(target_app, WS) as conn:
+            with pytest.raises(execution_approvals.Refused, match="revoked"):
+                execution_approvals.assert_authorized(
+                    conn,
+                    sealed_manifest_id=manual_seal["sealedManifestId"],
+                    run_id=manual_seal["canonicalManifest"]["runId"],
+                    workspace_id=WS,
+                )
+            with pytest.raises(execution_approvals.Refused, match="already issued"):
+                execution_approvals.issue(
+                    conn,
+                    sealed_manifest_id=manual_seal["sealedManifestId"],
+                    actor_id=OWNER,
+                    target_digest=manual_seal["manifestDigest"],
+                    expected_revision=0,
+                    expires_at=manual_seal["canonicalManifest"]["expiresAt"],
+                )
+    finally:
+        with connect(admin) as conn:
+            conn.autocommit = True
+            conn.execute(f'DROP DATABASE "{name}" WITH (FORCE)')  # noqa: S608 - owned name only
 
 
 # --- builds --------------------------------------------------------------------------------------

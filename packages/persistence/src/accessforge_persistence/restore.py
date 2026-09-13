@@ -169,6 +169,7 @@ class Reconciliation:
     candidate_builds_fenced: int = 0
     candidate_regressions_fenced: int = 0
     candidate_endpoints_fenced: int = 0
+    execution_approvals_revoked: int = 0
 
     @property
     def summary(self) -> str:
@@ -181,6 +182,7 @@ class Reconciliation:
             f"Fenced {self.candidate_builds_fenced} candidate builds without redispatch. "
             f"Fenced {self.candidate_regressions_fenced} protected regressions without redispatch. "
             f"Fenced {self.candidate_endpoints_fenced} browser endpoints without resumption. "
+            f"Revoked {self.execution_approvals_revoked} exact execution approvals. "
             f"{len(self.grants_requiring_revalidation)} execution grants require revalidation "
             "before anything may be dispatched under them."
         )
@@ -349,6 +351,15 @@ def reconcile(
     ]
     grants.sort()
 
+    # A snapshot cannot show revocations made after it. Exact manual consent cannot be revalidated
+    # in place: a person must review and approve a newly sealed run with a fresh authorization ID.
+    execution_approvals = conn.execute(
+        "UPDATE approval a SET revoked_at=%s WHERE a.revoked_at IS NULL AND a.scope='RUN_EFFECTS' "
+        "AND EXISTS(SELECT 1 FROM sealed_manifest m WHERE m.canonical_manifest IS NOT NULL "
+        "AND m.authorization_id=a.id)",
+        (moment,),
+    ).rowcount
+
     # Restored claim/dispatch state cannot prove that the original container stopped.
     candidate_builds = conn.execute(
         "UPDATE candidate_build_attempt SET state = 'UNKNOWN', epoch = epoch + 1, "
@@ -384,6 +395,7 @@ def reconcile(
                 {
                     "restoreId": restore_id,
                     "sessionsRevoked": sessions,
+                    "executionApprovalsRevoked": execution_approvals,
                     "enrollmentTokensExpired": tokens,
                     "leasesFenced": leases,
                     "runnersQuarantined": runners,
@@ -411,6 +423,7 @@ def reconcile(
         candidate_builds_fenced=candidate_builds,
         candidate_regressions_fenced=candidate_regressions,
         candidate_endpoints_fenced=candidate_endpoints,
+        execution_approvals_revoked=execution_approvals,
     )
 
 

@@ -9,11 +9,12 @@ from typing import Annotated, Any
 import psycopg
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from accessforge_api.dependencies import clamp_page_size, run_idempotently
+from accessforge_api.dependencies import clamp_page_size, require_if_match, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.origins import OriginError, normalize_origin
-from accessforge_persistence import projects
+from accessforge_domain.timestamps import parse_rfc3339_utc
+from accessforge_persistence import execution_approvals, projects
 from accessforge_persistence.source_intake import SourceIdentity
 
 from ._common import as_body, as_identifier, authorize, workspace_scope
@@ -819,7 +820,8 @@ def inspect_seal(
     authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
     _assert_project_visible(conn, project_id=project_id)
     row = conn.execute(
-        "SELECT id, manifest_digest, canonical_manifest FROM sealed_manifest "
+        "SELECT id, manifest_digest, canonical_manifest, authorization_revision "
+        "FROM sealed_manifest "
         "WHERE id=%s AND project_id=%s",
         (as_identifier(sealed_manifest_id, what="sealedManifestId"), project_id),
     ).fetchone()
@@ -833,4 +835,157 @@ def inspect_seal(
         if row["canonical_manifest"] is None
         else "CANONICAL_EXECUTION",
         "canonicalManifest": row["canonical_manifest"],
+        "revision": int(row["authorization_revision"]),
     }
+
+
+def _approval_target(
+    conn: psycopg.Connection[Any],
+    project_id: str,
+    seal_id: str,
+    expected_revision: int | None = None,
+) -> None:
+    _assert_project_visible(conn, project_id=project_id)
+    row = conn.execute(
+        "SELECT authorization_revision FROM sealed_manifest WHERE id=%s AND project_id=%s",
+        (as_identifier(seal_id, what="sealedManifestId"), project_id),
+    ).fetchone()
+    if row is None:
+        raise not_found()
+    if expected_revision is not None and expected_revision != row["authorization_revision"]:
+        raise ProblemDetail(ProblemCode.STALE_REVISION, "the reviewed seal revision has changed")
+
+
+@router.post(
+    "/projects/{project_id}/seals/{sealed_manifest_id}/approval",
+    status_code=status.HTTP_201_CREATED,
+)
+def approve_execution_seal(
+    workspace_id: str,
+    project_id: str,
+    sealed_manifest_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Issue exact manual RUN_EFFECTS consent, not PATCH_APPLY or a standing grant.
+
+    Requires RUN_APPROVE, CSRF, the reviewed manifestDigest, a bounded expiresAt, and If-Match
+    containing the seal's revision returned by GET (not its digest ETag). The immutable seal is
+    the approval target; its canonical payload binds the exact run. No run starts here.
+    """
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.RUN_APPROVE,
+        body,
+        frozenset({"manifestDigest", "expiresAt"}),
+    )
+    expected = require_if_match(context)
+    _approval_target(conn, project_id, sealed_manifest_id, expected)
+    if set(body) != {"manifestDigest", "expiresAt"} or any(
+        not isinstance(value, str) for value in body.values()
+    ):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT, "manifestDigest and expiresAt strings are required"
+        )
+    try:
+        parse_rfc3339_utc(body["expiresAt"], field="expiresAt")
+    except ValueError as exc:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, str(exc)) from exc
+
+    def perform() -> dict[str, Any]:
+        try:
+            return execution_approvals.issue(
+                conn,
+                sealed_manifest_id=sealed_manifest_id,
+                actor_id=context.principal.user_id,
+                target_digest=body["manifestDigest"],
+                expected_revision=expected,
+                expires_at=body["expiresAt"],
+            )
+        except LookupError as exc:
+            raise not_found() from exc
+        except (
+            execution_approvals.Refused,
+            projects.ProjectError,
+            projects.SealError,
+            ValueError,
+        ) as exc:
+            raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
+
+    outcome = run_idempotently(
+        conn,
+        context,
+        route=f"POST /projects/{project_id}/seals/{sealed_manifest_id}/approval",
+        body=body,
+        perform=perform,
+    )
+    return outcome.response or {}
+
+
+@router.get("/projects/{project_id}/seals/{sealed_manifest_id}/approval")
+def inspect_execution_approval(
+    workspace_id: str,
+    project_id: str,
+    sealed_manifest_id: str,
+    request: Request,
+    conn: Conn,
+) -> dict[str, Any]:
+    """Inspect an issued decision, including revoked/expired history; not dispatch readiness."""
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    _approval_target(conn, project_id, sealed_manifest_id)
+    try:
+        return execution_approvals.inspect(conn, sealed_manifest_id=sealed_manifest_id)
+    except LookupError as exc:
+        raise not_found() from exc
+
+
+@router.post("/projects/{project_id}/seals/{sealed_manifest_id}/approval/revocation")
+def revoke_execution_approval(
+    workspace_id: str,
+    project_id: str,
+    sealed_manifest_id: str,
+    request: Request,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Irreversibly withdraw this exact approval. Does not claim already-started work stopped."""
+    body = as_body(payload)
+    context = authorize(
+        conn,
+        request,
+        workspace_id,
+        Permission.RUN_APPROVE,
+        body,
+        frozenset({"manifestDigest"}),
+    )
+    expected = require_if_match(context)
+    _approval_target(conn, project_id, sealed_manifest_id, expected)
+    if set(body) != {"manifestDigest"} or not isinstance(body["manifestDigest"], str):
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "manifestDigest is required")
+
+    def perform() -> dict[str, Any]:
+        try:
+            return execution_approvals.revoke(
+                conn,
+                sealed_manifest_id=sealed_manifest_id,
+                actor_id=context.principal.user_id,
+                target_digest=body["manifestDigest"],
+                expected_revision=expected,
+            )
+        except LookupError as exc:
+            raise not_found() from exc
+        except execution_approvals.Refused as exc:
+            raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
+
+    outcome = run_idempotently(
+        conn,
+        context,
+        route=f"POST /projects/{project_id}/seals/{sealed_manifest_id}/approval/revocation",
+        body=body,
+        perform=perform,
+    )
+    return outcome.response or {}
