@@ -45,6 +45,7 @@ import { RunOutcomeBadge, RunStatusBadge, StatusBadge } from '../components/Stat
 import type { RunOutcome, RunStatus } from '../components/StatusBadge'
 import { EvidenceTimeline } from './EvidenceTimeline'
 import { RunEvaluationSection } from './RunEvaluationSection'
+import { ReaderStartupSection } from './ReaderStartupSection'
 import {
   getRun,
   listAttempts,
@@ -554,6 +555,7 @@ export const RunScreen = (): JSX.Element => {
             </section>
 
             <RunEvaluationSection workspaceId={workspaceId} run={value} />
+            <ReaderStartupSection key={`${workspaceId}:${value.runId}`} workspaceId={workspaceId} run={value} />
 
             {NON_TERMINAL.has(value.status) && (
               <section className="af-stack">
