@@ -457,6 +457,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         if (url.endsWith('/source-comparison')) return problem(404, 'RESOURCE_NOT_FOUND', 'no accessible comparison', 'Not found')
         return url.endsWith('/verifications') ? json({ items: data.verifications.filter((v) => v.patchId === patchId) }) : json(patch)
       }
+      if (url.includes('/repair-options') || url.includes('/repair-requests')) {
+        return problem(404, 'RESOURCE_NOT_FOUND', 'no synthetic repair request configured', 'Not found')
+      }
       if (url.includes('/findings/') && method === 'GET') {
         return json(data.findings)
       }
