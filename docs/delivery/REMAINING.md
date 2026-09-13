@@ -24,6 +24,11 @@ outcome reasons and sealed/observed identity comparison (handoff23). It does not
 or present historical snapshots as proof of current artifact retention. Missing/mismatched records
 remain unavailable, not invented results.
 
+Native Safari origin wiring is now packaged with an operator diagnostic and authenticated-runner
+factory (desktop native README/handoff08). This supersedes earlier local/uncommitted status. The
+positive physical Safari path is not proven, and this read-only probe neither starts VoiceOver nor
+completes focus/effect authorization or full execution bootstrap. No profile gate has been relaxed.
+
 The current finalizer can only establish INCONCLUSIVE, because actual physical identity and
 execution-preflight observations are not integrated. Missing/corrupt artifacts instead refuse
 completion. Next build work is trusted runtime identity/probe ingestion and the remaining
