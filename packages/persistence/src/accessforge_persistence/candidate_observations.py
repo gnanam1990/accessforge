@@ -15,6 +15,7 @@ from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
 from . import candidate_builds as builds
 from . import candidate_endpoints as endpoints
+from . import candidate_materializations as materializations
 from . import candidate_regressions as regressions
 from . import candidate_runs
 
@@ -35,7 +36,7 @@ def retain(
     with conn.transaction():
         parent = regressions._owned(conn, claim, "DISPATCHED")
         workspace = str(parent["workspace_id"])
-        regressions._authority(conn, claim.build_id, workspace)
+        build = regressions._authority(conn, claim.build_id, workspace)
         endpoints.assert_live(conn, claim=claim)
         candidate_runs.assert_request(conn, attempt_id=claim.attempt_id, method="GET")
         endpoint = endpoints._record(conn, claim)
@@ -79,6 +80,14 @@ def retain(
             or (context["lease_created"] is not None and captured < context["lease_created"])
         ):
             raise Refused("candidate binding changed during artifact measurement")
+        lineage = materializations.source_lineage(conn, build=build)
+        if lineage is not None and (
+            lineage["artifactDigest"] != observation["artifactDigest"]
+            or lineage["imageId"] != observation["imageId"]
+            or lineage["daemonId"] != observation["daemonId"]
+            or parse_rfc3339_utc(lineage["artifactPublishedAt"]) > captured
+        ):
+            raise Refused("deployed measurement differs from captured build lineage")
         payload = {
             "observation": observation,
             "workspaceId": workspace,
@@ -94,6 +103,8 @@ def retain(
             "leaseEpoch": None if context is None else context["lease_epoch"],
             "meaning": "BUILD_RECEIPT_CONTEXT_NOT_CANONICAL_EXECUTION_EVIDENCE",
         }
+        if lineage is not None:
+            payload["sourceLineage"] = lineage
         content_digest = digest(payload)
         identifier = str(uuid5(NAMESPACE_URL, "accessforge:artifact-observation:" + content_digest))
         prior = conn.execute(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import pytest
 
@@ -73,7 +73,92 @@ def fixture() -> dict[str, Any]:
 def test_complete_runtime_reports_use_measurement_not_sealed_build() -> None:
     result = interpret(fixture(), CONTEXT)
     assert result.preflight_passed and result.observed_build == "a" * 64
-    assert not result.reasons
+    assert result.observed_source is None
+    assert result.reasons == (
+        "captured source-to-build lineage does not cover every original action",
+    )
+
+
+def _rehash(receipt: dict[str, Any]) -> None:
+    fingerprint = digest(receipt["receipt"])
+    receipt["receiptDigest"] = fingerprint
+    receipt["receiptId"] = str(
+        uuid5(NAMESPACE_URL, "accessforge:artifact-observation:" + fingerprint)
+    )
+
+
+def _with_lineage() -> dict[str, Any]:
+    snapshots = fixture()
+    for report in snapshots["PREFLIGHT_RECORD"]["records"]:
+        receipt = report["payload"]["buildArtifactReceipt"]
+        payload = receipt["receipt"]
+        payload["buildId"] = str(UUID(int=1))
+        payload["observation"].update(imageId="sha256:" + "b" * 64, daemonId="daemon")
+        payload["sourceLineage"] = {
+            "meaning": "CAPTURED_BUILD_INPUT_LINEAGE_NOT_RUNTIME_SOURCE_READ",
+            "workspaceId": "workspace",
+            "buildId": str(UUID(int=1)),
+            "sourceSnapshotId": str(UUID(int=2)),
+            "buildArtifactId": str(UUID(int=3)),
+            "sourceTreeDigest": "c" * 64,
+            "sourceArchiveDigest": "d" * 64,
+            "artifactDigest": "a" * 64,
+            "buildContainerId": "e" * 64,
+            "imageId": "sha256:" + "b" * 64,
+            "daemonId": "daemon",
+            "sourceCapturedAt": "2026-09-12T23:59:00Z",
+            "buildDispatchedAt": "2026-09-12T23:59:01Z",
+            "buildFinishedAt": "2026-09-13T00:00:00Z",
+            "artifactPublishedAt": "2026-09-13T00:00:00.000001Z",
+        }
+        _rehash(receipt)
+    return snapshots
+
+
+def test_source_is_the_captured_input_linked_to_every_measured_build() -> None:
+    result = interpret(_with_lineage(), CONTEXT)
+    assert result.observed_source == "c" * 64  # Not the output archive digest or a sealed input.
+    assert result.observed_build == "a" * 64 and not result.reasons
+
+
+@pytest.mark.parametrize("fault", ["missing", "different-source", "build-unknown"])
+def test_partial_or_conflicting_lineage_never_establishes_source(fault: str) -> None:
+    snapshots = _with_lineage()
+    report = snapshots["PREFLIGHT_RECORD"]["records"][0]
+    receipt = report["payload"]["buildArtifactReceipt"]
+    if fault == "missing":
+        del receipt["receipt"]["sourceLineage"]
+    elif fault == "different-source":
+        receipt["receipt"]["sourceLineage"]["sourceTreeDigest"] = "f" * 64
+    else:
+        report["payload"]["sourceRecord"]["checks"]["BUILD_IDENTITY_MATCHES_MANIFEST"] = "UNKNOWN"
+    _rehash(receipt)
+    assert interpret(snapshots, CONTEXT).observed_source is None
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("workspaceId", "foreign"),
+        ("buildId", str(UUID(int=4))),
+        ("artifactDigest", "f" * 64),
+        ("imageId", "other-image"),
+        ("daemonId", "other-daemon"),
+        ("sourceSnapshotId", "not-a-uuid"),
+        ("sourceTreeDigest", "not-a-digest"),
+        ("sourceCapturedAt", "2026-09-13T00:00:00Z"),
+        ("artifactPublishedAt", "2026-09-13T00:00:01.000001Z"),
+    ],
+)
+def test_lineage_must_match_its_original_measurement_and_causal_order(
+    field: str, value: str
+) -> None:
+    snapshots = _with_lineage()
+    receipt = snapshots["PREFLIGHT_RECORD"]["records"][0]["payload"]["buildArtifactReceipt"]
+    receipt["receipt"]["sourceLineage"][field] = value
+    _rehash(receipt)  # A consistent envelope hash does not establish matching provenance.
+    with pytest.raises(Refused):
+        interpret(snapshots, CONTEXT)
 
 
 @pytest.mark.parametrize("missing", ["all", "one", "measurement", "unknown", "build-unknown"])

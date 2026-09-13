@@ -42,7 +42,7 @@ from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements
 
-EVALUATOR_VERSION = "1.2.0"
+EVALUATOR_VERSION = "1.3.0"
 
 
 def _retained(
@@ -188,6 +188,8 @@ def _decide(
     runtime = interpret_runtime(snapshots, row)
     if runtime.observed_build is not None:
         observed[IdentityKind.BUILD] = runtime.observed_build
+    if runtime.observed_source is not None:
+        observed[IdentityKind.SOURCE] = runtime.observed_source
     identity = revalidate(sealed_identities, observed)
     evidence_digest = digest({"manifestDigest": row["manifest_digest"], "artifacts": artifact_ids})
     verdict = decide(
