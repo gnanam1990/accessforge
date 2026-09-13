@@ -267,12 +267,12 @@ export const SettingsScreen = (): JSX.Element => {
                 <p>{value.meaning}</p>
               </Notice>
               <p className="af-secondary">
-                Measured over a {value.window}. Allowance revision {value.entitlementRevision}, set
+                Usage window: {value.window}. Allowance revision {value.entitlementRevision}, set
                 by <code>{value.configuredBy}</code> — {value.reason}
               </p>
 
               <DataTable<UsageRow>
-                caption="Consumption in the current window, by how each number was obtained"
+                caption="Consumption in the current window and reserved capacity, by how each number was obtained"
                 rows={value.usage}
                 rowKey={(row) => row.kind}
                 columns={[
@@ -283,6 +283,11 @@ export const SettingsScreen = (): JSX.Element => {
                     cell: (row) => KIND_LABEL[row.kind] ?? row.kind,
                   },
                   { key: 'measured', header: 'Measured', cell: (row) => String(row.measured) },
+                  {
+                    key: 'reserved',
+                    header: 'Reserved (not measured)',
+                    cell: (row) => String(row.reserved ?? 'Unavailable'),
+                  },
                   {
                     key: 'estimated',
                     header: 'Estimated',
