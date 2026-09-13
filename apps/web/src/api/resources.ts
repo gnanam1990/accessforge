@@ -12,6 +12,7 @@
  */
 
 import type { ApiClient, ApiOutcome } from "./client";
+import { parseRunEvaluation, type RunEvaluation } from "./evaluation";
 
 export interface Page<T> {
   readonly items: readonly T[];
@@ -623,6 +624,27 @@ export const getRun = (
     `${base(workspaceId)}/runs/${encodeURIComponent(runId)}`,
     { signal },
   );
+
+export const getRunEvaluation = async (
+  client: ApiClient,
+  workspaceId: string,
+  runId: string,
+  signal: AbortSignal,
+): Promise<ApiOutcome<RunEvaluation>> => {
+  const response = await client.request<unknown>(
+    `${base(workspaceId)}/runs/${encodeURIComponent(runId)}/evaluation`,
+    { signal },
+  );
+  if (response.kind !== "ok" && response.kind !== "accepted") return response;
+  const value = parseRunEvaluation(response.value, runId);
+  if (value === null) return {
+    kind: "problem",
+    problem: { code: "UNRECOGNISED", title: "Evaluation cannot be displayed",
+      detail: "The returned evaluation is malformed, unsupported or belongs to a different run. No assertion result has been reconstructed.",
+      status: 502, requestId: null },
+  };
+  return response.kind === "accepted" ? { kind: "accepted", value } : { ...response, value };
+};
 
 export const listAttempts = (
   client: ApiClient,
