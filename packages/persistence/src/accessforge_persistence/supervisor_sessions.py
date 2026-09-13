@@ -26,7 +26,7 @@ from accessforge_domain.authorization import (
 from accessforge_domain.canonical import digest
 from accessforge_domain.journeys.dsl import ALLOWED_ACTIONS, ALLOWED_KEY_CHORDS
 from accessforge_domain.origins import normalize_origin
-from accessforge_domain.runners.preflight import AmbiguityReason
+from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS, AmbiguityReason
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
 from . import reader_startup_consents, runners, runs, sequencer, supervisor_dispatch
@@ -439,6 +439,96 @@ def commit_action_dispatch(
     return {"sessionId": session_id, "command": command, "meaning": "ACTION_DISPATCH_COMMITTED"}
 
 
+def retain_runtime_preflight(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    session_id: str,
+    token: str,
+    action_id: str,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    """Retain an authenticated live probe report, not independently attested physical identity.
+
+    Exact unresolved dispatch, immutable source identity and closed condition vocabulary prevent
+    historical admission records or arbitrary diagnostic text being substituted for this report.
+    FALSE and UNKNOWN stay visible; retention does not authorize an action or promote an outcome.
+    """
+    row, _ = _live(conn, workspace_id, session_id, token)
+    action = _action(conn, row, action_id)
+    if action["dispatched_at"] is None:
+        raise Refused("runtime preflight requires a dispatched unresolved action")
+    source = record.get("sourceRecord")
+    if (
+        set(record) != {"sourceRecord", "sourceRecordDigest"}
+        or not isinstance(source, dict)
+        or set(source) != {"actionId", "actionSequence", "capturedAtUtc", "checks"}
+        or source["actionId"] != action_id
+        or type(source["actionSequence"]) is not int
+        or source["actionSequence"] != action["action_sequence"]
+        or not isinstance(source["checks"], dict)
+        or set(source["checks"]) != set(REQUIRED_PREFLIGHT_CHECKS)
+        or any(v not in ("TRUE", "FALSE", "UNKNOWN") for v in source["checks"].values())
+        or not isinstance(source["capturedAtUtc"], str)
+        or len(source["capturedAtUtc"]) > 40
+    ):
+        raise Refused("closed action-bound runtime preflight required")
+    try:
+        captured = parse_rfc3339_utc(source["capturedAtUtc"])
+        source_digest = digest(source)
+    except (ValueError, UnicodeError) as exc:
+        raise Refused("runtime preflight content unavailable") from exc
+    if record["sourceRecordDigest"] != source_digest:
+        raise Refused("runtime preflight digest differs")
+    # Supervisor clock is evidence, not authority. Reject implausible times against server dispatch
+    # and receipt bounds, without using the submitted time to extend the session or action lease.
+    if captured < action["dispatched_at"] - timedelta(seconds=5) or captured > datetime.now(
+        UTC
+    ) + timedelta(seconds=5):
+        raise Refused("runtime preflight capture time differs from dispatch")
+    producer = f"supervisor:{session_id}:lifecycle"
+    source_id = "runtime-preflight:" + action_id
+    existing = conn.execute(
+        "SELECT p.event_id,e.payload FROM producer_source_record p JOIN canonical_event e "
+        "ON e.event_id=p.event_id WHERE p.attempt_id=%s AND p.producer_id=%s "
+        "AND p.source_record_id=%s",
+        (row["attempt_id"], producer, source_id),
+    ).fetchone()
+    if existing is not None:
+        if existing["payload"].get("sourceRecordDigest") != source_digest:
+            raise Refused("original runtime preflight cannot be replaced")
+        event_id = str(existing["event_id"])
+    else:
+        stream = conn.execute(
+            "SELECT admitted_through,closed_at_sequence FROM producer_stream "
+            "WHERE attempt_id=%s AND producer_id=%s FOR UPDATE",
+            (row["attempt_id"], producer),
+        ).fetchone()
+        if (
+            stream is None
+            or stream["closed_at_sequence"] is not None
+            or stream["admitted_through"] < 2
+        ):
+            raise Refused("original open lifecycle stream required")
+        event_id = session_evidence.emit(
+            conn,
+            row,
+            stream="lifecycle",
+            sequence=stream["admitted_through"] + 1,
+            source_id=source_id,
+            event_type="PREFLIGHT_RESULT",
+            source=source,
+            provenance="RUNTIME_PROBE_REPORT",
+        )
+    return {
+        "sessionId": session_id,
+        "actionId": action_id,
+        "eventId": event_id,
+        "sourceRecordDigest": source_digest,
+        "meaning": "RUNTIME_PREFLIGHT_RETAINED_NOT_IDENTITY_ATTESTATION",
+    }
+
+
 def retain_reader_observation(
     conn: psycopg.Connection[Any],
     *,
@@ -684,11 +774,23 @@ def finish_session(
         != actions[-1]["action_sequence"]
     ):
         raise Refused("independent observer final sample/tail is unavailable")
+    lifecycle = conn.execute(
+        "SELECT admitted_through,closed_at_sequence FROM producer_stream "
+        "WHERE attempt_id=%s AND producer_id=%s FOR UPDATE",
+        (row["attempt_id"], required["PREFLIGHT_RECORD"]),
+    ).fetchone()
+    if (
+        lifecycle is None
+        or lifecycle["closed_at_sequence"] is not None
+        or lifecycle["admitted_through"] < 2
+    ):
+        raise Refused("original open lifecycle stream unavailable")
+    lifecycle_tail = int(lifecycle["admitted_through"]) + 1
     session_evidence.emit(
         conn,
         row,
         stream="lifecycle",
-        sequence=3,
+        sequence=lifecycle_tail,
         source_id="execution-stopped",
         event_type="RUN_FINISHED",
         source={"stopActionId": stop_action_id, "meaning": "STOP_ACKNOWLEDGED"},
@@ -696,7 +798,7 @@ def finish_session(
     for producer, sequence in (
         (required["SPEECH_TRANSCRIPT"], reader_sequence),
         (required["ACTION_TRACE"], len(actions) * 2),
-        (required["PREFLIGHT_RECORD"], 3),
+        (required["PREFLIGHT_RECORD"], lifecycle_tail),
     ):
         sequencer.close_producer_stream(
             conn,

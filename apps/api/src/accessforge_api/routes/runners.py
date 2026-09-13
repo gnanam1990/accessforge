@@ -298,6 +298,38 @@ def retain_supervisor_reader_observation(
     return result
 
 
+@router.post("/supervisor-sessions/{session_id}/actions/{action_id}/preflight")
+def retain_supervisor_runtime_preflight(
+    workspace_id: str,
+    session_id: str,
+    action_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    credential: SupervisorBearer,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    for value in (workspace_id, session_id, action_id):
+        as_identifier(value, what="supervisor action identity")
+    if credential is None or len(request.headers.getlist("authorization")) != 1:
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
+    try:
+        result = supervisor_sessions.retain_runtime_preflight(
+            conn,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            token=credential.credentials,
+            action_id=action_id,
+            record=payload,
+        )
+    except (supervisor_sessions.Refused, runners.RunnerError, sequencer.SequencerError):
+        raise ProblemDetail(
+            ProblemCode.PERMISSION_DENIED, "runtime preflight is not admitted"
+        ) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
 @router.post("/supervisor-sessions/{session_id}/actions/{action_id}/result")
 def record_supervisor_action_result(
     workspace_id: str,
