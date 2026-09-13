@@ -26,6 +26,7 @@ from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import (
     budgets,
     deletion,
+    effect_recovery,
     evaluations,
     evidence,
     projects,
@@ -285,6 +286,34 @@ def get_run(
     view = _run_view(row)
     response.headers["ETag"] = f'"{view["revision"]}"'
     return view
+
+
+@router.get("/runs/{run_id}/effect-deliveries")
+def get_effect_deliveries(
+    workspace_id: str,
+    run_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    limit: int = 50,
+    after: str | None = None,
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    as_identifier(run_id, what="the run")
+    if after is not None:
+        as_identifier(after, what="the permit cursor")
+    if not 1 <= limit <= 100:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "Page size must be between 1 and 100.")
+    try:
+        result = effect_recovery.read(conn, run_id=run_id, limit=limit, after=after)
+    except effect_recovery.Refused:
+        raise ProblemDetail(
+            ProblemCode.CONFLICT, "Original form transport history is unavailable."
+        ) from None
+    if result is None:
+        raise not_found()
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.get("/runs/{run_id}/evaluation")

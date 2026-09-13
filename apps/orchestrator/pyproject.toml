@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 accessforge-purge-worker = "accessforge_orchestrator.maintenance.purge_worker:main"
+accessforge-effect-recovery = "accessforge_orchestrator.effect_recovery:main"
 
 [build-system]
 requires = ["hatchling"]
