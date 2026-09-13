@@ -89,6 +89,7 @@ def claim_messages(
     claimed_by: str,
     limit: int = 10,
     now: datetime | None = None,
+    exclude_message_ids: tuple[int, ...] = (),
 ) -> list[OutboxMessage]:
     """Claim unpublished messages for this worker.
 
@@ -105,6 +106,7 @@ def claim_messages(
             SELECT id
             FROM outbox_message
             WHERE published_at IS NULL
+              AND id <> ALL(%(excluded)s::bigint[])
               AND (claim_expires_at IS NULL OR claim_expires_at <= %(now)s)
             ORDER BY created_at
             LIMIT %(limit)s
@@ -123,6 +125,7 @@ def claim_messages(
             "limit": limit,
             "worker": claimed_by,
             "expires": moment + CLAIM_LEASE,
+            "excluded": list(exclude_message_ids),
         },
     ).fetchall()
 
