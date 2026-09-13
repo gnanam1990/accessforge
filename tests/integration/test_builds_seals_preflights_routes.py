@@ -19,9 +19,11 @@ Requirements: FR-002, FR-004, FR-005, FR-010, FR-014. Invariants: INV-02, INV-04
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from collections.abc import Iterator
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
@@ -34,6 +36,12 @@ from accessforge_api.auth import CSRF_HEADER, SESSION_COOKIE
 from accessforge_api.config import ApiSettings
 from accessforge_contracts import validate
 from accessforge_domain.canonical import digest
+from accessforge_orchestrator.manual_dispatch import (
+    DispatchReference,
+    HandoffUnknown,
+    ManualRunController,
+    ReaderTransportUnavailable,
+)
 from accessforge_persistence import (
     assert_row_level_security_enforced,
     budgets,
@@ -969,6 +977,407 @@ def test_manual_dispatch_survives_lease_revision_but_rechecks_exact_live_prerequ
                 lease_id=lease.lease_id,
                 epoch=lease.epoch,
             )
+
+
+@pytest.fixture()
+def manual_dispatch_reference(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    execution_body: dict[str, Any],
+    runner: dict[str, Any],
+) -> DispatchReference:
+    """Synthetic desktop/preflight, real API consent and PostgreSQL lease. Not actual AT proof."""
+    execution_body["runnerProfileDigest"] = runner["profileDigest"]
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json=execution_body,
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 201
+    created = response.json()
+    assert (
+        client.post(
+            _approval_url(project, created),
+            json=_approval_body(created),
+            headers={CSRF_HEADER: csrf, "If-Match": "0"},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            f"/v1/workspaces/{WS}/runners/{runner['runnerId']}/preflights",
+            json=_preflight_body(
+                runner,
+                manifestDigest=created["manifestDigest"],
+                environmentConfigDigest=created["canonicalManifest"]["environmentConfigDigest"],
+            ),
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            f"/v1/workspaces/{WS}/runs",
+            json={"manifestDigest": created["manifestDigest"]},
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 202
+    )
+    run_id = created["canonicalManifest"]["runId"]
+    with workspace_connection(db, WS) as conn:
+        attempt_id = run_store.start_attempt(conn, run_id=run_id, workspace_id=WS, lease_epoch=1)
+        lease = runner_store.admit_lease(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            runner_id=runner["runnerId"],
+        )
+    return DispatchReference(
+        WS, run_id, attempt_id, runner["runnerId"], lease.lease_id, lease.epoch
+    )
+
+
+class SyntheticStartTransport:
+    """Does not touch a reader, model, fixture or desktop."""
+
+    def __init__(self, db: str) -> None:
+        self.db = db
+        self.calls = 0
+
+    def check_available(self) -> None:
+        pass
+
+    async def start(self, reference: DispatchReference) -> None:
+        self.calls += 1
+        # A separate connection must observe the committed claim BEFORE any transport work.
+        with workspace_connection(self.db, WS) as conn:
+            state = run_store.load_run(conn, run_id=reference.run_id).state
+            assert state.status.value == "RUNNING"
+            assert state.outcome.value == "NOT_EVALUATED"
+            claim = conn.execute(
+                "SELECT detail FROM audit_event WHERE target_id=%s "
+                "AND action='MANUAL_DISPATCH_CLAIMED'",
+                (reference.run_id,),
+            ).fetchone()
+            assert claim is not None and claim["detail"]["context"] == asdict(reference)
+            actions = conn.execute("SELECT count(*) AS n FROM runner_action").fetchone()
+            assert actions is not None and actions["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_manual_controller_commits_before_send_and_never_replays(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    ref = manual_dispatch_reference
+    transport = SyntheticStartTransport(db)
+    controller = ManualRunController(db, transport)
+    assert await controller.dispatch(ref, expected_revision=1) == ref
+    with pytest.raises(run_store.StaleRevision):
+        await controller.dispatch(ref, expected_revision=1)
+    with pytest.raises(runner_store.DispatchRefused):
+        await controller.dispatch(ref, expected_revision=2)
+    assert transport.calls == 1
+    with workspace_connection(db, WS) as conn:
+        state = run_store.load_run(conn, run_id=ref.run_id).state
+        assert state.outcome.value == "NOT_EVALUATED"
+        assert state.status.value == "RUNNING"
+        message = conn.execute(
+            "SELECT count(*) AS n FROM outbox_message WHERE topic='run.manual_dispatch_claimed'"
+        ).fetchone()
+        assert message is not None and message["n"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "default-unavailable",
+        "revoked",
+        "cancelled",
+        "attempt",
+        "workspace",
+        "epoch",
+        "revision",
+        "lease",
+        "timeout-setting",
+    ],
+)
+async def test_manual_controller_refusals_never_reach_transport(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+    changed: str,
+) -> None:
+    ref = manual_dispatch_reference
+    transport = SyntheticStartTransport(db)
+    controller = ManualRunController(db, transport)
+    revision = 1
+    if changed == "default-unavailable":
+        controller = ManualRunController(db)
+    elif changed == "revoked":
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "UPDATE approval SET revoked_at=now() WHERE id="
+                "(SELECT authorization_id FROM run WHERE id=%s)",
+                (ref.run_id,),
+            )
+    elif changed == "cancelled":
+        with workspace_connection(db, WS) as conn:
+            conn.execute(
+                "UPDATE run SET cancel_requested_at=now(),cancellation_revision=revision "
+                "WHERE id=%s",
+                (ref.run_id,),
+            )
+    elif changed == "attempt":
+        ref = replace(ref, attempt_id=str(uuid.uuid4()))
+    elif changed == "workspace":
+        ref = replace(ref, workspace_id=str(uuid.uuid4()))
+    elif changed == "epoch":
+        ref = replace(ref, epoch=2)
+    elif changed == "lease":
+        ref = replace(ref, lease_id=str(uuid.uuid4()))
+    elif changed == "revision":
+        revision = 0
+    else:
+        controller = ManualRunController(db, transport, float("nan"))
+    with pytest.raises(
+        (
+            runner_store.DispatchRefused,
+            run_store.StaleRevision,
+            LookupError,
+            ReaderTransportUnavailable,
+            ValueError,
+        )
+    ):
+        await controller.dispatch(ref, expected_revision=revision)
+    assert transport.calls == 0
+    with workspace_connection(db, WS) as conn:
+        assert (
+            run_store.load_run(conn, run_id=manual_dispatch_reference.run_id).state.status.value
+            == "LEASED"
+        )
+        assert (
+            conn.execute(
+                "SELECT 1 FROM audit_event WHERE action='MANUAL_DISPATCH_CLAIMED'"
+            ).fetchone()
+            is None
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["exception", "timeout", "cancelled"])
+async def test_manual_handoff_uncertainty_interrupts_and_quarantines_without_stop_proof(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+    failure: str,
+) -> None:
+    class FailingTransport(SyntheticStartTransport):
+        async def start(self, reference: DispatchReference) -> None:
+            await super().start(reference)
+            if failure == "timeout":
+                await asyncio.Event().wait()
+            if failure == "cancelled":
+                raise asyncio.CancelledError()
+            raise RuntimeError("untrusted transport details must not be surfaced")
+
+    ref = manual_dispatch_reference
+    transport = FailingTransport(db)
+    controller = ManualRunController(db, transport, 0.05)
+    expected = asyncio.CancelledError if failure == "cancelled" else HandoffUnknown
+    with pytest.raises(expected):
+        await controller.dispatch(ref, expected_revision=1)
+    controller.interrupt(ref)  # exact recovery is idempotent, never resumes the attempt
+    with workspace_connection(db, WS) as conn:
+        state = run_store.load_run(conn, run_id=ref.run_id).state
+        assert (state.status.value, state.outcome.value) == ("INTERRUPTED", "INCONCLUSIVE")
+        assert state.stop_acknowledged_at is None
+        assert state.quarantined and state.ambiguity_reason == "MANUAL_HANDOFF_UNKNOWN"
+        runner_row = conn.execute(
+            "SELECT status FROM runner WHERE id=%s", (ref.runner_id,)
+        ).fetchone()
+        assert runner_row is not None and runner_row["status"] == "QUARANTINED"
+        lease_row = conn.execute(
+            "SELECT released_at,stop_acknowledged_at FROM desktop_lease WHERE id=%s",
+            (ref.lease_id,),
+        ).fetchone()
+        assert lease_row is not None and lease_row["stop_acknowledged_at"] is None
+        assert lease_row["released_at"] is not None
+    with pytest.raises(run_store.StaleRevision):
+        await controller.dispatch(ref, expected_revision=1)
+    assert transport.calls == 1
+
+
+def test_two_manual_controllers_race_one_committed_handoff(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    barrier = Barrier(2)
+    transport = SyntheticStartTransport(db)
+
+    def contend() -> str:
+        barrier.wait(timeout=5)
+        try:
+            asyncio.run(
+                ManualRunController(db, transport).dispatch(
+                    manual_dispatch_reference, expected_revision=1
+                )
+            )
+            return "sent"
+        except run_store.StaleRevision:
+            return "stale"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: contend(), range(2)))
+    assert sorted(results) == ["sent", "stale"]
+    assert transport.calls == 1
+
+
+def test_process_dies_after_dispatch_commit_no_restart_replay(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    import json
+    import subprocess
+    import sys
+
+    ref = manual_dispatch_reference
+    # Real abrupt process death, no exception handler/finally rollback or graceful quarantine.
+    program = """
+import asyncio, json, os
+from accessforge_orchestrator.manual_dispatch import DispatchReference, ManualRunController
+class CrashTransport:
+    def check_available(self): pass
+    async def start(self, reference): os._exit(24)
+asyncio.run(ManualRunController(os.environ['AF_CONTROLLER_TEST_DB'], CrashTransport()).dispatch(
+    DispatchReference(**json.loads(os.environ['AF_CONTROLLER_TEST_REF'])), expected_revision=1))
+"""
+    result = subprocess.run(  # noqa: S603 - fixed interpreter/program; fixture IDs via environment
+        [sys.executable, "-c", program],
+        env={
+            **os.environ,
+            "AF_CONTROLLER_TEST_DB": db,
+            "AF_CONTROLLER_TEST_REF": json.dumps(asdict(ref)),
+        },
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 24
+    transport = SyntheticStartTransport(db)
+    controller = ManualRunController(db, transport)
+    with pytest.raises(run_store.StaleRevision):
+        asyncio.run(controller.dispatch(ref, expected_revision=1))
+    assert transport.calls == 0
+    with workspace_connection(db, WS) as conn:
+        assert run_store.load_run(conn, run_id=ref.run_id).state.status.value == "RUNNING"
+    controller.interrupt(ref)
+    with workspace_connection(db, WS) as conn:
+        assert run_store.load_run(conn, run_id=ref.run_id).state.status.value == "INTERRUPTED"
+
+
+@pytest.mark.asyncio
+async def test_late_transport_success_does_not_clear_unknown_or_quarantine(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    class LateTransport(SyntheticStartTransport):
+        async def start(self, reference: DispatchReference) -> None:
+            await super().start(reference)
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()  # A remote receiver may ignore cancellation.
+            finally:
+                finished.set()
+
+    ref = manual_dispatch_reference
+    transport = LateTransport(db)
+    controller = ManualRunController(db, transport, 0.05)
+    with pytest.raises(HandoffUnknown):
+        await controller.dispatch(ref, expected_revision=1)
+    release.set()
+    await asyncio.wait_for(finished.wait(), timeout=2)
+    with workspace_connection(db, WS) as conn:
+        assert run_store.load_run(conn, run_id=ref.run_id).state.status.value == "INTERRUPTED"
+        runner_row = conn.execute(
+            "SELECT status FROM runner WHERE id=%s", (ref.runner_id,)
+        ).fetchone()
+        assert runner_row is not None and runner_row["status"] == "QUARANTINED"
+    assert transport.calls == 1
+
+
+@pytest.mark.parametrize("changed", ["no-claim", "attempt", "lease", "epoch", "runner"])
+def test_manual_recovery_refuses_unclaimed_or_mismatched_attempt(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+    changed: str,
+) -> None:
+    ref = manual_dispatch_reference
+    controller = ManualRunController(db, SyntheticStartTransport(db))
+    if changed != "no-claim":
+        asyncio.run(controller.dispatch(ref, expected_revision=1))
+        if changed == "epoch":
+            ref = replace(ref, epoch=2)
+        elif changed == "attempt":
+            ref = replace(ref, attempt_id=str(uuid.uuid4()))
+        elif changed == "lease":
+            ref = replace(ref, lease_id=str(uuid.uuid4()))
+        else:
+            ref = replace(ref, runner_id=str(uuid.uuid4()))
+    with pytest.raises(runner_store.DispatchRefused):
+        controller.interrupt(ref)
+    with workspace_connection(db, WS) as conn:
+        runner_row = conn.execute(
+            "SELECT status FROM runner WHERE id=%s", (manual_dispatch_reference.runner_id,)
+        ).fetchone()
+        assert runner_row is not None and runner_row["status"] == "BUSY"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_transaction_failure_rolls_back_and_never_sends(
+    db: str,
+    manual_dispatch_reference: DispatchReference,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = run_store.apply_transition
+
+    def fail_after_transition(*args: Any, **kwargs: Any) -> Any:
+        original(*args, **kwargs)
+        raise RuntimeError("synthetic failure before commit")
+
+    monkeypatch.setattr(run_store, "apply_transition", fail_after_transition)
+    transport = SyntheticStartTransport(db)
+    with pytest.raises(RuntimeError, match="before commit"):
+        await ManualRunController(db, transport).dispatch(
+            manual_dispatch_reference, expected_revision=1
+        )
+    assert transport.calls == 0
+    with workspace_connection(db, WS) as conn:
+        assert (
+            run_store.load_run(conn, run_id=manual_dispatch_reference.run_id).state.status.value
+            == "LEASED"
+        )
+        assert (
+            conn.execute(
+                "SELECT 1 FROM audit_event WHERE action='MANUAL_DISPATCH_CLAIMED'"
+            ).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT 1 FROM outbox_message WHERE topic='run.manual_dispatch_claimed'"
+            ).fetchone()
+            is None
+        )
 
 
 def test_restored_exact_approval_is_revoked_and_cannot_be_revalidated_in_place(

@@ -882,3 +882,28 @@ and recursive TypeScript typecheck/build/test pass. Actual built packages retain
 and34 migrations byte-for-byte. The scratch workspace-erasure probe passes without retaining
 an approval or bypassing the anti-reissue trigger. No actual reader or committed controller dispatch
 is inferred from these tests; draft PR37 remains incomplete and unmerged.
+
+### Committed manual controller handoff (continuation)
+
+The manual controller now invokes the exact consent gate inside a transaction it owns, commits
+the exact run/attempt/lease/epoch audit context with LEASED -> RUNNING and its outbox reference,
+then sends once through a trusted transport port. A concurrent or restarted controller cannot
+repeat the handoff. Timeout, exception and cancellation interrupt/quarantine the exact attempt;
+late success never converts UNKNOWN into stop proof or a passing result. A real abrupt child
+process exit verifies that committed state survives without a graceful exception handler.
+
+The production transport remains unavailable by default, refusing before state mutation. This
+is a controller integration seam, not completed canonical reader/observer execution. Candidate
+POST is still closed, no RUN_EFFECTS action authority is synthesized, and no evidence/outcome is
+created by acknowledgement. Explicit recovery is implemented; an automatic process-owner recovery
+service, actual authenticated transport, deployed identity checks, per-action effects, protected
+observer tails, STOP/finalization and matched failure-to-repair proof remain pending.
+See [handoff 07](07.md#manual-controller-continuation) for the exact boundary.
+
+Final local validation for this controller continuation: **2,245 passed**, zero failures/skips,
+58 upstream warnings,316.06 seconds. This includes22 new controller/recovery regressions, using
+fresh disposable PostgreSQL and explicitly synthetic transport. Strict mypy234, Ruff336, all four
+OpenAPI/schema/client/fixture drift checks and recursive Node typecheck/build/test pass. Actual
+core sdist/direct-wheel builds retain six exact schemas and34 exact migrations. Two scratch-only
+negative controls fail as expected when approval revalidation or quarantine recovery is removed.
+The preceding consent commit889c38b passed GitHub CI34730188016; this new slice requires fresh CI.

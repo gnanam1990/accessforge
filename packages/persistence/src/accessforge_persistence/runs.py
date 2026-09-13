@@ -140,6 +140,7 @@ def apply_transition(
     actor_user: str | None = None,
     actor_service: str | None = None,
     audit_action: str | None = None,
+    audit_context: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> RunState:
     """Apply one reducer-admitted transition, atomically with its audit row and outbox message.
@@ -234,6 +235,7 @@ def apply_transition(
                     "to": after.status.value,
                     "outcome": after.outcome.value,
                     "revision": after.revision,
+                    **({"context": audit_context} if audit_context is not None else {}),
                 }
             ),
         ),

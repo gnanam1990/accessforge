@@ -39,6 +39,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from accessforge_domain import reducers
 from accessforge_domain.authority import (
@@ -55,7 +56,7 @@ from accessforge_domain.runners import (
     RunnerProfile,
     assert_runner_transition,
 )
-from accessforge_domain.states import ApprovalScope, RunnerStatus
+from accessforge_domain.states import ApprovalScope, RunnerStatus, RunStatus
 from accessforge_domain.timestamps import is_expired, parse_rfc3339_utc, to_rfc3339_utc
 
 from . import candidate_runs, execution_approvals, projects, runs
@@ -1464,6 +1465,85 @@ def _assert_dispatch_ready(
 # whether an action is unresolved, which epoch acknowledged a stop. These two functions are where
 # that knowledge meets the reducers, and they exist so that no caller has to assemble the decision
 # from parts and get one of them wrong.
+
+
+def interrupt_manual_handoff(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    workspace_id: str,
+    run_id: str,
+    attempt_id: str,
+    runner_id: str,
+    lease_id: str,
+    epoch: int,
+) -> None:
+    """Fence an uncertain controller handoff without inventing an OS action journal entry.
+
+    Exact identity is checked even for recovery. A late timeout from another attempt must never
+    quarantine a replacement session. RUNNING is not stop proof and is never re-dispatched.
+    """
+    runner = conn.execute(
+        "SELECT lease_epoch FROM runner WHERE id=%s FOR UPDATE", (runner_id,)
+    ).fetchone()
+    stored = runs.load_run_for_update(conn, run_id=run_id)
+    lease = conn.execute(
+        "SELECT l.id FROM desktop_lease l JOIN run_attempt a ON a.id=l.attempt_id "
+        "AND a.workspace_id=l.workspace_id WHERE l.id=%s AND l.workspace_id=%s "
+        "AND l.runner_id=%s AND l.run_id=%s AND l.attempt_id=%s AND l.epoch=%s "
+        "AND a.run_id=%s AND a.lease_epoch=%s",
+        (lease_id, workspace_id, runner_id, run_id, attempt_id, epoch, run_id, epoch),
+    ).fetchone()
+    if (
+        runner is None
+        or lease is None
+        or int(runner["lease_epoch"]) != epoch
+        or stored.state.lease_epoch != epoch
+        or stored.workspace_id != workspace_id
+    ):
+        raise DispatchRefused("manual handoff recovery identity is stale or mismatched")
+    if stored.state.status is RunStatus.INTERRUPTED:
+        return
+    if (
+        stored.state.status is not RunStatus.RUNNING
+        or conn.execute(
+            "SELECT 1 FROM audit_event WHERE workspace_id=%s AND target_id=%s "
+            "AND action='MANUAL_DISPATCH_CLAIMED' AND actor_service='manual-run-controller' "
+            "AND detail->'context'=%s",
+            (
+                workspace_id,
+                run_id,
+                Jsonb(
+                    {
+                        "workspace_id": workspace_id,
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "runner_id": runner_id,
+                        "lease_id": lease_id,
+                        "epoch": epoch,
+                    }
+                ),
+            ),
+        ).fetchone()
+        is None
+    ):
+        raise DispatchRefused("run has no recoverable manual dispatch commitment")
+    moment = _now(None)
+    conn.execute(
+        "UPDATE desktop_lease SET released_at=COALESCE(released_at,%s), "
+        "release_reason=COALESCE(release_reason,'AMBIGUOUS_ACTION') WHERE id=%s",
+        (moment, lease_id),
+    )
+    _quarantine(conn, runner_id=runner_id, reason=QuarantineReason.AMBIGUOUS_ACTION, now=moment)
+    runs.apply_transition(
+        conn,
+        run_id=run_id,
+        reducer=lambda state: reducers.interrupt(state, reason="MANUAL_HANDOFF_UNKNOWN"),
+        expected_revision=stored.state.revision,
+        operation_id=_operation_id(f"manual-handoff-unknown:{run_id}:{epoch}"),
+        topic="run.interrupted",
+        actor_service="manual-run-controller",
+        audit_action="RUN_INTERRUPTED_MANUAL_HANDOFF_UNKNOWN",
+    )
 
 
 def terminalize_ambiguous_attempt(
