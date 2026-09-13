@@ -1,5 +1,8 @@
 # Action-bound candidate form permission
 
+Continuation: [candidate effect transport](candidate-effect-transport.md) implements consumption,
+response retention and action-window closure. The notes below describe the original permission-only checkpoint.
+
 The machine-authenticated action endpoint `form-effect-permit` accepts only an empty JSON object.
 It revalidates the original live RUN_EFFECTS approval/session/lease and current candidate binding,
 requires FORM_SUBMIT in the sealed effects, an unresolved dispatched ACTIVATE or ENTER/SPACE chord, a complete
