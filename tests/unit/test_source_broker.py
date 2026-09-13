@@ -12,9 +12,13 @@ from pathlib import Path
 
 import pytest
 
+from accessforge_build_worker.comparison import compare_source
 from accessforge_build_worker.process import CommandStopped
 from accessforge_build_worker.snapshot import SnapshotRefused, SourceFile, SourceSnapshot
 from accessforge_build_worker.source_broker import _decode_batch, read_committed_source
+from accessforge_domain.patch_policy import ProposedChange
+from accessforge_domain.states import PatchStatus
+from accessforge_persistence.patches import PatchProposal, patch_digest
 from accessforge_persistence.source_intake import SourceIdentity
 
 
@@ -69,6 +73,40 @@ def test_committed_bytes_and_modes_ignore_dirty_checkout_and_archive_attributes(
     assert result.source.archive() == expected.archive()
     assert (repository / "src/app.txt").read_text() == "dirty replacement"
     assert (repository / "untracked").exists()
+
+
+def test_comparison_uses_original_committed_source_and_preserves_dirty_checkout(
+    committed: tuple[Path, SourceIdentity, SourceSnapshot],
+) -> None:
+    repository, identity, original = committed
+    (repository / "src/app.txt").write_text("dirty user edits")
+    changes = (ProposedChange("src/app.txt", "proposed repair\n"),)
+    patch = PatchProposal(
+        patch_id="patch-1",
+        finding_id="finding-1",
+        base_manifest_digest="a" * 64,
+        base_source_digest=identity.tree_digest,
+        patch_digest=patch_digest(changes),
+        changes=changes,
+        verdicts=(("src/app.txt", "ALLOWED"),),
+        status=PatchStatus.PROPOSED,
+        approval_id=None,
+        proposed_by="author",
+        rationale="repair the task",
+        revision=1,
+        created_at="2026-09-13T00:00:00Z",
+    )
+    comparison = compare_source(
+        read_committed_source(repository, identity=identity),
+        patch=patch,
+        application_paths=("src",),
+    )["comparison"]
+    assert comparison["baseCommitSha"] == identity.commit_sha
+    assert comparison["baseArchiveDigest"] == original.archive_digest
+    assert comparison["files"][0]["before"]["text"] == "original\n"
+    assert "-original\n+proposed repair\n" in comparison["files"][0]["unifiedDiff"]
+    assert (repository / "src/app.txt").read_text() == "dirty user edits"
+    assert patch.status is PatchStatus.PROPOSED and patch.approval_id is None
 
 
 def test_replacement_refs_and_inherited_git_directory_cannot_substitute_the_commit(
