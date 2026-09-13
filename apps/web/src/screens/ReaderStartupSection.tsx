@@ -40,15 +40,18 @@ const useOperation = () => {
 
 export const ReaderStartupSection = ({ workspaceId, run }: { readonly workspaceId: string; readonly run: Run }): JSX.Element => {
   const [open, setOpen] = useState(false)
+  const operation = useOperation()
   return <section className="af-stack">
     <h2>Reader startup consent</h2>
     <p>Separate operator permission for VoiceOver restart and preference changes. This neither starts a reader nor grants macOS permissions.</p>
-    <Button aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Close reader consent' : 'Inspect reader consent'}</Button>
-    {open && <ConsentPanel key={`${workspaceId}:${run.runId}:${run.revision}`} workspaceId={workspaceId} run={run} />}
+    <Button aria-expanded={open} disabled={operation.busy} onClick={() => setOpen(!open)}>{open ? 'Close reader consent' : 'Inspect reader consent'}</Button>
+    {open && <ConsentPanel key={`${workspaceId}:${run.runId}`} workspaceId={workspaceId} run={run} operation={operation} />}
   </section>
 }
 
-const ConsentPanel = ({ workspaceId, run }: { readonly workspaceId: string; readonly run: Run }): JSX.Element => {
+type Operation = ReturnType<typeof useOperation>
+
+const ConsentPanel = ({ workspaceId, run, operation }: { readonly workspaceId: string; readonly run: Run; readonly operation: Operation }): JSX.Element => {
   const { client, state } = useSession()
   const owner = state.status === 'authenticated' && state.workspaces.some((membership) => membership.workspaceId === workspaceId && membership.role === 'OWNER')
   const history = useResource((signal) => readReaderConsent(client, workspaceId, run.runId, signal), [client, workspaceId, run.runId])
@@ -59,22 +62,21 @@ const ConsentPanel = ({ workspaceId, run }: { readonly workspaceId: string; read
     {message !== null && <Notice tone="information" heading="Consent request result" headingLevel={3} live><p>{message}</p></Notice>}
     {history.state.kind === 'problem' && history.state.problem.status === 404 ? <>
       <p>No stored reader startup consent is available for this run.</p>
-      {owner && eligible ? <ConsentForm workspaceId={workspaceId} run={run} changed={changed} /> :
+      {owner && eligible ? <ConsentForm workspaceId={workspaceId} run={run} changed={changed} operation={operation} /> :
         <p>Only a workspace owner can issue consent for an eligible, approved run before its first action.</p>}
     </> : <ResourceView resource={history} what="the stored reader startup decision">
       {(consent) => consent.manifestDigest !== run.manifestDigest ?
         <Notice tone="problem" heading="Consent identity differs" headingLevel={3}><p>Reload this run before making a decision.</p></Notice> :
-        <ConsentHistory key={consent.consentId} consent={consent} workspaceId={workspaceId} owner={owner} changed={changed} />}
+        <ConsentHistory key={consent.consentId} consent={consent} workspaceId={workspaceId} owner={owner} changed={changed} operation={operation} />}
     </ResourceView>}
-    <Button onClick={history.reload}>Read stored consent again</Button>
+    <Button disabled={operation.busy} onClick={history.reload}>Read stored consent again</Button>
   </div>
 }
 
-const ConsentHistory = ({ consent, workspaceId, owner, changed }: {
-  readonly consent: ReaderConsent; readonly workspaceId: string; readonly owner: boolean; readonly changed: (message: string) => void
+const ConsentHistory = ({ consent, workspaceId, owner, changed, operation }: {
+  readonly consent: ReaderConsent; readonly workspaceId: string; readonly owner: boolean; readonly changed: (message: string) => void; readonly operation: Operation
 }): JSX.Element => {
   const { client } = useSession()
-  const operation = useOperation()
   const [confirm, setConfirm] = useState(false)
   const revoke = async () => {
     const controller = operation.start(); if (controller === null) return
@@ -104,12 +106,11 @@ const ConsentHistory = ({ consent, workspaceId, owner, changed }: {
   </div>
 }
 
-const ConsentForm = ({ workspaceId, run, changed }: {
-  readonly workspaceId: string; readonly run: Run; readonly changed: (message: string) => void
+const ConsentForm = ({ workspaceId, run, changed, operation }: {
+  readonly workspaceId: string; readonly run: Run; readonly changed: (message: string) => void; readonly operation: Operation
 }): JSX.Element => {
   const { client } = useSession()
   const runners = useResource((signal) => listRunners(client, workspaceId, signal), [client, workspaceId])
-  const operation = useOperation()
   const [runnerId, setRunnerId] = useState('')
   const [scope, setScope] = useState<ReaderConsentScope | null>(null)
   const [expires, setExpires] = useState('')
@@ -118,19 +119,21 @@ const ConsentForm = ({ workspaceId, run, changed }: {
   const [expiryError, setExpiryError] = useState<string | undefined>(undefined)
   const expiryInput = useRef<HTMLInputElement>(null)
   const key = useRef(crypto.randomUUID())
+  const latestRun = useRef(run); latestRun.current = run
+  useEffect(() => { setScope(null); setAcknowledged(false); setError(null) }, [run.revision, run.manifestDigest])
   const review = async () => {
     const controller = operation.start(); if (controller === null) return
     setError(null); setExpiryError(undefined); setScope(null); setAcknowledged(false)
     const result = await reviewReaderConsent(client, workspaceId, run.runId, runnerId, controller.signal)
     if (!operation.finish(controller)) return
     if (result.kind !== 'ok') { setError(failure(result)); return }
-    if (result.value.manifestDigest !== run.manifestDigest || result.value.revision !== run.revision) {
+    if (result.value.manifestDigest !== latestRun.current.manifestDigest || result.value.revision !== latestRun.current.revision) {
       setError('The run changed. Reload the run before reviewing consent.'); return
     }
     setScope(result.value); setExpires(result.value.maximumExpiresAt); key.current = crypto.randomUUID()
   }
   const submit = async () => {
-    if (scope === null || !acknowledged) return
+    if (scope === null || !acknowledged || scope.revision !== run.revision || scope.manifestDigest !== run.manifestDigest) return
     const expiry = Date.parse(expires)
     if (!expires.endsWith('Z') || !Number.isFinite(expiry) || expiry <= Date.now() || expiry > Date.parse(scope.maximumExpiresAt)) {
       setExpiryError('Enter a future UTC expiry no later than the reviewed maximum.'); expiryInput.current?.focus(); return
