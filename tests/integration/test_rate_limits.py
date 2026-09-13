@@ -754,20 +754,32 @@ def test_the_contract_documents_retry_after_on_exactly_the_limited_operations(db
         for path, ops in contract["paths"].items()
         for method, operation in ops.items()
         if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
-        and "Retry-After" in operation["responses"]["429"].get("headers", {})
+        and "Retry-After" in operation["responses"].get("429", {}).get("headers", {})
     }
 
-    # Exactly the two session routes are silent, and they are exactly the two the limiter cannot
-    # reach. Asserted as an equality so the set cannot drift in either direction: a new unlimited
-    # route that claims a Retry-After fails here, and so does a limited one that omits it.
-    assert writes - promising == {"POST /v1/sessions", "DELETE /v1/session"}
+    # Human session routes and independently authenticated supervisor routes bypass the human
+    # limiter. Keep equality so both missing limited routes and extra promises fail this check.
+    machine_writes = {
+        f"{method.upper()} {path}"
+        for path, ops in contract["paths"].items()
+        for method, operation in ops.items()
+        if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and operation.get("security") == [{"supervisorBearer": []}]
+    }
+    assert machine_writes
+    assert writes - promising == {"POST /v1/sessions", "DELETE /v1/session"} | machine_writes
+    for ops in contract["paths"].values():
+        for operation in ops.values():
+            if operation.get("security") == [{"supervisorBearer": []}]:
+                assert "429" not in operation["responses"]
     assert promising, "no operation documents the rate-limit refusal at all"
 
     # And every read stays silent about it, because reads are not limited.
     reads_promising = {
         f"GET {path}"
         for path, ops in contract["paths"].items()
-        if "get" in ops and "Retry-After" in ops["get"]["responses"]["429"].get("headers", {})
+        if "get" in ops
+        and "Retry-After" in ops["get"]["responses"].get("429", {}).get("headers", {})
     }
     assert reads_promising == set()
 
