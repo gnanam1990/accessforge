@@ -631,6 +631,22 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: true,
     authenticated: true,
   },
+  'open_supervisor_session': {
+    operationId: 'open_supervisor_session',
+    method: 'POST',
+    path: '/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/session',
+    parameters: ['workspace_id', 'ticket_id'],
+    mutating: true,
+    authenticated: true,
+  },
+  'retain_supervisor_action_intent': {
+    operationId: 'retain_supervisor_action_intent',
+    method: 'POST',
+    path: '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/action-intents',
+    parameters: ['workspace_id', 'session_id'],
+    mutating: true,
+    authenticated: true,
+  },
   'read_usage': {
     operationId: 'read_usage',
     method: 'GET',
@@ -714,6 +730,8 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/settings/entitlement',
   '/v1/workspaces/{workspace_id}/settings/retention',
   '/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/accept',
+  '/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/session',
+  '/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/action-intents',
   '/v1/workspaces/{workspace_id}/usage',
   '/v1/workspaces/{workspace_id}/verifications/{verification_id}',
 ]

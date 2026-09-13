@@ -658,6 +658,22 @@ OPERATIONS: dict[str, Operation] = {
         mutating=True,
         authenticated=True,
     ),
+    "open_supervisor_session": Operation(
+        operation_id="open_supervisor_session",
+        method="POST",
+        path="/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/session",
+        parameters=("workspace_id", "ticket_id"),
+        mutating=True,
+        authenticated=True,
+    ),
+    "retain_supervisor_action_intent": Operation(
+        operation_id="retain_supervisor_action_intent",
+        method="POST",
+        path="/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/action-intents",
+        parameters=("workspace_id", "session_id"),
+        mutating=True,
+        authenticated=True,
+    ),
     "read_usage": Operation(
         operation_id="read_usage",
         method="GET",
@@ -743,6 +759,8 @@ PATHS: frozenset[str] = frozenset(
         "/v1/workspaces/{workspace_id}/settings/entitlement",
         "/v1/workspaces/{workspace_id}/settings/retention",
         "/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/accept",
+        "/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket_id}/session",
+        "/v1/workspaces/{workspace_id}/supervisor-sessions/{session_id}/action-intents",
         "/v1/workspaces/{workspace_id}/usage",
         "/v1/workspaces/{workspace_id}/verifications/{verification_id}",
     }

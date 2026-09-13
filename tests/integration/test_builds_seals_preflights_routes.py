@@ -199,7 +199,12 @@ def _seal_body(build_id: str, environment_id: str, **overrides: Any) -> dict[str
 
 @pytest.fixture()
 def execution_body(
-    db: str, client: TestClient, csrf: str, project: str, environment: str
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    environment: str,
+    request: pytest.FixtureRequest,
 ) -> dict[str, Any]:
     """HTTP-created source/environment and a synthetic frozen journey, not reader proof."""
     build = client.post(
@@ -210,11 +215,20 @@ def execution_body(
     assert build.status_code == 201, build.text
     journey_id = str(uuid.uuid4())
     body = _seal_body(build.json()["buildId"], environment)
+    policy: dict[str, Any] = {}
+    if getattr(request, "param", None) == "action-policy":
+        policy = {
+            "allowedActions": ["READ_CURRENT", "NEXT", "TYPE_TEXT", "KEY_CHORD"],
+            "allowedKeyChords": [],
+            "maxActions": 10,
+            "wallTimeSeconds": 30,
+        }
+        body["navigatorPolicyDigest"] = str(digest(policy))
     with workspace_connection(db, WS) as conn:
         conn.execute(
             "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,journey_digest,"
             "assertion_set_digest,fixture_digest,navigator_policy_digest,navigator_policy,"
-            "reviewer_summary) VALUES (%s,%s,%s,'synthetic','web',%s,%s,%s,%s,'{}','{}')",
+            "reviewer_summary) VALUES (%s,%s,%s,'synthetic','web',%s,%s,%s,%s,%s,'{}')",
             (
                 journey_id,
                 WS,
@@ -223,6 +237,7 @@ def execution_body(
                 body["assertionSetDigest"],
                 body["fixtureDigest"],
                 body["navigatorPolicyDigest"],
+                json.dumps(policy),
             ),
         )
     body["execution"] = {
@@ -1404,6 +1419,108 @@ def _ticket_url(ticket: DispatchTicket, workspace_id: str = WS) -> str:
     return f"/v1/workspaces/{workspace_id}/supervisor-dispatches/{ticket.ticket_id}/accept"
 
 
+@pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "bootstrap-reuse",
+        "session-revoked",
+        "parent-revoked",
+        "approval-revoked",
+        "wrong-origin",
+        "sequence",
+        "unknown-field",
+    ],
+)
+def test_supervisor_session_action_intent(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    fault: str | None,
+) -> None:
+    import hashlib
+    import secrets
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    secret = secrets.token_urlsafe(32)
+    url = _ticket_url(ticket).removesuffix("accept") + "session"
+    # A browser OWNER cannot open a machine session, and the response never returns either secret.
+    assert client.post(url, json={"sessionSecret": secret}).status_code == 401
+    response = client.post(
+        url, json={"sessionSecret": secret}, headers={"Authorization": f"Bearer {ticket.token}"}
+    )
+    assert response.status_code == 201
+    assert response.headers["cache-control"] == "no-store"
+    receipt = response.json()
+    assert receipt["sessionId"] == ticket.ticket_id and receipt["attemptId"] == ref.attempt_id
+    assert receipt["meaning"] == "SUPERVISOR_SESSION_OPENED"
+    assert secret not in response.text and ticket.token not in response.text
+    assert (
+        client.post(
+            url, json={"sessionSecret": secret}, headers={"Authorization": f"Bearer {ticket.token}"}
+        ).status_code
+        == 401
+    )
+    with workspace_connection(db, WS) as conn:
+        session = conn.execute(
+            "SELECT token_digest FROM supervisor_execution_session WHERE ticket_id=%s",
+            (ticket.ticket_id,),
+        ).fetchone()
+        assert (
+            session is not None
+            and session["token_digest"] == hashlib.sha256(secret.encode()).hexdigest()
+        )
+        if fault == "session-revoked":
+            conn.execute(
+                "UPDATE supervisor_execution_session SET revoked_at=now() WHERE ticket_id=%s",
+                (ticket.ticket_id,),
+            )
+        if fault == "parent-revoked":
+            conn.execute(
+                "UPDATE supervisor_dispatch_ticket SET revoked_at=now() WHERE id=%s",
+                (ticket.ticket_id,),
+            )
+        if fault == "approval-revoked":
+            conn.execute(
+                "UPDATE approval SET revoked_at=now() WHERE id=("
+                "SELECT authorization_id FROM run WHERE id=%s)",
+                (ref.run_id,),
+            )
+    command: dict[str, Any] = {
+        "action": "READ_CURRENT",
+        "sequence": 1,
+        "origin": "https://app.example.test",
+    }
+    if fault == "wrong-origin":
+        command["origin"] = "https://unapproved.example"
+    if fault == "sequence":
+        command["sequence"] = 2
+    if fault == "unknown-field":
+        command["selector"] = "body"
+    headers = {"Authorization": f"Bearer {ticket.token if fault == 'bootstrap-reuse' else secret}"}
+    action_url = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}/action-intents"
+    assert client.post(action_url, json=command).status_code == 401
+    intended = client.post(action_url, json=command, headers=headers)
+    assert intended.status_code == (201 if fault is None else 403)
+    if fault is None:
+        assert intended.json()["meaning"] == "ACTION_INTENT_RETAINED"
+        assert client.post(action_url, json=command, headers=headers).status_code == 403
+        assert (
+            client.post(action_url, json={**command, "sequence": 2}, headers=headers).status_code
+            == 403
+        )
+    with workspace_connection(db, WS) as conn:
+        actions = conn.execute(
+            "SELECT * FROM runner_action WHERE run_id=%s", (ref.run_id,)
+        ).fetchall()
+        assert len(actions) == (1 if fault is None else 0)
+        for action in actions:
+            assert action["dispatched_at"] is None and action["result_at"] is None
+        assert conn.execute("SELECT count(*) AS n FROM canonical_event").fetchone() == {"n": 0}
+
+
 @pytest.mark.parametrize(
     "scenario",
     [
@@ -1567,6 +1684,102 @@ def native_receiver_api(settings: ApiSettings, db: str) -> Iterator[str]:
             server.should_exit = True
             thread.join(timeout=5)
             assert not thread.is_alive(), "native receiver test API did not stop"
+
+
+@pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+def test_native_execution_session_real_http(
+    db: str,
+    native_receiver_command: Path,
+    native_receiver_api: str,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    tmp_path: Path,
+) -> None:
+    ref, ticket = manual_dispatch_reference, supervisor_ticket
+    node = shutil.which("node")
+    assert node is not None
+    reference = {
+        "workspaceId": ref.workspace_id,
+        "runId": ref.run_id,
+        "attemptId": ref.attempt_id,
+        "runnerId": ref.runner_id,
+        "leaseId": ref.lease_id,
+        "epoch": ref.epoch,
+    }
+    claims = tmp_path.resolve() / "claims"
+    claims.mkdir(mode=0o700)
+    config = tmp_path.resolve() / "session.json"
+    config.write_text(
+        json.dumps(
+            {
+                "apiOrigin": native_receiver_api,
+                "claimsDirectory": str(claims),
+                "localReference": reference,
+                "allowLoopbackHttp": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    script = """
+      const { NativeExecutionSession, readReceiverConfig } = await import(process.argv[1]);
+      const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
+      try {
+        const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const config = readReceiverConfig(process.argv[2]);
+        const session = await NativeExecutionSession.open(config, input);
+        const command = { action: 'READ_CURRENT', sequence: 1, origin: 'https://app.example.test' };
+        const intent = await session.retainIntent(command);
+        let refused = false;
+        try { await session.retainIntent(command); } catch { refused = true; }
+        process.stdout.write(JSON.stringify({ session, intent, duplicateRefused: refused }));
+      } catch { process.stderr.write('native session failed'); process.exitCode = 78; }
+    """
+    result = subprocess.run(  # noqa: S603 - owned native client with secret on stdin, no shell
+        [
+            node,
+            "--input-type=module",
+            "--eval",
+            script,
+            native_receiver_command.with_name("dispatch-receiver.js").as_uri(),
+            str(config),
+        ],
+        input=json.dumps(
+            {
+                "reference": reference,
+                "ticket": {
+                    "ticketId": ticket.ticket_id,
+                    "token": ticket.token,
+                    "expiresAt": ticket.expires_at,
+                },
+            }
+        ),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env={"PATH": os.environ["PATH"]},
+    )
+    assert result.returncode == 0 and result.stderr == ""
+    assert ticket.token not in result.stdout
+    output = json.loads(result.stdout)
+    # JS private fields must not serialize even if somebody prints the entire session object.
+    assert set(output["session"]) == {"receipt"}
+    assert output["session"]["receipt"]["reference"] == reference
+    assert output["intent"]["meaning"] == "ACTION_INTENT_RETAINED"
+    assert output["duplicateRefused"] is True
+    with workspace_connection(db, WS) as conn:
+        action = conn.execute(
+            "SELECT action,dispatched_at,result_at FROM runner_action WHERE run_id=%s",
+            (ref.run_id,),
+        ).fetchall()
+        assert action == [{"action": "READ_CURRENT", "dispatched_at": None, "result_at": None}]
+        for statement in (
+            "UPDATE supervisor_execution_session SET token_digest=repeat('a',64)",
+            "UPDATE supervisor_execution_session SET expires_at=expires_at+interval '1 second'",
+            "DELETE FROM supervisor_execution_session",
+        ):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(statement)
 
 
 @pytest.mark.parametrize("fault", [None, "local-identity", "existing-claim", "revoked-approval"])
