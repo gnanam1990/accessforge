@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0033_canonical_execution_manifest.sql"
+NEWEST = "0034_manual_execution_approval.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -139,6 +139,34 @@ def test_data_written_under_the_previous_rules_survives_the_migration(disposable
     assert row is not None and row["release_reason"] == "OPERATOR_RESET"
 
 
+def test_manual_approval_migration_preserves_old_decisions_without_creating_consent(
+    disposable: str,
+) -> None:
+    _apply_through(disposable, "0033_canonical_execution_manifest.sql")
+    actor, approval, target = (str(uuid.uuid4()) for _ in range(3))
+    with connect(disposable) as conn:
+        conn.execute("INSERT INTO workspace(id,name) VALUES(%s,'upgrade')", (WS,))
+        conn.execute("INSERT INTO app_user(id,email) VALUES(%s,'upgrade@example.test')", (actor,))
+        conn.execute(
+            "INSERT INTO approval(id,workspace_id,scope,actor_user,target_id,target_digest,"
+            "expected_revision,expires_at) VALUES(%s,%s,'PATCH_APPLY',%s,%s,repeat('a',64),"
+            "4,now()+interval '1 hour')",
+            (approval, WS, actor, target),
+        )
+        before = conn.execute("SELECT * FROM approval").fetchall()
+    assert migrate(disposable) == [NEWEST]
+    with connect(disposable) as conn:
+        assert conn.execute("SELECT * FROM approval").fetchall() == before
+        assert conn.execute(
+            "SELECT count(*) AS n FROM approval WHERE scope='RUN_EFFECTS'"
+        ).fetchone() == {"n": 0}
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute("UPDATE approval SET expected_revision=5")
+        conn.execute("UPDATE approval SET revoked_at=now()")
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute("UPDATE approval SET revoked_at=NULL")
+
+
 def test_regression_migrations_effect_is_absent_before_and_present_after(
     disposable: str,
 ) -> None:
@@ -152,6 +180,7 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
+        "0033_canonical_execution_manifest.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -175,6 +204,7 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
     assert migrate(disposable) == [
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
+        "0033_canonical_execution_manifest.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -191,7 +221,7 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
 def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authority(
     disposable: str,
 ) -> None:
-    _apply_through(disposable, _previous())
+    _apply_through(disposable, "0032_candidate_run_binding.sql")
     build = _seed_legacy_candidate(disposable, "BUILT")
     with connect(disposable) as conn:
         row = conn.execute(
@@ -228,7 +258,7 @@ def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authori
             "repeat('f',64))",
             ids,
         )
-    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == ["0033_canonical_execution_manifest.sql", NEWEST]
     with connect(disposable) as conn:
         assert conn.execute(
             "SELECT canonical_manifest,manifest_digest,authorization_id FROM sealed_manifest"
@@ -252,7 +282,11 @@ def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) ->
         assert conn.execute("SELECT to_regclass('candidate_run_binding') AS name").fetchone() == {
             "name": None
         }
-    assert migrate(disposable) == ["0032_candidate_run_binding.sql", NEWEST]
+    assert migrate(disposable) == [
+        "0032_candidate_run_binding.sql",
+        "0033_canonical_execution_manifest.sql",
+        NEWEST,
+    ]
     with connect(disposable) as conn:
         assert conn.execute(
             "SELECT captured_contract_digest FROM run_fixture_instance"
@@ -292,6 +326,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
+        "0033_canonical_execution_manifest.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -320,6 +355,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
+        "0033_canonical_execution_manifest.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -365,6 +401,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
+        "0033_canonical_execution_manifest.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -427,6 +464,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
+        "0033_canonical_execution_manifest.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -473,6 +511,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0030_candidate_endpoint.sql",
         "0031_candidate_materialization.sql",
         "0032_candidate_run_binding.sql",
+        "0033_canonical_execution_manifest.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:

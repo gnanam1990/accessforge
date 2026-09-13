@@ -833,3 +833,52 @@ without re-execution. Final focused HTTP plus all unit tests: **1,095 passed** (
 one upstream warning,28.98 seconds. These are separate checkpoints. Strict mypy232, Ruff334,
 four drift checks, documentation links and recursive TypeScript typecheck/build/test pass.
 The preceding commit0df922e passed GitHub CI34728157381; the new commit requires its own CI.
+
+### Exact manual execution consent (continuation)
+
+Manual consent is now exposed at `/projects/{projectId}/seals/{sealedManifestId}/approval`:
+POST issues the reserved authorization ID, GET inspects the decision, and POST to the appended
+`/revocation` path irreversibly withdraws it. Mutation requires RUN_APPROVE (owner/maintainer), CSRF,
+the exact reviewed `manifestDigest`, and `If-Match` containing the seal's `revision` from GET.
+Issuance additionally requires explicit future `expiresAt` no later than the canonical execution
+expiry. The digest ETag is not the integer revision header. Issuance and its attributed audit row
+commit together; it does not start or even create a run. Same-key responses are historical operation
+receipts, not cached dispatch permission; GET reads current revocation state and dispatch rechecks it.
+
+Migration0034 adds the seal's fixed initial `authorization_revision=0`. It is an immutable target:
+the full canonical payload already binds the exact run, source/build/environment, effects, budgets
+and expiry. A changed scope requires a new seal/authorization, whereas acquiring a desktop merely
+advances the run's operational revision. No missing historical consent is backfilled. SQL makes
+all exact approval identities immutable, permits only one-way revocation, and prevents deleting a
+canonical approval for a retained seal and reissuing its reserved ID. Existing workspace erasure
+and legacy decision preservation remain distinct from reauthorization.
+
+`runners.assert_manual_dispatch_authorized` loads the persisted manual approval, exact seal, current
+approver permission and environment afresh; it shares the actual runner/lease/profile/preflight
+checks with the existing R1 child/grant gate, without fabricating a parent grant. Shared checks now
+also require this lease's exact run, live deadline/current epoch, uncancelled unquarantined LEASED
+run and matching preflight identities. Passing this gate is not deployment or actual-reader proof,
+nor permission to skip per-action effects/budgets, journaling or physical stop acknowledgement.
+The canonical controller still must invoke it at committed dispatch; that controller and the
+bound-session POST transport remain unfinished/closed.
+
+Restore reconciliation irreversibly revokes restored canonical RUN_EFFECTS approvals and reports
+their count in its receipt/audit. A real `pg_dump`/`psql` test snapshots live consent, revokes it in
+the original database, restores the earlier snapshot into an exact owned disposable database, and
+proves reconciliation invalidates the resurrected decision. Reapproval requires a newly reviewed
+seal, not resetting the old revocation. A scratch-only mutation ignoring persisted revocation makes
+both the direct revocation and actual restore regressions fail; unmodified code passes.
+
+Focused API/dispatch/forward-upgrade validation:136 passed, one upstream warning,26.84 seconds.
+Concurrent real HTTP issuance admits one of two requests(201/409), with one approval and audit row.
+Synthetic desktop/preflight metadata prove the control-plane gates, not VoiceOver, focus, observer
+closure or a repaired outcome. Current-head CI and actual controller/reader/observer
+acceptance remain required. The preceding commit0580238 passed GitHub CI34729010746.
+
+Final local regression for this consent continuation: **2,223 passed**, zero failures/skips,
+58 upstream warnings,298.94 seconds, using fresh disposable PostgreSQL and the pinned local Docker
+toolchains. Strict mypy233, Ruff335, four contract/client/fixture drift checks, documentation links
+and recursive TypeScript typecheck/build/test pass. Actual built packages retain all six schemas
+and34 migrations byte-for-byte. The scratch workspace-erasure probe passes without retaining
+an approval or bypassing the anti-reissue trigger. No actual reader or committed controller dispatch
+is inferred from these tests; draft PR37 remains incomplete and unmerged.
