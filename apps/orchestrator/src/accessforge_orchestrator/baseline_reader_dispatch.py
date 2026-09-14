@@ -9,6 +9,9 @@ from __future__ import annotations
 import asyncio
 import math
 
+import psycopg
+from psycopg.rows import dict_row
+
 from accessforge_build_worker.baseline_session import BaselineSession
 from accessforge_persistence import baseline_runs, workspace_connection
 
@@ -80,11 +83,17 @@ async def admit_and_dispatch_reader(
     ).dispatch(reference, expected_revision=revision)
 
 
-def _reader_stopped(session: BaselineSession, reference: DispatchReference) -> bool:
+async def _reader_stopped(session: BaselineSession, reference: DispatchReference) -> bool:
     """Positive original-lease STOP evidence; absence is never successful cleanup."""
-    with workspace_connection(session.database_url, session.workspace_id) as conn:
-        conn.execute("SET LOCAL statement_timeout='2s'")
-        row = conn.execute(
+    conn = await psycopg.AsyncConnection.connect(
+        session.database_url, row_factory=dict_row, connect_timeout=2
+    )
+    try:
+        await conn.execute("SET LOCAL statement_timeout='2s'")
+        await conn.execute(
+            "SELECT set_config('accessforge.workspace_id', %s, true)", (session.workspace_id,)
+        )
+        cursor = await conn.execute(
             "SELECT l.released_at IS NOT NULL AND l.stop_acknowledged_at IS NOT NULL "
             "AND l.stop_acknowledged_epoch=l.epoch "
             "AND l.release_reason='STOP_ACKNOWLEDGED' AS stopped "
@@ -103,10 +112,15 @@ def _reader_stopped(session: BaselineSession, reference: DispatchReference) -> b
                 reference.runner_id,
                 reference.epoch,
             ),
-        ).fetchone()
+        )
+        row = await cursor.fetchone()
         if row is None:
             raise baseline_runs.Refused("original dispatched baseline reader disappeared")
         return row["stopped"] is True
+    finally:
+        # Read-only polling has nothing to commit. Close even during cancellation rather than
+        # leaving executor threads (and asyncio.run's executor shutdown) waiting on a socket.
+        await conn.close()
 
 
 async def admit_dispatch_and_wait_reader(
@@ -138,7 +152,7 @@ async def admit_dispatch_and_wait_reader(
                 transport=transport,
                 acknowledgement_timeout_seconds=min(10, timeout_seconds),
             )
-            while not await asyncio.to_thread(_reader_stopped, session, reference):
+            while not await _reader_stopped(session, reference):
                 await asyncio.sleep(0.1)
             return reference
     except TimeoutError:

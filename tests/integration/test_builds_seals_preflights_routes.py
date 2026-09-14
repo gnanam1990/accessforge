@@ -1477,7 +1477,6 @@ def test_baseline_archive_retention_boundary(
                         assert not sessions.reader_cleanup_confirmed(
                             conn, attempt_id=task.attempt_id
                         )
-                        from contextlib import nullcontext
                         from types import SimpleNamespace
 
                         from accessforge_orchestrator import baseline_reader_dispatch as handoff
@@ -1489,6 +1488,21 @@ def test_baseline_archive_retention_boundary(
                             database_url=db, workspace_id=WS, claim=task
                         )
 
+                        class AsyncOriginalConnection:
+                            async def execute(self, *args: Any, **kwargs: Any) -> Any:
+                                cursor = conn.execute(*args, **kwargs)
+
+                                async def fetchone() -> Any:
+                                    return cursor.fetchone()
+
+                                return SimpleNamespace(fetchone=fetchone)
+
+                            async def close(self) -> None:
+                                pass  # The outer test owns this original runtime transaction.
+
+                        async def original_connection(*args: Any, **kwargs: Any) -> Any:
+                            return AsyncOriginalConnection()
+
                         def stopped(
                             reference: DispatchReference = reader_ref,
                             reader_session: Any = reader_session,
@@ -1497,9 +1511,11 @@ def test_baseline_archive_retention_boundary(
                             # production helper still executes its actual SQL, not a fake result.
                             with monkeypatch.context() as patch:
                                 patch.setattr(
-                                    handoff, "workspace_connection", lambda *args: nullcontext(conn)
+                                    psycopg.AsyncConnection, "connect", original_connection
                                 )
-                                return handoff._reader_stopped(reader_session, reference)
+                                return asyncio.run(
+                                    handoff._reader_stopped(reader_session, reference)
+                                )
 
                         assert not stopped()
                         from accessforge_persistence import baseline_observations as observations
