@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from accessforge_domain.canonical import digest
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
 from .github_webhooks import _constant, _object
@@ -54,12 +55,21 @@ class RepositoryScope:
 
 
 @dataclass(frozen=True, slots=True)
+class CheckObservation:
+    """Known-ID read of proposed payload fields, not creation provenance or uniqueness."""
+
+    check_run_id: int
+    payload_digest: str
+
+
+@dataclass(frozen=True, slots=True)
 class RepositoryAccess:
     scope: RepositoryScope
     observed_at: str
     token_revoked: bool
     meaning: str = "POINT_IN_TIME_READ_ACCESS_NOT_PUBLICATION_AUTHORITY"
     commit_sha: str | None = None
+    check_observation: CheckObservation | None = None
 
 
 def inspect_repository(
@@ -68,6 +78,7 @@ def inspect_repository(
     app_jwt: str,
     allow_temporary_token_issuance: bool = False,
     commit_sha: str | None = None,
+    check_run_id: int | None = None,
     _transport: httpx.BaseTransport | None = None,
 ) -> RepositoryAccess:
     """Check current App/installation/account/repository identity, without returning a token.
@@ -84,6 +95,10 @@ def inspect_repository(
         or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", commit_sha)
     ):
         raise Refused("an exact immutable source commit is required")
+    if check_run_id is not None and (
+        type(check_run_id) is not int or not 1 <= check_run_id <= 2**63 - 1 or commit_sha is None
+    ):
+        raise Refused("check inspection requires an exact check ID and source commit")
     if (
         not isinstance(scope, RepositoryScope)
         or not isinstance(app_jwt, str)
@@ -96,6 +111,9 @@ def inspect_repository(
     deadline = time.monotonic() + 30
     token: str | None = None
     permissions = {"metadata": "read", "contents": "read"}
+    if check_run_id is not None:
+        permissions["checks"] = "read"
+    check_observation: CheckObservation | None = None
     with httpx.Client(
         transport=_transport, trust_env=False, follow_redirects=False, timeout=5
     ) as client:
@@ -213,6 +231,19 @@ def inspect_repository(
                 )
                 if commit.get("sha") != commit_sha:
                     raise Refused("repository commit identity differs")
+                if check_run_id is not None:
+                    observed_check = request(
+                        "GET",
+                        f"/repos/{scope.owner}/{scope.name}/check-runs/{check_run_id}",
+                        token,
+                        200,
+                    )
+                    check_observation = _observe_check(
+                        observed_check,
+                        scope=scope,
+                        commit_sha=commit_sha,
+                        check_run_id=check_run_id,
+                    )
                 # A rename/transfer during the commit read must not silently retain old scope.
                 fresh_repository = request("GET", f"/repos/{scope.owner}/{scope.name}", token, 200)
                 fresh_owner = fresh_repository.get("owner")
@@ -231,4 +262,63 @@ def inspect_repository(
         finally:
             if token is not None:
                 request("DELETE", "/installation/token", token, 204, cleanup=True)
-    return RepositoryAccess(scope, to_rfc3339_utc(datetime.now(UTC)), True, commit_sha=commit_sha)
+    return RepositoryAccess(
+        scope,
+        to_rfc3339_utc(datetime.now(UTC)),
+        True,
+        commit_sha=commit_sha,
+        check_observation=check_observation,
+    )
+
+
+def _observe_check(
+    value: dict[str, Any], *, scope: RepositoryScope, commit_sha: str, check_run_id: int
+) -> CheckObservation:
+    """Hash only the create-preview fields; never expose untrusted check text or URLs.
+
+    Caller must compare this digest with the exact stored request body before interpreting a
+    match. This does not prove the check was created by our intent, that no duplicate exists,
+    or that mutable GitHub-owned metadata/URLs remain unchanged.
+    """
+    app, output = value.get("app"), value.get("output")
+    if (
+        type(value.get("id")) is not int
+        or value["id"] != check_run_id
+        or not isinstance(app, dict)
+        or type(app.get("id")) is not int
+        or app["id"] != scope.app_id
+        or value.get("head_sha") != commit_sha
+        or value.get("name") != "AccessForge journey evidence"
+        or not isinstance(value.get("external_id"), str)
+        or not re.fullmatch(r"accessforge:[a-f0-9]{64}", value["external_id"])
+        or value.get("status") not in ("queued", "in_progress", "completed")
+        or not isinstance(output, dict)
+        or not isinstance(output.get("title"), str)
+        or not isinstance(output.get("summary"), str)
+        or output.get("text") not in (None, "")
+        or type(output.get("annotations_count")) is not int
+        or output["annotations_count"] != 0
+    ):
+        raise Refused("check identity or payload unavailable")
+    conclusion = value.get("conclusion")
+    if (
+        value["status"] == "completed"
+        and conclusion
+        not in (
+            "success",
+            "failure",
+            "neutral",
+            "cancelled",
+            "timed_out",
+            "action_required",
+            "skipped",
+            "stale",
+            "startup_failure",
+        )
+    ) or (value["status"] != "completed" and conclusion is not None):
+        raise Refused("check lifecycle unavailable")
+    body = {key: value[key] for key in ("name", "head_sha", "external_id", "status")}
+    body["output"] = {"title": output["title"], "summary": output["summary"]}
+    if conclusion is not None:
+        body["conclusion"] = conclusion
+    return CheckObservation(check_run_id, digest(body))
