@@ -140,7 +140,7 @@ class FaultStore:
 
 @pytest.fixture()
 def candidate_run_database(test_database_url: str, backup_database_url: str) -> Iterator[str]:
-    """Terminal baselines are immutable; dispose the exact test database, never bypass triggers."""
+    """Baselines and seed receipts are immutable; dispose the exact owned test database."""
     name = "accessforge_candidate_run_" + uuid.uuid4().hex[:12]
     owner = urlsplit(test_database_url).username
     assert owner is not None
@@ -167,7 +167,7 @@ def candidate_run_database(test_database_url: str, backup_database_url: str) -> 
 def binding(
     test_database_url: str, tmp_path: Path, request: pytest.FixtureRequest
 ) -> Iterator[BoundFixture]:
-    isolated_terminal = getattr(request, "param", None) == "reference-session"
+    isolated_terminal = getattr(request, "param", None) in {"reference", "reference-session"}
     if isolated_terminal:
         test_database_url = str(request.getfixturevalue("candidate_run_database"))
     assert_row_level_security_enforced(test_database_url)
