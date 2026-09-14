@@ -655,6 +655,122 @@ def _approval_body(sealed: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("ending", ["capture", "revoked", "expired", "failed", "unknown"])
+def test_baseline_build_durable_fencing(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    manual_seal: dict[str, Any],
+    ending: str,
+) -> None:
+    """Real DB/HTTP authority, synthetic process receipts; not a Docker or reader run."""
+    from accessforge_persistence import baseline_builds as builds
+
+    approval_url = _approval_url(project, manual_seal)
+    headers = {CSRF_HEADER: csrf, "If-Match": "0"}
+    assert (
+        client.post(approval_url, json=_approval_body(manual_seal), headers=headers).status_code
+        == 201
+    )
+    response = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": manual_seal["manifestDigest"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 202, response.text
+    run_id = manual_seal["canonicalManifest"]["runId"]
+    with workspace_connection(db, WS) as conn:
+        binding = builds.read_binding(conn, workspace_id=WS, run_id=run_id)
+        inputs: dict[str, Any] = dict(
+            binding=binding,
+            source_archive_digest="a" * 64,
+            policy_digest="b" * 64,
+            image_id="sha256:" + "c" * 64,
+            daemon_endpoint="unix:///fixture/docker.sock",
+            daemon_id="fixture-daemon",
+        )
+        value = builds.claim(conn, **inputs)
+        with pytest.raises(builds.Refused), conn.transaction():
+            builds.claim(conn, **inputs)
+        with pytest.raises(builds.Refused), conn.transaction():
+            builds.dispatch(conn, value=value, **{**inputs, "source_archive_digest": "d" * 64})
+        builds.dispatch(conn, value=value, **inputs)
+        # BEFORE INSERT rejects the active baseline before FK validation of this synthetic lease.
+        with pytest.raises(psycopg.IntegrityError, match="baseline build"), conn.transaction():
+            conn.execute(
+                "INSERT INTO desktop_lease(id,workspace_id,run_id) VALUES(%s,%s,%s)",
+                (str(uuid.uuid4()), WS, run_id),
+            )
+    with workspace_connection(db, str(uuid.uuid4())) as conn:
+        with pytest.raises(builds.Refused):
+            builds.created(
+                conn,
+                value=value,
+                container_id="d" * 64,
+                platform="linux/amd64",
+                image_id=inputs["image_id"],
+                daemon_endpoint=inputs["daemon_endpoint"],
+                daemon_id=inputs["daemon_id"],
+            )
+    if ending == "revoked":
+        revoked = client.post(
+            approval_url + "/revocation",
+            json={"manifestDigest": manual_seal["manifestDigest"]},
+            headers=headers,
+        )
+        assert revoked.status_code == 200
+    with workspace_connection(db, WS) as conn:
+        process = dict(
+            container_id="d" * 64,
+            platform="linux/amd64",
+            image_id=inputs["image_id"],
+            daemon_endpoint=inputs["daemon_endpoint"],
+            daemon_id=inputs["daemon_id"],
+        )
+        if ending == "revoked":
+            with pytest.raises(execution_approvals.Refused), conn.transaction():
+                builds.created(conn, value=value, **process)
+            builds.fail(conn, value=value, cleanup_confirmed=True)
+        elif ending == "expired":
+            assert builds.fence_expired(conn, now=datetime.now(UTC) + timedelta(hours=1)) == 1
+            with pytest.raises(builds.Refused), conn.transaction():
+                builds.created(conn, value=value, **process)
+        elif ending in {"failed", "unknown"}:
+            builds.fail(conn, value=value, cleanup_confirmed=ending == "failed")
+        else:
+            builds.created(conn, value=value, **process)
+            capture = dict(
+                **process,
+                source_archive_digest=inputs["source_archive_digest"],
+                policy_digest=inputs["policy_digest"],
+                artifact_digest=binding["expected_artifact_digest"],
+            )
+            with pytest.raises(builds.Refused), conn.transaction():
+                builds.captured(conn, value=value, **{**capture, "artifact_digest": "e" * 64})
+            builds.captured(conn, value=value, **capture)
+        row = conn.execute(
+            "SELECT state,cleanup_confirmed FROM baseline_build_attempt WHERE id=%s",
+            (value.attempt_id,),
+        ).fetchone()
+        assert row == {
+            "state": "CAPTURED"
+            if ending == "capture"
+            else "UNKNOWN"
+            if ending in {"expired", "unknown"}
+            else "FAILED",
+            "cleanup_confirmed": ending not in {"expired", "unknown"},
+        }
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "UPDATE baseline_build_attempt SET failure_code='rewritten' WHERE id=%s",
+                (value.attempt_id,),
+            )
+        assert conn.execute("SELECT status FROM run WHERE id=%s", (run_id,)).fetchone() == {
+            "status": "QUEUED"
+        }
+
+
 def test_manual_approval_is_exact_independent_audited_and_revocable(
     db: str, client: TestClient, csrf: str, project: str, manual_seal: dict[str, Any]
 ) -> None:

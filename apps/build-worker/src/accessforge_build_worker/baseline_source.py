@@ -9,8 +9,7 @@ from typing import Any
 
 import psycopg
 
-from accessforge_domain.canonical import digest
-from accessforge_persistence import execution_approvals, workspace_connection
+from accessforge_persistence import baseline_builds, workspace_connection
 
 from .snapshot import SnapshotRefused, SourceSnapshot
 from .source_broker import read_persisted_source
@@ -36,42 +35,12 @@ class PreparedBaselineSource:
 def _binding(
     conn: psycopg.Connection[dict[str, Any]], *, workspace_id: str, run_id: str
 ) -> BaselineBinding:
-    run = conn.execute("SELECT * FROM run WHERE id=%s FOR UPDATE", (run_id,)).fetchone()
-    if (
-        run is None
-        or str(run["workspace_id"]) != workspace_id
-        or run["status"] != "QUEUED"
-        or run["cancel_requested_at"] is not None
-        or run["quarantined"]
-        or conn.execute("SELECT 1 FROM desktop_lease WHERE run_id=%s", (run_id,)).fetchone()
-        or conn.execute("SELECT 1 FROM candidate_run_binding WHERE run_id=%s", (run_id,)).fetchone()
-    ):
-        raise SnapshotRefused("baseline preparation requires an unleased approved queued baseline")
-    seal = conn.execute(
-        "SELECT id,project_id,source_snapshot_id FROM sealed_manifest WHERE run_id=%s",
-        (run_id,),
-    ).fetchone()
-    if seal is None:
-        raise SnapshotRefused("original baseline seal is unavailable")
-    conn.execute("SELECT id FROM approval WHERE id=%s FOR SHARE", (run["authorization_id"],))
-    manifest = execution_approvals.assert_authorized(
-        conn, sealed_manifest_id=str(seal["id"]), run_id=run_id, workspace_id=workspace_id
-    )
-    if (
-        digest(manifest) != run["manifest_digest"]
-        or manifest["authorizationId"] != str(run["authorization_id"])
-        or str(seal["project_id"]) != str(run["project_id"])
-    ):
-        raise SnapshotRefused("baseline run and its original authority/manifest differ")
-    return BaselineBinding(
-        workspace_id,
-        run_id,
-        str(seal["project_id"]),
-        run["manifest_digest"],
-        str(seal["source_snapshot_id"]),
-        manifest["sourceTreeDigest"],
-        manifest["buildArtifactDigest"],
-    )
+    try:
+        return BaselineBinding(
+            **baseline_builds.read_binding(conn, workspace_id=workspace_id, run_id=run_id)
+        )
+    except baseline_builds.Refused as exc:
+        raise SnapshotRefused(str(exc)) from exc
 
 
 def prepare_baseline_source(
