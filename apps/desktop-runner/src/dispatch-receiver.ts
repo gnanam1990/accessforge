@@ -6,7 +6,7 @@ import {
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { digest } from '@accessforge/contracts';
-import { PREFLIGHT_CHECKS, type PreflightReport, type RawObservation, type UnknownObservation } from '@accessforge/at-voiceover';
+import { PREFLIGHT_CHECKS, parseObservedRunnerProfile, type PreflightReport, type RawObservation, type UnknownObservation } from '@accessforge/at-voiceover';
 import type { ActionCommand } from './supervisor.js';
 import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from './reader-startup-consent.js';
 
@@ -502,9 +502,13 @@ export class NativeExecutionSession {
       const checks = Object.fromEntries(PREFLIGHT_CHECKS.map((key) => [key, report.checks[key]?.condition]));
       if (Object.keys(report.checks).length !== PREFLIGHT_CHECKS.length ||
           Object.values(checks).some((value) => !['TRUE', 'FALSE', 'UNKNOWN'].includes(value))) throw new Error('runtime checks incomplete');
-      // Only closed conditions leave the host. Probe diagnostics may contain private host paths,
-      // account names or source URLs and are deliberately not transmitted.
-      const sourceRecord = { actionId: command.actionId, actionSequence: command.sequence, capturedAtUtc, checks };
+      // Only conditions and a closed observed profile leave the host. Free-form diagnostics may
+      // contain private host paths/account names/source URLs and are never transmitted.
+      const rawProfile = report.runnerProfile;
+      const runnerProfile = rawProfile === undefined ? undefined : parseObservedRunnerProfile(rawProfile);
+      if (rawProfile !== undefined && runnerProfile === undefined) throw new Error('runtime profile incomplete');
+      const sourceRecord = { actionId: command.actionId, actionSequence: command.sequence, capturedAtUtc, checks,
+        ...(runnerProfile === undefined ? {} : { runnerProfile }) };
       const sourceRecordDigest = digest(sourceRecord);
       const result = exactObject(await this.#post(`actions/${command.actionId}/preflight`, { sourceRecord, sourceRecordDigest }),
         ['sessionId', 'actionId', 'eventId', 'sourceRecordDigest', 'meaning']);

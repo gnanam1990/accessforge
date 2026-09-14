@@ -222,12 +222,17 @@ def execution_body(
         prepared_environment = client.post(
             f"/v1/workspaces/{WS}/projects/{project}/environments",
             json={
-                "name": "fresh fixture setup", "allowedOrigins": ["http://127.0.0.1:8081"],
+                "name": "fresh fixture setup",
+                "allowedOrigins": ["http://127.0.0.1:8081"],
                 "fixtureResetStrategy": "FRESH_FIXTURE_NONCE",
-                "observerCredentialRef": "observer-profile", "resetCredentialRef": "reset-profile",
+                "observerCredentialRef": "observer-profile",
+                "resetCredentialRef": "reset-profile",
                 "permittedEffects": ["FORM_SUBMIT"],
-                "expiresAt": (datetime.now(UTC) + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
-            }, headers={CSRF_HEADER: csrf},
+                "expiresAt": (datetime.now(UTC) + timedelta(days=1))
+                .isoformat()
+                .replace("+00:00", "Z"),
+            },
+            headers={CSRF_HEADER: csrf},
         )
         assert prepared_environment.status_code == 201
         body["environmentId"] = prepared_environment.json()["environmentId"]
@@ -295,10 +300,9 @@ def execution_body(
             body["assertionSetDigest"] = str(digest(assertions.canonical_form()))
     policy.setdefault("fixtureValues", {"name": "Private Fixture Name"})
     reviewer_summary["fixtureContract"] = {
+        "schemaVersion": 2,
         "templateId": "service-request",
         "navigatorValues": policy["fixtureValues"],
-        "resetKeys": ["variant"] if setup_case else [],
-        "observerKeys": ["effect"],
         "resetValuesDigest": digest({"variant": "inaccessible"} if setup_case else {}),
         "observerConfigDigest": digest({"effect": "CREATE_TEST_REQUEST"}),
     }
@@ -3079,6 +3083,16 @@ def _check_runtime_preflight(
         "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "checks": {str(key): "UNKNOWN" for key in REQUIRED_PREFLIGHT_CHECKS},
     }
+    if sequence % 2:
+        source["runnerProfile"] = {
+            "platform": "darwin",
+            "readerName": "VoiceOver",
+            "readerVersion": "bundled with macOS 26.6 (build 25G72)",
+            "browserName": "Safari",
+            "browserVersion": "26.6",
+            "locale": "en-US",
+            "keyboardLayout": "com.apple.keylayout.US",
+        }
     envelope = {"sourceRecord": source, "sourceRecordDigest": digest(source)}
     url = action_url + "/preflight"
     assert client.post(url, json=envelope).status_code == 401
@@ -3089,6 +3103,8 @@ def _check_runtime_preflight(
         {**source, "checks": {str(key): True for key in REQUIRED_PREFLIGHT_CHECKS}},
         {**source, "capturedAtUtc": "2000-01-01T00:00:00Z"},
         {**source, "diagnostic": "private host path must not be retained"},
+        {**source, "runnerProfile": None},
+        {**source, "runnerProfile": {"platform": "darwin", "privatePath": "/private"}},
     ):
         assert (
             client.post(

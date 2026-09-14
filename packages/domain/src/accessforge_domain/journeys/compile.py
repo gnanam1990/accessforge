@@ -64,16 +64,13 @@ def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> Co
 
     assertion_set_digest = digest(draft.assertions.canonical_form())
 
-    # The fixture digest covers the template and the navigator-visible values, plus the *names* of
-    # reset and observer keys but not their values. Changing an oracle value changes the run's
-    # behaviour and must invalidate the seal; including the value itself would put answer-key
-    # material
-    # into a digest that travels with exports.
+    # V2 binds entire private maps through their hashes, including key names and values.
+    # Publishing those names separately leaked oracle metadata through reviewer summaries.
+    # Newly compiled versions receive a new digest; historical seals are never rewritten.
     fixture_contract = {
+        "schemaVersion": 2,
         "templateId": draft.fixture.template_id,
         "navigatorValues": dict(sorted(draft.fixture.navigator_values.items())),
-        "resetKeys": sorted(draft.fixture.reset_values),
-        "observerKeys": sorted(draft.fixture.observer_config),
         "resetValuesDigest": digest(dict(sorted(draft.fixture.reset_values.items()))),
         "observerConfigDigest": digest(dict(sorted(draft.fixture.observer_config.items()))),
     }

@@ -160,6 +160,8 @@ def test_original_fixture_preimage_requires_original_bound_material(change: str)
     assert digest(original) == version.fixture_digest
     assert "fixtureContract" not in compiled.navigator_policy
     assert "observerConfig" not in original and "resetValues" not in original
+    assert original["schemaVersion"] == 2
+    assert "observerKeys" not in original and "resetKeys" not in original
     if change == "legacy":
         row["fixture_contract"] = None
     elif change == "contract":
@@ -191,6 +193,25 @@ def test_original_fixture_preimage_requires_original_bound_material(change: str)
             load_fixture_contract(
                 conn, version_id=version.version_id, expected_digest=version.fixture_digest
             )
+
+
+def test_private_fixture_key_names_remain_bound_but_unpublished() -> None:
+    draft = e0_draft()
+    first = compile_journey(
+        dataclasses.replace(
+            draft,
+            fixture=dataclasses.replace(draft.fixture, observer_config={"private_oracle_a": "1"}),
+        )
+    )
+    second = compile_journey(
+        dataclasses.replace(
+            draft,
+            fixture=dataclasses.replace(draft.fixture, observer_config={"private_oracle_b": "1"}),
+        )
+    )
+    assert first.version.fixture_digest != second.version.fixture_digest
+    rendered = repr(first.reviewer_summary) + repr(second.reviewer_summary)
+    assert "private_oracle_a" not in rendered and "private_oracle_b" not in rendered
 
 
 def e0_draft(**over: object) -> JourneyDraft:
