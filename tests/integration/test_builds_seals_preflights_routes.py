@@ -302,6 +302,24 @@ def execution_body(
                     ),
                 )
             )
+            if "focus_mode" in getattr(getattr(request.node, "callspec", None), "params", {}):
+                assertions = AssertionSet(
+                    (
+                        *assertions.assertions,
+                        Assertion(
+                            "focus.native",
+                            AssertionKind.FOCUS_BEHAVIOUR,
+                            "Native keyboard target",
+                            unknown_reasons=frozenset({UnknownReason.OBSERVATION_MISSING}),
+                            evaluation_rule=EvaluationRule(
+                                "EXACT_NATIVE_KEYBOARD_FOCUS",
+                                action_sequence=1,
+                                role="AXTextField",
+                                identifier_digest="a" * 64,
+                            ),
+                        ),
+                    )
+                )
             reviewer_summary["assertionContract"] = assertions.canonical_form()
             body["assertionSetDigest"] = str(digest(assertions.canonical_form()))
     if (
@@ -3932,6 +3950,7 @@ def test_authenticated_execution_finish(
     monkeypatch: pytest.MonkeyPatch,
     case: str,
     tmp_path: Path,
+    focus_mode: str | None = None,
 ) -> None:
     import secrets
 
@@ -4035,6 +4054,20 @@ def test_authenticated_execution_finish(
                 "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "phrase": "Synthetic reader evidence",
             }
+            if focus_mode in {"known", "mismatch", "unknown"}:
+                source["keyboardFocus"] = {
+                    "measurementKind": "AX_KEYBOARD_FOCUS",
+                    "capturedAtUtc": source["capturedAtUtc"],
+                    **(
+                        {"status": "UNKNOWN", "reason": "NATIVE_FOCUS_UNAVAILABLE"}
+                        if focus_mode == "unknown"
+                        else {
+                            "status": "KNOWN",
+                            "role": "AXTextField",
+                            "identifierDigest": ("b" if focus_mode == "mismatch" else "a") * 64,
+                        }
+                    ),
+                }
             assert (
                 client.post(
                     action_url + "/observation",
@@ -4268,7 +4301,9 @@ def test_authenticated_execution_finish(
         ).fetchall()
         assert len(finished) == int(closes)
     if case.startswith("artifact"):
-        _retain_stopped_artifact_case(db, ref, ticket, monkeypatch, tmp_path, case, client)
+        _retain_stopped_artifact_case(
+            db, ref, ticket, monkeypatch, tmp_path, case, client, focus_mode=focus_mode
+        )
 
 
 def _check_runtime_preflight(
@@ -4380,6 +4415,32 @@ def test_fresh_setup_retained_lifecycle(
     )
 
 
+@pytest.mark.parametrize("execution_body", ["stop-policy"], indirect=True)
+@pytest.mark.parametrize("focus_mode", ["known", "mismatch", "missing", "unknown"])
+def test_original_native_focus_retained_finalization(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    owned_observer_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    focus_mode: str,
+) -> None:
+    """Real session, DB, retained S3 bytes and finalizer; native measurement is synthetic."""
+    test_authenticated_execution_finish(
+        db,
+        client,
+        supervisor_ticket,
+        manual_dispatch_reference,
+        owned_observer_database,
+        monkeypatch,
+        "artifact-finalize",
+        tmp_path,
+        focus_mode=focus_mode,
+    )
+
+
 def _retain_stopped_artifact_case(
     db: str,
     ref: DispatchReference,
@@ -4388,6 +4449,8 @@ def _retain_stopped_artifact_case(
     tmp_path: Path,
     case: str,
     client: TestClient,
+    *,
+    focus_mode: str | None = None,
 ) -> None:
     from accessforge_orchestrator.execution_artifacts import Refused, retain_bundle
     from accessforge_persistence import evidence
@@ -4612,6 +4675,30 @@ def _retain_stopped_artifact_case(
                 )
                 assert result["snapshot"]["outcome"] == "INCONCLUSIVE"
                 assert result["snapshot"]["assertions"][0]["condition"] == "FALSE"
+                if focus_mode is not None:
+                    focus = next(
+                        a
+                        for a in result["snapshot"]["assertions"]
+                        if a["assertionId"] == "focus.native"
+                    )
+                    assert (
+                        focus["condition"]
+                        == {
+                            "known": "TRUE",
+                            "mismatch": "FALSE",
+                            "missing": "UNKNOWN",
+                            "unknown": "UNKNOWN",
+                        }[focus_mode]
+                    )
+                    with workspace_connection(db, WS) as conn:
+                        original_focus_event = conn.execute(
+                            "SELECT event_id FROM canonical_event "
+                            "WHERE event_type='READER_OBSERVATION' AND run_id=%s",
+                            (ref.run_id,),
+                        ).fetchone()
+                        assert original_focus_event is not None
+                        assert focus["evidenceRefs"] == [str(original_focus_event["event_id"])]
+                    assert focus["provenance"] == "EVALUATOR_DERIVED"
                 assert any("BUILD" in reason for reason in result["snapshot"]["reasons"])
                 assert set(result["snapshot"]["observedIdentities"]) == {
                     "EVALUATOR",
