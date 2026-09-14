@@ -199,12 +199,14 @@ def test_private_fixture_key_names_remain_bound_but_unpublished() -> None:
     draft = e0_draft()
     first = compile_journey(
         dataclasses.replace(
-            draft, fixture=dataclasses.replace(draft.fixture, observer_config={"private_oracle_a": "1"})
+            draft,
+            fixture=dataclasses.replace(draft.fixture, observer_config={"private_oracle_a": "1"}),
         )
     )
     second = compile_journey(
         dataclasses.replace(
-            draft, fixture=dataclasses.replace(draft.fixture, observer_config={"private_oracle_b": "1"})
+            draft,
+            fixture=dataclasses.replace(draft.fixture, observer_config={"private_oracle_b": "1"}),
         )
     )
     assert first.version.fixture_digest != second.version.fixture_digest
