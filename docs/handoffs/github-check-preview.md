@@ -60,7 +60,38 @@ has been added for CI; it has not run locally because the local object store is 
 Its expected INCONCLUSIVE remains action_required, never a physical PASS. Strict mypy passed
 across 385 files. No public endpoint or publication approval is enabled by this service function.
 
-Next: fresh remote repository/commit verification, durable exact preview/approval,
+## Durable preview and separate local approval
+
+Migration 0067 stores the canonical preview and its digest with exact workspace/binding/run
+foreign keys and forced RLS. Updates and direct deletes are refused; parent run/workspace deletion
+cascades local previews. A deleted target cannot be used to dispatch an old approval. Integrity is
+rehashed on read rather than trusting the stored digest alone. No credentials are stored.
+
+`github_preview_approval.store_preview` reconstructs the original authorized records and saves
+the exact preview plus audit in one transaction. It does not approve it. `approve_preview` accepts
+only the stored preview ID and the digest the human reviewed, rechecks current local owner/session
+authority, reconstructs the current preview under the same transaction locks, and refuses any
+changed project/run revision, binding, source or outcome. It then records a separate ten-minute
+GITHUB_PUBLISH approval for that exact preview/digest/revision and an atomic audit entry.
+
+A deterministic approval ID permits at most one approval per preview. Repeat calls do not renew
+or un-revoke an approval; they fail and the caller must reconcile/read existing state. New authority
+requires a newly created and reviewed preview. RUN_EFFECTS and PATCH_APPLY approvals are not valid
+for this scope. These service functions are not exposed as public HTTP routes: CSRF/idempotency
+handling, denial auditing and lost-response reconciliation still need endpoint integration.
+
+The focused PostgreSQL path now also checks durable preview reconnect, immutable rows, digest
+mismatch, project-revision staleness, fresh review, separate approval scope, cross-workspace RLS
+and refusal to renew revoked decisions. Five grouped cases (including cross-workspace assertions)
+and 37 forward-migration cases passed on disposable databases. No live migration or approval for this
+user's repository was created; all data belongs to temporary fixtures.
+
+No outbound function consumes the approval yet. A valid generic approval is not a single-use
+publication receipt: current repository/commit permissions, evidence retention, approver role,
+revocation/expiry and exact current payload must all be checked at dispatch, with a durable remote
+intent and ambiguous-response reconciliation. No claim of completed publication is made here.
+
+Next: fresh remote repository/commit verification,
 stale-state revalidation, durable publication intent and ambiguous-response reconciliation.
 Actual outbound checks still require separately scoped credentials and explicit GITHUB_PUBLISH.
 

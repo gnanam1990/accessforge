@@ -5,7 +5,10 @@ not a public endpoint, an execution grant or publication approval. No evidence i
 or rewritten on reads. Historical snapshots do not assert present object-store retention.
 """
 
+from contextlib import nullcontext
 from typing import Any
+
+import psycopg
 
 from accessforge_contracts import validate
 from accessforge_domain.authorization import HumanPrincipal
@@ -19,7 +22,12 @@ from .github_connections import _authorize
 
 
 def prepare_check_preview(
-    database_url: str, *, principal: HumanPrincipal, binding_id: str, run_id: str
+    database_url: str,
+    *,
+    principal: HumanPrincipal,
+    binding_id: str,
+    run_id: str,
+    _connection: psycopg.Connection[Any] | None = None,
 ) -> dict[str, Any]:
     """Snapshot local authority and immutable source/evaluation under short DB locks.
 
@@ -27,7 +35,13 @@ def prepare_check_preview(
     commit belongs to the current remote repository. Publication still requires fresh remote
     identity/commit checks and one exact current GITHUB_PUBLISH approval. No network occurs here.
     """
-    with workspace_connection(database_url, principal.workspace_id) as conn:
+    # Internal transaction composition only; never populated from API request data.
+    context = (
+        nullcontext(_connection)
+        if _connection is not None
+        else workspace_connection(database_url, principal.workspace_id)
+    )
+    with context as conn:
         conn.execute("SET LOCAL statement_timeout='5s'")
         _authorize(conn, principal)
         binding = github_bindings.require_live(

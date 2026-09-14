@@ -775,6 +775,62 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
     with workspace_connection(db, WS) as conn:
         assert conn.execute("SELECT id FROM run_evaluation").fetchall() == []
 
+    from accessforge_domain.authority import AuthorityError
+    from accessforge_domain.states import ApprovalScope
+    from accessforge_orchestrator.github_preview_approval import approve_preview, store_preview
+    from accessforge_persistence import approvals, github_previews
+
+    stored = store_preview(db, principal=principal, binding_id=binding_id, run_id=manifest["runId"])
+    preview_id, expected = stored["previewId"], stored["preview"]["previewDigest"]
+    with workspace_connection(db, str(uuid.UUID(int=0x9FF))) as conn:
+        with pytest.raises(github_previews.Refused, match="unavailable"):
+            github_previews.read(conn, preview_id=preview_id)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+            github_previews.record(conn, preview=preview)
+    with workspace_connection(db, WS) as conn:
+        assert github_previews.read(conn, preview_id=preview_id)["preview"] == preview
+        assert conn.execute("SELECT id FROM approval WHERE scope='GITHUB_PUBLISH'").fetchall() == []
+        for statement in (
+            "UPDATE github_publication_preview SET preview_digest=repeat('a',64)",
+            "DELETE FROM github_publication_preview",
+        ):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(statement)
+    with pytest.raises(github_previews.Refused, match="digest differs"):
+        approve_preview(db, principal=principal, preview_id=preview_id, expected_digest="0" * 64)
+    with workspace_connection(db, WS) as conn:
+        conn.execute("UPDATE project SET revision=revision+1 WHERE id=%s", (project,))
+    with pytest.raises(github_previews.Refused, match="stale"):
+        approve_preview(db, principal=principal, preview_id=preview_id, expected_digest=expected)
+    fresh = store_preview(db, principal=principal, binding_id=binding_id, run_id=manifest["runId"])
+    fresh_id, fresh_digest = fresh["previewId"], fresh["preview"]["previewDigest"]
+    assert fresh_digest != expected
+    decision = approve_preview(
+        db, principal=principal, preview_id=fresh_id, expected_digest=fresh_digest
+    )
+    with workspace_connection(db, WS) as conn:
+        approval = approvals.load_for_check(conn, approval_id=decision)
+        check = {
+            "now": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "scope": ApprovalScope.GITHUB_PUBLISH,
+            "workspace_id": WS,
+            "target_id": fresh_id,
+            "target_digest": fresh_digest,
+            "current_revision": 0,
+        }
+        approval.check(**check)
+        for other_scope in (ApprovalScope.RUN_EFFECTS, ApprovalScope.PATCH_APPLY):
+            with pytest.raises(AuthorityError):
+                replace(approval, scope=other_scope).check(**check)
+        assert approvals.revoke_approval(conn, approval_id=decision)
+    with pytest.raises(psycopg.IntegrityError):
+        approve_preview(db, principal=principal, preview_id=fresh_id, expected_digest=fresh_digest)
+    with workspace_connection(db, WS) as conn:
+        assert approvals.load_for_check(conn, approval_id=decision).revoked
+        assert conn.execute(
+            "SELECT count(*) AS n FROM approval WHERE scope='GITHUB_PUBLISH'"
+        ).fetchone() == {"n": 1}
+
 
 def _approval_body(sealed: dict[str, Any]) -> dict[str, Any]:
     return {
