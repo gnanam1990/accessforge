@@ -36,7 +36,9 @@ was removed afterwards. No live migration was performed. This does not prove act
 ## Remaining implementation
 
 1. Isolated integration-service configuration and repository/installation binding verified
-   against current GitHub App API evidence, with workspace RLS and revocation.
+   against current GitHub App API evidence, with workspace RLS and revocation. The
+   [concrete access probe](github-repository-access.md) now implements the HTTP protocol;
+   operator JWT provisioning and durable workspace binding are still missing.
 2. Connect the replay inbox to the isolated ingress and event-specific schema handling;
    event names and payload text do not broaden scope. Replay storage alone cannot authorize work.
 3. Immutable source-bound check preview and honest outcome/coverage rendering.
