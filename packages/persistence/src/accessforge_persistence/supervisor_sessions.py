@@ -30,6 +30,7 @@ from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS, Ambi
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
 from . import (
+    baseline_observations,
     candidate_observations,
     reader_startup_consents,
     runners,
@@ -536,7 +537,18 @@ def retain_runtime_preflight(
                 captured_at=captured,
                 manifest=manifest,
             )
-        except candidate_observations.Refused as exc:
+            baseline_receipt = baseline_observations.for_runtime_preflight(
+                conn,
+                session=row,
+                dispatched_at=action["dispatched_at"],
+                captured_at=captured,
+                manifest=manifest,
+            )
+            if artifact_receipt is not None and baseline_receipt is not None:
+                raise Refused("runtime cannot carry both baseline and candidate build identities")
+            if baseline_receipt is not None:
+                artifact_receipt = baseline_receipt
+        except (candidate_observations.Refused, baseline_observations.Refused) as exc:
             raise Refused("runtime build measurement authority unavailable") from exc
         event_id = session_evidence.emit(
             conn,
