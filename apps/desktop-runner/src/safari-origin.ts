@@ -8,9 +8,10 @@ import { AuthenticatedRunner, type AuthenticatedRunnerOptions } from './authenti
 interface ProbeRequest {
   readonly expectedUrl: string;
   readonly expectedBrowserVersion: string;
+  readonly includeKeyboardFocus?: true;
 }
 
-export interface SafariOriginOptions extends ProbeRequest {
+export interface SafariOriginOptions extends Omit<ProbeRequest, 'includeKeyboardFocus'> {
   /** Operator-owned compiled helper, not a candidate artifact or navigator-selected executable. */
   readonly helperPath?: string;
 }
@@ -23,6 +24,7 @@ export const SAFARI_PROBE_FAILURES = [
   'AX_TIMEOUT_UNAVAILABLE', 'FOCUSED_WINDOW_UNAVAILABLE', 'MODAL_WINDOW_OR_UNKNOWN',
   'DOCUMENT_UNAVAILABLE', 'DOCUMENT_DIFFERS', 'BROWSER_CHANGED_DURING_SAMPLE', 'OUTPUT_UNAVAILABLE',
   'PROBE_UNAVAILABLE',
+  'KEYBOARD_FOCUS_UNAVAILABLE', 'KEYBOARD_FOCUS_CHANGED',
 ] as const;
 export type SafariProbeFailure = (typeof SAFARI_PROBE_FAILURES)[number];
 
@@ -73,6 +75,30 @@ async function nativeRead(request: ProbeRequest, helperPath: string): Promise<un
 export function createSafariOriginProbe(
   options: SafariOriginOptions, read?: SafariProbeRead,
 ): () => Promise<string> {
+  const sample = createSafariMeasurement(options, false, read);
+  return async () => (await sample()).origin;
+}
+
+export interface SafariKeyboardFocus {
+  readonly measurementKind: 'AX_KEYBOARD_FOCUS';
+  readonly role: string;
+  /** Hash of the native accessibility identifier, never a page value, title or selector. */
+  readonly identifierDigest: string;
+}
+
+/** Private read-only collector, not an action-bound receipt or an evaluator condition. */
+export function createSafariKeyboardFocusProbe(options: SafariOriginOptions, read?: SafariProbeRead):
+  () => Promise<Readonly<{ origin: string; keyboardFocus: SafariKeyboardFocus }>> {
+  const sample = createSafariMeasurement(options, true, read);
+  return async () => {
+    const result = await sample();
+    if (result.keyboardFocus === undefined) throw new SafariProbeUnavailable('KEYBOARD_FOCUS_UNAVAILABLE');
+    return Object.freeze({ origin: result.origin, keyboardFocus: result.keyboardFocus });
+  };
+}
+
+function createSafariMeasurement(options: SafariOriginOptions, includeKeyboardFocus: boolean, read?: SafariProbeRead):
+  () => Promise<Readonly<{ origin: string; keyboardFocus?: SafariKeyboardFocus }>> {
   const url = new URL(options.expectedUrl);
   if (url.href !== options.expectedUrl || url.protocol !== 'http:' ||
       !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ||
@@ -81,7 +107,8 @@ export function createSafariOriginProbe(
       !/^[0-9]+(?:\.[0-9]+){1,3}$/.test(options.expectedBrowserVersion)) {
     throw new Error('native Safari probe requires an exact sealed reference fixture and browser version');
   }
-  const request = Object.freeze({ expectedUrl: url.href, expectedBrowserVersion: options.expectedBrowserVersion });
+  const request = Object.freeze({ expectedUrl: url.href, expectedBrowserVersion: options.expectedBrowserVersion,
+    ...(includeKeyboardFocus ? { includeKeyboardFocus: true as const } : {}) });
   const helperPath = options.helperPath ?? fileURLToPath(new URL('./native/safari-origin-probe', import.meta.url));
   const sample = read ?? ((value: ProbeRequest) => nativeRead(value, helperPath));
   let identity: string | undefined;
@@ -94,7 +121,9 @@ export function createSafariOriginProbe(
       const value = await sample(request);
       if (fenced || typeof value !== 'object' || value === null) throw new Error('unavailable');
       const result = value as Record<string, unknown>;
-      if (Object.keys(result).sort().join(',') !== 'browserVersion,bundleId,launchedAt,pid,schemaVersion,status,url' ||
+      const keys = includeKeyboardFocus ? 'browserVersion,bundleId,keyboardFocus,launchedAt,pid,schemaVersion,status,url'
+        : 'browserVersion,bundleId,launchedAt,pid,schemaVersion,status,url';
+      if (Object.keys(result).sort().join(',') !== keys ||
           result.schemaVersion !== 1 || result.status !== 'KNOWN' || result.bundleId !== 'com.apple.Safari' ||
           result.url !== request.expectedUrl || result.browserVersion !== request.expectedBrowserVersion ||
           typeof result.pid !== 'number' || !Number.isSafeInteger(result.pid) || result.pid <= 0 ||
@@ -104,7 +133,18 @@ export function createSafariOriginProbe(
       const observedIdentity = `${result.pid}:${result.launchedAt}`;
       if (identity !== undefined && identity !== observedIdentity) throw new Error('browser replaced');
       identity = observedIdentity;
-      return url.origin;
+      let keyboardFocus: SafariKeyboardFocus | undefined;
+      if (includeKeyboardFocus) {
+        const raw = result.keyboardFocus;
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('focus unavailable');
+        const focus = raw as Record<string, unknown>;
+        if (Object.keys(focus).sort().join(',') !== 'identifierDigest,measurementKind,role' ||
+            focus.measurementKind !== 'AX_KEYBOARD_FOCUS' || typeof focus.role !== 'string' ||
+            !['AXTextField', 'AXTextArea', 'AXButton', 'AXCheckBox', 'AXRadioButton', 'AXPopUpButton', 'AXComboBox', 'AXLink'].includes(focus.role) ||
+            typeof focus.identifierDigest !== 'string' || !/^[a-f0-9]{64}$/.test(focus.identifierDigest)) throw new Error('focus unavailable');
+        keyboardFocus = Object.freeze({ measurementKind: 'AX_KEYBOARD_FOCUS', role: focus.role, identifierDigest: focus.identifierDigest });
+      }
+      return Object.freeze({ origin: url.origin, ...(keyboardFocus === undefined ? {} : { keyboardFocus }) });
     } catch (error) {
       fenced = true;
       // Neither the intended private nonce nor a different foreground document leaks in diagnostics.
