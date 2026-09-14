@@ -2,7 +2,7 @@
 
 ## Current delivery checkpoint — 2026-09-14
 
-Inspected baseline: `main` at `5ffca58bfc9bd52117bf8954d6362dcd9ce2105f` (PR #116).
+Inspected baseline: `main` at `987bb7fcedc5634f6f798c954dba1818294b4284` (PR #126).
 This checkpoint supersedes the historical branch-status statements below; it is not a claim of
 production readiness. `PLAN.md` remains the requirement map and handoffs retain scoped evidence.
 
@@ -19,11 +19,31 @@ Merged implementation now includes these paths; none establishes actual reader a
   expected identities from the seal.
 - Frozen protected functional-validation predicates and producer-authored conditions. Original
   baseline receipts now feed the shared required FUNCTIONAL_REGRESSION artifact/finalizer path.
-  Focus behaviour and forbidden-effect coverage are still separate missing producers.
+  Functional rule authoring controls are merged in PR #119. Forbidden-effect coverage still
+  needs an independent trusted producer; a final zero count cannot establish absence of earlier
+  transient or external effects.
+- Native keyboard-focus collection, private action-bound admission/retention, frozen exact
+  role/identifier-digest evaluation, retained S3/finalizer composition and authoring controls
+  are merged in PRs #120–125. This is AX keyboard focus, not the VoiceOver cursor. Native compile
+  checks and synthetic fixtures do not establish actual Safari identifier stability or reader
+  acceptance. The retained focus finalizer proof is nonbaseline, not the baseline composition below.
+- Post-STOP retention/evaluation command (PR #117), original baseline admission-to-native dispatch
+  handoff (PR #118), and bounded raw-byte GitHub webhook authentication (PR #126) are merged.
 
-PR #117 (post-STOP retention/evaluation command) and PR #118 (original baseline admission-to-native
-dispatch handoff) are **open at this checkpoint**. Their focused checks are not full CI or merged
-delivery. Consult current GitHub state before integration; do not restart already-running CI.
+### Implemented on the open GitHub integration stack, not merged at this checkpoint
+
+| PR | Implemented boundary | Still not established |
+| --- | --- | --- |
+| #127 | Durable workspace/App body-digest and delivery-alias inbox | Event dispatch authority |
+| #128 | Exact App/installation/repository read-access HTTP probe and temporary-token cleanup | Actual GitHub App access |
+| #129 | Forced-RLS immutable repository binding and irreversible local disconnect | Current remote access or publication authority |
+| #130 | Live local user/session/owner rechecks, probe-to-binding composition, atomic success audit | Deployed authenticated connection endpoint and isolated credential broker |
+| #131 | Offline bounded RS256 App JWT signer | Real key provisioning/rotation or App registration |
+| #132 | Exact-binding receipt-only HTTP ingress and replay composition | Deployed multi-workspace routing, event processing or publication |
+
+Each row has scoped local checks, not actual GitHub delivery or publication evidence. Consult
+current GitHub exact-head CI/merge state before integration; do not restart already-running CI.
+See the [module 20 requirement handoff](../handoffs/20.md) for the missing end-to-end R1 work.
 
 ### Next implementation and acceptance gates
 
@@ -38,11 +58,11 @@ delivery. Consult current GitHub state before integration; do not restart alread
    operator-owned configuration, runtime-evidence callbacks, action authorization and independent
    observer closure. Preserve one-shot session handling, retained uncertainty and separate startup
    consent; do not introduce permissive callback defaults to make the first run pass.
-3. **Remaining assertion producers.** Required announcement, reader NEXT sequence and independent
-   task-completion count and protected functional validation have implemented paths. Focus behaviour
-   and forbidden effects still need trusted measurements and frozen typed predicates. Functional
-   rule authoring controls also remain to be completed. A final zero count does not prove that no
-   forbidden effect occurred earlier. Missing measurements remain UNKNOWN.
+3. **Remaining assertion producers.** Required announcement, reader NEXT sequence, independent
+   task-completion count, protected functional validation and native keyboard-focus predicates have
+   implemented paths. Forbidden effects still need trusted measurements and frozen typed predicates.
+   A final zero count does not prove that no forbidden effect occurred earlier. Actual native focus
+   qualification remains separate; missing measurements remain UNKNOWN.
 4. **Actual reader qualification and full product flow.** VoiceOver `VERIFIED_MATRICES` is empty.
    After explicit operator approval, qualify the actual host and retain original physical evidence;
    then execute baseline → diagnosis → constrained repair → independently approved candidate rerun
