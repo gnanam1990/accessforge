@@ -3198,7 +3198,9 @@ def test_authenticated_execution_finish(
             == 200
         )
         if case == "artifact-finalize":
-            _check_runtime_preflight(client, action_url, headers, stop_id, sequence)
+            _check_runtime_preflight(
+                client, action_url, headers, stop_id, sequence, known=existing is not None
+            )
         if action != "STOP":
             source = {
                 "actionId": stop_id,
@@ -3443,7 +3445,13 @@ def test_authenticated_execution_finish(
 
 
 def _check_runtime_preflight(
-    client: TestClient, action_url: str, headers: dict[str, str], action_id: str, sequence: int
+    client: TestClient,
+    action_url: str,
+    headers: dict[str, str],
+    action_id: str,
+    sequence: int,
+    *,
+    known: bool = False,
 ) -> None:
     from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
 
@@ -3452,9 +3460,9 @@ def _check_runtime_preflight(
         "actionId": action_id,
         "actionSequence": sequence,
         "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "checks": {str(key): "UNKNOWN" for key in REQUIRED_PREFLIGHT_CHECKS},
+        "checks": {str(key): "TRUE" if known else "UNKNOWN" for key in REQUIRED_PREFLIGHT_CHECKS},
     }
-    if sequence % 2:
+    if sequence % 2 and not known:
         source["runnerProfile"] = {
             "platform": "darwin",
             "readerName": "VoiceOver",
@@ -3493,7 +3501,10 @@ def _check_runtime_preflight(
     assert retained.json()["meaning"] == "RUNTIME_PREFLIGHT_RETAINED_NOT_IDENTITY_ATTESTATION"
     assert retained.json()["sourceRecordDigest"] == digest(source)
     assert client.post(url, headers=headers, json=envelope).json() == retained.json()
-    changed = {**source, "checks": {str(key): "TRUE" for key in REQUIRED_PREFLIGHT_CHECKS}}
+    changed = {
+        **source,
+        "checks": {str(key): "UNKNOWN" if known else "TRUE" for key in REQUIRED_PREFLIGHT_CHECKS},
+    }
     assert (
         client.post(
             url,
@@ -3771,8 +3782,12 @@ def _retain_stopped_artifact_case(
                 assert set(result["snapshot"]["observedIdentities"]) == {
                     "EVALUATOR",
                     "ASSERTION_SET",
-                } | ({"FIXTURE_INSTANCE"} if fresh else set())
+                } | ({"FIXTURE_INSTANCE", "ENVIRONMENT"} if fresh else set())
                 if fresh:
+                    assert (
+                        result["snapshot"]["observedIdentities"]["ENVIRONMENT"]
+                        == result["snapshot"]["sealedIdentities"]["ENVIRONMENT"]
+                    )
                     assert (
                         result["snapshot"]["observedIdentities"]["FIXTURE_INSTANCE"]
                         == result["snapshot"]["sealedIdentities"]["FIXTURE_INSTANCE"]
