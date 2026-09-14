@@ -1316,6 +1316,9 @@ def test_baseline_archive_retention_boundary(
                     # Real SQL lease binding, synthetic desktop identity: never starts AT.
                     with conn.transaction():
                         reader_id, lease_id = str(uuid.uuid4()), str(uuid.uuid4())
+                        reader_attempt = run_store.start_attempt(
+                            conn, run_id=binding["run_id"], workspace_id=WS, lease_epoch=1
+                        )
                         conn.execute(
                             "INSERT INTO runner(id,workspace_id,name,status,session_key,platform,"
                             "device_id,interactive_session_id,console,profile_digest,profile,"
@@ -1326,7 +1329,10 @@ def test_baseline_archive_retention_boundary(
                         )
 
                         def insert_lease(
-                            seconds: int, identifier: str, reader_id: str = reader_id
+                            seconds: int,
+                            identifier: str,
+                            reader_id: str = reader_id,
+                            reader_attempt: str = reader_attempt,
                         ) -> None:
                             conn.execute(
                                 "INSERT INTO desktop_lease(id,workspace_id,runner_id,session_key,"
@@ -1338,7 +1344,7 @@ def test_baseline_archive_retention_boundary(
                                     reader_id,
                                     "d" * 64,
                                     binding["run_id"],
-                                    str(uuid.uuid4()),
+                                    reader_attempt,
                                     seconds,
                                 ),
                             )
@@ -1511,7 +1517,7 @@ def test_baseline_archive_retention_boundary(
                         "workspace_id": WS,
                         "lease_id": lease_id,
                         "epoch": 1,
-                        "attempt_id": "synthetic-attempt",
+                        "attempt_id": reader_attempt,
                         "manifest_digest": binding["manifest_digest"],
                     },
                 )
@@ -1538,7 +1544,7 @@ def test_baseline_archive_retention_boundary(
                         "workspace_id": WS,
                         "lease_id": lease_id,
                         "epoch": 1,
-                        "attempt_id": "synthetic-attempt",
+                        "attempt_id": reader_attempt,
                         "manifest_digest": binding["manifest_digest"],
                     },
                     assertions=frozen,
@@ -1546,6 +1552,13 @@ def test_baseline_archive_retention_boundary(
                     artifact_digest=digest(bundle),
                 )
                 outcomes = observed_assertions(**values)
+                for changed in (
+                    {"attempt_id": str(uuid.uuid4())},
+                    {"manifest_digest": "0" * 64},
+                    {"epoch": 2},
+                ):
+                    with pytest.raises(evidence.Refused):
+                        evidence.snapshot(conn, {**values["context"], **changed})
                 assert set(outcomes) == {"validation"}
                 assert outcomes["validation"].condition.value == "TRUE"
                 assert outcomes["validation"].provenance.value == "OBSERVER_AUTHORED"

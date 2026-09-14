@@ -24,6 +24,21 @@ def producer(attempt_id: str) -> str:
 
 
 def snapshot(conn: psycopg.Connection[dict[str, Any]], session: dict[str, Any]) -> dict[str, Any]:
+    original = conn.execute(
+        "SELECT l.attempt_id,a.lease_epoch,r.manifest_digest FROM desktop_lease l "
+        "JOIN run_attempt a ON a.id=l.attempt_id AND a.workspace_id=l.workspace_id "
+        "AND a.run_id=l.run_id JOIN run r ON r.id=l.run_id AND r.workspace_id=l.workspace_id "
+        "WHERE l.id=%s AND l.workspace_id=%s AND l.run_id=%s AND l.epoch=%s "
+        "FOR SHARE OF l,a,r",
+        (session["lease_id"], session["workspace_id"], session["run_id"], session["epoch"]),
+    ).fetchone()
+    if (
+        original is None
+        or str(original["attempt_id"]) != str(session["attempt_id"])
+        or original["lease_epoch"] != session["epoch"]
+        or original["manifest_digest"] != session["manifest_digest"]
+    ):
+        raise Refused("functional snapshot requires its original attempt, lease and manifest")
     receipt = for_run(conn, run_id=str(session["run_id"]))
     if (
         receipt is None
