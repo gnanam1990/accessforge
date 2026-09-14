@@ -29,7 +29,7 @@ from accessforge_domain.evaluation.observer import ObserverError
 from accessforge_domain.evaluation.rules import observer_count_assertions
 from accessforge_domain.journeys.assertions import AssertionSet
 from accessforge_domain.origins import normalize_origin
-from accessforge_domain.timestamps import to_rfc3339_utc
+from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 from accessforge_persistence import (
     fixtures,
     journeys,
@@ -169,6 +169,21 @@ def _context(
             ).canonical_form()
         except journeys.JourneyPersistenceError as exc:
             raise Refused("original assertion contract differs from the seal") from exc
+    initial_fixture = None
+    if conn.execute(
+        "SELECT 1 FROM fixture_setup_reservation WHERE run_id=%s", (run_id,)
+    ).fetchone():
+        from accessforge_persistence.fixture_setup_evidence import snapshot
+
+        initial_fixture = snapshot(
+            conn,
+            {
+                "run_id": run_id,
+                "workspace_id": workspace_id,
+                "attempt_id": ticket["attempt_id"],
+                "manifest_digest": digest(manifest),
+            },
+        )["observation"]["application"]
     return {
         "workspace": workspace_id,
         "run": run_id,
@@ -182,6 +197,7 @@ def _context(
         "fixtureNonce": fixture["nonce"],
         "templateDigest": fixture["template_digest"],
         "fixtureContract": contract,
+        "initialFixture": initial_fixture,
         "afterActionSequence": int(actions["last"]),
         "lastAction": last["action"],
         "lastResult": last["result_status"],
@@ -250,19 +266,35 @@ def measure_once(
         if existing is not None:
             return existing
     count: int | None = None
+    fixture_identity: str | None = None
     observed_at = to_rfc3339_utc(datetime.now(UTC))
     try:
-        measured = ApplicationObserver(application_database_url).count_effects(
-            fixture_nonce=before["fixtureNonce"],
-            effect="CREATE_TEST_REQUEST",
-            expected_template_digest=before["templateDigest"],
-        )
-        if (
-            measured.fixture_nonce != before["fixtureNonce"]
-            or measured.effect != "CREATE_TEST_REQUEST"
-        ):
-            raise ObserverError("observer returned a different measurement identity")
-        count, observed_at = measured.count, measured.observed_at
+        observer = ApplicationObserver(application_database_url)
+        if before["initialFixture"] is not None:
+            inspected = observer.inspect_fixture(fixture_nonce=before["fixtureNonce"])
+            fields = ("nonce", "templateDigest", "variant", "createdAt")
+            if (
+                any(inspected[key] != before["initialFixture"][key] for key in fields)
+                or type(inspected["effectCount"]) is not int
+                or inspected["effectCount"] < 0
+                or parse_rfc3339_utc(inspected["observedAt"])
+                < parse_rfc3339_utc(before["initialFixture"]["observedAt"])
+            ):
+                raise ObserverError("original fixture incarnation is unavailable or changed")
+            count, observed_at = inspected["effectCount"], inspected["observedAt"]
+            fixture_identity = digest({key: inspected[key] for key in fields})
+        else:
+            measured = observer.count_effects(
+                fixture_nonce=before["fixtureNonce"],
+                effect="CREATE_TEST_REQUEST",
+                expected_template_digest=before["templateDigest"],
+            )
+            if (
+                measured.fixture_nonce != before["fixtureNonce"]
+                or measured.effect != "CREATE_TEST_REQUEST"
+            ):
+                raise ObserverError("observer returned a different measurement identity")
+            count, observed_at = measured.count, measured.observed_at
     except ObserverError:
         # No DSN, SQL errors, fixture nonce or receipt secrets enter the payload/logs.
         observed_at = to_rfc3339_utc(datetime.now(UTC))
@@ -306,6 +338,9 @@ def measure_once(
             "count": count,
             "finalSample": final_sample,
         }
+        if before["initialFixture"] is not None:
+            # Bind the independent sample without exporting the private fixture nonce.
+            source["fixtureIdentityDigest"] = fixture_identity
         event = sequencer.admit_record(
             conn,
             workspace_id=workspace_id,

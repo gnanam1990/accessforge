@@ -3113,7 +3113,13 @@ def test_authenticated_execution_finish(
     from accessforge_persistence.fixtures import create_instance
 
     ticket, ref = supervisor_ticket, manual_dispatch_reference
-    closes = case in {"success", "observer-unknown", "stop-only"} or case.startswith("artifact")
+    closes = case in {
+        "success",
+        "observer-unknown",
+        "observer-recreated",
+        "observer-continuity",
+        "stop-only",
+    } or case.startswith("artifact")
     stop_only = "stop-only" in case
     secret = secrets.token_urlsafe(32)
     assert (
@@ -3219,6 +3225,15 @@ def test_authenticated_execution_finish(
                 ).status_code
                 == 200
             )
+    if case == "observer-recreated":
+        assert existing is not None
+        with psycopg.connect(owned_observer_database) as application:
+            application.execute("DELETE FROM fixture_instance WHERE nonce=%s", (fixture.nonce,))
+            application.execute(
+                "INSERT INTO fixture_instance(nonce,template_digest,variant) "
+                "VALUES(%s,%s,'inaccessible')",
+                (fixture.nonce, fixture.template_digest),
+            )
     if case not in {"missing-observer", "no-stop", "unresolved-stop"}:
         receipt = measure_once(
             db,
@@ -3231,7 +3246,8 @@ def test_authenticated_execution_finish(
             source_record_id=str(uuid.uuid4()),
             final_sample=True,
         )
-        assert receipt.known == (case != "observer-unknown")
+        unknown_observer = case in {"observer-unknown", "observer-recreated"}
+        assert receipt.known is not unknown_observer
         with workspace_connection(db, WS) as conn:
             observed = conn.execute(
                 "SELECT payload FROM canonical_event WHERE event_id=%s", (receipt.event_id,)
@@ -3241,14 +3257,32 @@ def test_authenticated_execution_finish(
             assert assertion == {
                 "assertionId": "completion.one-request",
                 "kind": "TASK_COMPLETION",
-                "condition": "UNKNOWN" if case == "observer-unknown" else "FALSE",
+                "condition": "UNKNOWN" if unknown_observer else "FALSE",
                 "provenance": "OBSERVER_AUTHORED",
                 **(
                     {"unknownReason": "measurement or matching frozen effect predicate unavailable"}
-                    if case == "observer-unknown"
+                    if unknown_observer
                     else {}
                 ),
             }
+            if existing is not None:
+                source = observed["payload"]["sourceRecord"]
+                assert fixture.nonce not in json.dumps(source)
+                if unknown_observer:
+                    assert source["fixtureIdentityDigest"] is None
+                else:
+                    initial = conn.execute(
+                        "SELECT observation->'application' AS app FROM fixture_setup_reservation "
+                        "WHERE run_id=%s",
+                        (ref.run_id,),
+                    ).fetchone()
+                    assert initial is not None
+                    assert source["fixtureIdentityDigest"] == digest(
+                        {
+                            key: initial["app"][key]
+                            for key in ("nonce", "templateDigest", "variant", "createdAt")
+                        }
+                    )
     if case == "revoked":
         with workspace_connection(db, WS) as conn:
             conn.execute(
@@ -3419,6 +3453,8 @@ def _check_runtime_preflight(
         "artifact-finalize-corrupt",
         "artifact-finalize-incomplete",
         "artifact-deleted",
+        "observer-recreated",
+        "observer-continuity",
     ],
 )
 def test_fresh_setup_retained_lifecycle(
