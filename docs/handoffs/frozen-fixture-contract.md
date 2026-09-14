@@ -6,11 +6,17 @@ and hashes of private reset/observer values. It does not include those private v
 contract through navigator policy. A loader checks the original row hash and navigator-value binding;
 historical versions without the preimage are refused rather than reconstructed.
 
-This is the first part of fixture provisioning, not completed runtime fixture evidence. The current
-completion observer compares the application template digest with the manifest logical fixture digest;
-these are distinct identities. Next work must use the retained contract to bind trusted reset/observer
-material, provision a fresh reference-app instance and retain its app-template identity and nonce.
+The completion observer now reads that original contract and binds the instance's template ID,
+navigator values and private observer configuration to it. It separately checks the supported
+reference-app template digest before reading the application's nonce-scoped state. Historical
+versions missing the original preimage are refused; existing records are not backfilled.
+
+This is not completed runtime fixture evidence. Next work must bind trusted reset material,
+provision a fresh reference-app instance and retain its app-template identity and nonce.
 Do not simply replace one digest with the other or accept a caller-supplied nonce as proof of reset.
 
 Changed-file Ruff/strict mypy passed. Five focused synthetic loader cases passed locally in 0.25s.
+The existing authenticated observer and finalizer integration fixtures now distinguish logical
+contract hashes from application-template hashes. Added wrong-value/oracle rejection cases run in
+CI; the full local integration suite was not repeated.
 No live fixture, database migration, AT session, billable provider call or deployment was performed.

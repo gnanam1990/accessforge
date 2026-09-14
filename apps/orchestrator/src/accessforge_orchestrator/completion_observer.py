@@ -18,6 +18,7 @@ from typing import Any
 import psycopg
 from psycopg.conninfo import make_conninfo
 
+from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_domain.authorization import (
     MachinePrincipal,
     ServiceIdentity,
@@ -108,6 +109,14 @@ def _context(
     )
     if spec.config_digest() != manifest["environmentConfigDigest"]:
         raise Refused("observer environment content differs from sealed identity")
+    try:
+        logical_fixture = journeys.load_fixture_contract(
+            conn,
+            version_id=manifest["journeyVersionId"],
+            expected_digest=manifest["fixtureDigest"],
+        )
+    except journeys.JourneyPersistenceError as exc:
+        raise Refused("original observer fixture contract unavailable") from exc
     fixture = conn.execute(
         "SELECT * FROM run_fixture_instance WHERE run_id=%s FOR SHARE",
         (run_id,),
@@ -117,7 +126,13 @@ def _context(
         or not isinstance(fixture["observer_config"], dict)
         or not isinstance(fixture["navigator_values"], dict)
         or fixture["observer_config"].get("effect") != "CREATE_TEST_REQUEST"
-        or fixture["template_digest"] != manifest["fixtureDigest"]
+        or logical_fixture["templateId"] != "service-request"
+        or fixture["template_id"] != logical_fixture["templateId"]
+        or fixture["navigator_values"] != logical_fixture["navigatorValues"]
+        or sorted(fixture["observer_config"]) != logical_fixture["observerKeys"]
+        or digest(fixture["observer_config"]) != logical_fixture["observerConfigDigest"]
+        # Application template identity is independent of the logical fixture hash above.
+        or fixture["template_digest"] != REFERENCE_FIXTURE_DIGEST
     ):
         raise Refused("supported independent observer fixture unavailable")
     contract = fixtures.contract_digest(
