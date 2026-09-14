@@ -97,8 +97,35 @@ restore audit include the count. Original previews and evaluations remain histor
 restored consent is not publication authority. This does not discover remote writes that occurred
 after the snapshot, so remote reconciliation remains required before any future publication.
 
-Next: fresh remote repository/commit verification,
-stale-state revalidation, durable publication intent and ambiguous-response reconciliation.
+## One-shot local create reservation
+
+Migration 0068 adds an immutable, forced-RLS publication-intent tombstone. The trusted
+`github_publication_intent.reserve_publication` service locks and rechecks the current owner,
+original stored preview, current reconstructed evidence/revisions and exact GITHUB_PUBLISH
+approval (same approving user, scope, target, digest, revision, expiry and revocation). Intent
+and audit commit atomically. It returns only after commit and performs no remote call.
+
+There is one create slot per workspace/App/repository/run, independent of preview and connection
+replacement. A second request never gets the first request's return value as a new dispatch
+grant. A newly reviewed preview does not reopen this slot. The minimal UUID/ID/digest tombstone
+is not cascaded from deletable run or preview evidence; direct update/delete is refused and only
+workspace deletion removes it. Workspace deletion is therefore not remote deletion/reconciliation.
+
+An intent means remote outcome UNKNOWN, not SENT or CONFIRMED. It has no expiring lease, automatic
+retry or resume path. A failed/lost commit response requires inspecting durable state, never
+repeating a create. Restoring a backup revokes publication approvals, but cannot prove what was
+published after the snapshot. This reservation alone is NOT sufficient outbound authority:
+the future controller must compose fresh remote access, retained-byte verification, current
+local approval revalidation, one outbound call and exact response/ambiguous-outcome reconciliation.
+No background worker or public route dispatches these rows.
+
+Five grouped real-PostgreSQL preview/approval cases now include four concurrent reservers with
+exactly one committed winner/audit, reconnect visibility, RLS, immutable records, wrong-digest
+and revoked-consent refusals, and refusal to create again through a new approved preview.
+Together with 38 forward-migration cases, 43 focused checks passed on disposable databases.
+Ruff and strict mypy passed across 388 files. No live migration or GitHub publication occurred.
+
+Next: outbound controller, retained-byte revalidation and ambiguous-response reconciliation.
 Actual outbound checks still require separately scoped credentials and explicit GITHUB_PUBLISH.
 
 Protocol reference: [GitHub check-run API](https://docs.github.com/en/rest/checks/runs).
