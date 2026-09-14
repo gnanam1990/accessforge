@@ -127,6 +127,7 @@ dependencies = [
     { name = "accessforge-navigation-tools" },
     { name = "accessforge-persistence" },
     { name = "botocore" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "strands-agents" },
 ]
@@ -137,6 +138,7 @@ requires-dist = [
     { name = "accessforge-navigation-tools", editable = "packages/agent-tools/navigation" },
     { name = "accessforge-persistence", editable = "packages/persistence" },
     { name = "botocore", specifier = "==1.43.91" },
+    { name = "httpx", specifier = ">=0.28,<0.29" },
     { name = "pydantic", specifier = ">=2.10" },
     { name = "strands-agents", specifier = "==1.55.1" },
 ]

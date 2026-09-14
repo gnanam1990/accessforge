@@ -614,6 +614,15 @@ def admit_lease(
     # contend for this runner's row, and the loser reads the winner's committed state below.
     session_key = str(runner["session_key"])
 
+    # Setup owns the run row before reserving a nonce. Match the database lease trigger so
+    # an ordinary unresolved setup is a clear admission refusal, not a raw integrity error.
+    conn.execute("SELECT id FROM run WHERE id=%s FOR UPDATE", (run_id,))
+    if conn.execute(
+        "SELECT 1 FROM fixture_setup_reservation WHERE run_id=%s AND observation IS NULL",
+        (run_id,),
+    ).fetchone():
+        raise RunnerError("fixture setup is unresolved; desktop lease refused")
+
     status = RunnerStatus(str(runner["status"]))
     if status is RunnerStatus.QUARANTINED:
         raise SessionBusy(

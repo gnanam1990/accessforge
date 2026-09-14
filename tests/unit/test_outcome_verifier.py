@@ -473,7 +473,10 @@ def test_the_observer_protocol_exposes_no_write() -> None:
     from accessforge_persistence.evidence import ApplicationObserver
 
     assert observer_writes_nothing(ApplicationObserver) == ()
-    assert [m for m in dir(ApplicationObserver) if not m.startswith("_")] == ["count_effects"]
+    assert [m for m in dir(ApplicationObserver) if not m.startswith("_")] == [
+        "count_effects",
+        "inspect_fixture",
+    ]
 
 
 # --- findings ------------------------------------------------------------------------------------
