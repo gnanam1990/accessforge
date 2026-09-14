@@ -1,12 +1,32 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createSafariKeyboardFocusProbe, createSafariOriginProbe } from '../dist/safari-origin.js';
+import { createSafariKeyboardFocusProbe, createSafariOriginProbe, createSafariObservationProbes } from '../dist/safari-origin.js';
 
 // Synthetic helper output: these tests do not operate Safari, AX or a screen reader.
 const options = { expectedUrl: 'http://127.0.0.1:3000/form/fixture_nonce_123456', expectedBrowserVersion: '26.6' };
 const focus = { measurementKind: 'AX_KEYBOARD_FOCUS', role: 'AXTextField', identifierDigest: 'a'.repeat(64) };
 const known = { schemaVersion: 1, status: 'KNOWN', bundleId: 'com.apple.Safari',
   pid: 312, launchedAt: 1700000000.5, browserVersion: '26.6', url: options.expectedUrl, keyboardFocus: focus };
+
+test('paired origin and focus share original process identity and refusal state', async () => {
+  const { keyboardFocus, ...origin } = known;
+  const probes = createSafariObservationProbes(options, async request => request.includeKeyboardFocus
+    ? { ...known, pid: 999 } : origin);
+  assert.equal(await probes.observeOrigin(), 'http://127.0.0.1:3000');
+  await assert.rejects(probes.observeKeyboardFocus);
+  await assert.rejects(probes.observeOrigin);
+});
+
+test('overlapping origin/focus sampling fences both channels, including late origin', async () => {
+  const { keyboardFocus, ...origin } = known;
+  let resolve;
+  const probes = createSafariObservationProbes(options, () => new Promise(done => { resolve = done; }));
+  const first = probes.observeOrigin();
+  await assert.rejects(probes.observeKeyboardFocus);
+  resolve(origin);
+  await assert.rejects(first);
+  await assert.rejects(probes.observeOrigin);
+});
 
 test('explicit private focus collection returns only bounded metadata and resamples changes', async () => {
   let calls = 0;

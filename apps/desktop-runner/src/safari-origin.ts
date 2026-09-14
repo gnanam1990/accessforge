@@ -4,6 +4,7 @@ import { lstat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AuthenticatedRunner, type AuthenticatedRunnerOptions } from './authenticated-runner.js';
+import { parseKeyboardFocus } from './keyboard-focus.js';
 
 interface ProbeRequest {
   readonly expectedUrl: string;
@@ -97,7 +98,18 @@ export function createSafariKeyboardFocusProbe(options: SafariOriginOptions, rea
   };
 }
 
-function createSafariMeasurement(options: SafariOriginOptions, includeKeyboardFocus: boolean, read?: SafariProbeRead):
+interface BrowserBinding { identity?: string; fenced: boolean; busy: boolean }
+
+/** One private attempt shares browser identity and fencing between origin and focus reads. */
+export function createSafariObservationProbes(options: SafariOriginOptions, read?: SafariProbeRead) {
+  const binding: BrowserBinding = { fenced: false, busy: false };
+  const origin = createSafariMeasurement(options, false, read, binding);
+  const focus = createSafariMeasurement(options, true, read, binding);
+  return Object.freeze({ observeOrigin: async () => (await origin()).origin, observeKeyboardFocus: focus });
+}
+
+function createSafariMeasurement(options: SafariOriginOptions, includeKeyboardFocus: boolean, read?: SafariProbeRead,
+  binding: BrowserBinding = { fenced: false, busy: false }):
   () => Promise<Readonly<{ origin: string; keyboardFocus?: SafariKeyboardFocus }>> {
   const url = new URL(options.expectedUrl);
   if (url.href !== options.expectedUrl || url.protocol !== 'http:' ||
@@ -111,15 +123,12 @@ function createSafariMeasurement(options: SafariOriginOptions, includeKeyboardFo
     ...(includeKeyboardFocus ? { includeKeyboardFocus: true as const } : {}) });
   const helperPath = options.helperPath ?? fileURLToPath(new URL('./native/safari-origin-probe', import.meta.url));
   const sample = read ?? ((value: ProbeRequest) => nativeRead(value, helperPath));
-  let identity: string | undefined;
-  let fenced = false;
-  let busy = false;
   return async () => {
-    if (fenced || busy) { fenced = true; throw new Error('Safari observation fenced'); }
-    busy = true;
+    if (binding.fenced || binding.busy) { binding.fenced = true; throw new Error('Safari observation fenced'); }
+    binding.busy = true;
     try {
       const value = await sample(request);
-      if (fenced || typeof value !== 'object' || value === null) throw new Error('unavailable');
+      if (binding.fenced || typeof value !== 'object' || value === null) throw new Error('unavailable');
       const result = value as Record<string, unknown>;
       const keys = includeKeyboardFocus ? 'browserVersion,bundleId,keyboardFocus,launchedAt,pid,schemaVersion,status,url'
         : 'browserVersion,bundleId,launchedAt,pid,schemaVersion,status,url';
@@ -131,8 +140,8 @@ function createSafariMeasurement(options: SafariOriginOptions, includeKeyboardFo
         throw new Error('unavailable');
       }
       const observedIdentity = `${result.pid}:${result.launchedAt}`;
-      if (identity !== undefined && identity !== observedIdentity) throw new Error('browser replaced');
-      identity = observedIdentity;
+      if (binding.identity !== undefined && binding.identity !== observedIdentity) throw new Error('browser replaced');
+      binding.identity = observedIdentity;
       let keyboardFocus: SafariKeyboardFocus | undefined;
       if (includeKeyboardFocus) {
         const raw = result.keyboardFocus;
@@ -146,17 +155,27 @@ function createSafariMeasurement(options: SafariOriginOptions, includeKeyboardFo
       }
       return Object.freeze({ origin: url.origin, ...(keyboardFocus === undefined ? {} : { keyboardFocus }) });
     } catch (error) {
-      fenced = true;
+      binding.fenced = true;
       // Neither the intended private nonce nor a different foreground document leaks in diagnostics.
       throw error instanceof SafariProbeUnavailable ? error : new SafariProbeUnavailable('PROBE_UNAVAILABLE');
-    } finally { busy = false; }
+    } finally { binding.busy = false; }
   };
 }
 
 /** Live-origin wiring only. Physical preflight and focus/effect authorization remain mandatory. */
 export function createSafariAuthenticatedRunner(
-  options: Omit<AuthenticatedRunnerOptions, 'observeOrigin'> & { readonly safari: SafariOriginOptions },
+  options: Omit<AuthenticatedRunnerOptions, 'observeOrigin' | 'observeKeyboardFocus'> & {
+    readonly safari: SafariOriginOptions;
+    /** Explicit host provisioning only. Does not enable reader startup or a focus verdict. */
+    readonly keyboardFocusEvidence?: boolean;
+  },
 ): AuthenticatedRunner {
-  const { safari, ...runtime } = options;
-  return new AuthenticatedRunner({ ...runtime, observeOrigin: createSafariOriginProbe(safari) });
+  const { safari, keyboardFocusEvidence, ...runtime } = options;
+  const probes = createSafariObservationProbes(safari);
+  return new AuthenticatedRunner({ ...runtime, observeOrigin: probes.observeOrigin,
+    ...(keyboardFocusEvidence === true ? { observeKeyboardFocus: async () => {
+      const measured = await probes.observeKeyboardFocus();
+      if (measured.keyboardFocus === undefined) throw new SafariProbeUnavailable('KEYBOARD_FOCUS_UNAVAILABLE');
+      return parseKeyboardFocus({ ...measured.keyboardFocus, status: 'KNOWN', capturedAtUtc: runtime.clock.utc() });
+    } } : {}) });
 }
