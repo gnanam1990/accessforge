@@ -56,8 +56,8 @@ def validate_profile(profile: dict[str, Any]) -> None:
     # fractional floats; integral floats remain equivalent to their integer JSON representation.
     if (
         type(timeout) not in (int, float)
-        or not math.isfinite(timeout)
         or not 1 <= timeout <= 120
+        or not math.isfinite(timeout)
         or int(timeout) != timeout
     ):
         raise ValueError("navigator call timeout must be 1 to 120 whole seconds")

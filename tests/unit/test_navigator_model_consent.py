@@ -28,6 +28,7 @@ def test_consent_profile_matches_the_actual_adapter_and_reserves_each_attempt() 
         {"call_timeout_seconds": float("nan")},
         {"call_timeout_seconds": 0.5},
         {"call_timeout_seconds": 1.5},
+        {"call_timeout_seconds": 10**1000},
         {"provider": "other"},
         {"retry_initial_delay_seconds": 5, "retry_max_delay_seconds": 1},
     ],
