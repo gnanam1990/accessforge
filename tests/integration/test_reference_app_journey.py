@@ -66,6 +66,51 @@ def _new_fixture(client: TestClient, variant: str = "inaccessible") -> str:
 # --- the journey ------------------------------------------------------------------------
 
 
+def test_setup_reservation_replays_without_resetting_other_instances(client: TestClient) -> None:
+    previous = _new_fixture(client)
+    assert client.post(f"/form/{previous}", data=VALID_SUBMISSION).status_code == 201
+    params = {"variant": "inaccessible", "nonce": "reserved-fixture-run-001"}
+    headers = {"x-setup-token": SETUP}
+    first = client.post("/api/_test/fixtures", params=params, headers=headers)
+    assert first.status_code == 201
+    replay = client.post("/api/_test/fixtures", params=params, headers=headers)
+    assert replay.status_code == 200 and replay.json() == first.json()
+    wrong = client.post(
+        "/api/_test/fixtures", params={**params, "variant": "accessible"}, headers=headers
+    )
+    assert wrong.status_code == 409
+    nonce = first.json()["nonce"]
+    assert client.post(f"/form/{nonce}", data=VALID_SUBMISSION).status_code == 201
+    assert client.post("/api/_test/fixtures", params=params, headers=headers).status_code == 409
+    for retained in (previous, nonce):
+        receipt = client.get(
+            f"/api/_test/receipt/{retained}", headers={"x-observer-token": OBSERVER}
+        )
+        assert receipt.json()["request_count"] == 1
+
+
+def test_setup_reservation_still_requires_setup_authority_and_bounded_nonce(
+    client: TestClient,
+) -> None:
+    params = {"variant": "accessible", "nonce": "reserved-fixture-run-002"}
+    assert client.post("/api/_test/fixtures", params=params).status_code == 403
+    assert (
+        client.post(
+            "/api/_test/fixtures", params=params, headers={"x-setup-token": OBSERVER}
+        ).status_code
+        == 403
+    )
+    for invalid in ("short", "x" * 65, "../not-a-safe-nonce"):
+        assert (
+            client.post(
+                "/api/_test/fixtures",
+                params={**params, "nonce": invalid},
+                headers={"x-setup-token": SETUP},
+            ).status_code
+            == 422
+        )
+
+
 def test_full_journey_creates_exactly_one_request(client: TestClient) -> None:
     nonce = _new_fixture(client)
 
