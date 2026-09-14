@@ -41,6 +41,35 @@ and fences malformed/mismatched results, process replacement and concurrent samp
 
 ## Authenticated runner embedding
 
+### Explicit browser launch port
+
+`createSafariReferenceLauncher` in `src/safari-launcher.ts` supplies the concrete `BrowserLauncher`
+port for trusted reference-app setup. Construct it with the exact controller-reserved fixture URL,
+sealed browser version, an AbortSignal, fresh `authorize(signal)` callback for this browser effect,
+and `assertDesktopHeld()` for the controller's already-held exclusive desktop claim. Construction
+is inert. The returned function issues one bounded `/usr/bin/open -b com.apple.Safari` invocation;
+no shell, AppleScript, reader startup or permission-grant command is used.
+
+Use the function as `prepareReferenceApp({ ...privateSetupOptions, launch })` only for the trusted
+baseline setup path that can reconcile its private setup endpoint. Candidate gateway setup is
+separate; this launcher does not expose private candidate setup routes or authorize their use.
+Never give its callbacks or private options to the navigator. Callback implementations and overall
+host-controller composition remain the trusted embedding's responsibility, not JSON configuration.
+
+`prepareSafariReferenceApp(privateSetup, host)` supplies this composition directly and derives the
+launch URL from the same private origin/reserved nonce used for reconciliation. Both expected and
+independently observed build digests must agree before any setup HTTP request. The existing HTTP200
+confirmation gate runs before launch; no second destination can be supplied through host options.
+This configured build check is not a new independent artifact measurement or environment attestation.
+
+The native probe must independently confirm foreground signed Safari, the exact fixture document
+and browser version. Native document-not-ready refusals may be resampled within an eight-second
+overall deadline, but `open` is never retried. Authority is checked again and the same browser
+process/document reobserved before returning a setup result. Failed/cancelled/concurrent attempts
+remain one-shot even when the OS might already have opened the URL: reconcile the retained desktop
+claim, do not infer no side effect or create an automatic retry. This code has mocked-host coverage;
+actual launch/AT acceptance still requires explicit operator approval and real host evidence.
+
 Use `createSafariAuthenticatedRunner` from `src/safari-origin.ts` in trusted bootstrap code. It
 accepts existing AuthenticatedRunner options plus `safari: { expectedUrl, expectedBrowserVersion }`
 and supplies live origin observation. Independent `preflight` and `authorizePhysicalAction`
