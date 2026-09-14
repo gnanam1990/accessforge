@@ -32,6 +32,7 @@ from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 from . import (
     baseline_observations,
     candidate_observations,
+    keyboard_focus,
     reader_startup_consents,
     runners,
     runs,
@@ -603,6 +604,16 @@ def retain_reader_observation(
     fields = {"actionId", "actionSequence", "capturedAtUtc"} | (
         {"provenance", "reason"} if unknown else {"phrase"}
     )
+    if "keyboardFocus" in source:
+        fields.add("keyboardFocus")
+        clock = conn.execute("SELECT clock_timestamp() AS now").fetchone()
+        assert clock is not None
+        try:
+            keyboard_focus.validate(
+                source["keyboardFocus"], dispatched_at=action["dispatched_at"], now=clock["now"]
+            )
+        except (ValueError, TypeError) as exc:
+            raise Refused("keyboard focus source unavailable for this action") from exc
     if (
         set(source) != fields
         or source["actionId"] != action_id

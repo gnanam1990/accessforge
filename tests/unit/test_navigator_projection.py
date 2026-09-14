@@ -23,6 +23,30 @@ def test_unknown_and_genuine_silence_are_not_conflated() -> None:
     assert silence.phrase == "" and silence.provenance == "ACTUAL_READER"
 
 
+def test_private_focus_metadata_is_verified_then_excluded_from_navigator() -> None:
+    identifier, now = str(uuid4()), datetime.now(UTC)
+    action = {"id": identifier, "action_sequence": 1, "dispatched_at": now, "result_at": now}
+    source = {
+        "actionId": identifier,
+        "actionSequence": 1,
+        "capturedAtUtc": to_rfc3339_utc(now),
+        "phrase": "Name",
+        "keyboardFocus": {
+            "measurementKind": "AX_KEYBOARD_FOCUS",
+            "status": "KNOWN",
+            "capturedAtUtc": to_rfc3339_utc(now),
+            "role": "AXTextField",
+            "identifierDigest": "a" * 64,
+        },
+    }
+    result = _observation(source, action)
+    assert result.phrase == "Name"
+    assert "keyboardFocus" not in result.model_dump()
+    assert "identifierDigest" not in result.model_dump_json()
+    with pytest.raises(ProjectionRefused):
+        _observation({**source, "keyboardFocus": {"value": "private"}}, action)
+
+
 @pytest.mark.parametrize(
     "change",
     [

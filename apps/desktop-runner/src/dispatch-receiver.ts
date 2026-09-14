@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { digest } from '@accessforge/contracts';
 import { PREFLIGHT_CHECKS, parseObservedRunnerProfile, type PreflightReport, type RawObservation, type UnknownObservation } from '@accessforge/at-voiceover';
 import type { ActionCommand } from './supervisor.js';
+import { parseKeyboardFocus, type KeyboardFocusRecord } from './keyboard-focus.js';
 import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from './reader-startup-consent.js';
 
 export interface DispatchReference {
@@ -522,7 +523,7 @@ export class NativeExecutionSession {
     } finally { this.#busy = false; }
   }
 
-  async retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string): Promise<void> {
+  async retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string, keyboardFocus?: KeyboardFocusRecord): Promise<void> {
     if (this.#busy || this.#fenced || !this.#committed || this.#observationPending ||
         this.#current?.id !== command.actionId || this.#current.sequence !== command.sequence) {
       throw new ReceiverRefused('reader observation identity unavailable');
@@ -535,12 +536,14 @@ export class NativeExecutionSession {
           observation.actionSequence !== command.sequence)) throw new Error('reader action identity');
       // Construct a closed source vocabulary. Diagnostic DOM, selectors, paths and answer keys
       // never cross this channel. The server independently redacts exact fixture values.
-      const sourceRecord = unknown
+      const reader = unknown
         ? { actionId: command.actionId, actionSequence: command.sequence, capturedAtUtc,
             provenance: 'CAPTURE_UNKNOWN', reason: (observation as UnknownObservation).reason }
         : { actionId: command.actionId, actionSequence: command.sequence,
             capturedAtUtc: (observation as RawObservation).capturedAtUtc,
             phrase: (observation as RawObservation).phrase };
+      const sourceRecord = { ...reader,
+        ...(keyboardFocus === undefined ? {} : { keyboardFocus: parseKeyboardFocus(keyboardFocus) }) };
       if (Buffer.byteLength(JSON.stringify(sourceRecord)) > 32768) throw new Error('reader source bound');
       const sourceRecordDigest = digest(sourceRecord);
       const producerSequence = ++this.#observationSequence;
