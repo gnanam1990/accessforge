@@ -447,6 +447,17 @@ def reserve_turn(
             reader_digest,
         ),
     )
+    # Declared atomically with admission, before provider entry. Missing runtime bytes therefore
+    # cannot disappear from finalization's requirements after a crash.
+    from .evidence.artifacts import declare_required_artifacts
+    from .navigator_runtime import producer as runtime_producer
+
+    declare_required_artifacts(
+        conn,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        requirements={"MODEL_RUNTIME": runtime_producer(attempt_id)},
+    )
     return request_digest
 
 

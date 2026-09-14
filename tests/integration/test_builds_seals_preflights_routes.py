@@ -2343,6 +2343,40 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
             "SELECT operation_id FROM navigator_planning_checkpoint WHERE run_id=%s",
             (ref.run_id,),
         ).fetchone() == {"operation_id": uuid.UUID(operation_id)}
+    from accessforge_domain.navigator_runtime import MEANING
+    from accessforge_persistence import navigator_runtime
+
+    runtime_observation = {
+        "meaning": MEANING,
+        "profile": default_profile(),
+        "requests": [
+            {"requestId": "synthetic-response-1", "httpStatus": 200, "streamCompleted": True}
+        ],
+    }
+    # Synthetic provider receipt only; this exercises durable isolation and binding, not Bedrock.
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute(
+            "SELECT producer_id FROM required_artifact WHERE run_id=%s AND kind='MODEL_RUNTIME'",
+            (ref.run_id,),
+        ).fetchone() == {"producer_id": navigator_runtime.producer(ref.attempt_id)}
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            navigator_runtime.retain(
+                conn,
+                workspace_id=WS,
+                operation_id=operation_id,
+                observation={
+                    **runtime_observation,
+                    "profile": {**default_profile(), "provider_max_tokens": 1024},
+                },
+            )
+        navigator_runtime.retain(
+            conn, workspace_id=WS, operation_id=operation_id, observation=runtime_observation
+        )
+    with workspace_connection(db, str(uuid.uuid4())) as conn:
+        assert conn.execute("SELECT * FROM navigator_runtime_observation").fetchall() == []
+    runtime_context = {**asdict(ref), "manifest_digest": scope.json()["manifestDigest"]}
+    with pytest.raises(ValueError, match="settled"), workspace_connection(db, WS) as conn:
+        navigator_runtime.snapshot(conn, runtime_context)
     with workspace_connection(db, WS) as conn:
         navigator_model_calls.finish_turn(
             conn,
@@ -2356,6 +2390,9 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
             (f"navigator:{operation_id}:usage",),
         ).fetchone()
         assert usage == {"basis": "UNAVAILABLE", "quantity": 0}
+        runtime_snapshot = navigator_runtime.snapshot(conn, runtime_context)
+        assert runtime_snapshot["turns"][0]["observation"] == runtime_observation
+        assert runtime_snapshot["turns"][0]["status"] == "UNCONFIRMED"
     with pytest.raises(navigator_model_calls.Refused), workspace_connection(db, WS) as conn:
         navigator_model_calls.assert_turn_authorized(conn, **recheck)
     with pytest.raises(psycopg.IntegrityError):
@@ -2382,6 +2419,8 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
             "UPDATE navigator_model_consent SET max_calls=3",
             "UPDATE navigator_planning_checkpoint SET operation_id=NULL",
             "DELETE FROM navigator_planning_checkpoint WHERE operation_id IS NOT NULL",
+            "UPDATE navigator_runtime_observation SET observation_digest=repeat('0',64)",
+            "DELETE FROM navigator_runtime_observation",
         ):
             with pytest.raises(psycopg.IntegrityError), conn.transaction():
                 conn.execute(statement)
