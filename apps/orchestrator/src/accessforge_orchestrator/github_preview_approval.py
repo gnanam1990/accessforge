@@ -4,9 +4,12 @@ No remote adapter or dispatch function is enabled here. These approvals are not 
 GitHub access, retained object-store bytes, or single-use remote intent reconciliation.
 """
 
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
+
+import psycopg
 
 from accessforge_domain.authorization import HumanPrincipal
 from accessforge_domain.states import ApprovalScope
@@ -18,10 +21,19 @@ from .github_preview_service import prepare_check_preview
 
 
 def store_preview(
-    database_url: str, *, principal: HumanPrincipal, binding_id: str, run_id: str
+    database_url: str,
+    *,
+    principal: HumanPrincipal,
+    binding_id: str,
+    run_id: str,
+    _connection: psycopg.Connection[Any] | None = None,
 ) -> dict[str, Any]:
     """Reconstruct and commit exact preview; no caller payload or outcome is accepted."""
-    with workspace_connection(database_url, principal.workspace_id) as conn:
+    with (
+        nullcontext(_connection)
+        if _connection is not None
+        else workspace_connection(database_url, principal.workspace_id)
+    ) as conn:
         preview = prepare_check_preview(
             database_url,
             principal=principal,
@@ -40,7 +52,12 @@ def store_preview(
 
 
 def approve_preview(
-    database_url: str, *, principal: HumanPrincipal, preview_id: str, expected_digest: str
+    database_url: str,
+    *,
+    principal: HumanPrincipal,
+    preview_id: str,
+    expected_digest: str,
+    _connection: psycopg.Connection[Any] | None = None,
 ) -> str:
     """Approve only the exact preview shown, after locked fresh local reconstruction.
 
@@ -48,7 +65,11 @@ def approve_preview(
     repeat approval is refused, not renewed or unrevoked; create/review a new preview instead.
     There is no standing policy, automatic approval at preview creation, or remote write.
     """
-    with workspace_connection(database_url, principal.workspace_id) as conn:
+    with (
+        nullcontext(_connection)
+        if _connection is not None
+        else workspace_connection(database_url, principal.workspace_id)
+    ) as conn:
         conn.execute("SET LOCAL statement_timeout='5s'")
         _authorize(conn, principal)
         stored = github_previews.read(conn, preview_id=preview_id)
@@ -84,3 +105,27 @@ def approve_preview(
             (principal.workspace_id, principal.user_id, preview_id),
         )
     return approval_id
+
+
+def revoke_preview_approval(
+    conn: psycopg.Connection[Any], *, principal: HumanPrincipal, preview_id: str, approval_id: str
+) -> None:
+    """Withdraw one exact local publication decision, even after its preview was deleted.
+
+    Caller owns commit. This does not undo a remote write or cancel an already-entered request.
+    """
+    _authorize(conn, principal)
+    row = conn.execute(
+        "SELECT id FROM approval WHERE id=%s AND workspace_id=%s "
+        "AND scope='GITHUB_PUBLISH' AND target_id=%s FOR UPDATE",
+        (approval_id, principal.workspace_id, preview_id),
+    ).fetchone()
+    if row is None:
+        raise github_previews.Refused("publication approval unavailable")
+    if approvals.revoke_approval(conn, approval_id=approval_id):
+        conn.execute(
+            "INSERT INTO audit_event(workspace_id,actor_user,action,target_kind,target_id,"
+            "outcome,occurred_at,detail) VALUES(%s,%s,'GITHUB_PREVIEW_APPROVAL_REVOKE',"
+            "'approval',%s,'ALLOWED',clock_timestamp(),'{}')",
+            (principal.workspace_id, principal.user_id, approval_id),
+        )

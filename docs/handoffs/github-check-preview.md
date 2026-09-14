@@ -77,8 +77,8 @@ GITHUB_PUBLISH approval for that exact preview/digest/revision and an atomic aud
 A deterministic approval ID permits at most one approval per preview. Repeat calls do not renew
 or un-revoke an approval; they fail and the caller must reconcile/read existing state. New authority
 requires a newly created and reviewed preview. RUN_EFFECTS and PATCH_APPLY approvals are not valid
-for this scope. These service functions are not exposed as public HTTP routes: CSRF/idempotency
-handling, denial auditing and lost-response reconciliation still need endpoint integration.
+for this scope. Owner-authorized HTTP routes now compose these services in the request transaction
+with CSRF and optional idempotency handling, as described below. Publication remains unavailable.
 
 The focused PostgreSQL path now also checks durable preview reconnect, immutable rows, digest
 mismatch, project-revision staleness, fresh review, separate approval scope, cross-workspace RLS
@@ -152,6 +152,33 @@ No preview creation, approval, reservation or outbound capability is added to HT
 Five grouped in-process HTTP/real-DB cases passed, including positive/nonexistent history,
 no-store, malformed ID, viewer, wrong workspace and revoked session. OpenAPI and both generated
 client operation tables match (113 operations); strict mypy passed across 391 files.
+
+### Human preview, decision and withdrawal API
+
+Owner-only POST routes now expose three separate local actions:
+
+- `/github/publication-previews` accepts only `bindingId` and `runId`, reconstructing stored facts.
+- `/github/publication-previews/{preview_id}/approval` accepts only the exact reviewed `previewDigest`.
+- `/github/publication-previews/{preview_id}/approval/revocation` accepts the exact `approvalId`.
+
+All paths have the `/v1/workspaces/{workspace_id}` prefix, require current cookie authority and
+CSRF, and return no-store responses. Creation/approval use the shared optional Idempotency-Key
+mechanism in the same transaction as the service write/audit. A repeated key/body returns the
+original result; changed body conflicts. Without a key, preview creation creates a new preview,
+but a second approval for one preview still refuses. Replay returns a recorded decision, explicitly
+not current authority; it never renews or un-revokes an approval. A changed current preview refuses
+new approval. Domain-conflict denial audit coverage still needs further integration.
+
+Withdrawal verifies exact workspace/scope/preview/approval identity, serializes against reservation,
+and audits the first revocation only. It does not require the preview to remain retained. Repeated
+withdrawal is safe and never claims that an entered remote write was cancelled. No route reserves
+or dispatches publication, loads a credential, or installs a standing policy.
+
+Five grouped real-DB/HTTP cases passed, covering the existing owner/session restrictions plus
+CSRF, idempotent preview/decision response replay, conflicting body, wrong reviewed digest,
+duplicate decision, wrong revocation target, repeat withdrawal and no renewal after revocation.
+Ruff, strict mypy (391 files), generated OpenAPI and both generated clients (116 operations) passed.
+Only disposable fixture decisions were created; no real-user publication approval was issued.
 
 Next: outbound controller, retained-byte revalidation and remote ambiguous-response reconciliation.
 Actual outbound checks still require separately scoped credentials and explicit GITHUB_PUBLISH.
