@@ -2,37 +2,47 @@
 
 ## Current delivery checkpoint — 2026-09-14
 
-Inspected baseline: `main` at `7d11f00152490069cbc4b28f7ff80e61d8ae465c` (PR #88).
+Inspected baseline: `main` at `5ffca58bfc9bd52117bf8954d6362dcd9ce2105f` (PR #116).
 This checkpoint supersedes the historical branch-status statements below; it is not a claim of
 production readiness. `PLAN.md` remains the requirement map and handoffs retain scoped evidence.
 
-Merged code now includes independently observed initial fixture setup, candidate pre-seed
-reservation (#85), attachment to a separately approved reader run (#86), exact candidate runtime
-destination without rewriting navigator policy (#87), and final fixture incarnation comparison
-(#88). A recreated or missing fixture produces UNKNOWN, not an inferred zero effect count.
-See [fixture controller](../handoffs/reference-fixture-controller.md).
+Merged implementation now includes these paths; none establishes actual reader acceptance:
 
-PR #89 adds finalizer reconstruction of the logical fixture identity from protected configuration
-and matching initial/final measurements. At this checkpoint it is **open, not merged**; its full
-CI run is `34824959322`. Do not count a draft branch or a running CI job as delivered evidence.
+- Original fixture and environment identity reconstruction in the finalizer. PR #89 is merged
+  (`4006f030f9b74d4a3f0b35b723edc08eb56cbfa9`), not pending. `finalize_execution.py` consumes
+  `observed_fixture`, `observed_environment`, model/runtime measurements and source/build linkage.
+- Original baseline source preparation, fenced build, create-only artifact retention, protected
+  fixture/runtime and owned endpoint. Explicit baseline reader binding, bounded admission and
+  acknowledged-STOP cleanup are implemented; they do not qualify or start a reader by default.
+- Baseline action/effect one-shot delivery, original runtime measurements, explicit receipt
+  namespace and source-to-build lineage. These preserve actual provenance rather than copying
+  expected identities from the seal.
+- Frozen protected functional-validation predicates and producer-authored conditions. Original
+  baseline receipts now feed the shared required FUNCTIONAL_REGRESSION artifact/finalizer path.
+  Focus behaviour and forbidden-effect coverage are still separate missing producers.
+
+PR #117 (post-STOP retention/evaluation command) and PR #118 (original baseline admission-to-native
+dispatch handoff) are **open at this checkpoint**. Their focused checks are not full CI or merged
+delivery. Consult current GitHub state before integration; do not restart already-running CI.
 
 ### Next implementation and acceptance gates
 
-1. **Environment runtime evidence.** The finalizer does not yet populate observed ENVIRONMENT.
-   The configuration digest covers name, allowed origins, reset strategy, observer/reset credential
-   references and permitted effects (`EnvironmentSpec.config_digest`). Expiry is a separate live
-   authorization gate, not part of that digest. Join original trusted configured producers to
-   retained runtime observations and authority checks; do not copy the seal's expected digest.
-   An initial empty fixture or a Safari URL sample alone cannot establish every environment field.
+1. **Composed baseline retention/finalization proof.** Baseline DB integration currently exercises
+   original seed, endpoint, reader lease/STOP, protected receipt, snapshot and frozen functional
+   assertion consumption with synthetic process/native observations. It does not execute the whole
+   baseline `retain_bundle` → real S3 → `finalize_execution` path. Complete that composition without
+   substituting fabricated observations for physical acceptance. Existing nonbaseline S3 finalizer
+   integration and separate baseline archive/S3 tests prove only their own boundaries.
 2. **Trusted host controller composition.** `runProvisionedNavigatorExecution` joins the private
    native action bridge and owned navigator process, but remains an embedding API. Finish concrete
    operator-owned configuration, runtime-evidence callbacks, action authorization and independent
    observer closure. Preserve one-shot session handling, retained uncertainty and separate startup
    consent; do not introduce permissive callback defaults to make the first run pass.
 3. **Remaining assertion producers.** Required announcement, reader NEXT sequence and independent
-   task-completion count have implemented paths. Focus behaviour, forbidden effects and functional
-   validation still need their trusted measurements and frozen typed predicates. A final zero count
-   does not prove that no forbidden effect occurred earlier. Missing measurements remain UNKNOWN.
+   task-completion count and protected functional validation have implemented paths. Focus behaviour
+   and forbidden effects still need trusted measurements and frozen typed predicates. Functional
+   rule authoring controls also remain to be completed. A final zero count does not prove that no
+   forbidden effect occurred earlier. Missing measurements remain UNKNOWN.
 4. **Actual reader qualification and full product flow.** VoiceOver `VERIFIED_MATRICES` is empty.
    After explicit operator approval, qualify the actual host and retain original physical evidence;
    then execute baseline → diagnosis → constrained repair → independently approved candidate rerun
