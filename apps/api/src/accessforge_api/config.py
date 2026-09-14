@@ -126,6 +126,19 @@ class ApiSettings(BaseSettings):
                 "a deployment that is not local cannot start with an authentication bypass enabled."
             )
 
+        if self.identity_provider == "local-development":
+            # The environment label alone does not constrain uvicorn's listening interface.
+            # Empty/wildcard hosts and arbitrary DNS names must not expose passwordless login.
+            try:
+                local_bind = ipaddress.ip_address(self.host).is_loopback
+            except ValueError:
+                local_bind = self.host.lower() == "localhost"
+            if not local_bind:
+                raise ValueError(
+                    "identity_provider 'local-development' requires a loopback host; "
+                    "passwordless development login must not bind to a network interface"
+                )
+
         if self.environment == "production" and _is_loopback(self.database_url):
             raise ValueError(
                 "refusing a loopback database in production; a production deployment pointing at "

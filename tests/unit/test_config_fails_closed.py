@@ -43,6 +43,8 @@ def _api_settings(
     evidence_access_key: str = "access-key-value",
     evidence_secret_key: str = "secret-key-value",  # noqa: S107 - deliberately redacted test input.
     environment: Literal["local", "test", "staging", "production"] = "local",
+    host: str = "127.0.0.1",
+    identity_provider: Literal["none", "local-development"] = "none",
 ) -> ApiSettings:
     """Keep configuration tests at the real typed constructor boundary."""
     return ApiSettings(
@@ -52,6 +54,8 @@ def _api_settings(
         evidence_access_key=evidence_access_key,
         evidence_secret_key=evidence_secret_key,
         environment=environment,
+        host=host,
+        identity_provider=identity_provider,
     )
 
 
@@ -59,6 +63,21 @@ def test_valid_configuration_is_accepted() -> None:
     # Allowed-path control: an always-reject validator must fail this test.
     assert _reference_app_settings().port == 8081
     assert _api_settings().environment == "local"
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "example.com", ""])  # noqa: S104
+def test_development_login_refuses_network_exposure(host: str) -> None:
+    with pytest.raises(ValidationError, match="loopback"):
+        _api_settings(host=host, identity_provider="local-development")
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "::1", "localhost"])
+def test_development_login_accepts_loopback_binding(host: str) -> None:
+    assert _api_settings(host=host, identity_provider="local-development").host == host
+
+
+def test_disabled_development_login_does_not_restrict_api_bind() -> None:
+    assert _api_settings(host="0.0.0.0").host == "0.0.0.0"  # noqa: S104
 
 
 # S104 flags the all-interfaces literal; this test exists precisely to prove it is rejected.

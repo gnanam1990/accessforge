@@ -18,6 +18,8 @@ an authentication bypass by construction, so:
 * it is off unless `ACCESSFORGE_IDENTITY_PROVIDER=local-development` is set explicitly;
 * `ApiSettings` refuses that value unless `environment` is `local`, so a staging or production
   deployment cannot start with it enabled even if someone sets the variable;
+* the configured listening host must be loopback; never expose this bridge through a public
+  reverse proxy, tunnel, or a separately configured ASGI server binding;
 * while it is off the route answers 503 and names the missing configuration, and never reveals
   whether a given account exists.
 
