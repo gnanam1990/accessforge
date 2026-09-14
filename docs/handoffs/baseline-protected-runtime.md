@@ -45,6 +45,21 @@ externally observed fixtures without owned-runtime metadata retain their origina
 new checks use synthetic SQL rows and do not prove actual fixture startup. Endpoint lifecycle,
 reader lease admission and complete callback composition remain pending.
 
+`baseline_endpoints` adds durable plan/bind/live/close operations under the original runtime claim.
+Endpoint mode must be selected when reserving the runtime; historical executions acquire no
+invented listener requirement. Planning checks the confirmed original fixture and current nonce,
+empty-state measurement, original three live process receipts and exact approved listen origin.
+Binding cannot change the committed origin or plan. Parent expiry/restore fences live endpoints;
+late cleanup cannot revive UNKNOWN. Required endpoints must have both binding and cleanup receipts
+before protected execution can be PASSED. Failed execution with an unresolved endpoint stays
+UNKNOWN. This still does not authorize a desktop lease or navigator request.
+
+Focused real PostgreSQL/HTTP checks now compose original approval, capture/retention, fixture
+reservation/confirmation, endpoint plan/bind/close, and protected completion, using synthetic
+process/measurement receipts and in-memory storage. Separate endpoint-admission checks cover
+changed origin, expired binding, substituted fixture, nonempty state and missing live processes.
+Actual baseline listener/reader callback composition and real AT acceptance remain pending.
+
 Focused checks cover the real PostgreSQL/HTTP authority lifecycle with synthetic process receipts,
 late creation/removal after expiry, immutable completion, desktop admission fencing, and forward
 migration. Separate synthetic coordinator checks verify commit-before-activation ordering and
