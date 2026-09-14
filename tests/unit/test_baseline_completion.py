@@ -1,10 +1,12 @@
 """Composition ordering only; no real reader, container, DB or S3 acceptance."""
 
+import asyncio
 from typing import Any
 
 import pytest
 
 from accessforge_orchestrator import baseline_completion as composition
+from accessforge_orchestrator.manual_dispatch import HandoffUnknown, ReaderTransportUnavailable
 from accessforge_persistence import baseline_builds
 
 
@@ -79,3 +81,86 @@ def test_completion_follows_original_reader_and_runtime_closure(
     assert events.count("runtime") == int(fault != "configuration")
     assert events.count("reader") <= 1
     assert ("complete" in events) is (fault in (None, "retention"))
+
+
+@pytest.mark.parametrize("fault", [None, "stop", "unavailable", "cancelled", "timeout", "loop"])
+def test_operator_dispatches_once_and_only_completes_after_stop(
+    monkeypatch: pytest.MonkeyPatch, fault: str | None
+) -> None:
+    events: list[str] = []
+    session = object()
+
+    class Transport:
+        def check_available(self) -> None:
+            if fault == "unavailable":
+                raise ReaderTransportUnavailable("unqualified")
+
+    transport = Transport()
+
+    async def dispatch(value: Any, **kwargs: Any) -> None:
+        assert value is session
+        assert kwargs == {
+            "runner_id": "runner",
+            "attempt_id": "attempt",
+            "transport": transport,
+            "timeout_seconds": 30,
+        }
+        events.append("dispatch")
+        if fault == "stop":
+            raise HandoffUnknown("original STOP unconfirmed")
+        events.append("stop")
+
+    def runtime(database_url: str, **kwargs: Any) -> None:
+        assert database_url == "explicit-database"
+        events.append("runtime")
+        kwargs["on_session"](session)
+        events.append("closed")
+
+    def complete(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert events == ["runtime", "dispatch", "stop", "closed"]
+        events.append("complete")
+        return {"outcome": "INCONCLUSIVE"}
+
+    monkeypatch.setattr(composition, "admit_dispatch_and_wait_reader", dispatch)
+    monkeypatch.setattr(composition, "execute_baseline_session", runtime)
+    monkeypatch.setattr(composition, "complete", complete)
+    arguments: dict[str, Any] = dict(
+        workspace_id="workspace",
+        run_id="run",
+        build_id="build",
+        origin="http://127.0.0.1:8081",
+        reset_credential_ref="reset",
+        observer_credential_ref="observer",
+        runner=object(),
+        archive_store=object(),
+        evidence_store=object(),
+        journal_path="private-spool",
+        runner_id="runner",
+        attempt_id="attempt",
+        transport=transport,
+        timeout_seconds=0 if fault == "timeout" else 30,
+        cancelled=lambda: fault == "cancelled",
+    )
+
+    def invoke() -> dict[str, Any]:
+        return composition.dispatch_and_complete("explicit-database", **arguments)
+
+    if fault is None:
+        assert invoke() == {"outcome": "INCONCLUSIVE"}
+        assert events[-1] == "complete"
+    elif fault == "loop":
+
+        async def inside_loop() -> None:
+            with pytest.raises(ValueError, match="active event loop"):
+                invoke()
+
+        asyncio.run(inside_loop())
+    else:
+        with pytest.raises(
+            (HandoffUnknown, ReaderTransportUnavailable, baseline_builds.Refused, ValueError)
+        ):
+            invoke()
+    if fault == "stop":
+        assert events == ["runtime", "dispatch"]
+    elif fault is not None:
+        assert events == []
