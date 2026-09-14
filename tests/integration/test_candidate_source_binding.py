@@ -52,6 +52,14 @@ from accessforge_contracts import validate
 from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_domain.authority import AuthorityError
 from accessforge_domain.canonical import digest
+from accessforge_domain.functional_validation import VALIDATION_SUITE_DIGEST
+from accessforge_domain.journeys.assertions import (
+    Assertion,
+    AssertionKind,
+    AssertionSet,
+    EvaluationRule,
+    UnknownReason,
+)
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.patch_policy import ProposedChange
 from accessforge_domain.states import FindingStatus, Outcome
@@ -349,6 +357,7 @@ def _prepare_owned_build(
     change: ProposedChange | None = None,
     canonical_execution: bool = False,
     fresh_fixture: bool = False,
+    functional_contract: bool = False,
 ) -> tuple[ClaimedCandidate, DockerSandbox, tuple[str, ...]]:
     """Actual build pipeline over owned synthetic source, not reference-app or reader proof."""
     image = image or os.environ.get("ACCESSFORGE_SANDBOX_IMAGE")
@@ -384,10 +393,41 @@ def _prepare_owned_build(
         reserved_approval = str(uuid.uuid4()) if canonical_execution else None
         execution = None
         fixture_digest = policy_digest = "a" * 64
+        assertion_digest = "a" * 64
         if canonical_execution:
             journey = str(uuid.uuid4())
             policy: dict[str, Any] = {}
             summary: dict[str, Any] = {}
+            if functional_contract:
+                reasons = frozenset({UnknownReason.OBSERVATION_MISSING})
+                contract = AssertionSet(
+                    (
+                        Assertion(
+                            "completion",
+                            AssertionKind.TASK_COMPLETION,
+                            "Request persisted",
+                            unknown_reasons=reasons,
+                        ),
+                        Assertion(
+                            "validation",
+                            AssertionKind.FUNCTIONAL_VALIDATION,
+                            "Validation preserved",
+                            unknown_reasons=reasons,
+                            evaluation_rule=EvaluationRule(
+                                "PROTECTED_REFERENCE_VALIDATION",
+                                suite_digest=VALIDATION_SUITE_DIGEST,
+                            ),
+                        ),
+                        Assertion(
+                            "legacy-validation",
+                            AssertionKind.FUNCTIONAL_VALIDATION,
+                            "Prose is not a predicate",
+                            unknown_reasons=reasons,
+                        ),
+                    )
+                )
+                summary["assertionContract"] = contract.canonical_form()
+                assertion_digest = digest(contract.canonical_form())
             if fresh_fixture:
                 policy = {
                     "fixtureValues": {"email": "fixture@example.test"},
@@ -420,11 +460,12 @@ def _prepare_owned_build(
                 "journey_digest,"
                 "assertion_set_digest,fixture_digest,navigator_policy_digest,navigator_policy,"
                 "reviewer_summary) VALUES (%s,%s,%s,'synthetic metadata','web',repeat('a',64),"
-                "repeat('a',64),%s,%s,%s::jsonb,%s::jsonb)",
+                "%s,%s,%s,%s::jsonb,%s::jsonb)",
                 (
                     journey,
                     binding.workspace,
                     binding.project,
+                    assertion_digest,
                     fixture_digest,
                     policy_digest,
                     json.dumps(policy),
@@ -444,7 +485,7 @@ def _prepare_owned_build(
             execution=execution,
             inputs=projects.SealInputs(
                 journey_digest="a" * 64,
-                assertion_set_digest="a" * 64,
+                assertion_set_digest=assertion_digest,
                 fixture_digest=fixture_digest,
                 runner_profile_digest="a" * 64,
                 navigator_policy_digest=policy_digest,
@@ -1167,6 +1208,7 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
         change=ProposedChange(path, original.decode() + "\n# Candidate session binding probe.\n"),
         canonical_execution=True,
         fresh_fixture=fresh,
+        functional_contract=reader_exit == "fresh-released",
     )
     store = isolated_archives[0].store
     execute_claim(
@@ -1603,6 +1645,39 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             assert functional is not None
             assert functional["regressionAttemptId"] == regression.task_id
             assert functional["artifactDigest"] == regression.artifact_digest
+            producer = functional["producerReceipt"]
+            assert producer["validation"] == regression.validation.canonical_form()
+            assert regression.validation.passed
+            authored = producer["runEvidence"]
+            assert authored["runId"] == functional["runId"]
+            assert authored["workspaceId"] == binding.workspace
+            assert authored["leaseId"] == functional["leaseId"]
+            assert authored["leaseEpoch"] == functional["leaseEpoch"]
+            assert authored["assertionObservations"] == [
+                {
+                    "assertionId": "validation",
+                    "kind": "FUNCTIONAL_VALIDATION",
+                    "condition": "TRUE",
+                    "provenance": "OBSERVER_AUTHORED",
+                },
+                {
+                    "assertionId": "legacy-validation",
+                    "kind": "FUNCTIONAL_VALIDATION",
+                    "condition": "UNKNOWN",
+                    "provenance": "OBSERVER_AUTHORED",
+                    "unknownReason": "matching frozen functional predicate unavailable",
+                },
+            ]
+            for replacement in (None, {"forged": True}):
+                with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                    conn.execute(
+                        "UPDATE candidate_regression_attempt SET functional_receipt=%s::jsonb "
+                        "WHERE id=%s",
+                        (
+                            json.dumps(replacement) if replacement is not None else None,
+                            regression.task_id,
+                        ),
+                    )
             assert functional["originalSeedDigest"] == digest(history)
             assert functional_regression_evidence.VALIDATION_CHECKS.issubset(functional["checks"])
             assert history["context"]["nonce"] not in json.dumps(functional)
@@ -1648,6 +1723,36 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             assert conn.execute(
                 "SELECT state FROM evidence_artifact WHERE id=%s", (artifact.artifact_id,)
             ).fetchone() == {"state": "PROMOTED"}
+            from accessforge_orchestrator.execution_artifacts import Refused as EvidenceRefused
+            from accessforge_orchestrator.functional_evidence import observed_assertions
+            from accessforge_persistence import journeys
+
+            original_manifest = conn.execute(
+                "SELECT canonical_manifest FROM sealed_manifest WHERE run_id=%s",
+                (session["run_id"],),
+            ).fetchone()
+            assert original_manifest is not None
+            contract = journeys.load_assertion_contract(
+                conn,
+                version_id=original_manifest["canonical_manifest"]["journeyVersionId"],
+                expected_digest=authored["assertionSetDigest"],
+            )
+            # Actual retained bytes and original DB receipt; runtime argument is a controlled
+            # join input here, not proof of native reader/runtime interpretation.
+            join = {
+                "bundle": json.loads(store.get(key=artifact.object_key)),
+                "context": session,
+                "assertions": contract,
+                "observed_build": regression.artifact_digest,
+                "artifact_digest": digest(bundle),
+            }
+            consumed = observed_assertions(**join)
+            assert consumed["validation"].condition.value == "TRUE"
+            assert consumed["legacy-validation"].condition.value == "UNKNOWN"
+            assert consumed["validation"].evidence_refs == (digest(bundle),)
+            assert observed_assertions(**{**join, "observed_build": None}) == {}
+            with pytest.raises(EvidenceRefused):
+                observed_assertions(**{**join, "observed_build": "0" * 64})
         with workspace_connection(binding.database, str(uuid.uuid4())) as other:
             from accessforge_persistence import functional_regression_evidence
 

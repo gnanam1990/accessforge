@@ -37,14 +37,17 @@ from accessforge_orchestrator.execution_artifacts import (
     _context,
 )
 from accessforge_orchestrator.fixture_evidence import observed_fixture
+from accessforge_orchestrator.functional_evidence import (
+    observed_assertions as functional_assertions,
+)
 from accessforge_orchestrator.runtime_evidence import interpret as interpret_runtime
 from accessforge_orchestrator.runtime_evidence import observed_model, reader_samples
 from accessforge_persistence import evaluations, journeys, runs, workspace_connection
 from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
-from accessforge_persistence.evidence.session import requirements
+from accessforge_persistence.evidence.session import requirements, stream_requirements
 
-EVALUATOR_VERSION = "1.9.0"
+EVALUATOR_VERSION = "1.10.0"
 
 
 def _retained(
@@ -106,11 +109,7 @@ def _retained(
         bounded,
         run_id=str(row["run_id"]),
         attempt_id=str(row["attempt_id"]),
-        required_producers=frozenset(
-            p
-            for k, p in required.items()
-            if k not in {"RUNNER_JOURNAL", "MODEL_RUNTIME", "FIXTURE_SETUP"}
-        ),
+        required_producers=frozenset(stream_requirements(required).values()),
     )
     if not complete.complete:
         raise Refused("evidence cannot be finalized: " + "; ".join(complete.reasons))
@@ -138,6 +137,7 @@ def _decide(
     )
     values: dict[str, AssertionOutcome] = {}
     samples = reader_samples(snapshots)
+    runtime = interpret_runtime(snapshots, row)
     last = snapshots["EFFECT_RECEIPT"]["records"][-1]
     source = last["payload"]["sourceRecord"]
     if (
@@ -167,6 +167,19 @@ def _decide(
     for assertion in assertions.required:
         if assertion.kind in {AssertionKind.REQUIRED_ANNOUNCEMENT, AssertionKind.READING_ORDER}:
             values[assertion.assertion_id] = derive_reader_assertion(assertion, samples)
+    functional_artifacts = [a for a in artifact_ids if a["kind"] == "FUNCTIONAL_REGRESSION"]
+    if len(functional_artifacts) > 1:
+        raise Refused("multiple functional artifacts cannot decide one execution")
+    functional = functional_assertions(
+        bundle=snapshots.get("FUNCTIONAL_REGRESSION"),
+        context=row,
+        assertions=assertions,
+        observed_build=runtime.observed_build,
+        artifact_digest=functional_artifacts[0]["digest"] if functional_artifacts else None,
+    )
+    if set(functional) & set(values):
+        raise Refused("different observers cannot decide the same assertion")
+    values.update(functional)
     evaluated = evaluate_assertions(assertions.required, values)
     task_values = [
         a.condition for a in evaluated.outcomes if a.kind is AssertionKind.TASK_COMPLETION
@@ -215,7 +228,6 @@ def _decide(
     )
     if fixture_digest is not None:
         observed[IdentityKind.FIXTURE_INSTANCE] = fixture_digest
-    runtime = interpret_runtime(snapshots, row)
     environment_digest = observed_environment(
         environment=conn.execute(
             "SELECT e.* FROM environment_manifest e JOIN sealed_manifest s "

@@ -120,4 +120,9 @@ def for_run(conn: psycopg.Connection[dict[str, Any]], *, run_id: str) -> dict[st
         "checks": sorted(checks),
         "processes": [dict(p) for p in processes],
         "finishedAt": to_rfc3339_utc(row["finished_at"]),
+        **(
+            {"producerReceipt": row["functional_receipt"]}
+            if row["functional_receipt"] is not None
+            else {}
+        ),
     }
