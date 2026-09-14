@@ -2,6 +2,10 @@
 
 This is a release checklist, not a statement of completed physical acceptance.
 
+Prepared writing assets: [English project description](SUBMISSION-DRAFT.md) and
+[evidence-gated recording plan](DEMO-RECORDING-PLAN.md). These are drafts, not a completed video,
+submission or actual-reader acceptance result.
+
 ## Essential working evidence
 
 - [ ] Qualify exact actual VoiceOver host with consent and native capture evidence.
