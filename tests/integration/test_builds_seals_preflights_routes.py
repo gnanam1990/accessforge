@@ -1173,6 +1173,7 @@ def test_baseline_archive_retention_boundary(
     execution_body: dict[str, Any],
     fault: str | None,
     request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Real DB/HTTP; s3 case uses isolated real stores; process receipt is synthetic, not Docker."""
     from accessforge_build_worker.baseline_artifacts import (
@@ -1476,6 +1477,31 @@ def test_baseline_archive_retention_boundary(
                         assert not sessions.reader_cleanup_confirmed(
                             conn, attempt_id=task.attempt_id
                         )
+                        from contextlib import nullcontext
+                        from types import SimpleNamespace
+
+                        from accessforge_orchestrator import baseline_reader_dispatch as handoff
+
+                        reader_ref = DispatchReference(
+                            WS, binding["run_id"], reader_attempt, reader_id, lease_id, 1
+                        )
+                        reader_session: Any = SimpleNamespace(
+                            database_url=db, workspace_id=WS, claim=task
+                        )
+
+                        def stopped(
+                            reference: DispatchReference = reader_ref,
+                            reader_session: Any = reader_session,
+                        ) -> bool:
+                            # Reuse this test's uncommitted original runtime transaction. The
+                            # production helper still executes its actual SQL, not a fake result.
+                            with monkeypatch.context() as patch:
+                                patch.setattr(
+                                    handoff, "workspace_connection", lambda *args: nullcontext(conn)
+                                )
+                                return handoff._reader_stopped(reader_session, reference)
+
+                        assert not stopped()
                         from accessforge_persistence import baseline_observations as observations
 
                         clock_row = conn.execute("SELECT clock_timestamp() AS now").fetchone()
@@ -1579,6 +1605,15 @@ def test_baseline_archive_retention_boundary(
                             (lease_id,),
                         )
                         sessions.assert_reader_released(conn, attempt_id=task.attempt_id)
+                        assert stopped()
+                        for changed_reference in (
+                            replace(reader_ref, epoch=2),
+                            replace(reader_ref, attempt_id=str(uuid.uuid4())),
+                            replace(reader_ref, lease_id=str(uuid.uuid4())),
+                            replace(reader_ref, runner_id=str(uuid.uuid4())),
+                        ):
+                            with pytest.raises(sessions.Refused):
+                                stopped(changed_reference)
                     endpoints.closed(conn, claim=task, cleanup_confirmed=True)
                     with pytest.raises(endpoints.Refused), conn.transaction():
                         endpoints.assert_live(conn, claim=task)
