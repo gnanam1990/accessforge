@@ -87,9 +87,10 @@ ARTIFACT_CLASS: dict[str, str] = {
     "SPEECH_TRANSCRIPT": "READER_SPEECH",
     # Visual capture, explicitly supplementary.
     "SCREENSHOT": "SCREEN_RECORDING",
-    # Timings, internal state, the supervisor's own log. None decides a verdict.
+    # Optional timings and internal debug state do not decide a verdict.
     "DIAGNOSTIC_LOG": "DIAGNOSTIC",
-    "RUNNER_JOURNAL": "DIAGNOSTIC",
+    # The original local journal is required to reconstruct the execution bundle.
+    "RUNNER_JOURNAL": "READER_SPEECH",
     # Runtime preflight binds runner identity and readiness to the verdict.
     # Deleting either its artifact or canonical payload must invalidate that proof.
     "PREFLIGHT_RECORD": "READER_SPEECH",

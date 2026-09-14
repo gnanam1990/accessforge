@@ -315,11 +315,12 @@ def test_a_class_that_breaks_nothing_says_so(db: str, store: evidence.S3Artifact
 # --- the event chain -----------------------------------------------------------------------------
 
 
-def test_runtime_preflight_is_proof_not_disposable_diagnostics(
-    db: str, store: evidence.S3ArtifactStore
+@pytest.mark.parametrize("kind", ["PREFLIGHT_RECORD", "RUNNER_JOURNAL"])
+def test_runtime_proof_is_not_disposable_diagnostics(
+    db: str, store: evidence.S3ArtifactStore, kind: str
 ) -> None:
     run_id, attempt_id = _run(db)
-    _promoted(db, store, run_id, attempt_id, kind="PREFLIGHT_RECORD")
+    _promoted(db, store, run_id, attempt_id, kind=kind)
     with workspace_connection(db, WS) as conn:
         sequencer.admit_record(
             conn,
