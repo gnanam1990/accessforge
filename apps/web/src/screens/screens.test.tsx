@@ -318,12 +318,17 @@ describe('journey authoring', () => {
     const user = userEvent.setup()
     const server = createFakeServer(MEMBER)
     await openProject(server)
-    await user.type(screen.getByLabelText(/Journey name/), 'Frozen reader rules')
-    await user.type(screen.getByLabelText(/trying to do/), 'Submit the contact form')
-    await user.type(screen.getByLabelText(/Start address/), 'https://localhost:8443/contact')
-    await user.type(screen.getByLabelText(/count as having succeeded/), 'No submission recorded')
-    await user.type(screen.getByLabelText(/Fixture template/), 'contact-form')
-    await user.type(screen.getByLabelText(/Assertion 1 description/), 'No submission recorded')
+    // These prerequisite fields are not keystroke tests. Paste realistic prepared values,
+    // keeping literal reader typing and every validation/submission assertion below intact.
+    for (const [label, value] of [
+      [/Journey name/, 'Frozen reader rules'], [/trying to do/, 'Submit the contact form'],
+      [/Start address/, 'https://localhost:8443/contact'],
+      [/count as having succeeded/, 'No submission recorded'], [/Fixture template/, 'contact-form'],
+      [/Assertion 1 description/, 'No submission recorded'],
+    ] as const) {
+      await user.click(screen.getByLabelText(label))
+      await user.paste(value)
+    }
     await user.click(screen.getByLabelText('Freeze an executable rule for assertion 1'))
     await user.clear(screen.getByLabelText(/Assertion 1 expected request count/))
     await user.type(screen.getByLabelText(/Assertion 1 expected request count/), '0')
