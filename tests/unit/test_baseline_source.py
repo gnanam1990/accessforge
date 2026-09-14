@@ -154,9 +154,7 @@ def test_only_original_unleased_approved_baseline_is_preparable(
         def fetchone(self) -> Any:
             return self.value
 
-    monkeypatch.setattr(
-        execution_approvals, "assert_authorized", lambda *a, **kw: manifest
-    )
+    monkeypatch.setattr(execution_approvals, "assert_authorized", lambda *a, **kw: manifest)
     conn: Any = Connection()
     if fault is None:
         assert (
