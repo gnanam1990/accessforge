@@ -617,10 +617,11 @@ def admit_lease(
     # Setup owns the run row before reserving a nonce. Match the database lease trigger so
     # an ordinary unresolved setup is a clear admission refusal, not a raw integrity error.
     conn.execute("SELECT id FROM run WHERE id=%s FOR UPDATE", (run_id,))
-    if conn.execute(
-        "SELECT 1 FROM fixture_setup_reservation WHERE run_id=%s AND observation IS NULL",
+    setup = conn.execute(
+        "SELECT fixture_setup_unresolved(%s) AS unresolved",
         (run_id,),
-    ).fetchone():
+    ).fetchone()
+    if setup is None or setup["unresolved"]:
         raise RunnerError("fixture setup is unresolved; desktop lease refused")
 
     status = RunnerStatus(str(runner["status"]))

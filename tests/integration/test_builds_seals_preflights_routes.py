@@ -2635,6 +2635,31 @@ def test_queued_fixture_setup_reconciles_reserved_nonce(
     assert queued.status_code == 202, queued.text
     run_id = queued.json()["runId"]
     token = "synthetic-controller-setup-token"
+    # No reservation at all must be refused just as an uncertain setup is refused.
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute(
+            "SELECT fixture_setup_unresolved(%s) AS unresolved", (run_id,)
+        ).fetchone() == {"unresolved": True}
+        with pytest.raises(runner_store.RunnerError, match="fixture setup is unresolved"):
+            runner_store.admit_lease(
+                conn,
+                workspace_id=WS,
+                runner_id=runner["runnerId"],
+                run_id=run_id,
+                attempt_id=str(uuid.uuid4()),
+            )
+    # Direct SQL cannot bypass the repository gate, even before a reservation exists.
+    with (
+        pytest.raises(psycopg.Error, match="fixture setup is unresolved"),
+        workspace_connection(db, WS) as conn,
+    ):
+        conn.execute(
+            "INSERT INTO desktop_lease(id,workspace_id,runner_id,session_key,run_id,attempt_id,"
+            "epoch,granted_at,deadline_at,heartbeat_at) SELECT %s,%s,id,session_key,%s,%s,1,"
+            "clock_timestamp(),clock_timestamp()+interval '30 seconds',clock_timestamp() "
+            "FROM runner WHERE id=%s",
+            (str(uuid.uuid4()), WS, run_id, str(uuid.uuid4()), runner["runnerId"]),
+        )
     app = create_reference_app(
         ReferenceAppSettings(
             database_url=owned_observer_database,
@@ -2712,6 +2737,10 @@ def test_queued_fixture_setup_reconciles_reserved_nonce(
     assert setup.prepare(db, owned_observer_database, **kwargs) == observed
     assert statuses == ([201, 200] if case == "lost-response" else [201])
     assert len(set(nonces)) == 1
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute(
+            "SELECT fixture_setup_unresolved(%s) AS unresolved", (run_id,)
+        ).fetchone() == {"unresolved": False}
     with workspace_connection(db, str(uuid.uuid4())) as conn:
         assert conn.execute("SELECT 1 FROM fixture_setup_reservation").fetchone() is None
     with workspace_connection(db, WS) as conn:
