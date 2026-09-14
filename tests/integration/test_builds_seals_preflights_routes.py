@@ -217,6 +217,20 @@ def execution_body(
     assert build.status_code == 201, build.text
     journey_id = str(uuid.uuid4())
     body = _seal_body(build.json()["buildId"], environment)
+    setup_case = getattr(request, "param", None) == "fixture-setup"
+    if setup_case:
+        prepared_environment = client.post(
+            f"/v1/workspaces/{WS}/projects/{project}/environments",
+            json={
+                "name": "fresh fixture setup", "allowedOrigins": ["http://127.0.0.1:8081"],
+                "fixtureResetStrategy": "FRESH_FIXTURE_NONCE",
+                "observerCredentialRef": "observer-profile", "resetCredentialRef": "reset-profile",
+                "permittedEffects": ["FORM_SUBMIT"],
+                "expiresAt": (datetime.now(UTC) + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
+            }, headers={CSRF_HEADER: csrf},
+        )
+        assert prepared_environment.status_code == 201
+        body["environmentId"] = prepared_environment.json()["environmentId"]
     policy: dict[str, Any] = {}
     reviewer_summary: dict[str, Any] = {}
     if getattr(request, "param", None) in {
@@ -283,9 +297,9 @@ def execution_body(
     reviewer_summary["fixtureContract"] = {
         "templateId": "service-request",
         "navigatorValues": policy["fixtureValues"],
-        "resetKeys": [],
+        "resetKeys": ["variant"] if setup_case else [],
         "observerKeys": ["effect"],
-        "resetValuesDigest": digest({}),
+        "resetValuesDigest": digest({"variant": "inaccessible"} if setup_case else {}),
         "observerConfigDigest": digest({"effect": "CREATE_TEST_REQUEST"}),
     }
     body["fixtureDigest"] = digest(reviewer_summary["fixtureContract"])

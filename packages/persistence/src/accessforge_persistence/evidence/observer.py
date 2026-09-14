@@ -46,6 +46,38 @@ class ApplicationObserver:
     def __init__(self, application_database_url: str) -> None:
         self._url = application_database_url
 
+    def inspect_fixture(self, *, fixture_nonce: str) -> dict[str, Any]:
+        """One read-only snapshot of original fixture metadata and its durable effect count."""
+        try:
+            with psycopg.connect(
+                self._url,
+                row_factory=dict_row,
+                autocommit=False,
+                connect_timeout=5,
+                options="-c statement_timeout=5000 -c lock_timeout=1000",
+            ) as conn:
+                conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                row = conn.execute(
+                    "SELECT f.nonce,f.template_digest,f.variant,f.created_at,"
+                    "(SELECT count(*) FROM public.service_request r WHERE r.fixture_nonce=f.nonce) "
+                    "AS effect_count FROM public.fixture_instance f WHERE f.nonce=%s",
+                    (fixture_nonce,),
+                ).fetchone()
+                if row is None:
+                    raise ObserverError("application fixture is unavailable")
+                return {
+                    "nonce": row["nonce"],
+                    "templateDigest": row["template_digest"],
+                    "variant": row["variant"],
+                    "createdAt": to_rfc3339_utc(row["created_at"]),
+                    "effectCount": int(row["effect_count"]),
+                    "observedAt": to_rfc3339_utc(datetime.now(UTC)),
+                }
+        except psycopg.Error as exc:
+            raise ObserverError(
+                "application fixture inspection unavailable, not an empty fixture"
+            ) from exc
+
     def count_effects(
         self, *, fixture_nonce: str, effect: str, expected_template_digest: str | None = None
     ) -> EffectCount:
