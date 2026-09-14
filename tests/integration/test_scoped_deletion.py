@@ -315,6 +315,39 @@ def test_a_class_that_breaks_nothing_says_so(db: str, store: evidence.S3Artifact
 # --- the event chain -----------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("kind", ["PREFLIGHT_RECORD", "RUNNER_JOURNAL"])
+def test_runtime_proof_is_not_disposable_diagnostics(
+    db: str, store: evidence.S3ArtifactStore, kind: str
+) -> None:
+    run_id, attempt_id = _run(db)
+    _promoted(db, store, run_id, attempt_id, kind=kind)
+    with workspace_connection(db, WS) as conn:
+        sequencer.admit_record(
+            conn,
+            workspace_id=WS,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            lease_epoch=1,
+            producer_id=SUPERVISOR,
+            source_record_id="runtime-preflight",
+            producer_sequence=1,
+            event_type="PREFLIGHT_RESULT",
+            manifest_digest=MANIFEST,
+            payload={"runnerProfile": {"platform": "darwin"}},
+            source_time=datetime(2026, 9, 11, 12, tzinfo=UTC),
+        )
+
+    diagnostic = _delete(db, store, run_id, classes=("DIAGNOSTIC",))
+    assert diagnostic.artifact_bytes_deleted == 0
+    assert diagnostic.event_payloads_cleared == 0
+    assert diagnostic.completeness_invalidated is False
+
+    proof = _delete(db, store, run_id, classes=("READER_SPEECH",))
+    assert proof.artifact_bytes_deleted == 1
+    assert proof.event_payloads_cleared == 1
+    assert proof.completeness_invalidated is True
+
+
 def test_the_hash_chain_survives_a_cleared_payload(
     db: str, store: evidence.S3ArtifactStore
 ) -> None:

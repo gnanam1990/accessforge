@@ -29,6 +29,8 @@ export {
   assertRealReaderProven,
 } from './profile.js';
 export type { PlatformMatrix, ProfileStatus } from './profile.js';
+export { observeRunnerProfile, parseObservedRunnerProfile } from './runner-profile.js';
+export type { ObservedRunnerProfile } from './runner-profile.js';
 
 export {
   PREFLIGHT_CHECKS,

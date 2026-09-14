@@ -15,6 +15,7 @@ from accessforge_domain.canonical import digest
 from accessforge_domain.evaluation.rules import ReaderSample
 from accessforge_domain.navigator_runtime import validate_observation
 from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
+from accessforge_domain.runners.runtime_profile import observed_profile
 from accessforge_domain.timestamps import parse_rfc3339_utc
 from accessforge_orchestrator.execution_artifacts import Refused
 
@@ -25,6 +26,7 @@ class RuntimeEvidence:
     observed_build: str | None
     reasons: tuple[str, ...]
     observed_source: str | None = None
+    observed_runner_profile: str | None = None
 
 
 def observed_model(snapshots: dict[str, Any], context: dict[str, Any]) -> str | None:
@@ -263,6 +265,7 @@ def interpret(snapshots: dict[str, Any], context: dict[str, Any]) -> RuntimeEvid
     reports: dict[str, dict[str, Any]] = {}
     builds: list[str] = []
     sources: list[str] = []
+    profiles: list[str] = []
     for event in snapshots["PREFLIGHT_RECORD"]["records"]:
         payload = event["payload"]
         if payload.get("provenance") != "RUNTIME_PROBE_REPORT":
@@ -288,6 +291,22 @@ def interpret(snapshots: dict[str, Any], context: dict[str, Any]) -> RuntimeEvid
         ):
             raise Refused("runtime preflight coverage or action ordering differs")
         reports[action_id] = checks
+        if "runnerProfile" in source:
+            try:
+                profile = observed_profile(source["runnerProfile"])
+            except ValueError as exc:
+                raise Refused("retained runtime profile malformed") from exc
+            if all(
+                checks[key] == "TRUE"
+                for key in (
+                    "READER_ACTIVE",
+                    "READER_VERSION_MATCHES_PROFILE",
+                    "BROWSER_VERSION_MATCHES_PROFILE",
+                    "DESKTOP_SESSION_OWNED",
+                    "NO_STALE_INPUT_SOURCE",
+                )
+            ):
+                profiles.append(profile.digest)
         build = _build(payload.get("buildArtifactReceipt"), source, context)
         if build is not None and checks["BUILD_IDENTITY_MATCHES_MANIFEST"] == "TRUE":
             builds.append(build)
@@ -313,4 +332,9 @@ def interpret(snapshots: dict[str, Any], context: dict[str, Any]) -> RuntimeEvid
         observed_source = sources[0]
     else:
         reasons.append("captured source-to-build lineage does not cover every original action")
-    return RuntimeEvidence(passed, observed_build, tuple(reasons), observed_source)
+    runner_profile = None
+    if len(profiles) == len(intents) and len(set(profiles)) == 1:
+        runner_profile = profiles[0]
+    else:
+        reasons.append("matching observed runner profiles do not cover every original action")
+    return RuntimeEvidence(passed, observed_build, tuple(reasons), observed_source, runner_profile)
