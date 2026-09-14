@@ -8,6 +8,7 @@ from typing import Any, Literal, Self
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from accessforge_domain.journeys.dsl import ALLOWED_ACTIONS
+from accessforge_domain.reference_destination import reference_destination
 
 
 class ActionName(StrEnum):
@@ -96,6 +97,21 @@ class NavigatorProjection(_SealedModel):
     run_ref: str = Field(alias="runRef", min_length=1)
     policy: SealedNavigatorPolicy
     reader_observations: tuple[ReaderObservation, ...] = Field(alias="readerObservations")
+    runtime_start_url: str | None = Field(default=None, alias="runtimeStartUrl", max_length=2048)
+
+    @model_validator(mode="after")
+    def destination_preserves_original_policy(self) -> Self:
+        if self.runtime_start_url is not None:
+            origin, separator, nonce = self.runtime_start_url.rpartition("/form/")
+            if (
+                not separator
+                or reference_destination(
+                    sealed_url=self.policy.start_url, origin=origin, nonce=nonce
+                )
+                != self.runtime_start_url
+            ):
+                raise ValueError("runtime destination differs from the reviewed template")
+        return self
 
     @classmethod
     def from_policy(
@@ -104,6 +120,7 @@ class NavigatorProjection(_SealedModel):
         run_ref: str,
         policy: dict[str, object],
         reader_observations: list[ReaderObservation],
+        runtime_start_url: str | None = None,
     ) -> NavigatorProjection:
         # Validate the whole sealed policy first. Extra oracle/source keys are rejected rather than
         # copied and then filtered, so an upstream boundary expansion is a visible failure.
@@ -113,11 +130,15 @@ class NavigatorProjection(_SealedModel):
                 "run_ref": run_ref,
                 "policy": sealed,
                 "reader_observations": tuple(reader_observations),
+                "runtime_start_url": runtime_start_url,
             }
         )
 
     def model_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json", by_alias=True)
+        payload = self.model_dump(mode="json", by_alias=True)
+        if self.runtime_start_url is None:
+            del payload["runtimeStartUrl"]
+        return payload
 
 
 class ProposedAction(_SealedModel):

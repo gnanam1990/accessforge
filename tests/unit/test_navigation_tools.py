@@ -60,6 +60,36 @@ def projection(raw_policy: dict[str, object] | None = None) -> NavigatorProjecti
     )
 
 
+def test_runtime_destination_preserves_the_exact_original_policy() -> None:
+    original = policy(startUrl="http://127.0.0.1:8081/form/FIXTURE")
+    runtime = "http://127.0.0.1:8081/form/reserved-nonce-1234"
+    view = NavigatorProjection.from_policy(
+        run_ref="run-1", policy=original, reader_observations=[], runtime_start_url=runtime
+    )
+    assert view.model_payload()["policy"] == original
+    assert view.model_payload()["runtimeStartUrl"] == runtime
+    assert "runtimeStartUrl" not in projection().model_payload()
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        "http://localhost:8081/form/reserved-nonce-1234",
+        "http://127.0.0.1:8081/form/reserved-nonce-1234?oracle=1",
+        "http://127.0.0.1:8081/form/..",
+        "https://example.com/form/reserved-nonce-1234",
+    ],
+)
+def test_runtime_destination_cannot_expand_the_original_origin_or_template(runtime: str) -> None:
+    with pytest.raises(ValueError):
+        NavigatorProjection.from_policy(
+            run_ref="run-1",
+            policy=policy(startUrl="http://127.0.0.1:8081/form/FIXTURE"),
+            reader_observations=[],
+            runtime_start_url=runtime,
+        )
+
+
 def state(
     *,
     lease_epoch: int = 4,

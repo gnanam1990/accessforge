@@ -22,6 +22,8 @@ from accessforge_navigation_tools import (
 from accessforge_orchestrator.manual_dispatch import DispatchReference
 from accessforge_persistence import journeys, runners, workspace_connection
 
+from .destination import load_destination
+
 
 class ProjectionRefused(ValueError):
     """The exact current attempt has no complete, original planning boundary."""
@@ -98,7 +100,8 @@ def load_retained_turn(
         except journeys.JourneyPersistenceError as exc:
             raise ProjectionRefused("original logical fixture contract unavailable") from exc
         fixture = conn.execute(
-            "SELECT template_id,template_digest,navigator_values FROM run_fixture_instance "
+            "SELECT id,nonce,template_id,template_digest,navigator_values "
+            "FROM run_fixture_instance "
             "WHERE run_id=%s AND workspace_id=%s FOR SHARE",
             (reference.run_id, reference.workspace_id),
         ).fetchone()
@@ -110,6 +113,17 @@ def load_retained_turn(
             or fixture["navigator_values"] != policy.fixture_values
         ):
             raise ProjectionRefused("runtime fixture values differ from the approved template")
+        try:
+            runtime_start_url = load_destination(
+                conn,
+                workspace_id=reference.workspace_id,
+                run_id=reference.run_id,
+                manifest=manifest,
+                fixture=fixture,
+                sealed_url=policy.start_url,
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ProjectionRefused("confirmed runtime fixture destination unavailable") from exc
         expires = min(
             session["expires_at"],
             parse_rfc3339_utc(manifest["expiresAt"]),
@@ -194,6 +208,7 @@ def load_retained_turn(
             run_ref="navigator:" + digest(asdict(reference)),
             policy=raw_policy,
             reader_observations=observations,
+            runtime_start_url=runtime_start_url,
         )
         if expires <= datetime.now(UTC):
             raise ProjectionRefused("planning snapshot outlived its wall-time budget")
