@@ -5,7 +5,9 @@ lease that expires or a job to resume. Remote checks and retained-byte verificat
 be composed by the outbound controller before its one call. This module cannot publish.
 """
 
-from uuid import uuid4
+from dataclasses import dataclass
+from typing import Literal
+from uuid import UUID, uuid4
 
 from accessforge_domain.authorization import HumanPrincipal
 from accessforge_domain.states import ApprovalScope
@@ -14,6 +16,69 @@ from accessforge_persistence import approvals, github_previews, workspace_connec
 
 from .github_connections import _authorize
 from .github_preview_service import prepare_check_preview
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationRecovery:
+    """Point-in-time local observation; not a receipt or permission to retry."""
+
+    local_state: Literal["RECORDED", "NOT_OBSERVED"]
+    intent_id: str | None = None
+    original_preview_id: str | None = None
+    preview_digest: str | None = None
+    created_at: str | None = None
+    remote_outcome: Literal["UNKNOWN"] = "UNKNOWN"
+    retry_allowed: Literal[False] = False
+
+
+def read_publication_state(
+    database_url: str, *, principal: HumanPrincipal, preview_id: str
+) -> PublicationRecovery:
+    """Recover a lost reservation response using the original request's preview ID.
+
+    Also resolves a later preview to the original run/App/repository create slot. Reads require
+    a current owner/session, but not current publication consent or an active binding: revocation
+    must stop writes, not hide historical ambiguity. No row is not proof of no remote write
+    (restore, concurrent commit or workspace deletion may have removed the relevant local view).
+    """
+    try:
+        if str(UUID(preview_id)) != preview_id:
+            raise ValueError
+    except (ValueError, TypeError, AttributeError):
+        raise github_previews.Refused("publication preview identity unavailable") from None
+    with workspace_connection(database_url, principal.workspace_id) as conn:
+        conn.execute("SET LOCAL statement_timeout='5s'")
+        _authorize(conn, principal)
+        row = conn.execute(
+            "SELECT * FROM github_publication_intent WHERE preview_id=%s", (preview_id,)
+        ).fetchone()
+        if row is None:
+            available = conn.execute(
+                "SELECT id FROM github_publication_preview WHERE id=%s", (preview_id,)
+            ).fetchone()
+            if available is not None:
+                # Never trust an alias's embedded identities before validating its stored hash.
+                stored = github_previews.read(conn, preview_id=preview_id)
+                identity = stored["preview"]["identity"]
+                row = conn.execute(
+                    "SELECT * FROM github_publication_intent WHERE workspace_id=%s "
+                    "AND app_id=%s AND repository_id=%s AND run_id=%s",
+                    (
+                        principal.workspace_id,
+                        int(identity["appId"]),
+                        int(identity["repositoryId"]),
+                        stored["run_id"],
+                    ),
+                ).fetchone()
+        if row is None:
+            return PublicationRecovery(local_state="NOT_OBSERVED")
+        return PublicationRecovery(
+            local_state="RECORDED",
+            intent_id=str(row["id"]),
+            original_preview_id=str(row["preview_id"]),
+            preview_digest=row["preview_digest"],
+            created_at=to_rfc3339_utc(row["created_at"]),
+        )
 
 
 def reserve_publication(

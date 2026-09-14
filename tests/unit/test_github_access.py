@@ -7,14 +7,29 @@ from typing import Any
 import httpx
 import pytest
 
+from accessforge_domain.canonical import digest
 from accessforge_orchestrator.github_access import Refused, RepositoryScope, inspect_repository
 
 SCOPE = RepositoryScope(7, 42, 3, 13, "fixture-owner", "fixture-repository")
 TOKEN = "ghs_" + "a" * 32
 COMMIT = "a" * 40
+CHECK_BODY: dict[str, Any] = {
+    "name": "AccessForge journey evidence",
+    "head_sha": COMMIT,
+    "external_id": "accessforge:" + "b" * 64,
+    "status": "completed",
+    "conclusion": "action_required",
+    "output": {"title": "Fixture", "summary": "Scope only"},
+}
 
 
-def transport(fault: str | None, calls: list[httpx.Request]) -> httpx.MockTransport:
+def transport(
+    fault: str | None, calls: list[httpx.Request], *, check: bool = False
+) -> httpx.MockTransport:
+    permissions = {"metadata": "read", "contents": "read"}
+    if check:
+        permissions["checks"] = "read"
+
     def handle(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         assert request.url.host == "api.github.com" and request.url.scheme == "https"
@@ -29,7 +44,7 @@ def transport(fault: str | None, calls: list[httpx.Request]) -> httpx.MockTransp
                 "app_id": 7,
                 "account": {"id": 3},
                 "suspended_at": None,
-                "permissions": {"metadata": "read", "contents": "write"},
+                "permissions": {**permissions, "contents": "write"},
             }
             if fault == "wrong-app":
                 value["app_id"] = 8
@@ -39,15 +54,17 @@ def transport(fault: str | None, calls: list[httpx.Request]) -> httpx.MockTransp
                 value["suspended_at"] = "2026-09-14T00:00:00Z"
             if fault == "missing-permission":
                 value["permissions"] = {"metadata": "read"}
+            if fault == "missing-checks":
+                del value["permissions"]["checks"]
         elif path == "/app/installations/42/access_tokens" and request.method == "POST":
             assert json.loads(request.content) == {
                 "repository_ids": [13],
-                "permissions": {"metadata": "read", "contents": "read"},
+                "permissions": permissions,
             }
             status = 201
             value = {
                 "token": TOKEN,
-                "permissions": {"metadata": "read", "contents": "read"},
+                "permissions": dict(permissions),
                 "expires_at": (datetime.now(UTC) + timedelta(minutes=59))
                 .isoformat()
                 .replace("+00:00", "Z"),
@@ -60,6 +77,36 @@ def transport(fault: str | None, calls: list[httpx.Request]) -> httpx.MockTransp
                 del value["expires_at"]
             if fault == "issuance-timeout":
                 raise httpx.ReadTimeout("private credential details must not escape")
+        elif path == "/repos/fixture-owner/fixture-repository/check-runs/91":
+            assert check and request.method == "GET"
+            assert request.headers["Authorization"] == "Bearer " + TOKEN
+            value = {
+                **CHECK_BODY,
+                "id": 91,
+                "app": {"id": 7},
+                "output": {**CHECK_BODY["output"], "annotations_count": 0},
+                "html_url": "https://untrusted.invalid/private-response",
+            }
+            if fault == "check-id":
+                value["id"] = 92
+            if fault == "check-app":
+                value["app"]["id"] = 8
+            if fault == "check-source":
+                value["head_sha"] = "b" * 40
+            if fault == "check-text":
+                value["output"]["text"] = "unreviewed body"
+            if fault == "check-annotations":
+                value["output"]["annotations_count"] = 1
+            if fault == "check-lifecycle":
+                value["status"] = "in_progress"
+            if fault == "check-missing":
+                status = 404
+            if fault == "check-redirect":
+                status = 302
+            if fault == "check-timeout":
+                raise httpx.ReadTimeout("private check details must not escape")
+            if fault == "changed-summary":
+                value["output"]["summary"] = "Changed summary"
         elif path == f"/repos/fixture-owner/fixture-repository/git/commits/{COMMIT}":
             assert request.headers["Authorization"] == "Bearer " + TOKEN
             value = {
@@ -107,6 +154,96 @@ def test_exact_read_probe_revokes_and_never_returns_credential() -> None:
     assert result.meaning == "POINT_IN_TIME_READ_ACCESS_NOT_PUBLICATION_AUTHORITY"
     assert TOKEN not in repr(result) and "a.b.c" not in repr(result)
     assert [call.method for call in calls] == ["GET", "POST", "GET", "GET", "DELETE"]
+
+
+@pytest.mark.parametrize("fault", [None, "changed-summary"])
+def test_known_check_read_returns_only_bound_payload_digest(fault: str | None) -> None:
+    calls: list[httpx.Request] = []
+    result = inspect_repository(
+        SCOPE,
+        app_jwt="a.b.c",
+        allow_temporary_token_issuance=True,
+        commit_sha=COMMIT,
+        check_run_id=91,
+        _transport=transport(fault, calls, check=True),
+    )
+    assert result.token_revoked and result.check_observation is not None
+    assert result.check_observation.check_run_id == 91
+    assert (result.check_observation.payload_digest == digest(CHECK_BODY)) is (fault is None)
+    assert "private-response" not in repr(result) and "Scope only" not in repr(result)
+    assert TOKEN not in repr(result)
+    assert [call.method for call in calls] == [
+        "GET",
+        "POST",
+        "GET",
+        "GET",
+        "GET",
+        "GET",
+        "GET",
+        "DELETE",
+    ]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "check-id",
+        "check-app",
+        "check-source",
+        "check-text",
+        "check-annotations",
+        "check-lifecycle",
+        "check-missing",
+        "check-redirect",
+        "check-timeout",
+        "revocation-failed",
+        "late-transfer",
+        "late-suspension",
+    ],
+)
+def test_unconfirmed_known_check_never_returns_a_receipt(fault: str) -> None:
+    calls: list[httpx.Request] = []
+    with pytest.raises(Refused) as error:
+        inspect_repository(
+            SCOPE,
+            app_jwt="a.b.c",
+            allow_temporary_token_issuance=True,
+            commit_sha=COMMIT,
+            check_run_id=91,
+            _transport=transport(fault, calls, check=True),
+        )
+    assert TOKEN not in str(error.value) and "private check" not in str(error.value)
+    assert calls[-1].method == "DELETE"
+    assert sum(call.method == "POST" for call in calls) == 1
+
+
+def test_missing_checks_permission_never_issues_a_token() -> None:
+    calls: list[httpx.Request] = []
+    with pytest.raises(Refused):
+        inspect_repository(
+            SCOPE,
+            app_jwt="a.b.c",
+            allow_temporary_token_issuance=True,
+            commit_sha=COMMIT,
+            check_run_id=91,
+            _transport=transport("missing-checks", calls, check=True),
+        )
+    assert [call.method for call in calls] == ["GET"]
+
+
+@pytest.mark.parametrize("check_id,commit", [(True, COMMIT), (0, COMMIT), (91, None)])
+def test_malformed_check_scope_makes_no_request(check_id: int, commit: str | None) -> None:
+    calls: list[httpx.Request] = []
+    with pytest.raises(Refused, match="exact check ID"):
+        inspect_repository(
+            SCOPE,
+            app_jwt="a.b.c",
+            allow_temporary_token_issuance=True,
+            commit_sha=commit,
+            check_run_id=check_id,
+            _transport=transport(None, calls, check=True),
+        )
+    assert not calls
 
 
 def test_exact_commit_probe_rechecks_repository_and_discards_commit_text() -> None:
