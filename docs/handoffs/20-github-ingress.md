@@ -5,7 +5,8 @@ body with HMAC-SHA256 before decoding JSON. Duplicate object keys, non-finite co
 invalid UTF-8, excessive nesting and malformed numeric installation/repository identities
 are refused. The 1 MiB input limit and minimum 32-byte secret are local ingress policies.
 The return value contains only the body digest and numeric scope claims, not repository
-text, comment instructions or credentials. No HTTP route or secret loading is enabled.
+text, comment instructions or credentials. The raw helper enables no route or secret loading;
+the separately constructed receipt-only receiver is described below.
 
 GitHub signs the body, not the delivery/event headers. Delivery ID is transport metadata,
 not authorization and not a sufficient replay key. Replaying signed bytes under another
@@ -25,7 +26,8 @@ ordinary update/deletion is refused. No payload text or webhook secret is stored
 
 These are authentication/replay receipts, not work claims. The integration service must obtain
 workspace/App scope from trusted receiver configuration and check current installation/repository
-authority before event processing. No public ingress route or event worker is enabled. A receipt
+authority before event processing. No event worker is enabled. The receipt-only receiver below
+can be constructed explicitly, but has not been deployed. A receipt
 must never be used as proof that an external write has or has not happened; restoration, deletion
 and remote-operation reconciliation need independent authorization/publication records.
 
@@ -42,8 +44,9 @@ was removed afterwards. No live migration was performed. This does not prove act
    Migration 0066 and `github_bindings` now provide the local binding storage described below;
    the trusted connection service now composes current local authorization, the concrete HTTP
    probe and binding/audit commit. No user-facing connection route is enabled yet.
-2. Connect the replay inbox to the isolated ingress and event-specific schema handling;
-   event names and payload text do not broaden scope. Replay storage alone cannot authorize work.
+2. Deploy the receipt-only ingress with isolated configuration and host controls, then add
+   event-specific schema handling and current remote scope checks. Event names and payload text
+   do not broaden scope. Replay storage alone cannot authorize work.
 3. Immutable source-bound check preview and honest outcome/coverage rendering.
 4. Exact current payload-bound GITHUB_PUBLISH approval and outbound rechecks. Existing
    run grants, PATCH_APPLY and human ACCEPT cannot authorize any GitHub write.
@@ -101,6 +104,35 @@ evidence, not an actual GitHub App round trip. The offline [App JWT signer](gith
 now supplies bounded local signing, not a deployed credential broker. Isolated key provisioning,
 authenticated endpoint/CSRF/idempotency routing, denial auditing and connection reconciliation
 remain to be integrated before exposing this service. No credentials were requested or used live.
+
+## Exact-binding receipt-only HTTP receiver
+
+`github_receiver.create_receiver` builds a standalone FastAPI app with `POST /webhook`; importing
+or constructing it does not start a listener. Operator configuration supplies one workspace,
+binding ID, App ID, database URL and webhook secret. It has no App JWT/private key input and makes
+no GitHub API calls. Configuration repr hides the secret and database URL. The receiver is separate
+from the connection service and must be deployed outside agent/build processes.
+
+The route bounds streamed bodies to 1 MiB, rejects duplicate signature/delivery headers and
+compression, and authenticates the original bytes before opening a database connection. Inside
+one short transaction it locks/rechecks the exact live binding, compares signed installation and
+repository IDs, then writes the durable body/alias replay receipts. Disconnect prevents subsequent
+receipts even for previously accepted signed bytes. A header naming another workspace/event is
+not authority and does not route, dispatch or publish anything. Success and replay both return
+202 `AUTHENTICATED_RECEIPT_ONLY`, without internal IDs or payload content. Database errors return
+503 UNCONFIRMED; this is not a claim that a failed commit did not occur. Re-delivery reconciles only
+authentication receipts, never an unknown remote write.
+
+Eight focused in-process HTTP/real-PostgreSQL tests passed for original/replayed deliveries,
+header alias conflicts, wrong/missing repository scope, disconnect, header ambiguity, compression,
+oversize bodies and signature refusal before DB access. The disposable database was removed;
+strict mypy passed across 382 files. These are synthetic GitHub deliveries, not deployed ingress.
+
+Still required: TLS, server connection/body-read deadlines, concurrency/rate controls, secret
+provisioning/rotation and redacted access logs; multi-workspace routing from an operator-owned
+registry; installation-level ping/removal handling; current GitHub access validation and durable
+event processing. This exact-binding factory intentionally does not claim those capabilities.
+No run, model invocation, check/comment/branch/PR publication or deployment is triggered by receipts.
 
 ## Evidence
 

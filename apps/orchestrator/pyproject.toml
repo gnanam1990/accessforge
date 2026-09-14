@@ -9,6 +9,7 @@ dependencies = [
   "accessforge-persistence",
   "botocore==1.43.91",
   "cryptography>=44",
+  "fastapi>=0.115",
   "httpx>=0.28,<0.29",
   "pydantic>=2.10",
   "strands-agents==1.55.1",
