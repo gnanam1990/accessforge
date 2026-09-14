@@ -72,7 +72,16 @@ def test_baseline_runtime_commits_facts_then_rechecks_before_activation(
             assert kwargs["endpoint_fixture_nonce"] == "original-fixture-nonce"
             gateway = SimpleNamespace(receipt=stage("receipt"))
             kwargs["on_candidate_endpoint"](gateway)
-            assert events[-5:] == ["receipt", "open", "prepare", "commit", "reader"]
+            assert events[-8:] == [
+                "receipt",
+                "open",
+                "prepare",
+                "commit",
+                "reader",
+                "open",
+                "released",
+                "commit",
+            ]
             kwargs["on_endpoint_planned"]({})
             kwargs["on_endpoint_bound"]({})
             kwargs["on_artifact_observed"]({})
@@ -116,6 +125,7 @@ def test_baseline_runtime_commits_facts_then_rechecks_before_activation(
     monkeypatch.setattr(regressions, "assert_active", stage("active"))
     monkeypatch.setattr(regressions, "fail", fail)
     monkeypatch.setattr(baseline_runs, "prepare", stage("prepare"))
+    monkeypatch.setattr(baseline_runs, "assert_reader_released", stage("released"))
     for method in ("plan", "bound", "closed"):
         monkeypatch.setattr(endpoints, method, stage(method))
     monkeypatch.setattr(baseline_observations, "retain", stage("observed"))

@@ -19,6 +19,7 @@ from accessforge_persistence.candidate_regressions import RegressionClaim
 
 from .artifacts import CandidateArchiveStore
 from .baseline_artifacts import read_retained_baseline
+from .baseline_session import BaselineSession
 from .candidate_gateway import CandidateGateway
 from .reference_regressions import ReferenceRegressionResult, ReferenceRegressions
 from .sandbox import CleanupUnconfirmed
@@ -32,7 +33,7 @@ def execute_baseline_regressions(
     runner: ReferenceRegressions,
     store: CandidateArchiveStore,
     cancelled: Callable[[], bool] = lambda: False,
-    on_baseline_session: Callable[[CandidateGateway], None] | None = None,
+    on_baseline_session: Callable[[BaselineSession], None] | None = None,
     endpoint_origin: str | None = None,
     endpoint_fixture_nonce: str | None = None,
     reserve_fixture: Callable[[RegressionClaim, str], str] | None = None,
@@ -167,7 +168,14 @@ def execute_baseline_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             baseline_runs.prepare(conn, claim=claim)
         assert on_baseline_session is not None
-        on_baseline_session(gateway)
+        try:
+            on_baseline_session(BaselineSession(database_url, workspace_id, claim, gateway))
+        finally:
+            try:
+                with workspace_connection(database_url, workspace_id) as conn:
+                    baseline_runs.assert_reader_released(conn, attempt_id=claim.attempt_id)
+            except Exception as exc:
+                raise CleanupUnconfirmed("baseline reader stop could not be confirmed") from exc
 
     session_kwargs: dict[str, Any] = {}
     if on_baseline_session is not None:

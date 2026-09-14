@@ -12,6 +12,29 @@ from .candidate_regressions import RegressionClaim
 Refused = baseline_builds.Refused
 
 
+def reader_cleanup_confirmed(conn: psycopg.Connection[Any], *, attempt_id: str) -> bool:
+    """Historical stop proof, not live authority. Expiry/release alone is insufficient."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM baseline_session_binding s JOIN baseline_reader_lease b "
+            "USING(run_id,workspace_id) LEFT JOIN desktop_lease l "
+            "ON l.id=b.lease_id AND l.workspace_id=b.workspace_id "
+            "WHERE s.regression_attempt_id=%s AND (l.id IS NULL OR l.run_id<>b.run_id "
+            "OR l.epoch<>b.lease_epoch OR l.released_at IS NULL "
+            "OR l.stop_acknowledged_at IS NULL "
+            "OR l.stop_acknowledged_epoch IS DISTINCT FROM b.lease_epoch "
+            "OR l.release_reason IS DISTINCT FROM 'STOP_ACKNOWLEDGED')",
+            (attempt_id,),
+        ).fetchone()
+        is None
+    )
+
+
+def assert_reader_released(conn: psycopg.Connection[Any], *, attempt_id: str) -> None:
+    if not reader_cleanup_confirmed(conn, attempt_id=attempt_id):
+        raise Refused("baseline reader lacks original-epoch stop acknowledgement")
+
+
 def prepare(conn: psycopg.Connection[Any], *, claim: RegressionClaim) -> None:
     with conn.transaction():
         baseline_endpoints.assert_live(conn, claim=claim)
