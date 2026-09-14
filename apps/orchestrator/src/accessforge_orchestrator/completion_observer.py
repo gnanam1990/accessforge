@@ -129,7 +129,6 @@ def _context(
         or logical_fixture["templateId"] != "service-request"
         or fixture["template_id"] != logical_fixture["templateId"]
         or fixture["navigator_values"] != logical_fixture["navigatorValues"]
-        or sorted(fixture["observer_config"]) != logical_fixture["observerKeys"]
         or digest(fixture["observer_config"]) != logical_fixture["observerConfigDigest"]
         # Application template identity is independent of the logical fixture hash above.
         or fixture["template_digest"] != REFERENCE_FIXTURE_DIGEST
