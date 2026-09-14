@@ -4,7 +4,8 @@
 route, installation enrollment flow or publication service. Its inputs must come from trusted
 operator configuration: exact numeric App, installation, account and repository IDs, the
 reviewed owner/name and an independently provisioned App JWT. No credential file/environment
-discovery, JWT signing, installation creation or browser/navigator credential access is added.
+discovery, installation creation or browser/navigator credential access is added by the probe.
+An explicit offline signer is described below; it does not discover or provision a key.
 
 The function refuses before HTTP unless `allow_temporary_token_issuance=True` is explicitly
 supplied. This operation is **not entirely read-only**: it creates and revokes a temporary
@@ -36,8 +37,31 @@ HTTP attempt. `_transport` is a trusted test seam and must never be populated fr
 18 local mocked-HTTP protocol cases, Ruff and strict mypy across 374 files passed. Cases include
 scope drift, permission narrowing, missing expiry, redirects, uncertain issuance and failed
 revocation. They establish protocol behavior only: no real JWT, GitHub App, token or repository
-access has been exercised. Durable workspace installation binding, operator JWT provisioning,
+access has been exercised. Local durable workspace binding and its authorized connection service
+are described in the [module handoff](20-github-ingress.md). Deployed operator key provisioning,
 isolated ingress/event handling and exact-payload publication authorization remain incomplete.
+
+## Offline App JWT signing
+
+`github_app_jwt.sign_app_jwt` accepts explicitly supplied PEM bytes and the configured numeric
+App ID. It does not read files/environment variables, generate persistent keys, call GitHub,
+print a token or store anything. It uses the existing locked cryptography package as a declared
+direct dependency, with RS256 and fixed claims: App ID issuer, iat 60 seconds before local time,
+expiry five minutes ahead. No request-selected claims or algorithm are accepted. PEM input is
+bounded to 16 KiB; only RSA private keys of 2048–8192 bits are accepted. Encrypted PEMs require
+separate trusted operator decryption; the helper does not discover a passphrase.
+
+The result's repr excludes its bearer, but the bearer attribute is still a credential. Do not
+serialize, log or expose it to API clients, agents, repository builds or evidence. Python memory
+is not claimed to be securely zeroized. Signing does not prove that the key is registered with
+the App, that the clock is synchronized, or that an installation is accessible. The concrete
+access probe still verifies remote scope and retains its separate temporary-token authorization.
+
+Fourteen offline checks passed with ephemeral test keys, including independent RSA signature
+verification, exact claims, redacted repr, invalid IDs/PEMs, weak/non-RSA/encrypted keys and invalid
+clock refusal. These keys never leave the test process. No actual App key was loaded or registered.
+The signed credential is not yet provisioned by a deployed isolated credential broker; trusted
+host key loading/rotation and endpoint composition remain required before enabling connections.
 
 Primary API contracts: [App installation/token endpoints](https://docs.github.com/en/rest/apps/apps),
 [repository lookup](https://docs.github.com/en/rest/repos/repos),
