@@ -53,6 +53,17 @@ It never finalizes inside the reader callback or retries execution after uncerta
 an implementation ordering boundary, not the full baseline DB/S3 or physical acceptance proof
 below. Operator controller configuration and explicit reader startup consent remain required.
 
+`baseline_reader_dispatch.admit_dispatch_and_wait_reader` now keeps the trusted runtime callback
+alive after native delivery acknowledgement, polling for positive original-run/attempt/runner/lease
+and epoch STOP evidence. Its total timeout includes dispatch; timeout/cancellation does not replay
+dispatch, release a lease or grant a verdict. The callback caller must still supply the qualified
+transport and private journal. STOP polling uses cancellable async PostgreSQL operations, not
+executor threads that delay event-loop shutdown; connection close follows cancellation. The timeout
+is cooperative (including database cancellation/cleanup), not a hard real-time OS kill guarantee.
+Runtime closure and finalization follow outside the callback. Focused
+unit checks and the baseline real-DB binding case pass with synthetic desktop observations. This
+does not close the full baseline S3 or physical acceptance gates below.
+
 Functional snapshot assembly now also joins the original `run_attempt`, desktop lease and run
 manifest before stamping the artifact's attempt/producer identity. A caller cannot re-label a
 valid functional receipt with another attempt or manifest. The baseline DB regression now creates
