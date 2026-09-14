@@ -59,7 +59,7 @@ from accessforge_domain.runners import (
 from accessforge_domain.states import ApprovalScope, RunnerStatus, RunStatus
 from accessforge_domain.timestamps import is_expired, parse_rfc3339_utc, to_rfc3339_utc
 
-from . import candidate_runs, execution_approvals, projects, runs
+from . import baseline_runs, candidate_runs, execution_approvals, projects, runs
 
 #: A desktop lease is short. A long lease is a long window in which a partitioned supervisor can
 #: still be typing while the server has moved on, and the cost of a short one is a heartbeat.
@@ -597,7 +597,8 @@ def admit_lease(
         raise RunnerError("a desktop lease lives between one second and one hour")
     try:
         candidate_runs.assert_live(conn, run_id=run_id)
-    except (candidate_runs.Refused, AuthorityError) as exc:
+        baseline_runs.assert_live(conn, run_id=run_id)
+    except (candidate_runs.Refused, baseline_runs.Refused, AuthorityError) as exc:
         raise RunnerError(str(exc)) from exc
 
     runner = conn.execute(
@@ -1428,7 +1429,8 @@ def _assert_dispatch_ready(
 
     try:
         candidate_runs.assert_lease(conn, run_id=run_id, lease_id=lease_id, epoch=epoch)
-    except (candidate_runs.Refused, AuthorityError) as exc:
+        baseline_runs.assert_lease(conn, run_id=run_id, lease_id=lease_id, epoch=epoch)
+    except (candidate_runs.Refused, baseline_runs.Refused, AuthorityError) as exc:
         raise DispatchRefused(str(exc)) from exc
 
     # 2. The desktop. A quarantined or revoked runner is refused before anything else is inspected,

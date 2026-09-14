@@ -25,7 +25,10 @@ def _authority(conn: psycopg.Connection[Any], build_id: str) -> dict[str, Any]:
         raise Refused("original baseline capture unavailable")
     if (
         builds.read_binding(
-            conn, workspace_id=str(build["workspace_id"]), run_id=str(build["run_id"])
+            conn,
+            workspace_id=str(build["workspace_id"]),
+            run_id=str(build["run_id"]),
+            allow_bound_reader=True,
         )
         != build["binding"]
     ):
@@ -51,7 +54,12 @@ def _authority(conn: psycopg.Connection[Any], build_id: str) -> dict[str, Any]:
     ):
         raise Refused("original baseline archive unavailable or expired")
     # Policy/archive locks may have blocked past approval expiry; recheck at the final boundary.
-    builds.read_binding(conn, workspace_id=str(build["workspace_id"]), run_id=str(build["run_id"]))
+    builds.read_binding(
+        conn,
+        workspace_id=str(build["workspace_id"]),
+        run_id=str(build["run_id"]),
+        allow_bound_reader=True,
+    )
     return dict(build)
 
 

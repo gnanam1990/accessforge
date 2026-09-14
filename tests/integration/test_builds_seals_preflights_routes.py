@@ -1070,6 +1070,73 @@ def test_baseline_archive_retention_boundary(
                         endpoints.bound(conn, claim=task, receipt=changed)
                     endpoints.bound(conn, claim=task, receipt=receipt)
                     endpoints.assert_live(conn, claim=task)
+                    from accessforge_persistence import baseline_runs as sessions
+
+                    sessions.prepare(conn, claim=task)
+                    with pytest.raises(sessions.Refused), conn.transaction():
+                        sessions.prepare(conn, claim=task)
+                    sessions.assert_request(conn, run_id=binding["run_id"], method="GET")
+                    with pytest.raises(sessions.Refused), conn.transaction():
+                        sessions.assert_request(conn, run_id=binding["run_id"], method="POST")
+                    # Real SQL lease binding, synthetic desktop identity: never starts AT.
+                    with (
+                        pytest.raises(RuntimeError, match="rollback synthetic lease"),
+                        conn.transaction(),
+                    ):
+                        reader_id, lease_id = str(uuid.uuid4()), str(uuid.uuid4())
+                        conn.execute(
+                            "INSERT INTO runner(id,workspace_id,name,status,session_key,platform,"
+                            "device_id,interactive_session_id,console,profile_digest,profile,"
+                            "lease_epoch) "
+                            "SELECT %s,%s,'synthetic','BUSY',%s,'darwin','synthetic','test',true,"
+                            "runner_profile_digest,'{}',1 FROM sealed_manifest WHERE run_id=%s",
+                            (reader_id, WS, "d" * 64, binding["run_id"]),
+                        )
+
+                        def insert_lease(
+                            seconds: int, identifier: str, reader_id: str = reader_id
+                        ) -> None:
+                            conn.execute(
+                                "INSERT INTO desktop_lease(id,workspace_id,runner_id,session_key,"
+                                "run_id,attempt_id,epoch,deadline_at) VALUES(%s,%s,%s,%s,%s,%s,1,"
+                                "clock_timestamp()+%s*interval '1 second')",
+                                (
+                                    identifier,
+                                    WS,
+                                    reader_id,
+                                    "d" * 64,
+                                    binding["run_id"],
+                                    str(uuid.uuid4()),
+                                    seconds,
+                                ),
+                            )
+
+                        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                            insert_lease(300, str(uuid.uuid4()))
+                        insert_lease(10, lease_id)
+                        conn.execute(
+                            "UPDATE run SET status='LEASED' WHERE id=%s", (binding["run_id"],)
+                        )
+                        sessions.assert_lease(
+                            conn, run_id=binding["run_id"], lease_id=lease_id, epoch=1
+                        )
+                        runtime.assert_active(conn, claim=task)
+                        with pytest.raises(builds.Refused), conn.transaction():
+                            builds.read_binding(conn, workspace_id=WS, run_id=binding["run_id"])
+                        with pytest.raises(sessions.Refused), conn.transaction():
+                            sessions.assert_lease(
+                                conn, run_id=binding["run_id"], lease_id=lease_id, epoch=2
+                            )
+                        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                            insert_lease(10, str(uuid.uuid4()))
+                        conn.execute(
+                            "UPDATE desktop_lease SET released_at=clock_timestamp(),"
+                            "release_reason='COMPLETED' WHERE id=%s",
+                            (lease_id,),
+                        )
+                        with pytest.raises(sessions.Refused), conn.transaction():
+                            sessions.assert_request(conn, run_id=binding["run_id"], method="GET")
+                        raise RuntimeError("rollback synthetic lease")
                     endpoints.closed(conn, claim=task, cleanup_confirmed=True)
                     with pytest.raises(endpoints.Refused), conn.transaction():
                         endpoints.assert_live(conn, claim=task)
