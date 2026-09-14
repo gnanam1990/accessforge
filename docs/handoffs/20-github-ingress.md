@@ -97,7 +97,8 @@ are not retried; an uncertain DB commit requires reconciliation, not automatic r
 Nine focused real-PostgreSQL/synthetic-HTTP checks pass for connection/probe/cleanup/binding/audit,
 duplicate refusal, disconnect, in-probe membership/session revocation, user disable, role demotion,
 cleanup failure and non-owner roles. The temporary database was dropped. This is composition
-evidence, not an actual GitHub App round trip. A deployed isolated credential broker, JWT signing,
+evidence, not an actual GitHub App round trip. The offline [App JWT signer](github-repository-access.md)
+now supplies bounded local signing, not a deployed credential broker. Isolated key provisioning,
 authenticated endpoint/CSRF/idempotency routing, denial auditing and connection reconciliation
 remain to be integrated before exposing this service. No credentials were requested or used live.
 

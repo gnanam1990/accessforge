@@ -8,6 +8,7 @@ dependencies = [
   "accessforge-navigation-tools",
   "accessforge-persistence",
   "botocore==1.43.91",
+  "cryptography>=44",
   "httpx>=0.28,<0.29",
   "pydantic>=2.10",
   "strands-agents==1.55.1",
