@@ -17,6 +17,11 @@ installation access token. Actual invocation requires separate operator authoriz
 2. Request one temporary token for exactly the numeric repository ID, with only `metadata:read`
    and `contents:read`. Reject broader returned permissions or invalid/expired expiry.
 3. Read the named repository and verify numeric repository/account IDs and exact full name.
+   When an exact `commit_sha` is supplied, fetch that Git commit object through the same repository
+   endpoint/token, require the returned SHA to match, then recheck repository/account/full-name
+   identity to detect a rename or transfer during the commit read. Branch names, shortened hashes,
+   uppercase/non-hex hashes and whitespace are refused before issuing a token. Commit messages,
+   author information, signature text and tree metadata are not returned to callers.
 4. Recheck the installation to detect scope changes/suspension during the probe.
 5. Revoke the owned token before returning a metadata-only point-in-time observation.
 
@@ -25,6 +30,11 @@ attempt revocation; revocation failure refuses the result. A lost issuance respo
 an unknown short-lived read token at GitHub: there is no retry and no claim that no token exists.
 An observation is not atomic remote-state locking and cannot be reused as publication authority.
 Every outbound publication will still need fresh repository/permission and payload approval checks.
+An optional commit observation proves only point-in-time retrieval of that exact object through
+the checked repository API. It does not prove default-branch ancestry, exclusive repository
+ownership (fork networks can share objects), correspondence of deployed source bytes to the tree,
+current object-store retention or permission to publish. The optional returned `commit_sha` is
+metadata, not an approval; no publication function consumes it yet.
 
 Production fixes HTTPS `api.github.com`, disables environment proxy/credential discovery and
 redirect following, requests/requires uncompressed responses, bounds bodies to 1 MiB, uses
@@ -34,9 +44,10 @@ HTTP attempt. `_transport` is a trusted test seam and must never be populated fr
 
 ## Evidence and remaining work
 
-18 local mocked-HTTP protocol cases, Ruff and strict mypy across 374 files passed. Cases include
+28 local mocked-HTTP protocol cases passed. Cases include
 scope drift, permission narrowing, missing expiry, redirects, uncertain issuance and failed
-revocation. They establish protocol behavior only: no real JWT, GitHub App, token or repository
+revocation, exact commit retrieval, wrong/missing commits, commit redirects and mid-probe transfer.
+They establish protocol behavior only: no real JWT, GitHub App, token or repository
 access has been exercised. Local durable workspace binding and its authorized connection service
 are described in the [module handoff](20-github-ingress.md). Deployed operator key provisioning,
 isolated ingress/event handling and exact-payload publication authorization remain incomplete.
@@ -67,3 +78,5 @@ Primary API contracts: [App installation/token endpoints](https://docs.github.co
 [repository lookup](https://docs.github.com/en/rest/repos/repos),
 [token revocation](https://docs.github.com/en/rest/apps/installations), and
 [App JWT requirements](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
+The optional commit check uses the [Git commit-object endpoint](https://docs.github.com/en/rest/git/commits#get-a-commit-object)
+with `contents:read`; it does not create a commit.

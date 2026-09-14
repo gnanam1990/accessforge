@@ -59,6 +59,7 @@ class RepositoryAccess:
     observed_at: str
     token_revoked: bool
     meaning: str = "POINT_IN_TIME_READ_ACCESS_NOT_PUBLICATION_AUTHORITY"
+    commit_sha: str | None = None
 
 
 def inspect_repository(
@@ -66,6 +67,7 @@ def inspect_repository(
     *,
     app_jwt: str,
     allow_temporary_token_issuance: bool = False,
+    commit_sha: str | None = None,
     _transport: httpx.BaseTransport | None = None,
 ) -> RepositoryAccess:
     """Check current App/installation/account/repository identity, without returning a token.
@@ -77,6 +79,11 @@ def inspect_repository(
     """
     if allow_temporary_token_issuance is not True:
         raise Refused("temporary installation-token issuance requires explicit authorization")
+    if commit_sha is not None and (
+        not isinstance(commit_sha, str)
+        or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", commit_sha)
+    ):
+        raise Refused("an exact immutable source commit is required")
     if (
         not isinstance(scope, RepositoryScope)
         or not isinstance(app_jwt, str)
@@ -197,10 +204,31 @@ def inspect_repository(
                 or owner["id"] != scope.account_id
             ):
                 raise Refused("repository identity or ownership differs")
+            if commit_sha is not None:
+                commit = request(
+                    "GET",
+                    f"/repos/{scope.owner}/{scope.name}/git/commits/{commit_sha}",
+                    token,
+                    200,
+                )
+                if commit.get("sha") != commit_sha:
+                    raise Refused("repository commit identity differs")
+                # A rename/transfer during the commit read must not silently retain old scope.
+                fresh_repository = request("GET", f"/repos/{scope.owner}/{scope.name}", token, 200)
+                fresh_owner = fresh_repository.get("owner")
+                if (
+                    type(fresh_repository.get("id")) is not int
+                    or fresh_repository["id"] != scope.repository_id
+                    or fresh_repository.get("full_name") != f"{scope.owner}/{scope.name}"
+                    or not isinstance(fresh_owner, dict)
+                    or type(fresh_owner.get("id")) is not int
+                    or fresh_owner["id"] != scope.account_id
+                ):
+                    raise Refused("repository identity changed during commit inspection")
             installation()  # Detect suspension/removal/permission change during the probe.
             if datetime.now(UTC) >= expires:
                 raise Refused("temporary credential expired during inspection")
         finally:
             if token is not None:
                 request("DELETE", "/installation/token", token, 204, cleanup=True)
-    return RepositoryAccess(scope, to_rfc3339_utc(datetime.now(UTC)), True)
+    return RepositoryAccess(scope, to_rfc3339_utc(datetime.now(UTC)), True, commit_sha=commit_sha)
