@@ -797,7 +797,10 @@ def baseline_archive_stores() -> Iterator[list[Any]]:
             store._client.delete_bucket(Bucket=store.storage_identity[1])
 
 
-@pytest.mark.parametrize("fault", [None, "readback", "revoked", "upload", "substitution", "s3"])
+@pytest.mark.parametrize(
+    "fault",
+    [None, "readback", "revoked", "upload", "substitution", "s3", "runtime", "runtime-expired"],
+)
 def test_baseline_archive_retention_boundary(
     db: str,
     client: TestClient,
@@ -928,6 +931,92 @@ def test_baseline_archive_retention_boundary(
     retain_baseline(db, workspace_id=WS, result=result, store=store)
     args: dict[str, Any] = dict(workspace_id=WS, build_id=claim.attempt_id, store=store)
     assert read_retained_baseline(db, **args) == artifact
+    if fault in {"runtime", "runtime-expired"}:
+        from accessforge_domain.functional_validation import (
+            INVALID_VALUES,
+            VALIDATION_SUITE_DIGEST,
+            ValidationObservation,
+        )
+        from accessforge_persistence import baseline_regressions as runtime
+        from accessforge_persistence.candidate_regressions import ROLES
+
+        with workspace_connection(db, WS) as conn:
+            runtime_inputs: dict[str, Any] = dict(
+                build_id=claim.attempt_id,
+                artifact_digest=artifact.archive_digest,
+                policy_digest="e" * 64,
+                image_id=inputs["image_id"],
+                daemon_endpoint=inputs["daemon_endpoint"],
+                daemon_id=inputs["daemon_id"],
+            )
+            task = runtime.claim(conn, **runtime_inputs)
+            with pytest.raises(runtime.Refused), conn.transaction():
+                runtime.claim(conn, **runtime_inputs)
+            runtime.dispatch(
+                conn, claim=task, policy_digest="e" * 64, artifact_digest=artifact.archive_digest
+            )
+            with (
+                pytest.raises(psycopg.IntegrityError, match="baseline protected"),
+                conn.transaction(),
+            ):
+                conn.execute(
+                    "INSERT INTO desktop_lease(id,workspace_id,run_id) VALUES(%s,%s,%s)",
+                    (str(uuid.uuid4()), WS, binding["run_id"]),
+                )
+            receipts: list[tuple[str, str, str]] = []
+            for i, role in enumerate(ROLES):
+                runtime.planned(
+                    conn,
+                    claim=task,
+                    role=role,
+                    name=f"accessforge-regression-{task.attempt_id}-{role}",
+                    image_id=inputs["image_id"],
+                )
+                if fault == "runtime-expired":
+                    assert (
+                        runtime.fence_expired(conn, now=datetime.now(UTC) + timedelta(hours=1)) == 1
+                    )
+                runtime.created(
+                    conn,
+                    claim=task,
+                    role=role,
+                    container_id=str(i) * 64,
+                    image_id=inputs["image_id"],
+                )
+                if fault == "runtime-expired":
+                    with pytest.raises(runtime.Refused), conn.transaction():
+                        runtime.assert_active(conn, claim=task)
+                    runtime.removed(conn, claim=task, role=role)
+                    assert conn.execute(
+                        "SELECT state,epoch FROM baseline_regression_attempt WHERE id=%s",
+                        (task.attempt_id,),
+                    ).fetchone() == {"state": "UNKNOWN", "epoch": 2}
+                    return
+                runtime.assert_active(conn, claim=task)
+                runtime.removed(conn, claim=task, role=role)
+                receipts.append((role, str(i) * 64, inputs["image_id"]))
+            observation = ValidationObservation(
+                VALIDATION_SUITE_DIGEST, tuple((field, 422, 0) for field, _ in INVALID_VALUES)
+            )
+            runtime.finish(
+                conn,
+                claim=task,
+                policy_digest="e" * 64,
+                artifact_digest=artifact.archive_digest,
+                checks=("synthetic_fixture_validation",),
+                containers=tuple(receipts),
+                validation=observation,
+            )
+            row = conn.execute(
+                "SELECT state,validation FROM baseline_regression_attempt WHERE id=%s",
+                (task.attempt_id,),
+            ).fetchone()
+            assert row == {"state": "PASSED", "validation": observation.canonical_form()}
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(
+                    "UPDATE baseline_regression_attempt SET validation='{}' WHERE id=%s",
+                    (task.attempt_id,),
+                )
     with pytest.raises(builds.Refused):
         retain_baseline(db, workspace_id=WS, result=result, store=store)
     if fault == "substitution":
