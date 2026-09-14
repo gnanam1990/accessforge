@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createSafariReferenceLauncher } from '../dist/safari-launcher.js';
+import { createSafariReferenceLauncher, prepareSafariReferenceApp } from '../dist/safari-launcher.js';
 import { SafariProbeUnavailable } from '../dist/safari-origin.js';
+import { REFERENCE_FIXTURE_DIGEST, REFERENCE_FIXTURE_VERSION } from '@accessforge/contracts';
 
 const expectedUrl = 'http://127.0.0.1:3000/form/fixture_nonce_123456';
 const known = { schemaVersion: 1, status: 'KNOWN', bundleId: 'com.apple.Safari',
@@ -93,4 +94,28 @@ test('browser replacement during reauthorization refuses the final receipt', asy
   const item = fixture({}, { read: async () => ({ ...known, launchedAt: known.launchedAt + reads++ }) });
   await assert.rejects(() => item.launch(expectedUrl));
   assert.equal(reads, 2);
+});
+
+test('baseline composition reconciles original reservation before native launch of that same fixture', async () => {
+  const events = [];
+  const nonce = 'fixture_nonce_123456';
+  const result = await prepareSafariReferenceApp({
+    permittedOrigin: 'http://127.0.0.1:3000', reservedNonce: nonce,
+    setupToken: 'synthetic-private-token', variant: 'inaccessible',
+    expectedFixtureDigest: REFERENCE_FIXTURE_DIGEST,
+    expectedBuildDigest: 'a'.repeat(64), observedBuildDigest: 'a'.repeat(64),
+    fetch: async (url) => {
+      assert.equal(new URL(url).searchParams.get('nonce'), nonce);
+      events.push('reconcile');
+      return { ok: true, status: 200, json: async () => ({ nonce, variant: 'inaccessible',
+        template_digest: REFERENCE_FIXTURE_DIGEST, template_version: REFERENCE_FIXTURE_VERSION }) };
+    },
+  }, { expectedBrowserVersion: '26.6', signal: new AbortController().signal,
+    authorize: async () => { events.push('authorize'); }, assertDesktopHeld: () => {},
+  }, { open: async (url) => { assert.equal(url, expectedUrl); events.push('open'); },
+    read: async () => known,
+  });
+  assert.deepEqual(events, ['reconcile', 'authorize', 'open', 'authorize']);
+  assert.equal(result.startUrl, expectedUrl);
+  assert.equal(JSON.stringify(result).includes('synthetic-private-token'), false);
 });

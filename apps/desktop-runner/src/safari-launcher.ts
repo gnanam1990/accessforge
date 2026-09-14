@@ -1,7 +1,8 @@
 /** Explicit trusted browser setup effect. Construction is inert; no reader is started. */
 import { execFile } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { BrowserLauncher } from './browser-setup.js';
+import { prepareReferenceApp, type BrowserLauncher, type ReferenceAppSetupOptions,
+  type ReferenceAppSetupResult } from './browser-setup.js';
 import { createSafariOriginProbe, SafariProbeUnavailable, type SafariOriginOptions, type SafariProbeRead } from './safari-origin.js';
 
 export interface SafariLaunchOptions extends SafariOriginOptions {
@@ -16,6 +17,22 @@ export interface SafariLaunchOptions extends SafariOriginOptions {
 export interface SafariLaunchPorts {
   readonly open?: (url: string, signal: AbortSignal) => Promise<void>;
   readonly read?: SafariProbeRead;
+}
+
+/** Private baseline setup composition. Call only after trusted setup reservation/confirmation.
+ * The actual launch target is derived from that same setup, never a second caller-selected URL.
+ * Candidate gateway setup remains separate; no private gateway routes are opened here.
+ */
+export async function prepareSafariReferenceApp(
+  setup: Omit<ReferenceAppSetupOptions, 'launch'>,
+  host: Omit<SafariLaunchOptions, 'expectedUrl'>,
+  ports: SafariLaunchPorts = {},
+): Promise<ReferenceAppSetupResult> {
+  const privateSetup = { ...setup };
+  const expectedUrl = new URL(`/form/${encodeURIComponent(privateSetup.reservedNonce)}`,
+    privateSetup.permittedOrigin).href;
+  const launch = createSafariReferenceLauncher({ ...host, expectedUrl }, ports);
+  return prepareReferenceApp({ ...privateSetup, launch });
 }
 
 async function openSafari(url: string, signal: AbortSignal): Promise<void> {

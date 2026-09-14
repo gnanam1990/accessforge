@@ -134,6 +134,11 @@ export async function prepareReferenceApp(
   if (options.expectedFixtureDigest !== REFERENCE_FIXTURE_DIGEST) {
     throw new Error('the sealed fixture definition is not the supported frozen reference contract');
   }
+  if (typeof options.expectedBuildDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(options.expectedBuildDigest) ||
+      options.observedBuildDigest !== options.expectedBuildDigest) {
+    throw new Error('the independently observed build must match before fixture reconciliation');
+  }
   const doFetch: SetupFetch = options.fetch ?? boundedLocalFetch;
   const headers = { 'x-setup-token': options.setupToken };
 

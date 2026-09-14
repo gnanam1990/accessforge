@@ -56,6 +56,12 @@ separate; this launcher does not expose private candidate setup routes or author
 Never give its callbacks or private options to the navigator. Callback implementations and overall
 host-controller composition remain the trusted embedding's responsibility, not JSON configuration.
 
+`prepareSafariReferenceApp(privateSetup, host)` supplies this composition directly and derives the
+launch URL from the same private origin/reserved nonce used for reconciliation. Both expected and
+independently observed build digests must agree before any setup HTTP request. The existing HTTP200
+confirmation gate runs before launch; no second destination can be supplied through host options.
+This configured build check is not a new independent artifact measurement or environment attestation.
+
 The native probe must independently confirm foreground signed Safari, the exact fixture document
 and browser version. Native document-not-ready refusals may be resampled within an eight-second
 overall deadline, but `open` is never retried. Authority is checked again and the same browser
