@@ -154,3 +154,23 @@ Focused tests use real loopback TCP with synthetic replies for transport and sep
 disposable product/application PostgreSQL databases with in-process HTTP for successful
 setup, lost-response reconciliation, revocation, pending lease refusal and immutability.
 These are not real screen-reader runs or production deployment evidence.
+
+## Environment producer binding
+
+The queued setup worker reconstructs the complete `EnvironmentSpec` configuration digest while
+holding a shared lock on the original environment row, before any application setup request.
+Name, allowed origins, reset strategy, credential references and permitted effects must all match
+the approved sealed identity, not just the selected origin and two references. The retained setup
+context keeps the same digest field and format; existing equal configuration has unchanged bytes.
+
+The independent observer now includes `environmentConfigurationDigest` in its authenticated source
+record. This is reconstructed from its protected configured environment and the locally used
+observer credential reference, rechecked before and after the application query. It remains present
+even when application measurement is UNKNOWN: configuration identity is not application-state proof.
+Old records remain unchanged and do not acquire this new witness through replay. No credential
+values, fixture nonce or new raw environment fields are published by this addition.
+
+This witness is one input for subsequent runtime environment integration, not observed ENVIRONMENT
+or a new PASS path. Browser/action coverage, reset evidence and their original producer bindings
+must still be checked together by the finalizer. Actual host/reader and deployment acceptance remain
+unproven; this change starts no service, reader, application fixture or live migration.

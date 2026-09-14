@@ -26,7 +26,13 @@ from accessforge_contracts.reference_fixture import (
 from accessforge_domain.canonical import digest
 from accessforge_domain.origins import normalize_origin
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
-from accessforge_persistence import execution_approvals, fixtures, journeys, workspace_connection
+from accessforge_persistence import (
+    execution_approvals,
+    fixtures,
+    journeys,
+    projects,
+    workspace_connection,
+)
 from accessforge_persistence.evidence.observer import ApplicationObserver
 
 
@@ -70,7 +76,7 @@ def _context(
         raise Refused("run and approval bindings differ")
     environment = conn.execute(
         "SELECT e.* FROM environment_manifest e JOIN sealed_manifest s "
-        "ON s.environment_manifest_id=e.id WHERE s.run_id=%s",
+        "ON s.environment_manifest_id=e.id WHERE s.run_id=%s FOR SHARE OF e",
         (run_id,),
     ).fetchone()
     if (
@@ -83,6 +89,17 @@ def _context(
         not in {normalize_origin(o) for o in environment["allowed_origins"]}
     ):
         raise Refused("setup configuration differs from the approved environment")
+    configured_environment = projects.EnvironmentSpec(
+        name=environment["name"],
+        allowed_origins=frozenset(normalize_origin(o) for o in environment["allowed_origins"]),
+        fixture_reset_strategy=environment["fixture_reset_strategy"],
+        observer_credential_ref=environment["observer_credential_ref"],
+        reset_credential_ref=environment["reset_credential_ref"],
+        permitted_effects=frozenset(environment["permitted_effects"]),
+        expires_at=to_rfc3339_utc(environment["expires_at"]),
+    ).config_digest()
+    if configured_environment != manifest["environmentConfigDigest"]:
+        raise Refused("complete setup environment content differs from sealed identity")
     contract = journeys.load_fixture_contract(
         conn, version_id=manifest["journeyVersionId"], expected_digest=manifest["fixtureDigest"]
     )
@@ -136,7 +153,7 @@ def _context(
         "templateDigest": REFERENCE_FIXTURE_DIGEST,
         "variant": reset_values["variant"],
         "origin": origin,
-        "environmentConfigDigest": manifest["environmentConfigDigest"],
+        "environmentConfigDigest": configured_environment,
         "resetCredentialRef": reset_credential_ref,
         "observerCredentialRef": observer_credential_ref,
     }

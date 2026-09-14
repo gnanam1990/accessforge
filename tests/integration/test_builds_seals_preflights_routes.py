@@ -3293,6 +3293,10 @@ def test_authenticated_execution_finish(
                     "SELECT canonical_manifest FROM sealed_manifest WHERE run_id=%s", (ref.run_id,)
                 ).fetchone()
                 assert seal_row is not None
+                assert (
+                    source["environmentConfigurationDigest"]
+                    == seal_row["canonical_manifest"]["environmentConfigDigest"]
+                )
                 context = {
                     "run_id": ref.run_id,
                     "attempt_id": ref.attempt_id,

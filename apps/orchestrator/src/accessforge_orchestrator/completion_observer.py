@@ -191,6 +191,7 @@ def _context(
         "lease": str(ticket["lease_id"]),
         "epoch": int(ticket["epoch"]),
         "manifestDigest": digest(manifest),
+        "environmentConfigurationDigest": spec.config_digest(),
         "assertionSetDigest": manifest["assertionSetDigest"],
         "assertionContract": assertion_contract,
         "fixtureId": str(fixture["id"]),
@@ -322,6 +323,9 @@ def measure_once(
         if sequence > 128:
             raise Refused("independent observer record budget exhausted")
         source = {
+            # Observer-side configuration, not browser/AT or full environment attestation.
+            # _context reconstructs these fields and binds the locally used credential reference.
+            "environmentConfigurationDigest": after["environmentConfigurationDigest"],
             "assertionSetDigest": after["assertionSetDigest"],
             "assertionObservations": observer_count_assertions(
                 AssertionSet.from_canonical_form(after["assertionContract"]),
