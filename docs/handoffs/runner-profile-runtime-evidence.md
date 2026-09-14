@@ -31,3 +31,9 @@ The native read-only Foundation/Carbon probe was executed once on the operator h
 the dedicated execution desktop or the enrolled profile. Locale canonicalization yields `en-IN`.
 After the ExternalSSD migration, pnpm attempted dependency relinking and refused without a TTY;
 the existing pinned TypeScript compiler was invoked directly instead. No node_modules purge occurred.
+
+Runtime preflight artifacts and canonical preflight payloads are now classified with outcome-bearing
+proof, not disposable diagnostics. Diagnostic cleanup must preserve both; deleting their proof class
+explicitly invalidates completeness. A focused integration regression exercises both deletion paths.
+Changed-file Ruff and strict mypy passed; the object-store regression is delegated to CI, not claimed
+as locally executed.

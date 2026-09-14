@@ -90,7 +90,9 @@ ARTIFACT_CLASS: dict[str, str] = {
     # Timings, internal state, the supervisor's own log. None decides a verdict.
     "DIAGNOSTIC_LOG": "DIAGNOSTIC",
     "RUNNER_JOURNAL": "DIAGNOSTIC",
-    "PREFLIGHT_RECORD": "DIAGNOSTIC",
+    # Runtime preflight binds runner identity and readiness to the verdict.
+    # Deleting either its artifact or canonical payload must invalidate that proof.
+    "PREFLIGHT_RECORD": "READER_SPEECH",
     # ACTION_TRACE and EFFECT_RECEIPT are deliberately *not* DIAGNOSTIC. A trace is
     # the record of what was done to somebody's application and a receipt is proof
     # an effect occurred -- both are what an ambiguous action is adjudicated from.
@@ -108,7 +110,7 @@ EVENT_CLASS: dict[str, str] = {
     "ACTION_INTENT": "READER_SPEECH",
     "ACTION_RESULT": "READER_SPEECH",
     "EFFECT_RECEIPT": "READER_SPEECH",
-    "PREFLIGHT_RESULT": "DIAGNOSTIC",
+    "PREFLIGHT_RESULT": "READER_SPEECH",
     "BUDGET_EVENT": "DIAGNOSTIC",
     "INTERRUPTION": "DIAGNOSTIC",
     # A run's own boundaries carry no captured content -- they are structural, and a
