@@ -44,13 +44,40 @@ HTTP attempt. `_transport` is a trusted test seam and must never be populated fr
 
 ## Evidence and remaining work
 
-28 local mocked-HTTP protocol cases passed. Cases include
+46 local mocked-HTTP protocol cases passed. Cases include
 scope drift, permission narrowing, missing expiry, redirects, uncertain issuance and failed
 revocation, exact commit retrieval, wrong/missing commits, commit redirects and mid-probe transfer.
 They establish protocol behavior only: no real JWT, GitHub App, token or repository
 access has been exercised. Local durable workspace binding and its authorized connection service
 are described in the [module handoff](20-github-ingress.md). Deployed operator key provisioning,
 isolated ingress/event handling and exact-payload publication authorization remain incomplete.
+
+## Known check-ID observation
+
+The optional `check_run_id` requires an exact positive numeric ID and `commit_sha`. Only this mode
+adds `checks:read` to the one-repository temporary token; ordinary repository/commit probes retain
+their original two read permissions. No `checks:write` permission or check create/update call is
+implemented. The adapter reads the known check after commit verification and before the final
+repository/installation rechecks and token cleanup.
+
+It verifies numeric check/App identity, exact head SHA, AccessForge name/external-ID format and
+the returned lifecycle. Unexpected rich text or annotations are refused. The returned observation
+contains only the check ID and canonical digest of the create-preview fields: name, head SHA,
+external ID, status, non-null conclusion, output title and summary. The caller must compare that
+digest with the **original stored request body**; a changed summary produces a different digest,
+not an inferred match. Untrusted remote text and URLs never leave the adapter.
+
+This does not establish who initiated creation, uniqueness of an external ID, absence of another
+check, full equality of GitHub-owned metadata/URLs, retention or permission to write. A missing
+check, redirect, mismatched identity or timeout is unconfirmed, never permission to recreate.
+Successful observation requires successful owned-token revocation. Unknown-ID discovery,
+durable remote receipts and outbound-controller composition remain unimplemented.
+
+The 18 additional mocked cases cover known-ID digest match/change, wrong check/App/source,
+unexpected text/annotations, inconsistent lifecycle, missing/redirected/timed-out reads,
+cleanup failure, late transfer/suspension, missing checks permission and malformed scope.
+Ruff and strict mypy passed across 388 files. No real check or installation token was accessed.
+Protocol: [Get a check run](https://docs.github.com/en/rest/checks/runs#get-a-check-run).
 
 ## Offline App JWT signing
 
