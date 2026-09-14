@@ -93,6 +93,8 @@ def bound(
         if identity != row["plan"] or set(receipt) != set(identity) | {"origin", "bindingDigest"}:
             raise Refused("bound endpoint does not match its committed intent")
         validate_endpoint_origin(receipt["origin"])
+        if "listenOrigin" in identity and receipt["origin"] != identity["listenOrigin"]:
+            raise Refused("endpoint listener differs from its committed origin")
         if receipt["bindingDigest"] != digest({**identity, "origin": receipt["origin"]}):
             raise Refused("endpoint receipt digest differs from actual binding")
         regressions._owned(conn, claim, "DISPATCHED")
