@@ -94,11 +94,12 @@ def load_fixture_contract(
         != {
             "templateId",
             "navigatorValues",
-            "resetKeys",
-            "observerKeys",
+            "schemaVersion",
             "resetValuesDigest",
             "observerConfigDigest",
         }
+        or type(contract["schemaVersion"]) is not int
+        or contract["schemaVersion"] != 2
         or row["fixture_digest"] != expected_digest
         or digest(contract) != expected_digest
         or not isinstance(row["navigator_policy"], dict)
