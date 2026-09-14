@@ -64,21 +64,17 @@ def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> Co
 
     assertion_set_digest = digest(draft.assertions.canonical_form())
 
-    # The fixture digest covers the template and the navigator-visible values, plus the *names* of
-    # reset and observer keys but not their values. Changing an oracle value changes the run's
-    # behaviour and must invalidate the seal; including the value itself would put answer-key
-    # material
-    # into a digest that travels with exports.
-    fixture_digest = digest(
-        {
-            "templateId": draft.fixture.template_id,
-            "navigatorValues": dict(sorted(draft.fixture.navigator_values.items())),
-            "resetKeys": sorted(draft.fixture.reset_values),
-            "observerKeys": sorted(draft.fixture.observer_config),
-            "resetValuesDigest": digest(dict(sorted(draft.fixture.reset_values.items()))),
-            "observerConfigDigest": digest(dict(sorted(draft.fixture.observer_config.items()))),
-        }
-    )
+    # V2 binds entire private maps through their hashes, including key names and values.
+    # Publishing those names separately leaked oracle metadata through reviewer summaries.
+    # Newly compiled versions receive a new digest; historical seals are never rewritten.
+    fixture_contract = {
+        "schemaVersion": 2,
+        "templateId": draft.fixture.template_id,
+        "navigatorValues": dict(sorted(draft.fixture.navigator_values.items())),
+        "resetValuesDigest": digest(dict(sorted(draft.fixture.reset_values.items()))),
+        "observerConfigDigest": digest(dict(sorted(draft.fixture.observer_config.items()))),
+    }
+    fixture_digest = digest(fixture_contract)
 
     navigator_policy: dict[str, object] = {
         "taskSummary": draft.intent.summary,
@@ -125,6 +121,9 @@ def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> Co
         # Retain the exact hash preimage at creation. The finalizer must not reconstruct a
         # historical journey from today's compiler or copy the manifest's claimed identity.
         "journeyContract": journey_contract,
+        # Logical fixture hash preimage, not the reference application's template hash.
+        # Oracle/reset values remain private; only their original hashes are retained here.
+        "fixtureContract": fixture_contract,
         # Stored on the protected reviewer side, never copied into navigator_policy. This is the
         # original complete contract (including optional assertions), not a reconstruction of prose.
         "assertionContract": draft.assertions.canonical_form(),

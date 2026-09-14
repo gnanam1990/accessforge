@@ -45,6 +45,7 @@ from accessforge_api.app import create_app
 from accessforge_api.auth import CSRF_HEADER, SESSION_COOKIE
 from accessforge_api.config import ApiSettings
 from accessforge_contracts import validate
+from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_domain.canonical import digest
 from accessforge_orchestrator.manual_dispatch import (
     DispatchReference,
@@ -278,6 +279,16 @@ def execution_body(
             )
             reviewer_summary["assertionContract"] = assertions.canonical_form()
             body["assertionSetDigest"] = str(digest(assertions.canonical_form()))
+    policy.setdefault("fixtureValues", {"name": "Private Fixture Name"})
+    reviewer_summary["fixtureContract"] = {
+        "schemaVersion": 2,
+        "templateId": "service-request",
+        "navigatorValues": policy["fixtureValues"],
+        "resetValuesDigest": digest({}),
+        "observerConfigDigest": digest({"effect": "CREATE_TEST_REQUEST"}),
+    }
+    body["fixtureDigest"] = digest(reviewer_summary["fixtureContract"])
+    body["navigatorPolicyDigest"] = digest(policy)
     with workspace_connection(db, WS) as conn:
         conn.execute(
             "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,journey_digest,"
@@ -2462,8 +2473,8 @@ def test_navigator_loads_only_original_resolved_reader_boundary(
             conn,
             workspace_id=WS,
             run_id=ref.run_id,
-            template_id="navigator-projection",
-            template_digest=sealed["canonical_manifest"]["fixtureDigest"],
+            template_id="service-request",
+            template_digest=REFERENCE_FIXTURE_DIGEST,
             navigator_values=sealed["navigator_policy"]["fixtureValues"],
             observer_config={"privateReceipt": "must-never-enter-model-context"},
         )
@@ -2584,6 +2595,8 @@ def owned_observer_database(db: str, backup_database_url: str) -> Iterator[str]:
         "wrong-template",
         "app-unreachable",
         "wrong-reference",
+        "wrong-values",
+        "wrong-oracle",
         "cli",
     ],
 )
@@ -2642,10 +2655,15 @@ def test_independent_observer_worker(
             conn,
             workspace_id=WS,
             run_id=ref.run_id,
-            template_id="reference-service-request",
-            template_digest=_digest("fixture"),
-            navigator_values={"name": "Private Fixture Name"},
-            observer_config={"effect": "CREATE_TEST_REQUEST"},
+            template_id="service-request",
+            template_digest=REFERENCE_FIXTURE_DIGEST,
+            navigator_values={
+                "name": "Different Fixture" if case == "wrong-values" else "Private Fixture Name"
+            },
+            observer_config={
+                "effect": "CREATE_TEST_REQUEST",
+                **({"unexpectedOracle": "1"} if case == "wrong-oracle" else {}),
+            },
         )
     with psycopg.connect(owned_observer_database, row_factory=psycopg.rows.dict_row) as conn:
         if case != "missing-fixture":
@@ -2699,7 +2717,13 @@ def test_independent_observer_worker(
         "source_record_id": source_id,
         "credential_ref": "wrong" if case == "wrong-reference" else "observer-profile",
     }
-    refused_cases = {"wrong-reference", "revoked-during-read", "action-during-read"}
+    refused_cases = {
+        "wrong-reference",
+        "revoked-during-read",
+        "action-during-read",
+        "wrong-values",
+        "wrong-oracle",
+    }
     unknown_cases = {"missing-fixture", "wrong-template", "app-unreachable"}
     if case in refused_cases:
         with pytest.raises((Refused, runner_store.DispatchRefused)):
@@ -2833,9 +2857,9 @@ def test_authenticated_execution_finish(
             conn,
             workspace_id=WS,
             run_id=ref.run_id,
-            template_id="reference-service-request",
-            template_digest=_digest("fixture"),
-            navigator_values={"name": "Private Fixture"},
+            template_id="service-request",
+            template_digest=REFERENCE_FIXTURE_DIGEST,
+            navigator_values={"name": "Private Fixture Name"},
             observer_config={"effect": "CREATE_TEST_REQUEST"},
         )
     with psycopg.connect(owned_observer_database, row_factory=psycopg.rows.dict_row) as conn:
