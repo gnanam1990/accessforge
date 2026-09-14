@@ -1126,9 +1126,9 @@ def test_baseline_archive_retention_boundary(
                         )
                         from accessforge_persistence import baseline_observations as observations
 
-                        measured_at = conn.execute("SELECT clock_timestamp() AS now").fetchone()[
-                            "now"
-                        ]
+                        clock_row = conn.execute("SELECT clock_timestamp() AS now").fetchone()
+                        assert clock_row is not None
+                        measured_at = clock_row["now"]
                         measurement = dict(
                             taskId=task.attempt_id,
                             candidateId=identity["candidateId"],
