@@ -716,9 +716,11 @@ def record_action_completion(
         raise Refused("a non-dispatched intent cannot report a known action result")
     if status != "AMBIGUOUS":
         # Local import avoids the permission issuer's session-authentication import cycle.
+        from .baseline_effect_delivery import assert_action_result as assert_baseline_action_result
         from .candidate_effect_delivery import assert_action_result
 
         assert_action_result(conn, action_id=action_id)
+        assert_baseline_action_result(conn, action_id=action_id)
     session_evidence.emit(
         conn,
         row,

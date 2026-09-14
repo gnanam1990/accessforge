@@ -22,13 +22,12 @@ from accessforge_domain.runners.identity import EnrollmentError
 from accessforge_domain.runners.preflight import PreflightCheck, PreflightResult
 from accessforge_domain.states import Condition
 from accessforge_persistence import (
-    candidate_effect_delivery,
-    candidate_effects,
     execution_approvals,
     reader_startup_consents,
     runners,
     sequencer,
     supervisor_dispatch,
+    supervisor_effects,
     supervisor_sessions,
 )
 
@@ -315,7 +314,7 @@ def supervisor_form_effect_status(
     if credential is None or len(request.headers.getlist("authorization")) != 1:
         raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, "supervisor session unavailable")
     try:
-        result = candidate_effect_delivery.status(
+        result = supervisor_effects.status(
             conn,
             workspace_id=workspace_id,
             session_id=session_id,
@@ -348,7 +347,7 @@ def authorize_supervisor_form_effect(
     if payload:
         raise ProblemDetail(ProblemCode.PERMISSION_DENIED, "form effect payload must be empty")
     try:
-        result = candidate_effects.authorize_form(
+        result = supervisor_effects.authorize_form(
             conn,
             workspace_id=workspace_id,
             session_id=session_id,
