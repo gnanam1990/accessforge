@@ -771,6 +771,166 @@ def test_baseline_build_durable_fencing(
         }
 
 
+@pytest.mark.parametrize("fault", [None, "readback", "revoked", "upload", "substitution"])
+def test_baseline_archive_retention_boundary(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    execution_body: dict[str, Any],
+    fault: str | None,
+) -> None:
+    """Real DB/HTTP lifecycle; in-memory storage and synthetic process receipt, not Docker."""
+    from accessforge_build_worker.baseline_artifacts import (
+        read_retained_baseline,
+        retain_baseline,
+        retire_expired_baseline,
+    )
+    from accessforge_build_worker.sandbox import DaemonBinding, SandboxBuild
+    from accessforge_build_worker.snapshot import SourceFile, SourceSnapshot
+    from accessforge_persistence import baseline_builds as builds
+    from accessforge_persistence import retention
+
+    artifact = SourceSnapshot((SourceFile("index.html", b"synthetic output, never served"),))
+    build = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/builds",
+        json=_build_body(artifactDigest=artifact.archive_digest),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert build.status_code == 201
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json={**execution_body, "buildId": build.json()["buildId"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 201, response.text
+    sealed = response.json()
+    url = _approval_url(project, sealed)
+    headers = {CSRF_HEADER: csrf, "If-Match": "0"}
+    assert client.post(url, json=_approval_body(sealed), headers=headers).status_code == 201
+    assert (
+        client.post(
+            f"/v1/workspaces/{WS}/runs",
+            json={"manifestDigest": sealed["manifestDigest"]},
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 202
+    )
+    with workspace_connection(db, WS) as conn:
+        binding = builds.read_binding(
+            conn, workspace_id=WS, run_id=sealed["canonicalManifest"]["runId"]
+        )
+        inputs: dict[str, Any] = dict(
+            binding=binding,
+            source_archive_digest="a" * 64,
+            policy_digest="b" * 64,
+            image_id="sha256:" + "c" * 64,
+            daemon_endpoint="unix:///fixture/docker.sock",
+            daemon_id="fixture",
+        )
+        claim = builds.claim(conn, **inputs)
+        builds.dispatch(conn, value=claim, **inputs)
+        process = dict(
+            container_id="d" * 64,
+            platform="linux/amd64",
+            image_id=inputs["image_id"],
+            daemon_endpoint=inputs["daemon_endpoint"],
+            daemon_id=inputs["daemon_id"],
+        )
+        builds.created(conn, value=claim, **process)
+        builds.captured(
+            conn,
+            value=claim,
+            **process,
+            source_archive_digest="a" * 64,
+            artifact_digest=artifact.archive_digest,
+            policy_digest="b" * 64,
+        )
+    result = SandboxBuild(
+        claim.attempt_id,
+        inputs["image_id"],
+        "a" * 64,
+        artifact,
+        b"",
+        b"",
+        True,
+        DaemonBinding(inputs["daemon_endpoint"], "fixture"),
+        "d" * 64,
+        "linux/amd64",
+    )
+
+    class Store:
+        storage_identity = ("http://fixture-storage", "baseline-test")
+
+        def __init__(self) -> None:
+            self.data: dict[str, bytes] = {}
+
+        def put_create_only(self, *, key: str, payload: bytes, content_type: str) -> str:
+            if fault == "upload" or key in self.data:
+                raise RuntimeError("synthetic create-only failure")
+            self.data[key] = payload
+            if fault == "revoked":
+                assert (
+                    client.post(
+                        url + "/revocation",
+                        json={"manifestDigest": sealed["manifestDigest"]},
+                        headers=headers,
+                    ).status_code
+                    == 200
+                )
+            return key
+
+        def get_bounded(self, *, key: str, max_bytes: int) -> bytes:
+            return b"changed" if fault == "readback" else self.data[key][:max_bytes]
+
+        def retire_create_only(self, *, key: str) -> None:
+            self.data[key] = b""
+
+    store = Store()
+    if fault in {"upload", "readback", "revoked"}:
+        with pytest.raises((RuntimeError, execution_approvals.Refused)):
+            retain_baseline(db, workspace_id=WS, result=result, store=store)
+        with workspace_connection(db, WS) as conn:
+            assert conn.execute(
+                "SELECT state FROM baseline_archive WHERE build_id=%s", (claim.attempt_id,)
+            ).fetchone() == {"state": "QUARANTINED"}
+        with pytest.raises(builds.Refused):
+            read_retained_baseline(db, workspace_id=WS, build_id=claim.attempt_id, store=store)
+        return
+    retain_baseline(db, workspace_id=WS, result=result, store=store)
+    args: dict[str, Any] = dict(workspace_id=WS, build_id=claim.attempt_id, store=store)
+    assert read_retained_baseline(db, **args) == artifact
+    with pytest.raises(builds.Refused):
+        retain_baseline(db, workspace_id=WS, result=result, store=store)
+    if fault == "substitution":
+        store.data[next(iter(store.data))] = b"substituted"
+        with pytest.raises(builds.Refused):
+            read_retained_baseline(db, **args)
+        return
+    assert not retire_expired_baseline(db, **args)
+    with workspace_connection(db, WS) as conn:
+        policy = retention.current_policy(conn, workspace_id=WS)
+        retention.configure_policy(
+            conn,
+            workspace_id=WS,
+            configured_by=OWNER,
+            expected_revision=policy.revision,
+            entries=[
+                dict(
+                    evidenceClass=e.evidence_class,
+                    retainDays=0 if e.evidence_class == "SOURCE_SNAPSHOT" else e.retain_days,
+                    consentRequired=e.consent_required,
+                )
+                for e in policy.entries
+            ],
+        )
+    assert retire_expired_baseline(db, **args)
+    assert retire_expired_baseline(db, **args)
+    assert list(store.data.values()) == [b""]
+    with pytest.raises(builds.Refused):
+        read_retained_baseline(db, **args)
+
+
 def test_manual_approval_is_exact_independent_audited_and_revocable(
     db: str, client: TestClient, csrf: str, project: str, manual_seal: dict[str, Any]
 ) -> None:

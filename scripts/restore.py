@@ -43,6 +43,7 @@ from accessforge_persistence.evidence.objectstore import (
 from accessforge_persistence.restore import (
     RestoreError,
     reconcile,
+    record_baseline_restore_locations,
     record_candidate_restore_locations,
     restore_is_forward_compatible,
     restore_object_bytes,
@@ -356,6 +357,12 @@ def main(argv: list[str] | None = None) -> int:
         # every backup taken afterwards -- from blocking the next real restore years later.
         if object_members:
             record_candidate_restore_locations(
+                conn,
+                store=store,
+                restored_keys={name.removeprefix("evidence/") for name in object_members},
+                restore_id=envelope.stream_id,
+            )
+            record_baseline_restore_locations(
                 conn,
                 store=store,
                 restored_keys={name.removeprefix("evidence/") for name in object_members},
