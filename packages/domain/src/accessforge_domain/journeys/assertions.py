@@ -113,11 +113,30 @@ MAX_RULE_PHRASE_CHARACTERS = 8192
 MAX_RULE_PHRASE_BYTES = 32768
 MAX_RULE_EFFECT_COUNT = 1000
 MAX_READER_SEQUENCE_STEPS = 20
+KEYBOARD_FOCUS_ROLES = frozenset(
+    {
+        "AXTextField",
+        "AXTextArea",
+        "AXButton",
+        "AXCheckBox",
+        "AXRadioButton",
+        "AXPopUpButton",
+        "AXComboBox",
+        "AXLink",
+    }
+)
 
 
 def evaluation_rule_capabilities() -> dict[str, Any]:
     """Authoring limits from the same constants used by frozen rule validation."""
     return {
+        "EXACT_NATIVE_KEYBOARD_FOCUS": {
+            "assertionKind": "FOCUS_BEHAVIOUR",
+            "maxActionSequence": MAX_RULE_ACTION_SEQUENCE,
+            "roles": sorted(KEYBOARD_FOCUS_ROLES),
+            "measurementKind": "AX_KEYBOARD_FOCUS",
+            "identifierDigestDomain": "accessforge.keyboard-focus-identifier.v1",
+        },
         "PROTECTED_REFERENCE_VALIDATION": {
             "assertionKind": "FUNCTIONAL_VALIDATION",
             "suiteDigest": VALIDATION_SUITE_DIGEST,
@@ -177,11 +196,30 @@ class EvaluationRule:
     count: int | None = None
     steps: tuple[ReaderSequenceStep, ...] = ()
     suite_digest: str | None = None
+    role: str | None = None
+    identifier_digest: str | None = None
 
     def __post_init__(self) -> None:
+        if self.rule_type != "EXACT_NATIVE_KEYBOARD_FOCUS" and (
+            self.role is not None or self.identifier_digest is not None
+        ):
+            raise ValueError("native focus identity cannot be attached to a different rule")
         if self.rule_type != "PROTECTED_REFERENCE_VALIDATION" and self.suite_digest is not None:
             raise ValueError("validation suite cannot be attached to a different rule")
-        if self.rule_type == "EXACT_READER_PHRASE":
+        if self.rule_type == "EXACT_NATIVE_KEYBOARD_FOCUS":
+            if (
+                type(self.action_sequence) is not int
+                or not 1 <= self.action_sequence <= MAX_RULE_ACTION_SEQUENCE
+                or not isinstance(self.role, str)
+                or self.role not in KEYBOARD_FOCUS_ROLES
+                or not isinstance(self.identifier_digest, str)
+                or len(self.identifier_digest) != 64
+                or any(c not in "0123456789abcdef" for c in self.identifier_digest)
+                or any(v is not None for v in (self.phrase, self.effect, self.count))
+                or self.steps != ()
+            ):
+                raise ValueError("focus rule requires an exact bounded action and native identity")
+        elif self.rule_type == "EXACT_READER_PHRASE":
             if (
                 type(self.action_sequence) is not int
                 or not 1 <= self.action_sequence <= MAX_RULE_ACTION_SEQUENCE
@@ -239,6 +277,13 @@ class EvaluationRule:
     def parse(cls, value: Any) -> EvaluationRule:
         if not isinstance(value, dict):
             raise ValueError("evaluationRule must be an object")
+        if set(value) == {"type", "actionSequence", "role", "identifierDigest"}:
+            return cls(
+                value["type"],
+                action_sequence=value["actionSequence"],
+                role=value["role"],
+                identifier_digest=value["identifierDigest"],
+            )
         if set(value) == {"type", "suiteDigest"}:
             return cls(value["type"], suite_digest=value["suiteDigest"])
         if set(value) == {"type", "actionSequence", "phrase"}:
@@ -263,6 +308,13 @@ class EvaluationRule:
         raise ValueError("evaluationRule fields are incomplete or unsupported")
 
     def canonical_form(self) -> dict[str, Any]:
+        if self.rule_type == "EXACT_NATIVE_KEYBOARD_FOCUS":
+            return {
+                "type": self.rule_type,
+                "actionSequence": self.action_sequence,
+                "role": self.role,
+                "identifierDigest": self.identifier_digest,
+            }
         if self.rule_type == "PROTECTED_REFERENCE_VALIDATION":
             return {"type": self.rule_type, "suiteDigest": self.suite_digest}
         if self.rule_type == "READER_NEXT_SEQUENCE":
@@ -306,6 +358,7 @@ class Assertion:
                 (AssertionKind.REQUIRED_ANNOUNCEMENT, "EXACT_READER_PHRASE"),
                 (AssertionKind.TASK_COMPLETION, "EFFECT_COUNT"),
                 (AssertionKind.READING_ORDER, "READER_NEXT_SEQUENCE"),
+                (AssertionKind.FOCUS_BEHAVIOUR, "EXACT_NATIVE_KEYBOARD_FOCUS"),
                 (AssertionKind.FUNCTIONAL_VALIDATION, "PROTECTED_REFERENCE_VALIDATION"),
             }
         ):

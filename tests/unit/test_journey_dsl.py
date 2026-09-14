@@ -283,6 +283,44 @@ def test_freezing_requires_explicit_stop_without_widening_the_selected_policy() 
     assert compiled.navigator_policy["allowedActions"] == sorted(draft.allowed_actions)
 
 
+def test_native_focus_rule_reserves_stop_and_does_not_leak_target_to_navigator() -> None:
+    from accessforge_domain.journeys.assertions import EvaluationRule
+
+    focus = Assertion(
+        "focus.native",
+        AssertionKind.FOCUS_BEHAVIOUR,
+        "Native keyboard focus",
+        unknown_reasons=frozenset({UnknownReason.OBSERVATION_MISSING}),
+        evaluation_rule=EvaluationRule(
+            "EXACT_NATIVE_KEYBOARD_FOCUS",
+            action_sequence=119,
+            role="AXTextField",
+            identifier_digest="a" * 64,
+        ),
+    )
+    draft = e0_draft()
+    assertions = AssertionSet((*draft.assertions.assertions, focus))
+    compiled = compile_journey(dataclasses.replace(draft, assertions=assertions))
+    assert "identifierDigest" not in str(compiled.navigator_policy)
+    assert focus.evaluation_rule is not None
+    invalid = dataclasses.replace(
+        focus,
+        evaluation_rule=dataclasses.replace(
+            focus.evaluation_rule,
+            action_sequence=120,
+        ),
+    )
+    with pytest.raises(ValueError, match="slot for STOP"):
+        compile_journey(
+            dataclasses.replace(
+                draft,
+                assertions=AssertionSet(
+                    (*draft.assertions.assertions, invalid),
+                ),
+            )
+        )
+
+
 @pytest.mark.parametrize(
     "change",
     [

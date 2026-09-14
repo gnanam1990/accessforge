@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from accessforge_domain.functional_validation import ValidationObservation
-from accessforge_domain.journeys.assertions import Assertion, AssertionKind, AssertionSet
+from accessforge_domain.journeys.assertions import (
+    KEYBOARD_FOCUS_ROLES,
+    Assertion,
+    AssertionKind,
+    AssertionSet,
+)
 from accessforge_domain.states import Condition
 
 from .assertions import AssertionOutcome, Provenance
@@ -27,6 +32,57 @@ class ReaderSample:
     # Supplied only by the trusted retained-action join, never reader/navigator JSON.
     next_action_verified: bool = False
     canonical_sequence: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KeyboardFocusSample:
+    """Trusted retained-source projection, not a navigator or speech-derived identity."""
+
+    action_sequence: int
+    event_id: str
+    role: str | None = None
+    identifier_digest: str | None = None
+    successful_action_verified: bool = False
+
+
+def derive_keyboard_focus_assertion(
+    assertion: Assertion, samples: tuple[KeyboardFocusSample, ...]
+) -> AssertionOutcome:
+    rule = assertion.evaluation_rule
+    refs: tuple[str, ...] = ()
+    if rule is not None and rule.rule_type == "EXACT_NATIVE_KEYBOARD_FOCUS":
+        selected = [s for s in samples if s.action_sequence == rule.action_sequence]
+        refs = tuple(dict.fromkeys(s.event_id for s in selected if s.event_id))
+        if len(selected) == 1:
+            sample = selected[0]
+            if (
+                refs
+                and sample.successful_action_verified is True
+                and isinstance(sample.role, str)
+                and sample.role in KEYBOARD_FOCUS_ROLES
+                and isinstance(sample.identifier_digest, str)
+                and len(sample.identifier_digest) == 64
+                and all(c in "0123456789abcdef" for c in sample.identifier_digest)
+            ):
+                return AssertionOutcome(
+                    assertion.assertion_id,
+                    assertion.kind,
+                    Condition.TRUE
+                    if (sample.role, sample.identifier_digest)
+                    == (rule.role, rule.identifier_digest)
+                    else Condition.FALSE,
+                    Provenance.EVALUATOR_DERIVED,
+                    refs,
+                )
+    return AssertionOutcome(
+        assertion.assertion_id,
+        assertion.kind,
+        Condition.UNKNOWN,
+        Provenance.EVALUATOR_DERIVED if refs else Provenance.ABSENT,
+        refs,
+        unknown_reason="frozen native focus predicate or unique known capture after a successful "
+        "original action is unavailable; speech cannot substitute for keyboard focus",
+    )
 
 
 def derive_reader_assertion(
