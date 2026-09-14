@@ -771,7 +771,33 @@ def test_baseline_build_durable_fencing(
         }
 
 
-@pytest.mark.parametrize("fault", [None, "readback", "revoked", "upload", "substitution"])
+@pytest.fixture()
+def baseline_archive_stores() -> Iterator[list[Any]]:
+    """Only generated isolated buckets; never remove configured evidence objects."""
+    from accessforge_persistence.evidence.objectstore import S3ArtifactStore, S3Settings
+
+    stores: list[Any] = []
+    try:
+        for _ in range(2):
+            store = S3ArtifactStore(
+                S3Settings(
+                    endpoint_url=os.environ["OBJECT_STORE_ENDPOINT"],
+                    access_key=os.environ["OBJECT_STORE_ACCESS_KEY"],
+                    secret_key=os.environ["OBJECT_STORE_SECRET_KEY"],
+                    bucket=f"accessforge-baseline-drill-{uuid.uuid4().hex}",
+                )
+            )
+            store.ensure_bucket()
+            stores.append(store)
+        yield stores
+    finally:
+        for store in stores:
+            for key in store.iter_keys():
+                store.delete(key=key)
+            store._client.delete_bucket(Bucket=store.storage_identity[1])
+
+
+@pytest.mark.parametrize("fault", [None, "readback", "revoked", "upload", "substitution", "s3"])
 def test_baseline_archive_retention_boundary(
     db: str,
     client: TestClient,
@@ -779,8 +805,9 @@ def test_baseline_archive_retention_boundary(
     project: str,
     execution_body: dict[str, Any],
     fault: str | None,
+    request: pytest.FixtureRequest,
 ) -> None:
-    """Real DB/HTTP lifecycle; in-memory storage and synthetic process receipt, not Docker."""
+    """Real DB/HTTP; s3 case uses isolated real stores; process receipt is synthetic, not Docker."""
     from accessforge_build_worker.baseline_artifacts import (
         read_retained_baseline,
         retain_baseline,
@@ -886,7 +913,8 @@ def test_baseline_archive_retention_boundary(
         def retire_create_only(self, *, key: str) -> None:
             self.data[key] = b""
 
-    store = Store()
+    real_stores = request.getfixturevalue("baseline_archive_stores") if fault == "s3" else None
+    store: Any = real_stores[0] if real_stores else Store()
     if fault in {"upload", "readback", "revoked"}:
         with pytest.raises((RuntimeError, execution_approvals.Refused)):
             retain_baseline(db, workspace_id=WS, result=result, store=store)
@@ -907,6 +935,36 @@ def test_baseline_archive_retention_boundary(
         with pytest.raises(builds.Refused):
             read_retained_baseline(db, **args)
         return
+    if real_stores:
+        from accessforge_persistence import connect, restore
+        from accessforge_persistence.evidence.objectstore import ObjectStoreUnavailable
+
+        target = real_stores[1]
+        key = next(iter(store.iter_keys()))
+        restore.restore_object_bytes(target, key=key, payload=artifact.archive())
+        with pytest.raises(builds.Refused, match="location"):
+            read_retained_baseline(db, **{**args, "store": target})
+        admin = urlsplit(request.getfixturevalue("backup_database_url"))
+        admin_url = urlunsplit(
+            (admin.scheme, admin.netloc, urlsplit(db).path, admin.query, admin.fragment)
+        )
+        with connect(admin_url) as conn:
+            restore.record_baseline_restore_locations(
+                conn, store=target, restored_keys={key}, restore_id=str(uuid.uuid4())
+            )
+        assert read_retained_baseline(db, **{**args, "store": target}) == artifact
+        with pytest.raises(builds.Refused, match="location"):
+            read_retained_baseline(db, **args)
+        # Original location is provenance, not rewritten to make a different bucket pass.
+        with workspace_connection(db, WS) as conn:
+            original = conn.execute(
+                "SELECT store_endpoint,store_bucket FROM baseline_archive WHERE build_id=%s",
+                (claim.attempt_id,),
+            ).fetchone()
+            assert original is not None
+            assert (original["store_endpoint"], original["store_bucket"]) == store.storage_identity
+        store = target
+        args["store"] = store
     assert not retire_expired_baseline(db, **args)
     with workspace_connection(db, WS) as conn:
         policy = retention.current_policy(conn, workspace_id=WS)
@@ -926,7 +984,17 @@ def test_baseline_archive_retention_boundary(
         )
     assert retire_expired_baseline(db, **args)
     assert retire_expired_baseline(db, **args)
-    assert list(store.data.values()) == [b""]
+    if real_stores:
+        assert store.get_bounded(key=key, max_bytes=1) == b""
+        with pytest.raises(ObjectStoreUnavailable):
+            store.put_create_only(
+                key=key, payload=artifact.archive(), content_type="application/x-tar"
+            )
+        with pytest.raises(ObjectStoreUnavailable):
+            restore.restore_object_bytes(store, key=key, payload=artifact.archive())
+        restore.restore_object_bytes(store, key=key, payload=b"")
+    else:
+        assert list(store.data.values()) == [b""]
     with pytest.raises(builds.Refused):
         read_retained_baseline(db, **args)
 
