@@ -3144,7 +3144,7 @@ def _retain_stopped_artifact_case(
         if case == "artifact-finalize-incomplete":
             from accessforge_orchestrator.finalize_execution import finalize
 
-            with pytest.raises(Refused, match="five retained"):
+            with pytest.raises(Refused, match="all originally required retained"):
                 finalize(db, store, workspace_id=WS, run_id=ref.run_id)
             with workspace_connection(db, WS) as conn:
                 state = run_store.load_run(conn, run_id=ref.run_id).state

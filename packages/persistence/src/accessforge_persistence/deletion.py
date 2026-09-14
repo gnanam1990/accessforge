@@ -99,6 +99,8 @@ ARTIFACT_CLASS: dict[str, str] = {
     # INV-09 exists to prevent.
     "ACTION_TRACE": "READER_SPEECH",
     "EFFECT_RECEIPT": "READER_SPEECH",
+    # Client-observed model identity is outcome-bearing proof, not disposable diagnostics.
+    "MODEL_RUNTIME": "READER_SPEECH",
 }
 
 #: Which class each canonical event type's payload belongs to, on the same terms.

@@ -32,3 +32,9 @@ call was made; these checks establish wrapper behavior, not external provider ac
 CI additionally covers real PostgreSQL profile binding, immutability, cross-workspace isolation,
 settled snapshot requirements, forward migration, and finalizer missing/corrupt/partial coverage.
 No billable call, actual screen-reader startup, live migration or deployment was performed.
+
+The first CI integration run exposed a missing MODEL_RUNTIME retention-class mapping plus stale
+historical migration lists and a five-artifact error-message expectation. MODEL_RUNTIME is now
+classified as outcome-bearing evidence (READER_SPEECH, like effect receipts), not disposable
+diagnostics. Exact migration lists include 0049 before 0050; the incomplete-artifact refusal remains
+required. These corrections do not disable or loosen CI gates.
