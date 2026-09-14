@@ -29,16 +29,47 @@ class Claim:
 
 
 def read_binding(
-    conn: psycopg.Connection[Any], *, workspace_id: str, run_id: str
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    run_id: str,
+    allow_bound_reader: bool = False,
 ) -> dict[str, str]:
     run = conn.execute("SELECT * FROM run WHERE id=%s FOR UPDATE", (run_id,)).fetchone()
+    bound_reader = False
+    if allow_bound_reader and run is not None:
+        # Runtime continuation only. Source preparation/build admission never opts into this.
+        bound_reader = (
+            conn.execute(
+                "SELECT 1 FROM baseline_session_binding s JOIN baseline_reader_lease b "
+                "USING(run_id,workspace_id) JOIN desktop_lease l ON l.id=b.lease_id "
+                "AND l.workspace_id=b.workspace_id JOIN baseline_regression_attempt a "
+                "ON a.id=s.regression_attempt_id AND a.run_id=s.run_id "
+                "JOIN baseline_endpoint e ON e.attempt_id=a.id AND e.workspace_id=s.workspace_id "
+                "WHERE s.run_id=%s AND s.workspace_id=%s AND s.manifest_digest=%s "
+                "AND l.run_id=s.run_id AND l.epoch=b.lease_epoch "
+                "AND e.binding_digest=s.endpoint_binding_digest AND a.state='DISPATCHED' "
+                "AND a.endpoint_required AND NOT EXISTS(SELECT 1 FROM desktop_lease other "
+                "WHERE other.run_id=s.run_id AND other.id<>l.id)",
+                (run_id, workspace_id, run["manifest_digest"]),
+            ).fetchone()
+            is not None
+        )
     if (
         run is None
         or str(run["workspace_id"]) != workspace_id
-        or run["status"] != "QUEUED"
+        or (
+            run["status"] != "QUEUED"
+            and not (
+                bound_reader and run["status"] in {"LEASED", "RUNNING", "FINALIZING", "COMPLETED"}
+            )
+        )
         or run["cancel_requested_at"] is not None
         or run["quarantined"]
-        or conn.execute("SELECT 1 FROM desktop_lease WHERE run_id=%s", (run_id,)).fetchone()
+        or (
+            not bound_reader
+            and conn.execute("SELECT 1 FROM desktop_lease WHERE run_id=%s", (run_id,)).fetchone()
+        )
         or conn.execute("SELECT 1 FROM candidate_run_binding WHERE run_id=%s", (run_id,)).fetchone()
     ):
         raise Refused("baseline preparation requires an unleased approved queued baseline")
