@@ -4692,8 +4692,8 @@ def _retain_stopped_artifact_case(
                     )
                     with workspace_connection(db, WS) as conn:
                         original_focus_event = conn.execute(
-                            "SELECT event_id FROM canonical_event WHERE event_type='READER_OBSERVATION' "
-                            "AND run_id=%s",
+                            "SELECT event_id FROM canonical_event "
+                            "WHERE event_type='READER_OBSERVATION' AND run_id=%s",
                             (ref.run_id,),
                         ).fetchone()
                         assert original_focus_event is not None
