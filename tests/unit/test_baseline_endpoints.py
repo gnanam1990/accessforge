@@ -112,7 +112,9 @@ def test_binding_cannot_change_committed_origin_or_bind_after_expiry(
     monkeypatch.setattr(baseline_regressions, "assert_active", lambda *a, **kw: None)
     monkeypatch.setattr(endpoints, "_seed", lambda *a: {})
     monkeypatch.setattr(endpoints, "_record", lambda *a: row)
-    args: dict[str, Any] = dict(claim=RegressionClaim("attempt", "build", "worker", 1), receipt=receipt)
+    args: dict[str, Any] = dict(
+        claim=RegressionClaim("attempt", "build", "worker", 1), receipt=receipt
+    )
     if fault is None:
         endpoints.bound(cast(psycopg.Connection[Any], conn), **args)
         assert conn.writes == 1
