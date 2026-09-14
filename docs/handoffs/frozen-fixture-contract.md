@@ -10,6 +10,8 @@ The completion observer now reads that original contract and binds the instance'
 navigator values and private observer configuration to it. It separately checks the supported
 reference-app template digest before reading the application's nonce-scoped state. Historical
 versions missing the original preimage are refused; existing records are not backfilled.
+Navigator planning verifies the same logical/template distinction without loading private observer
+values. Its loader selects only fixture metadata, not the rest of the reviewer assertion summary.
 
 This is not completed runtime fixture evidence. Next work must bind trusted reset material,
 provision a fresh reference-app instance and retain its app-template identity and nonce.

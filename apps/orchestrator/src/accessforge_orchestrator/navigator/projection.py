@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_domain.canonical import digest
 from accessforge_domain.timestamps import parse_rfc3339_utc
 from accessforge_navigation_tools import (
@@ -19,7 +20,7 @@ from accessforge_navigation_tools import (
     SealedNavigatorPolicy,
 )
 from accessforge_orchestrator.manual_dispatch import DispatchReference
-from accessforge_persistence import runners, workspace_connection
+from accessforge_persistence import journeys, runners, workspace_connection
 
 
 class ProjectionRefused(ValueError):
@@ -88,14 +89,24 @@ def load_retained_turn(
         if digest(raw_policy) != manifest["navigatorPolicyDigest"]:
             raise ProjectionRefused("navigator policy differs from the exact seal")
         policy = SealedNavigatorPolicy.model_validate(raw_policy)
+        try:
+            logical_fixture = journeys.load_fixture_contract(
+                conn,
+                version_id=manifest["journeyVersionId"],
+                expected_digest=manifest["fixtureDigest"],
+            )
+        except journeys.JourneyPersistenceError as exc:
+            raise ProjectionRefused("original logical fixture contract unavailable") from exc
         fixture = conn.execute(
-            "SELECT template_digest,navigator_values FROM run_fixture_instance "
+            "SELECT template_id,template_digest,navigator_values FROM run_fixture_instance "
             "WHERE run_id=%s AND workspace_id=%s FOR SHARE",
             (reference.run_id, reference.workspace_id),
         ).fetchone()
         if (
             fixture is None
-            or fixture["template_digest"] != manifest["fixtureDigest"]
+            or logical_fixture["templateId"] != "service-request"
+            or fixture["template_id"] != logical_fixture["templateId"]
+            or fixture["template_digest"] != REFERENCE_FIXTURE_DIGEST
             or fixture["navigator_values"] != policy.fixture_values
         ):
             raise ProjectionRefused("runtime fixture values differ from the approved template")

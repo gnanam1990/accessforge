@@ -81,12 +81,13 @@ def load_fixture_contract(
     This does not return reset/observer values or claim a physical fixture was created.
     """
     row = conn.execute(
-        "SELECT fixture_digest,reviewer_summary,navigator_policy FROM journey_version WHERE id=%s",
+        "SELECT fixture_digest,reviewer_summary->'fixtureContract' AS fixture_contract,"
+        "navigator_policy FROM journey_version WHERE id=%s",
         (version_id,),
     ).fetchone()
-    if row is None or not isinstance(row["reviewer_summary"], dict):
+    if row is None:
         raise JourneyPersistenceError("original fixture version unavailable")
-    contract = row["reviewer_summary"].get("fixtureContract")
+    contract = row["fixture_contract"]
     if (
         not isinstance(contract, dict)
         or set(contract)

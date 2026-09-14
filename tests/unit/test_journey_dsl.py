@@ -153,15 +153,15 @@ def test_original_fixture_preimage_requires_original_bound_material(change: str)
     version = compiled.version
     row: dict[str, Any] = {
         "fixture_digest": version.fixture_digest,
-        "reviewer_summary": deepcopy(compiled.reviewer_summary),
+        "fixture_contract": deepcopy(compiled.reviewer_summary["fixtureContract"]),
         "navigator_policy": deepcopy(compiled.navigator_policy),
     }
-    original = row["reviewer_summary"]["fixtureContract"]
+    original = row["fixture_contract"]
     assert digest(original) == version.fixture_digest
     assert "fixtureContract" not in compiled.navigator_policy
     assert "observerConfig" not in original and "resetValues" not in original
     if change == "legacy":
-        del row["reviewer_summary"]["fixtureContract"]
+        row["fixture_contract"] = None
     elif change == "contract":
         original["observerConfigDigest"] = "0" * 64
     elif change == "policy":

@@ -2474,8 +2474,8 @@ def test_navigator_loads_only_original_resolved_reader_boundary(
             conn,
             workspace_id=WS,
             run_id=ref.run_id,
-            template_id="navigator-projection",
-            template_digest=sealed["canonical_manifest"]["fixtureDigest"],
+            template_id="service-request",
+            template_digest=REFERENCE_FIXTURE_DIGEST,
             navigator_values=sealed["navigator_policy"]["fixtureValues"],
             observer_config={"privateReceipt": "must-never-enter-model-context"},
         )
