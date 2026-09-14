@@ -364,7 +364,8 @@ describe('journey authoring', () => {
       .toHaveAttribute('href', `#${focusDigest.id}`)
     expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
     await user.selectOptions(screen.getByLabelText(/Assertion 5 native AX role/), 'AXTextField')
-    await user.type(focusDigest, 'a'.repeat(64))
+    await user.click(focusDigest)
+    await user.paste('a'.repeat(64))
     await user.click(screen.getByRole('button', { name: 'Freeze version' }))
     const sent = server.bodies.find((entry) => entry.url.endsWith('/journeys'))
     const body = sent?.body as { assertions: { evaluationRule: unknown }[] }
