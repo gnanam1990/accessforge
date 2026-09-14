@@ -6,23 +6,22 @@ This validates source claims and their action window, not physical truth or a fo
 from datetime import datetime, timedelta
 from typing import Any
 
+from accessforge_domain.journeys.assertions import KEYBOARD_FOCUS_ROLES
 from accessforge_domain.timestamps import parse_rfc3339_utc
 
-ROLES = frozenset(
-    {
-        "AXTextField",
-        "AXTextArea",
-        "AXButton",
-        "AXCheckBox",
-        "AXRadioButton",
-        "AXPopUpButton",
-        "AXComboBox",
-        "AXLink",
-    }
-)
+ROLES = KEYBOARD_FOCUS_ROLES
 
 
 def validate(value: Any, *, dispatched_at: datetime, now: datetime) -> dict[str, Any]:
+    record = validate_record(value)
+    stamp = parse_rfc3339_utc(record["capturedAtUtc"])
+    if not dispatched_at <= stamp <= now or now - stamp > timedelta(seconds=30):
+        raise ValueError("keyboard focus capture is outside its original action window")
+    return record
+
+
+def validate_record(value: Any) -> dict[str, Any]:
+    """Shape only for already-admitted historical sources; not a substitute for admission."""
     if not isinstance(value, dict):
         raise ValueError("keyboard focus metadata unavailable")
     common = {"measurementKind", "status", "capturedAtUtc"}
@@ -36,9 +35,7 @@ def validate(value: Any, *, dispatched_at: datetime, now: datetime) -> dict[str,
         or len(value["capturedAtUtc"]) > 40
     ):
         raise ValueError("keyboard focus metadata malformed")
-    stamp = parse_rfc3339_utc(value["capturedAtUtc"])
-    if not dispatched_at <= stamp <= now or now - stamp > timedelta(seconds=30):
-        raise ValueError("keyboard focus capture is outside its original action window")
+    parse_rfc3339_utc(value["capturedAtUtc"])
     if known:
         fingerprint = value["identifierDigest"]
         if (

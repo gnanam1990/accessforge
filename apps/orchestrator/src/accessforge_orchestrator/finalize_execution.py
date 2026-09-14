@@ -24,7 +24,10 @@ from accessforge_domain.evaluation.assertions import (
 )
 from accessforge_domain.evaluation.identity import IdentityKind, revalidate
 from accessforge_domain.evaluation.observer import CompletionObservation
-from accessforge_domain.evaluation.rules import derive_reader_assertion
+from accessforge_domain.evaluation.rules import (
+    derive_keyboard_focus_assertion,
+    derive_reader_assertion,
+)
 from accessforge_domain.evaluation.verdict import decide
 from accessforge_domain.journeys.assertions import AssertionKind
 from accessforge_domain.states import Condition
@@ -40,6 +43,7 @@ from accessforge_orchestrator.fixture_evidence import observed_fixture
 from accessforge_orchestrator.functional_evidence import (
     observed_assertions as functional_assertions,
 )
+from accessforge_orchestrator.keyboard_focus_evidence import keyboard_focus_samples
 from accessforge_orchestrator.runtime_evidence import interpret as interpret_runtime
 from accessforge_orchestrator.runtime_evidence import observed_model, reader_samples
 from accessforge_persistence import evaluations, journeys, runs, workspace_connection
@@ -47,7 +51,7 @@ from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements, stream_requirements
 
-EVALUATOR_VERSION = "1.10.0"
+EVALUATOR_VERSION = "1.11.0"
 
 
 def _retained(
@@ -137,6 +141,7 @@ def _decide(
     )
     values: dict[str, AssertionOutcome] = {}
     samples = reader_samples(snapshots)
+    focus_samples = keyboard_focus_samples(snapshots)
     runtime = interpret_runtime(snapshots, row)
     last = snapshots["EFFECT_RECEIPT"]["records"][-1]
     source = last["payload"]["sourceRecord"]
@@ -167,6 +172,10 @@ def _decide(
     for assertion in assertions.required:
         if assertion.kind in {AssertionKind.REQUIRED_ANNOUNCEMENT, AssertionKind.READING_ORDER}:
             values[assertion.assertion_id] = derive_reader_assertion(assertion, samples)
+        elif assertion.kind is AssertionKind.FOCUS_BEHAVIOUR:
+            values[assertion.assertion_id] = derive_keyboard_focus_assertion(
+                assertion, focus_samples
+            )
     functional_artifacts = [a for a in artifact_ids if a["kind"] == "FUNCTIONAL_REGRESSION"]
     if len(functional_artifacts) > 1:
         raise Refused("multiple functional artifacts cannot decide one execution")
