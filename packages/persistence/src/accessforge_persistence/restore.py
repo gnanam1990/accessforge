@@ -225,6 +225,7 @@ class Reconciliation:
     candidate_endpoints_fenced: int = 0
     execution_approvals_revoked: int = 0
     supervisor_tickets_revoked: int = 0
+    github_publication_approvals_revoked: int = 0
 
     @property
     def summary(self) -> str:
@@ -241,6 +242,7 @@ class Reconciliation:
             f"Fenced {self.candidate_endpoints_fenced} browser endpoints without resumption. "
             f"Revoked {self.execution_approvals_revoked} exact execution approvals. "
             f"Revoked {self.supervisor_tickets_revoked} supervisor dispatch tickets. "
+            f"Revoked {self.github_publication_approvals_revoked} GitHub publication approvals. "
             f"{len(self.grants_requiring_revalidation)} execution grants require revalidation "
             "before anything may be dispatched under them."
         )
@@ -421,6 +423,13 @@ def reconcile(
         "UPDATE supervisor_dispatch_ticket SET revoked_at=%s WHERE revoked_at IS NULL",
         (moment,),
     ).rowcount
+    # Publication or withdrawal of consent may have happened after the snapshot. Revoke even
+    # expired/orphaned publication approvals, retaining historical evidence. This is not remote
+    # reconciliation and never authorizes recreating a missing publication intent.
+    github_publication_approvals = conn.execute(
+        "UPDATE approval SET revoked_at=%s WHERE revoked_at IS NULL AND scope='GITHUB_PUBLISH'",
+        (moment,),
+    ).rowcount
 
     # Restored claim/dispatch state cannot prove that the original container stopped.
     baseline_regressions = conn.execute(
@@ -469,6 +478,7 @@ def reconcile(
                     "sessionsRevoked": sessions,
                     "executionApprovalsRevoked": execution_approvals,
                     "supervisorTicketsRevoked": supervisor_tickets,
+                    "githubPublicationApprovalsRevoked": github_publication_approvals,
                     "enrollmentTokensExpired": tokens,
                     "leasesFenced": leases,
                     "runnersQuarantined": runners,
@@ -502,6 +512,7 @@ def reconcile(
         candidate_endpoints_fenced=candidate_endpoints,
         execution_approvals_revoked=execution_approvals,
         supervisor_tickets_revoked=supervisor_tickets,
+        github_publication_approvals_revoked=github_publication_approvals,
     )
 
 
