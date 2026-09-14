@@ -1627,7 +1627,21 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
     with workspace_connection(binding.database, binding.workspace) as conn:
         with pytest.raises(builds.BuildClaimRefused), conn.transaction():
             candidate_runs.assert_live(conn, run_id=str(prepared[0]["run_id"]))
-        assert patches._regression_attestation(conn, str(prepared[0]["run_id"]))[0] is False
+        verification = conn.execute(
+            "SELECT verification_id FROM candidate_run_binding WHERE run_id=%s",
+            (prepared[0]["run_id"],),
+        ).fetchone()
+        assert verification is not None
+        # Even actual successful protected regressions are not an original evaluated AT pair.
+        assert (
+            patches._regression_attestation(
+                conn,
+                str(prepared[0]["run_id"]),
+                verification_id=str(verification["verification_id"]),
+                baseline_run_id=baseline_id,
+            )[0]
+            is False
+        )
         if fresh:
             from accessforge_persistence import candidate_fixture_setups
 
@@ -1753,6 +1767,24 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             assert observed_assertions(**{**join, "observed_build": None}) == {}
             with pytest.raises(EvidenceRefused):
                 observed_assertions(**{**join, "observed_build": "0" * 64})
+            from accessforge_persistence.regression_attestation import _retained
+
+            retained_snapshot = {
+                "runId": str(session["run_id"]),
+                "attemptId": str(session["attempt_id"]),
+                "manifestDigest": session["manifest_digest"],
+                "artifacts": [
+                    {
+                        "artifactId": artifact.artifact_id,
+                        "kind": "FUNCTIONAL_REGRESSION",
+                        "producerId": bundle["producerId"],
+                        "digest": digest(bundle),
+                    }
+                ],
+            }
+            assert _retained(conn, retained_snapshot)
+            assert not _retained(conn, {**retained_snapshot, "runId": str(uuid.uuid4())})
+            assert not _retained(conn, {**retained_snapshot, "manifestDigest": "0" * 64})
         with workspace_connection(binding.database, str(uuid.uuid4())) as other:
             from accessforge_persistence import functional_regression_evidence
 

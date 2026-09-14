@@ -21,13 +21,9 @@ VERIFIED: CONTRACTS says "human review cannot convert an INCONCLUSIVE candidate 
 the
 way to honour that is to have no parameter that could.
 
-**What this module cannot do, today.** It cannot produce a candidate. Building one requires
-executing
-the target application's build inside a containment boundary this deployment has not got, and
-running
-it requires a real screen reader on a real desktop. So `conclude` is reachable with NOT_ESTABLISHED
-and INCONCLUSIVE, and VERIFIED is reachable only by supplying evidence that, here, nothing can
-produce. The gates are tested; the happy path is not claimed.
+Owned candidate builds and protected regression receipts are separate producer paths. This module
+reads their original evaluated evidence; it does not start a desktop or synthesize missing
+observations. An actual matched-reader happy path remains an external acceptance requirement.
 """
 
 from __future__ import annotations
@@ -853,22 +849,23 @@ def _producer_watermarks(
 
 
 def _regression_attestation(
-    conn: psycopg.Connection[dict[str, Any]], run_id: str
+    conn: psycopg.Connection[dict[str, Any]],
+    run_id: str,
+    *,
+    verification_id: str | None = None,
+    baseline_run_id: str | None = None,
 ) -> tuple[bool, str]:
-    """Whether protected functional regressions are attested for this run.
+    """Require original retained evaluations and regression evidence for this exact verification."""
+    from . import regression_attestation
 
-    **Nothing durably attests them today, so this is always False.** The owned-reference worker
-    can execute protected HTTP/database checks, but there is no durable result bound to this
-    candidate run, lease and epoch. An in-memory result or a test report is not such evidence.
-    This gate may read that future protected record only after the trusted dispatch/receipt path
-    exists; callers cannot replace it with an assertion that their tests passed.
-    """
+    if verification_id is not None and baseline_run_id is not None:
+        if regression_attestation.attest(
+            conn, run_id=run_id, verification_id=verification_id, baseline_run_id=baseline_run_id
+        ):
+            return True, "protected functional regressions are bound to the original evaluated pair"
     return False, (
-        "no attested record of protected functional regressions exists for this run. The local "
-        "owned-reference runner can exercise protected tests, but its result is not yet durably "
-        "bound to this candidate run and dispatch authority. Whether this candidate passed "
-        "validation, authorization, successful submission and failed-input handling is therefore "
-        "unattested. An unknown gate is an unmet gate."
+        "protected functional regressions lack a complete original evaluated pair, exact "
+        "verification binding or retained producer evidence. An unknown gate is an unmet gate."
     )
 
 
@@ -877,6 +874,7 @@ def _derive_evidence(
     *,
     baseline_run_id: str,
     candidate_run_id: str | None,
+    verification_id: str | None = None,
 ) -> TrustedEvidence:
     """Read everything the gates need from rows this product wrote."""
     baseline_status, baseline_outcome, baseline_identity = _run_facts(conn, baseline_run_id)
@@ -889,7 +887,9 @@ def _derive_evidence(
     else:
         candidate_status, candidate_outcome, candidate_identity = _run_facts(conn, candidate_run_id)
         closed, unclosed = _producer_watermarks(conn, candidate_run_id)
-        attested, detail = _regression_attestation(conn, candidate_run_id)
+        attested, detail = _regression_attestation(
+            conn, candidate_run_id, verification_id=verification_id, baseline_run_id=baseline_run_id
+        )
     return TrustedEvidence(
         candidate_run_id=candidate_run_id,
         baseline_outcome=baseline_outcome,
@@ -1177,11 +1177,9 @@ def conclude_verification(
     caller could assert a complete matched pair and obtain a VERIFIED record without a run having
     happened.
 
-    **In this deployment the conclusion can never be VERIFIED.** Nothing attests protected
-    functional regressions for this candidate run, so the gate remains unmet even though a local
-    owned-reference primitive can build and test captured wheels. Reaching VERIFIED requires
-    durable trusted regression receipts and a complete actual matched pair -- not a different
-    argument to this function.
+    Reaching VERIFIED requires original baseline/candidate evaluations, retained trusted regression
+    receipts for this exact verification, complete observed identities and a matched pair. A local
+    successful build, a synthetic run status or a caller-supplied test result cannot substitute.
 
     `candidate_run_id` absent is INCONCLUSIVE, not NOT_ESTABLISHED. A run that did not produce a
     verdict has not shown the repair failed -- it has shown nothing -- and recording those as the
@@ -1229,7 +1227,10 @@ def conclude_verification(
             )
 
     evidence = _derive_evidence(
-        conn, baseline_run_id=record.baseline_run_id, candidate_run_id=candidate_run_id
+        conn,
+        baseline_run_id=record.baseline_run_id,
+        candidate_run_id=candidate_run_id,
+        verification_id=verification_id,
     )
     # Recorded as observed, so a reader sees what differed rather than being told that something
     # did.
@@ -1253,7 +1254,7 @@ def conclude_verification(
             "permitted -- nothing else. An unrecorded difference means the two runs are not a pair."
         )
 
-    if not unmet:  # pragma: no cover - unreachable until a runner attests regressions
+    if not unmet:
         conclusion = "VERIFIED"
         reasons = [
             "a complete matched pair, every element read from recorded evidence: the baseline "
@@ -1269,9 +1270,7 @@ def conclude_verification(
         conclusion = "NOT_ESTABLISHED"
         reasons = unmet
     else:
-        # Including every case in this deployment: regressions are never attested, so a candidate
-        # that ran and failed still reports INCONCLUSIVE rather than claiming the repair was tried
-        # and rejected. Saying "not established" would imply the comparison was complete.
+        # Missing original regression/evaluation evidence cannot establish a rejected repair.
         conclusion = "INCONCLUSIVE"
         reasons = unmet
 
