@@ -398,6 +398,19 @@ def retain_bundle(
     return [item[0] for item in planned]
 
 
+def read_private_journal(path: str) -> bytes:
+    """Read bounded original spool bytes without following a final symlink or opening a pipe."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as spool:
+        info = os.fstat(spool.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise Refused("private owned regular journal required")
+        journal = spool.read(MAX_ARTIFACT_BYTES + 1)
+    if not journal or len(journal) > MAX_ARTIFACT_BYTES:
+        raise Refused("bounded nonempty original journal required")
+    return journal
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-id", type=uuid.UUID, required=True)
@@ -405,13 +418,7 @@ def main() -> None:
     parser.add_argument("--journal", required=True, help="private regular-file supervisor spool")
     args = parser.parse_args()
     try:
-        # Do not read symlinks, devices, pipes or shared-writable journal paths.
-        fd = os.open(args.journal, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "rb") as spool:
-            info = os.fstat(spool.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-                raise Refused("private owned regular journal required")
-            journal = spool.read(MAX_ARTIFACT_BYTES + 1)
+        journal = read_private_journal(args.journal)
         from accessforge_orchestrator.maintenance.purge_worker import _store_from_environment
 
         ids = retain_bundle(
