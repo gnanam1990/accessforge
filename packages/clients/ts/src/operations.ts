@@ -224,6 +224,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: true,
     authenticated: true,
   },
+  'inspect_github_publication_recovery': {
+    operationId: 'inspect_github_publication_recovery',
+    method: 'GET',
+    path: '/v1/workspaces/{workspace_id}/github/publication-previews/{preview_id}/recovery',
+    parameters: ['workspace_id', 'preview_id'],
+    mutating: false,
+    authenticated: true,
+  },
   'journey_capabilities': {
     operationId: 'journey_capabilities',
     method: 'GET',
@@ -842,6 +850,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/findings/{finding_id}/repair-requests',
   '/v1/workspaces/{workspace_id}/findings/{finding_id}/repair-requests/operation',
   '/v1/workspaces/{workspace_id}/findings/{finding_id}/transitions',
+  '/v1/workspaces/{workspace_id}/github/publication-previews/{preview_id}/recovery',
   '/v1/workspaces/{workspace_id}/journey-capabilities',
   '/v1/workspaces/{workspace_id}/journeys',
   '/v1/workspaces/{workspace_id}/journeys/{journey_version_id}',

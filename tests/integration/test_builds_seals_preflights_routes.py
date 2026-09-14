@@ -707,7 +707,11 @@ def _approval_url(project: str, sealed: dict[str, Any]) -> str:
 
 @pytest.mark.parametrize("preview_fault", [None, "repository", "disconnect", "project", "session"])
 def test_github_preview_reads_original_seal_and_live_local_authority(
-    db: str, project: str, manual_seal: dict[str, Any], preview_fault: str | None
+    db: str,
+    project: str,
+    manual_seal: dict[str, Any],
+    preview_fault: str | None,
+    client: TestClient,
 ) -> None:
     from accessforge_domain.authorization import HumanPrincipal, Role
     from accessforge_orchestrator.github_check_preview import Refused
@@ -844,6 +848,25 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
     assert recovered.local_state == "RECORDED" and recovered.intent_id == winners[0]
     assert recovered.original_preview_id == fresh_id and recovered.preview_digest == fresh_digest
     assert recovered.remote_outcome == "UNKNOWN" and not recovered.retry_allowed
+    recovery_url = f"/v1/workspaces/{WS}/github/publication-previews/{fresh_id}/recovery"
+    http_recovery = client.get(recovery_url)
+    assert http_recovery.status_code == 200, http_recovery.text
+    assert http_recovery.headers["cache-control"] == "no-store"
+    assert http_recovery.json()["intent_id"] == recovered.intent_id
+    assert http_recovery.json()["remote_outcome"] == "UNKNOWN"
+    assert http_recovery.json()["retry_allowed"] is False
+    unknown = client.get(recovery_url.replace(fresh_id, str(uuid.uuid4())))
+    assert unknown.status_code == 200 and unknown.json()["local_state"] == "NOT_OBSERVED"
+    assert unknown.json()["retry_allowed"] is False
+    assert client.get(recovery_url.replace(fresh_id, "bad-id")).status_code == 400
+    with workspace_connection(db, WS) as conn:
+        conn.execute("UPDATE workspace_membership SET role='VIEWER' WHERE user_id=%s", (OWNER,))
+    try:
+        assert client.get(recovery_url).status_code == 403
+    finally:
+        with workspace_connection(db, WS) as conn:
+            conn.execute("UPDATE workspace_membership SET role='OWNER' WHERE user_id=%s", (OWNER,))
+    assert client.get(recovery_url.replace(WS, str(uuid.uuid4()))).status_code in (403, 404)
     with workspace_connection(db, WS) as conn:
         intents = conn.execute("SELECT * FROM github_publication_intent").fetchall()
         assert len(intents) == 1 and str(intents[0]["id"]) == winners[0]
@@ -916,6 +939,7 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
         conn.execute("UPDATE user_session SET revoked_at=clock_timestamp()")
     with pytest.raises(ConnectionRefused):
         read_publication_state(db, principal=principal, preview_id=fresh_id)
+    assert client.get(recovery_url).status_code == 401
 
 
 def _approval_body(sealed: dict[str, Any]) -> dict[str, Any]:

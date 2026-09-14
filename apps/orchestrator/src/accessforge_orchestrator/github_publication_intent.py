@@ -5,9 +5,12 @@ lease that expires or a job to resume. Remote checks and retained-byte verificat
 be composed by the outbound controller before its one call. This module cannot publish.
 """
 
+from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
+
+import psycopg
 
 from accessforge_domain.authorization import HumanPrincipal
 from accessforge_domain.states import ApprovalScope
@@ -32,7 +35,11 @@ class PublicationRecovery:
 
 
 def read_publication_state(
-    database_url: str, *, principal: HumanPrincipal, preview_id: str
+    database_url: str,
+    *,
+    principal: HumanPrincipal,
+    preview_id: str,
+    _connection: psycopg.Connection[Any] | None = None,
 ) -> PublicationRecovery:
     """Recover a lost reservation response using the original request's preview ID.
 
@@ -46,7 +53,12 @@ def read_publication_state(
             raise ValueError
     except (ValueError, TypeError, AttributeError):
         raise github_previews.Refused("publication preview identity unavailable") from None
-    with workspace_connection(database_url, principal.workspace_id) as conn:
+    connection = (
+        nullcontext(_connection)
+        if _connection is not None
+        else workspace_connection(database_url, principal.workspace_id)
+    )
+    with connection as conn:
         conn.execute("SET LOCAL statement_timeout='5s'")
         _authorize(conn, principal)
         row = conn.execute(

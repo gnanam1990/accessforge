@@ -13,6 +13,7 @@ The repetition is in the plumbing; the decisions all live in one place each.
 from .diagnosis_requests import router as diagnosis_requests_router
 from .exports import router as exports_router
 from .findings import router as findings_router
+from .github import router as github_router
 from .grants import router as grants_router
 from .journeys import router as journeys_router
 from .navigator_model import router as navigator_model_router
@@ -33,6 +34,7 @@ __all__ = [
     "findings_router",
     "patches_router",
     "grants_router",
+    "github_router",
     "journeys_router",
     "navigator_model_router",
     "projects_router",

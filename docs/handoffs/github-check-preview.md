@@ -139,6 +139,20 @@ local row is not proof that no write happened: a concurrent commit, restore or w
 can make the local view incomplete. No remote receipt, lease renewal, new intent, audit mutation
 or publication occurs in this read path. Remote outcome reconciliation is still separate work.
 
+The authenticated GET `/v1/workspaces/{workspace_id}/github/publication-previews/{preview_id}/recovery`
+now exposes this local observation with `Cache-Control: no-store`. It uses the existing cookie
+session, workspace permission, rate-limit and denial-audit plumbing. Only current owners have
+WORKSPACE_CONFIGURE; viewer/wrong-workspace/revoked-session requests are refused. The service
+rechecks live authority in the same scoped transaction, avoiding a second connection behind
+request-held locks. Its connection argument is internal plumbing, never request data.
+
+The response uses the recovery record's snake_case fields and always retains UNKNOWN/false
+remote-outcome/retry semantics. Missing local history returns NOT_OBSERVED, never a new grant.
+No preview creation, approval, reservation or outbound capability is added to HTTP by this route.
+Five grouped in-process HTTP/real-DB cases passed, including positive/nonexistent history,
+no-store, malformed ID, viewer, wrong workspace and revoked session. OpenAPI and both generated
+client operation tables match (113 operations); strict mypy passed across 391 files.
+
 Next: outbound controller, retained-byte revalidation and remote ambiguous-response reconciliation.
 Actual outbound checks still require separately scoped credentials and explicit GITHUB_PUBLISH.
 

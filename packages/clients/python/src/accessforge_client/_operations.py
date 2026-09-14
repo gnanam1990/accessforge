@@ -250,6 +250,14 @@ OPERATIONS: dict[str, Operation] = {
         mutating=True,
         authenticated=True,
     ),
+    "inspect_github_publication_recovery": Operation(
+        operation_id="inspect_github_publication_recovery",
+        method="GET",
+        path="/v1/workspaces/{workspace_id}/github/publication-previews/{preview_id}/recovery",
+        parameters=("workspace_id", "preview_id"),
+        mutating=False,
+        authenticated=True,
+    ),
     "journey_capabilities": Operation(
         operation_id="journey_capabilities",
         method="GET",
@@ -870,6 +878,7 @@ PATHS: frozenset[str] = frozenset(
         "/v1/workspaces/{workspace_id}/findings/{finding_id}/repair-requests",
         "/v1/workspaces/{workspace_id}/findings/{finding_id}/repair-requests/operation",
         "/v1/workspaces/{workspace_id}/findings/{finding_id}/transitions",
+        "/v1/workspaces/{workspace_id}/github/publication-previews/{preview_id}/recovery",
         "/v1/workspaces/{workspace_id}/journey-capabilities",
         "/v1/workspaces/{workspace_id}/journeys",
         "/v1/workspaces/{workspace_id}/journeys/{journey_version_id}",
