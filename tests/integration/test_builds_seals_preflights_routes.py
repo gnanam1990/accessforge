@@ -1280,6 +1280,21 @@ def test_baseline_archive_retention_boundary(
                     },
                 )
                 assert bundle["receiptDigest"] == digest(original)
+                from accessforge_persistence.evidence.session import (
+                    requirements,
+                    stream_requirements,
+                )
+
+                required = requirements(
+                    conn,
+                    {
+                        "id": str(uuid.uuid4()),
+                        "run_id": binding["run_id"],
+                        "attempt_id": str(uuid.uuid4()),
+                    },
+                )
+                assert "FUNCTIONAL_REGRESSION" in required
+                assert "FUNCTIONAL_REGRESSION" not in stream_requirements(required)
                 with pytest.raises(evidence.Refused), conn.transaction():
                     conn.execute(
                         "UPDATE desktop_lease SET stop_acknowledged_at=NULL,"
