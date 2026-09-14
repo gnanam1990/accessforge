@@ -42,9 +42,20 @@ behavior: this is not yet mandatory setup for every run.
 The receipt explicitly means `INDEPENDENT_INITIAL_EMPTY_FIXTURE_NOT_DESKTOP_ATTESTATION`.
 It is a point-in-time measurement, not a promise that no later actor changes the app.
 It does not establish VoiceOver readiness, full environment identity, task success or
-finalizer completeness. Browser setup still needs migration from the legacy reset path;
-the frozen `/form/FIXTURE` navigator URL needs a protected per-run projection, and setup
-evidence still needs retained-artifact/preflight/finalizer wiring.
+finalizer completeness. The browser helper now requires the controller's reserved nonce
+and never calls global reset. Its setup-credential POST reconciles that same still-empty
+fixture and accepts only HTTP 200. HTTP 201 means the original application fixture was
+missing and was recreated: browser launch is refused, not treated as recovery proof.
+An uncertain reconciliation must be inspected; the helper does not automatically retry.
+After launch, the independently observed URL must exactly equal the reserved fixture
+URL, not merely share its origin. Synthetic launch callbacks are not browser evidence.
+
+Trusted controller embedding must supply `reservedNonce` from the confirmed observation's
+`application.nonce` together with the same approved origin, variant and reference template
+digest. This helper is not a new authorization endpoint and must not accept model fields.
+The frozen `/form/FIXTURE` navigator URL still needs a protected per-run projection, and
+setup evidence still needs retained-artifact/preflight/finalizer wiring. Mandatory setup
+admission for fresh-fixture environments and the real operator host entry remain pending.
 
 Focused tests use real loopback TCP with synthetic replies for transport and separate
 disposable product/application PostgreSQL databases with in-process HTTP for successful

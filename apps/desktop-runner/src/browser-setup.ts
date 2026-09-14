@@ -1,4 +1,4 @@
-/** Supervisor-only setup for the real local reference application and sealed browser target. */
+/** Supervisor-only reconciliation of an already confirmed, controller-reserved fixture. */
 
 import type { RuntimeProbeEvidence } from '@accessforge/at-voiceover';
 import { REFERENCE_FIXTURE_DIGEST, REFERENCE_FIXTURE_VERSION } from '@accessforge/contracts';
@@ -30,6 +30,8 @@ export type BrowserLauncher = (sealedUrl: string) => Promise<BrowserLaunchResult
 
 export interface ReferenceAppSetupOptions {
   readonly permittedOrigin: string;
+  /** Exact nonce from the trusted queued-run controller; never generated here or model supplied. */
+  readonly reservedNonce: string;
   /** Setup identity is held only here and never appears in the returned navigator projection. */
   readonly setupToken: string;
   readonly variant: ReferenceVariant;
@@ -98,13 +100,14 @@ const boundedLocalFetch: SetupFetch = async (url, init) => {
 };
 
 function readFixture(
-  body: unknown, expectedVariant: ReferenceVariant, expectedDigest: string,
+  body: unknown, expectedVariant: ReferenceVariant, expectedDigest: string, expectedNonce: string,
 ): ReferenceAppSetupResult['fixture'] {
   if (typeof body !== 'object' || body === null) throw new Error('fixture response is not an object');
   const value = body as Record<string, unknown>;
   if (
     typeof value.nonce !== 'string' ||
     !/^[A-Za-z0-9_-]{16,64}$/.test(value.nonce) ||
+    value.nonce !== expectedNonce ||
     value.variant !== expectedVariant ||
     typeof value.template_digest !== 'string' ||
     value.template_digest !== expectedDigest ||
@@ -124,6 +127,9 @@ export async function prepareReferenceApp(
   options: ReferenceAppSetupOptions,
 ): Promise<ReferenceAppSetupResult> {
   const origin = assertLoopbackOrigin(options.permittedOrigin);
+  if (typeof options.reservedNonce !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(options.reservedNonce)) {
+    throw new Error('controller-reserved fixture nonce required before browser setup');
+  }
   if (options.setupToken.trim() === '') throw new Error('reference setup token is empty');
   if (options.expectedFixtureDigest !== REFERENCE_FIXTURE_DIGEST) {
     throw new Error('the sealed fixture definition is not the supported frozen reference contract');
@@ -131,31 +137,23 @@ export async function prepareReferenceApp(
   const doFetch: SetupFetch = options.fetch ?? boundedLocalFetch;
   const headers = { 'x-setup-token': options.setupToken };
 
-  const reset = await doFetch(new URL('/api/_test/reset', origin).href, {
-    method: 'POST',
-    headers,
-    redirect: 'error',
-  });
-  if (!reset.ok || reset.status !== 204) {
-    throw new Error(`reference reset returned HTTP ${reset.status}; browser launch is refused`);
-  }
-
+  // Reconcile the existing empty fixture only. Never globally reset the application or select
+  // a new nonce. A 201 means the previously confirmed app fixture disappeared: fence launch.
+  const endpoint = new URL('/api/_test/fixtures', origin);
+  endpoint.searchParams.set('variant', options.variant);
+  endpoint.searchParams.set('nonce', options.reservedNonce);
   const fixtureResponse = await doFetch(
-    new URL(`/api/_test/fixtures?variant=${options.variant}`, origin).href,
+    endpoint.href,
     { method: 'POST', headers, redirect: 'error' },
   );
-  if (!fixtureResponse.ok || fixtureResponse.status !== 201) {
-    throw new Error(`fixture creation returned HTTP ${fixtureResponse.status}; browser launch is refused`);
+  if (!fixtureResponse.ok || fixtureResponse.status !== 200) {
+    throw new Error(`fixture reconciliation returned HTTP ${fixtureResponse.status}; browser launch is refused`);
   }
-  const fixture = readFixture(await fixtureResponse.json(), options.variant, options.expectedFixtureDigest);
+  const fixture = readFixture(await fixtureResponse.json(), options.variant, options.expectedFixtureDigest, options.reservedNonce);
   const startUrl = new URL(`/form/${encodeURIComponent(fixture.nonce)}`, origin).href;
   const launched = await options.launch(startUrl);
-  let observedOrigin: string | undefined;
-  try {
-    observedOrigin = new URL(launched.observedUrl).origin;
-  } catch {
-    // Preserved as undefined evidence below. A setup launcher that cannot say where the browser
-    // landed has not proved the sealed origin.
+  if (launched.observedUrl !== startUrl) {
+    throw new Error('browser did not independently observe the exact reserved fixture URL; launch is unconfirmed');
   }
 
   return {
@@ -164,7 +162,7 @@ export async function prepareReferenceApp(
     browserVersion: launched.browserVersion,
     evidence: {
       permittedOrigin: options.permittedOrigin,
-      ...(observedOrigin !== undefined ? { observedOrigin } : {}),
+      observedOrigin: origin.origin,
       originReachable: true,
       environmentResetSucceeded: true,
       expectedBuildDigest: options.expectedBuildDigest,
