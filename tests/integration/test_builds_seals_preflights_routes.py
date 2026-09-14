@@ -810,7 +810,16 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
     )
     from concurrent.futures import ThreadPoolExecutor
 
-    from accessforge_orchestrator.github_publication_intent import reserve_publication
+    from accessforge_orchestrator.github_publication_intent import (
+        read_publication_state,
+        reserve_publication,
+    )
+
+    empty = read_publication_state(db, principal=principal, preview_id=fresh_id)
+    assert empty.local_state == "NOT_OBSERVED"
+    assert empty.remote_outcome == "UNKNOWN" and not empty.retry_allowed
+    with pytest.raises(github_previews.Refused, match="identity unavailable"):
+        read_publication_state(db, principal=principal, preview_id="not-a-preview-id")
 
     reservation = dict(
         principal=principal,
@@ -831,6 +840,10 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
     with ThreadPoolExecutor(max_workers=4) as pool:
         winners = [value for value in pool.map(compete, range(4)) if value is not None]
     assert len(winners) == 1
+    recovered = read_publication_state(db, principal=principal, preview_id=fresh_id)
+    assert recovered.local_state == "RECORDED" and recovered.intent_id == winners[0]
+    assert recovered.original_preview_id == fresh_id and recovered.preview_digest == fresh_digest
+    assert recovered.remote_outcome == "UNKNOWN" and not recovered.retry_allowed
     with workspace_connection(db, WS) as conn:
         intents = conn.execute("SELECT * FROM github_publication_intent").fetchall()
         assert len(intents) == 1 and str(intents[0]["id"]) == winners[0]
@@ -853,6 +866,9 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
         principal=principal,
         preview_id=again["previewId"],
         expected_digest=again["preview"]["previewDigest"],
+    )
+    assert (
+        read_publication_state(db, principal=principal, preview_id=again["previewId"]) == recovered
     )
     with pytest.raises(github_previews.Refused, match="already reserved"):
         reserve_publication(
@@ -886,6 +902,20 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
         ).fetchone() == {"n": 2}
     with pytest.raises(AuthorityError, match="revoked"):
         reserve_publication(db, **reservation)
+    assert read_publication_state(db, principal=principal, preview_id=fresh_id) == recovered
+    with workspace_connection(db, WS) as conn:
+        github_bindings.disconnect(conn, workspace_id=WS, binding_id=binding_id)
+    assert read_publication_state(db, principal=principal, preview_id=fresh_id) == recovered
+    with pytest.raises(ConnectionRefused):
+        read_publication_state(
+            db,
+            principal=replace(principal, workspace_id=str(uuid.UUID(int=0x9FF))),
+            preview_id=fresh_id,
+        )
+    with workspace_connection(db, WS) as conn:
+        conn.execute("UPDATE user_session SET revoked_at=clock_timestamp()")
+    with pytest.raises(ConnectionRefused):
+        read_publication_state(db, principal=principal, preview_id=fresh_id)
 
 
 def _approval_body(sealed: dict[str, Any]) -> dict[str, Any]:
