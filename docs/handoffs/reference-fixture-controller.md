@@ -74,7 +74,7 @@ uses outcome-evidence retention (`READER_SPEECH`), not short-lived diagnostic re
 It has no synthetic sequencer stream and does not count as a physical reader observation.
 Migration 0053 extends the database's closed artifact-kind constraint to admit this kind;
 the object-store validator and SQL boundary must agree before materialization can succeed.
-Evaluator version is 1.7.0; historical seals are never rewritten to match a newer evaluator.
+Evaluator version is 1.8.0; historical seals are never rewritten to match a newer evaluator.
 
 This establishes retained initial-setup evidence only: it does not populate an observed
 environment identity or imply task success. Focused setup tests cover real source snapshots
@@ -138,6 +138,17 @@ it does not prove uninterrupted state between samples, full environment identity
 Legacy runs without confirmed setup keep their original count-only evidence shape. Two focused
 disposable-DB cases exercise original-instance acceptance and same-nonce recreation refusal
 through the actual observer and session closure, with synthetic desktop records only.
+
+The finalizer now derives `FIXTURE_INSTANCE` only when this final known sample agrees with the
+retained initial incarnation and names the original product fixture. It reconstructs the v2
+logical fixture contract from protected configured navigator values, the independently measured
+reset variant, and the supported observer configuration; it never copies the expected sealed
+fixture digest into observed identities. The nonce-specific binding stays in retained setup and
+observer evidence while the logical contract remains comparable across baseline/candidate runs.
+Missing legacy proof, unknown observations or unsupported observer configuration leave this
+identity absent. Conflicting identity/count/time bindings refuse interpretation. Other missing
+identities, full environment evidence and physical reader readiness remain independent gates;
+this change alone cannot produce PASS. Existing immutable evaluations are not recomputed.
 
 Focused tests use real loopback TCP with synthetic replies for transport and separate
 disposable product/application PostgreSQL databases with in-process HTTP for successful

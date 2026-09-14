@@ -3283,6 +3283,64 @@ def test_authenticated_execution_finish(
                             for key in ("nonce", "templateDigest", "variant", "createdAt")
                         }
                     )
+                from accessforge_orchestrator.execution_artifacts import Refused as FixtureRefused
+                from accessforge_orchestrator.fixture_evidence import observed_fixture
+                from accessforge_persistence.fixture_setup_evidence import (
+                    snapshot as setup_snapshot,
+                )
+
+                seal_row = conn.execute(
+                    "SELECT canonical_manifest FROM sealed_manifest WHERE run_id=%s", (ref.run_id,)
+                ).fetchone()
+                assert seal_row is not None
+                context = {
+                    "run_id": ref.run_id,
+                    "attempt_id": ref.attempt_id,
+                    "workspace_id": WS,
+                    "manifest_digest": digest(seal_row["canonical_manifest"]),
+                }
+                retained_setup = setup_snapshot(conn, context)
+                measured_digest = observed_fixture(
+                    setup=retained_setup,
+                    final_source=source,
+                    context=context,
+                    fixture=existing,
+                )
+                assert measured_digest == (
+                    None if unknown_observer else seal_row["canonical_manifest"]["fixtureDigest"]
+                )
+                if not unknown_observer:
+                    for key, value in {
+                        "fixtureIdentityDigest": "0" * 64,
+                        "fixtureInstanceId": str(uuid.uuid4()),
+                        "observedAt": "2000-01-01T00:00:00Z",
+                        "count": True,
+                    }.items():
+                        with pytest.raises(FixtureRefused):
+                            observed_fixture(
+                                setup=retained_setup,
+                                final_source={**source, key: value},
+                                context=context,
+                                fixture=existing,
+                            )
+                    assert (
+                        observed_fixture(
+                            setup=retained_setup,
+                            final_source={**source, "fixtureIdentityDigest": None},
+                            context=context,
+                            fixture=existing,
+                        )
+                        is None
+                    )
+                    assert (
+                        observed_fixture(
+                            setup=None,
+                            final_source=source,
+                            context=context,
+                            fixture=existing,
+                        )
+                        is None
+                    )
     if case == "revoked":
         with workspace_connection(db, WS) as conn:
             conn.execute(
@@ -3709,7 +3767,12 @@ def _retain_stopped_artifact_case(
                 assert set(result["snapshot"]["observedIdentities"]) == {
                     "EVALUATOR",
                     "ASSERTION_SET",
-                }
+                } | ({"FIXTURE_INSTANCE"} if fresh else set())
+                if fresh:
+                    assert (
+                        result["snapshot"]["observedIdentities"]["FIXTURE_INSTANCE"]
+                        == result["snapshot"]["sealedIdentities"]["FIXTURE_INSTANCE"]
+                    )
                 assert finalize(db, store, workspace_id=WS, run_id=ref.run_id) == result
                 response = client.get(endpoint)
                 assert response.status_code == 200 and response.json() == result
