@@ -808,6 +808,60 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
     decision = approve_preview(
         db, principal=principal, preview_id=fresh_id, expected_digest=fresh_digest
     )
+    from concurrent.futures import ThreadPoolExecutor
+
+    from accessforge_orchestrator.github_publication_intent import reserve_publication
+
+    reservation = dict(
+        principal=principal,
+        preview_id=fresh_id,
+        approval_id=decision,
+        expected_digest=fresh_digest,
+    )
+    with pytest.raises(github_previews.Refused, match="digest differs"):
+        reserve_publication(db, **{**reservation, "expected_digest": "0" * 64})
+
+    def compete(_: int) -> str | None:
+        try:
+            return reserve_publication(db, **reservation)
+        except github_previews.Refused as error:
+            assert "already reserved" in str(error)
+            return None
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        winners = [value for value in pool.map(compete, range(4)) if value is not None]
+    assert len(winners) == 1
+    with workspace_connection(db, WS) as conn:
+        intents = conn.execute("SELECT * FROM github_publication_intent").fetchall()
+        assert len(intents) == 1 and str(intents[0]["id"]) == winners[0]
+        assert str(intents[0]["approval_id"]) == decision
+        assert conn.execute(
+            "SELECT count(*) AS n FROM audit_event WHERE action='GITHUB_PUBLICATION_RESERVE'"
+        ).fetchone() == {"n": 1}
+        for statement in (
+            "UPDATE github_publication_intent SET preview_digest=repeat('a',64)",
+            "DELETE FROM github_publication_intent",
+        ):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(statement)
+    with workspace_connection(db, str(uuid.UUID(int=0x9FF))) as conn:
+        assert conn.execute("SELECT * FROM github_publication_intent").fetchall() == []
+    # Creating and explicitly approving a different preview does not reopen the create slot.
+    again = store_preview(db, principal=principal, binding_id=binding_id, run_id=manifest["runId"])
+    again_approval = approve_preview(
+        db,
+        principal=principal,
+        preview_id=again["previewId"],
+        expected_digest=again["preview"]["previewDigest"],
+    )
+    with pytest.raises(github_previews.Refused, match="already reserved"):
+        reserve_publication(
+            db,
+            principal=principal,
+            preview_id=again["previewId"],
+            approval_id=again_approval,
+            expected_digest=again["preview"]["previewDigest"],
+        )
     with workspace_connection(db, WS) as conn:
         approval = approvals.load_for_check(conn, approval_id=decision)
         check = {
@@ -829,7 +883,9 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
         assert approvals.load_for_check(conn, approval_id=decision).revoked
         assert conn.execute(
             "SELECT count(*) AS n FROM approval WHERE scope='GITHUB_PUBLISH'"
-        ).fetchone() == {"n": 1}
+        ).fetchone() == {"n": 2}
+    with pytest.raises(AuthorityError, match="revoked"):
+        reserve_publication(db, **reservation)
 
 
 def _approval_body(sealed: dict[str, Any]) -> dict[str, Any]:
