@@ -1153,7 +1153,15 @@ def test_baseline_archive_retention_boundary(
                             epoch=1,
                         )
                         sample_manifest = {"buildArtifactDigest": artifact.archive_digest}
-                        from accessforge_orchestrator.runtime_evidence import _build
+                        from accessforge_orchestrator.runtime_evidence import (
+                            _build,
+                            _source_lineage,
+                        )
+
+                        assert (
+                            _source_lineage(measured_receipt, artifact.archive_digest)
+                            == binding["source_tree_digest"]
+                        )
 
                         assert (
                             _build(

@@ -35,7 +35,7 @@ def retain(
     with conn.transaction():
         parent = regressions._owned(conn, claim, "DISPATCHED")
         workspace = str(parent["workspace_id"])
-        regressions._authority(conn, claim.build_id)
+        build = regressions._authority(conn, claim.build_id)
         endpoints.assert_live(conn, claim=claim)
         baseline_runs.assert_request(conn, run_id=str(parent["run_id"]), method="GET")
         endpoint = endpoints._record(conn, claim)
@@ -96,6 +96,33 @@ def retain(
             else str(context["lease_id"]),
             "leaseEpoch": None if context is None else context["lease_epoch"],
             "meaning": "BUILD_RECEIPT_CONTEXT_NOT_CANONICAL_EXECUTION_EVIDENCE",
+        }
+        archive = conn.execute(
+            "SELECT retained_at,content_digest FROM baseline_archive WHERE build_id=%s "
+            "AND state='RETAINED'",
+            (claim.build_id,),
+        ).fetchone()
+        if (
+            archive is None
+            or archive["retained_at"] is None
+            or archive["content_digest"] != observation["artifactDigest"]
+            or not build["created_at"] <= build["finished_at"] <= archive["retained_at"] <= captured
+        ):
+            raise Refused("baseline source/build retention chronology unavailable")
+        payload["baselineSourceLineage"] = {
+            "meaning": "CAPTURED_BASELINE_INPUT_LINK_NOT_RUNTIME_SOURCE_READ",
+            "workspaceId": workspace,
+            "buildId": claim.build_id,
+            "sourceSnapshotId": build["binding"]["source_snapshot_id"],
+            "sourceTreeDigest": build["binding"]["source_tree_digest"],
+            "sourceArchiveDigest": build["source_archive_digest"],
+            "artifactDigest": build["artifact_digest"],
+            "buildContainerId": build["container_id"],
+            "imageId": build["image_id"],
+            "daemonId": build["daemon_id"],
+            "buildReservedAt": to_rfc3339_utc(build["created_at"]),
+            "buildFinishedAt": to_rfc3339_utc(build["finished_at"]),
+            "artifactRetainedAt": to_rfc3339_utc(archive["retained_at"]),
         }
         content_digest = digest(payload)
         identifier = str(

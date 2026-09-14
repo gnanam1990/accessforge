@@ -10,9 +10,47 @@ import pytest
 from accessforge_domain.canonical import digest
 from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
 from accessforge_orchestrator.execution_artifacts import Refused
-from accessforge_orchestrator.runtime_evidence import interpret
+from accessforge_orchestrator.runtime_evidence import _baseline_source_lineage, interpret
 
 CONTEXT = {"workspace_id": "workspace", "run_id": "run", "lease_id": "lease", "epoch": 1}
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [None, "artifactDigest", "imageId", "buildId", "sourceTreeDigest", "artifactRetainedAt"],
+)
+def test_baseline_input_link_requires_original_build_and_ordered_retention(
+    fault: str | None,
+) -> None:
+    identity = str(UUID(int=1))
+    lineage = dict(
+        meaning="CAPTURED_BASELINE_INPUT_LINK_NOT_RUNTIME_SOURCE_READ",
+        workspaceId=identity,
+        buildId=identity,
+        sourceSnapshotId=identity,
+        sourceTreeDigest="b" * 64,
+        sourceArchiveDigest="c" * 64,
+        artifactDigest="a" * 64,
+        buildContainerId="d" * 64,
+        imageId="image",
+        daemonId="daemon",
+        buildReservedAt="2026-09-13T00:00:00Z",
+        buildFinishedAt="2026-09-13T00:00:01Z",
+        artifactRetainedAt="2026-09-13T00:00:02Z",
+    )
+    if fault is not None:
+        lineage[fault] = "2026-09-13T00:00:04Z" if fault == "artifactRetainedAt" else "different"
+    payload = dict(
+        workspaceId=identity,
+        buildId=identity,
+        baselineSourceLineage=lineage,
+        observation=dict(imageId="image", daemonId="daemon", observedAt="2026-09-13T00:00:03Z"),
+    )
+    if fault is None:
+        assert _baseline_source_lineage(payload, "a" * 64) == "b" * 64
+    else:
+        with pytest.raises(Refused):
+            _baseline_source_lineage(payload, "a" * 64)
 
 
 @pytest.mark.parametrize("fault", [None, "candidate-namespace", "unknown-kind", "missing-kind"])
