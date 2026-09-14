@@ -47,6 +47,12 @@ See the [module 20 requirement handoff](../handoffs/20.md) for the missing end-t
 
 ### Next implementation and acceptance gates
 
+The `baseline_completion.execute_and_complete` entrypoint now composes the explicitly supplied
+reader callback with protected-runtime closure and then original-spool retention/finalization.
+It never finalizes inside the reader callback or retries execution after uncertainty. This is
+an implementation ordering boundary, not the full baseline DB/S3 or physical acceptance proof
+below. Operator controller configuration and explicit reader startup consent remain required.
+
 1. **Composed baseline retention/finalization proof.** Baseline DB integration currently exercises
    original seed, endpoint, reader lease/STOP, protected receipt, snapshot and frozen functional
    assertion consumption with synthetic process/native observations. It does not execute the whole
