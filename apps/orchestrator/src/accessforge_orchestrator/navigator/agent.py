@@ -9,6 +9,7 @@ from enum import StrEnum
 from threading import Event
 from typing import Protocol
 
+from botocore.config import Config as BotocoreConfig
 from pydantic import BaseModel, ConfigDict
 from strands import Agent, ModelRetryStrategy
 from strands.agent.agent_result import AgentResult
@@ -78,7 +79,27 @@ def build_strands_agent(
         region_name=profile.region_name,
         temperature=profile.temperature,
         max_tokens=profile.provider_max_tokens,
+        # Strands owns the sole retry budget. Botocore's default/configured retry layer
+        # would multiply it without a corresponding consent reservation. Explicit config
+        # also wins over AWS_MAX_ATTEMPTS and shared-profile retry settings.
+        boto_client_config=BotocoreConfig(
+            retries={"total_max_attempts": 1, "mode": "standard"},
+            connect_timeout=min(10, profile.call_timeout_seconds),
+            read_timeout=profile.call_timeout_seconds,
+            ignore_configured_endpoint_urls=True,
+        ),
     )
+    runtime = model.client.meta
+    if (
+        runtime.region_name != profile.region_name
+        or runtime.endpoint_url != f"https://bedrock-runtime.{profile.region_name}.amazonaws.com"
+        or runtime.config.retries != {"total_max_attempts": 1, "mode": "standard"}
+        or runtime.config.connect_timeout != min(10, profile.call_timeout_seconds)
+        or runtime.config.read_timeout != profile.call_timeout_seconds
+    ):
+        # Do not log client configuration or credentials on a mismatched runtime.
+        model.client.close()
+        raise RuntimeError("navigator provider transport differs from its bounded configuration")
     retry = ModelRetryStrategy(
         max_attempts=profile.model_attempts,
         initial_delay=profile.retry_initial_delay_seconds,

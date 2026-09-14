@@ -159,6 +159,36 @@ def test_real_strands_agent_has_one_tool_and_never_loads_a_poisoned_directory(
     assert schema["additionalProperties"] is False
 
 
+@pytest.mark.parametrize("seconds", [1, 30, 120])
+def test_navigator_transport_has_no_hidden_retries_or_configured_endpoint_override(
+    monkeypatch: pytest.MonkeyPatch, seconds: int
+) -> None:
+    # Dummy credentials permit construction only. No invoke/stream/network operation is called.
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-secret-key")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.setenv("AWS_MAX_ATTEMPTS", "99")
+    monkeypatch.setenv("AWS_RETRY_MODE", "adaptive")
+    monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "https://unreviewed.example.test")
+    agent = build_strands_agent(
+        profile=profile(call_timeout_seconds=seconds),
+        gateway=gateway([]),
+        checkpoints=RecordingSink(),
+        cancel_fence=Event(),
+        utc_now=lambda: NOW,
+    )
+    from strands.models import BedrockModel
+
+    assert isinstance(agent.model, BedrockModel)
+    actual = agent.model.client.meta
+    assert actual.config.retries == {"total_max_attempts": 1, "mode": "standard"}
+    assert actual.config.connect_timeout == min(10, seconds)
+    assert actual.config.read_timeout == seconds
+    assert actual.endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    assert actual.region_name == "us-east-1"
+    agent.model.client.close()
+
+
 @pytest.mark.asyncio
 async def test_actual_strands_stream_path_rejects_unknown_model_fields_without_dispatch() -> None:
     dispatched: list[Any] = []

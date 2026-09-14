@@ -7,6 +7,7 @@ dependencies = [
   "accessforge-build-worker",
   "accessforge-navigation-tools",
   "accessforge-persistence",
+  "botocore==1.43.91",
   "pydantic>=2.10",
   "strands-agents==1.55.1",
 ]
