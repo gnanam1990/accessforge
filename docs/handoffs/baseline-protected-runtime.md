@@ -31,6 +31,20 @@ sessions retain their existing ephemeral-origin behavior and unchanged default p
 endpoint receipt validator rejects a bound origin that differs from the explicit plan. This is
 listener/fixture identity support, not yet the baseline session authorization implementation.
 
+`baseline_fixture_runtime` now supplies trusted prepare/reserve/confirm callbacks for that session
+wiring. It reuses the original queued-run setup authority and requires the owned harness's
+inaccessible variant and exact protected observer configuration. Nonce reservation does not create
+an application fixture. The runtime seed reservation must commit before setup HTTP, and confirmation
+may only follow the harness's checked 201 response and independent initial-empty SQL observation.
+Duplicate setup reservations are refused, not implicitly reseeded.
+
+Confirmed seed observations retain their original runtime/build/epoch/daemon and three-process
+provenance. Fixture evidence snapshot generation revalidates that provenance against original rows;
+fenced runtime receipts or substituted identities cannot become accepted seed evidence. Existing
+externally observed fixtures without owned-runtime metadata retain their original behavior. Focused
+new checks use synthetic SQL rows and do not prove actual fixture startup. Endpoint lifecycle,
+reader lease admission and complete callback composition remain pending.
+
 Focused checks cover the real PostgreSQL/HTTP authority lifecycle with synthetic process receipts,
 late creation/removal after expiry, immutable completion, desktop admission fencing, and forward
 migration. Separate synthetic coordinator checks verify commit-before-activation ordering and

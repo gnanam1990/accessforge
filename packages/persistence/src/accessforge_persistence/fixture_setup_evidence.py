@@ -9,6 +9,8 @@ import psycopg
 from accessforge_domain.canonical import digest
 from accessforge_domain.timestamps import to_rfc3339_utc
 
+from . import baseline_fixture_evidence
+
 
 def producer(attempt_id: str) -> str:
     return "fixture-setup:" + attempt_id
@@ -54,6 +56,12 @@ def snapshot(conn: psycopg.Connection[Any], session: dict[str, Any]) -> dict[str
         raise ValueError("original candidate seed evidence unavailable") from exc
     if observation.get("candidateSeed") != original_seed:
         raise ValueError("candidate setup artifact differs from original protected seed evidence")
+    baseline_fixture_evidence.validate_runtime(
+        conn,
+        run_id=str(session["run_id"]),
+        workspace_id=str(session["workspace_id"]),
+        observation=observation,
+    )
     return {
         "format": "accessforge.fixture-setup.v1",
         "runId": str(session["run_id"]),
