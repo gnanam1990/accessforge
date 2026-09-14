@@ -1251,6 +1251,21 @@ def test_baseline_archive_retention_boundary(
                 (task.attempt_id,),
             ).fetchone()
             assert row == {"state": "PASSED", "validation": observation.canonical_form()}
+            functional = conn.execute(
+                "SELECT functional_receipt FROM baseline_regression_attempt WHERE id=%s",
+                (task.attempt_id,),
+            ).fetchone()
+            assert functional is not None
+            assert functional["functional_receipt"] == {
+                "format": "accessforge.functional-producer.v1",
+                "validation": observation.canonical_form(),
+                "runEvidence": None,
+            }  # No durable reader lease in these harness cases; do not manufacture a run verdict.
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(
+                    "UPDATE baseline_regression_attempt SET functional_receipt='{}' WHERE id=%s",
+                    (task.attempt_id,),
+                )
             with pytest.raises(psycopg.IntegrityError), conn.transaction():
                 conn.execute(
                     "UPDATE baseline_regression_attempt SET validation='{}' WHERE id=%s",
