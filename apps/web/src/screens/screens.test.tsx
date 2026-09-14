@@ -384,7 +384,9 @@ describe('journey authoring', () => {
       { type: 'PROTECTED_REFERENCE_VALIDATION', suiteDigest: 'f'.repeat(64) },
       { type: 'EXACT_NATIVE_KEYBOARD_FOCUS', actionSequence: 1, role: 'AXTextField', identifierDigest: 'a'.repeat(64) },
     ])
-  })
+  // This five-rule, two-submit interaction is not a latency assertion. Preserve real user
+  // events and all validation/focus checks while allowing shared CI scheduling headroom.
+  }, 15_000)
 
   it('keeps an invalid rule inline, links the summary to it and allows removing only draft reader assertions', async () => {
     const user = userEvent.setup()
