@@ -47,6 +47,7 @@ import { EvidenceTimeline } from './EvidenceTimeline'
 import { RunEvaluationSection } from './RunEvaluationSection'
 import { EffectRecoverySection } from './EffectRecoverySection'
 import { ReaderStartupSection } from './ReaderStartupSection'
+import { NavigatorConsentSection } from './NavigatorConsentSection'
 import { DiagnosisRequestSection } from './DiagnosisRequestSection'
 import {
   getRun,
@@ -568,6 +569,7 @@ const RunDetails = ({ workspaceId, runId }: {
             <EffectRecoverySection workspaceId={workspaceId} runId={runId} />
             <DiagnosisRequestSection key={`diagnosis:${workspaceId}:${value.runId}`} workspaceId={workspaceId} run={value} />
             <ReaderStartupSection key={`${workspaceId}:${value.runId}`} workspaceId={workspaceId} run={value} />
+            <NavigatorConsentSection key={`navigator:${workspaceId}:${value.runId}`} workspaceId={workspaceId} run={value} />
 
             {NON_TERMINAL.has(value.status) && (
               <section className="af-stack">

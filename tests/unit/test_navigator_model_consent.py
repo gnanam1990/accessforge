@@ -1,12 +1,50 @@
 """Pure provider-profile and conservative reservation bounds; never provider access."""
 
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from accessforge_domain.canonical import digest
 from accessforge_domain.navigator_model import default_profile, reserved_tokens, validate_profile
 from accessforge_orchestrator.navigator.config import NavigatorModelProfile
+from accessforge_persistence import execution_approvals, navigator_model_calls, projects
+
+
+@pytest.mark.parametrize("action_budget", [1, 499, 500, 501, 10000])
+def test_review_scope_caps_model_calls_without_refusing_a_larger_execution_budget(
+    monkeypatch: pytest.MonkeyPatch, action_budget: int
+) -> None:
+    """Scope must offer only call counts that issue_consent can accept; no provider access."""
+    expires = datetime.now(UTC) + timedelta(minutes=5)
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.side_effect = [
+        {"revision": 2, "manifest_digest": "a" * 64},
+        {"expires_at": expires},
+    ]
+    monkeypatch.setattr(
+        projects,
+        "find_sealed_manifest",
+        lambda *_args, **_kwargs: SimpleNamespace(sealed_manifest_id="test-seal"),
+    )
+    monkeypatch.setattr(
+        execution_approvals,
+        "assert_authorized",
+        lambda *_args, **_kwargs: {
+            "modelConfigDigest": digest(default_profile()),
+            "authorizationId": "test-approval",
+            "actionBudget": action_budget,
+            "expiresAt": expires.isoformat().replace("+00:00", "Z"),
+        },
+    )
+    scope = navigator_model_calls.review_scope(
+        conn, workspace_id="test-workspace", run_id="test-run"
+    )
+    assert scope["maximumCalls"] == min(action_budget, 500)
+    assert scope["billableCallAcknowledged"] is False
+    assert scope["modelProfile"] == default_profile()
 
 
 def test_consent_profile_matches_the_actual_adapter_and_reserves_each_attempt() -> None:
