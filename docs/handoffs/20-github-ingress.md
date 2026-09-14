@@ -40,7 +40,8 @@ was removed afterwards. No live migration was performed. This does not prove act
    [concrete access probe](github-repository-access.md) now implements the HTTP protocol;
    operator JWT provisioning and its authorized connection workflow are still missing.
    Migration 0066 and `github_bindings` now provide the local binding storage described below;
-   no user-facing connection route or live probe-to-binding composition is enabled yet.
+   the trusted connection service now composes current local authorization, the concrete HTTP
+   probe and binding/audit commit. No user-facing connection route is enabled yet.
 2. Connect the replay inbox to the isolated ingress and event-specific schema handling;
    event names and payload text do not broaden scope. Replay storage alone cannot authorize work.
 3. Immutable source-bound check preview and honest outcome/coverage rendering.
@@ -75,6 +76,30 @@ conflict/disconnect/new binding identity, database-clock freshness, workspace RL
 scope/revocation/cascade, and rollback (several assertions share one case). The database was
 dropped afterwards. Strict mypy passed across 376 files. These tests use synthetic GitHub
 observations; no actual access token, installation, live migration or publication was invoked.
+
+## Authorized connection service
+
+`github_connections.connect_repository` accepts a principal already authenticated by trusted
+session middleware and an operator-configured App scope/JWT. The caller must never construct
+that principal from a request body. The service rechecks current membership, enabled user and
+unexpired/unrevoked session before HTTP, then again after inspection and successful token cleanup.
+The database role, not the principal's cached role, must hold WORKSPACE_CONFIGURE (currently owner).
+A pre-existing live binding refuses before any token request; the unique index also arbitrates
+concurrent connection attempts. The final identity insert and metadata-only success audit commit
+atomically. Local authorization locks are released before network I/O; no transaction spans HTTP.
+
+`disconnect_repository` rechecks the same local authority, irreversibly revokes the exact binding
+and records the action atomically. A repeated disconnect does not add a second success audit.
+It does not cancel a separately requested future connection, uninstall the App or undo any remote
+write. No publication workflow consumes these bindings yet. Failed/ambiguous remote operations
+are not retried; an uncertain DB commit requires reconciliation, not automatic reconnection.
+
+Nine focused real-PostgreSQL/synthetic-HTTP checks pass for connection/probe/cleanup/binding/audit,
+duplicate refusal, disconnect, in-probe membership/session revocation, user disable, role demotion,
+cleanup failure and non-owner roles. The temporary database was dropped. This is composition
+evidence, not an actual GitHub App round trip. A deployed isolated credential broker, JWT signing,
+authenticated endpoint/CSRF/idempotency routing, denial auditing and connection reconciliation
+remain to be integrated before exposing this service. No credentials were requested or used live.
 
 ## Evidence
 
