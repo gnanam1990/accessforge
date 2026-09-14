@@ -46,6 +46,14 @@ def snapshot(conn: psycopg.Connection[Any], session: dict[str, Any]) -> dict[str
         or row["observed_at"] is None
     ):
         raise ValueError("retained fixture setup identity or measurement differs")
+    from . import candidate_fixture_setups
+
+    try:
+        original_seed = candidate_fixture_setups.for_run(conn, run_id=str(session["run_id"]))
+    except candidate_fixture_setups.Refused as exc:
+        raise ValueError("original candidate seed evidence unavailable") from exc
+    if observation.get("candidateSeed") != original_seed:
+        raise ValueError("candidate setup artifact differs from original protected seed evidence")
     return {
         "format": "accessforge.fixture-setup.v1",
         "runId": str(session["run_id"]),
