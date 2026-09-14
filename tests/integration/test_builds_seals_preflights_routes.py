@@ -2672,12 +2672,27 @@ def test_queued_fixture_setup_reconciles_reserved_nonce(
     statuses: list[int] = []
 
     def provision(context: dict[str, Any], setup_token: str) -> int:
+        from accessforge_orchestrator.navigator.destination import load_destination
+
         with workspace_connection(db, WS) as conn:
             row = conn.execute(
                 "SELECT context,observation FROM fixture_setup_reservation WHERE run_id=%s",
                 (run_id,),
             ).fetchone()
             assert row is not None and row["context"] == context and row["observation"] is None
+            with pytest.raises(ValueError):
+                load_destination(
+                    conn,
+                    workspace_id=WS,
+                    run_id=run_id,
+                    manifest=manual_seal["canonicalManifest"],
+                    fixture={
+                        "id": context["fixtureId"],
+                        "nonce": context["nonce"],
+                        "template_digest": REFERENCE_FIXTURE_DIGEST,
+                    },
+                    sealed_url="http://127.0.0.1:8081/form/FIXTURE",
+                )
         nonces.append(context["nonce"])
         with TestClient(app) as reference_client:
             response = reference_client.post(
@@ -2734,6 +2749,30 @@ def test_queued_fixture_setup_reconciles_reserved_nonce(
     observed = setup.prepare(db, owned_observer_database, **kwargs)
     assert observed["application"]["effectCount"] == 0
     assert observed["meaning"] == "INDEPENDENT_INITIAL_EMPTY_FIXTURE_NOT_DESKTOP_ATTESTATION"
+    from accessforge_orchestrator.navigator.destination import load_destination
+
+    with workspace_connection(db, WS) as conn:
+        reserved_fixture = conn.execute(
+            "SELECT id,nonce,template_digest FROM run_fixture_instance WHERE run_id=%s", (run_id,)
+        ).fetchone()
+        assert reserved_fixture is not None
+        destination_args = dict(
+            workspace_id=WS,
+            run_id=run_id,
+            manifest=manual_seal["canonicalManifest"],
+            fixture=reserved_fixture,
+            sealed_url="http://127.0.0.1:8081/form/FIXTURE",
+        )
+        assert load_destination(conn, **destination_args) == (
+            "http://127.0.0.1:8081/form/" + observed["application"]["nonce"]
+        )
+        for change in (
+            {"fixture": {**reserved_fixture, "nonce": "another-nonce-12345"}},
+            {"manifest": {**manual_seal["canonicalManifest"], "fixtureDigest": "0" * 64}},
+            {"sealed_url": "http://localhost:8081/form/FIXTURE"},
+        ):
+            with pytest.raises(ValueError):
+                load_destination(conn, **{**destination_args, **change})
     assert setup.prepare(db, owned_observer_database, **kwargs) == observed
     assert statuses == ([201, 200] if case == "lost-response" else [201])
     assert len(set(nonces)) == 1

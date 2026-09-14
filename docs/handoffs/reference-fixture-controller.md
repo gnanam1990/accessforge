@@ -57,8 +57,15 @@ URL, not merely share its origin. Synthetic launch callbacks are not browser evi
 Trusted controller embedding must supply `reservedNonce` from the confirmed observation's
 `application.nonce` together with the same approved origin, variant and reference template
 digest. This helper is not a new authorization endpoint and must not accept model fields.
-The frozen `/form/FIXTURE` navigator URL still needs a protected per-run projection, and
-setup evidence still needs retained-artifact/preflight/finalizer wiring. The real operator
+The frozen `/form/FIXTURE` navigator URL is now instantiated as a separate `runtimeStartUrl`
+field after live planning authority and original policy/fixture checks. The original policy
+and its digest are unchanged. Resolution requires the original confirmed setup context,
+matching run/manifest/environment/fixture identities, exact approved origin and nonce.
+Only the URL enters model context, never setup context, credential references or observer
+results. Legacy literal URLs retain their original payload shape; unresolved placeholders
+and fresh-fixture environments without confirmation refuse projection.
+
+Setup evidence still needs retained-artifact/preflight/finalizer wiring. The real operator
 host entry remains pending. Mandatory setup admission is now enforced for fresh-fixture
 environments; this is not a substitute for current approval, physical preflight or outcome proof.
 
