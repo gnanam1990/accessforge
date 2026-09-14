@@ -348,6 +348,7 @@ def _prepare_owned_build(
     command: tuple[str, ...] = ("/usr/local/bin/node", "build.js"),
     change: ProposedChange | None = None,
     canonical_execution: bool = False,
+    fresh_fixture: bool = False,
 ) -> tuple[ClaimedCandidate, DockerSandbox, tuple[str, ...]]:
     """Actual build pipeline over owned synthetic source, not reference-app or reader proof."""
     image = image or os.environ.get("ACCESSFORGE_SANDBOX_IMAGE")
@@ -363,7 +364,7 @@ def _prepare_owned_build(
             spec=projects.EnvironmentSpec(
                 name="synthetic baseline",
                 allowed_origins=frozenset({normalize_origin("http://localhost:8000")}),
-                fixture_reset_strategy="RESET_ENDPOINT",
+                fixture_reset_strategy="FRESH_FIXTURE_NONCE" if fresh_fixture else "RESET_ENDPOINT",
                 observer_credential_ref="observer",
                 reset_credential_ref="reset",
                 permitted_effects=frozenset(),
@@ -382,15 +383,39 @@ def _prepare_owned_build(
         reserved_run = str(uuid.uuid4()) if canonical_execution else None
         reserved_approval = str(uuid.uuid4()) if canonical_execution else None
         execution = None
+        fixture_digest = policy_digest = "a" * 64
         if canonical_execution:
             journey = str(uuid.uuid4())
+            policy: dict[str, Any] = {}
+            summary: dict[str, Any] = {}
+            if fresh_fixture:
+                policy = {
+                    "fixtureValues": {"email": "fixture@example.test"},
+                    "startUrl": "http://localhost:8000/form/FIXTURE",
+                }
+                summary["fixtureContract"] = {
+                    "schemaVersion": 2,
+                    "templateId": "service-request",
+                    "navigatorValues": policy["fixtureValues"],
+                    "resetValuesDigest": digest({"variant": "inaccessible"}),
+                    "observerConfigDigest": digest({"effect": "CREATE_TEST_REQUEST"}),
+                }
+                fixture_digest, policy_digest = digest(summary["fixtureContract"]), digest(policy)
             conn.execute(
                 "INSERT INTO journey_version(id,workspace_id,project_id,name,platform,"
                 "journey_digest,"
                 "assertion_set_digest,fixture_digest,navigator_policy_digest,navigator_policy,"
                 "reviewer_summary) VALUES (%s,%s,%s,'synthetic metadata','web',repeat('a',64),"
-                "repeat('a',64),repeat('a',64),repeat('a',64),'{}'::jsonb,'{}'::jsonb)",
-                (journey, binding.workspace, binding.project),
+                "repeat('a',64),%s,%s,%s::jsonb,%s::jsonb)",
+                (
+                    journey,
+                    binding.workspace,
+                    binding.project,
+                    fixture_digest,
+                    policy_digest,
+                    json.dumps(policy),
+                    json.dumps(summary),
+                ),
             )
             execution = projects.ExecutionInputs(journey, expiry, 10, 20, frozenset())
         seal = projects.seal_run(
@@ -406,9 +431,9 @@ def _prepare_owned_build(
             inputs=projects.SealInputs(
                 journey_digest="a" * 64,
                 assertion_set_digest="a" * 64,
-                fixture_digest="a" * 64,
+                fixture_digest=fixture_digest,
                 runner_profile_digest="a" * 64,
-                navigator_policy_digest="a" * 64,
+                navigator_policy_digest=policy_digest,
                 evaluator_version="synthetic-test",
                 model_config_digest="b" * 64,
             ),
@@ -1106,7 +1131,10 @@ class IsolatedArchiveStore:
 
 @pytest.mark.sandbox
 @pytest.mark.parametrize("binding", ["reference-session"], indirect=True)
-@pytest.mark.parametrize("reader_exit", ["released", "returned-active", "raised-active"])
+@pytest.mark.parametrize(
+    "reader_exit",
+    ["released", "returned-active", "raised-active", "fresh-released", "fresh-preview"],
+)
 def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
     binding: BoundFixture,
     isolated_archives: tuple[IsolatedArchiveStore, IsolatedArchiveStore],
@@ -1115,6 +1143,7 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
     """Actual candidate/runtime, synthetic baseline/desktop metadata; NOT actual-reader proof."""
     image = os.environ.get("ACCESSFORGE_REFERENCE_TOOLCHAIN")
     assert image is not None
+    fresh = reader_exit.startswith("fresh-")
     path = "src/reference_app/templates.py"
     original = next(file.content for file in binding.source.files if file.path == path)
     claimed, sandbox, command = _prepare_owned_build(
@@ -1123,6 +1152,7 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
         command=REFERENCE_BUILD_COMMAND,
         change=ProposedChange(path, original.decode() + "\n# Candidate session binding probe.\n"),
         canonical_execution=True,
+        fresh_fixture=fresh,
     )
     store = isolated_archives[0].store
     execute_claim(
@@ -1140,7 +1170,7 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             conn,
             workspace_id=binding.workspace,
             run_id=baseline_id,
-            template_id="reference-service-request",
+            template_id="service-request" if fresh else "reference-service-request",
             template_digest=REFERENCE_FIXTURE_DIGEST,
             navigator_values={"email": "fixture@example.test"},
             observer_config={"effect": "CREATE_TEST_REQUEST"},
@@ -1149,6 +1179,8 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
 
     def controller(session: CandidateSession) -> None:
         gateway = session.gateway
+        if reader_exit == "fresh-preview":
+            gateway.observe_artifact()  # Actual unbound preview history, not fabricated DB rows.
         with workspace_connection(binding.database, binding.workspace) as conn:
             endpoint = conn.execute(
                 "SELECT * FROM candidate_endpoint WHERE attempt_id=%s", (gateway.binding.task_id,)
@@ -1295,6 +1327,76 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             candidate_attempt = runs.start_attempt(
                 conn, workspace_id=binding.workspace, run_id=run_id, lease_epoch=1
             )
+        if fresh:
+            from accessforge_orchestrator.candidate_fixture_setup import prepare as attach_setup
+            from accessforge_orchestrator.reference_fixture_setup import Refused as SetupRefused
+            from accessforge_persistence import execution_approvals, fixture_setup_evidence
+
+            setup_arguments: dict[str, Any] = {
+                "workspace_id": binding.workspace,
+                "run_id": run_id,
+                "origin": gateway.origin,
+                "reset_credential_ref": "reset",
+                "observer_credential_ref": "observer",
+                "reset_values": {"variant": "inaccessible"},
+                "observer_config": {"effect": "CREATE_TEST_REQUEST"},
+            }
+            with pytest.raises(execution_approvals.Refused):
+                attach_setup(binding.database, **setup_arguments)
+            with workspace_connection(binding.database, binding.workspace) as conn:
+                assert conn.execute("SELECT 1 FROM fixture_setup_reservation").fetchone() is None
+                with pytest.raises(runners.RunnerError, match="fixture"), conn.transaction():
+                    runners.admit_lease(
+                        conn,
+                        workspace_id=binding.workspace,
+                        runner_id=runner_id,
+                        run_id=run_id,
+                        attempt_id=candidate_attempt,
+                        ttl_seconds=5,
+                    )
+                execution_approvals.issue(
+                    conn,
+                    sealed_manifest_id=str(sealed["id"]),
+                    actor_id=binding.owner,
+                    target_digest=sealed["manifest_digest"],
+                    expected_revision=0,
+                    expires_at=manifest["expiresAt"],
+                )
+            with pytest.raises(SetupRefused):
+                attach_setup(
+                    binding.database,
+                    **{**setup_arguments, "reset_values": {"variant": "accessible"}},
+                )
+            if reader_exit == "fresh-preview":
+                with pytest.raises(builds.BuildClaimRefused, match="preview-observed"):
+                    attach_setup(binding.database, **setup_arguments)
+                with workspace_connection(binding.database, binding.workspace) as conn:
+                    assert (
+                        conn.execute("SELECT 1 FROM fixture_setup_reservation").fetchone() is None
+                    )
+                return
+            setup = attach_setup(binding.database, **setup_arguments)
+            assert attach_setup(binding.database, **setup_arguments) == setup
+            with workspace_connection(binding.database, binding.workspace) as conn:
+                readiness = conn.execute(
+                    "SELECT fixture_setup_unresolved(%s) AS unresolved", (run_id,)
+                ).fetchone()
+                assert readiness is not None and not readiness["unresolved"]
+                retained_setup = fixture_setup_evidence.snapshot(
+                    conn,
+                    {
+                        "run_id": run_id,
+                        "workspace_id": binding.workspace,
+                        "attempt_id": candidate_attempt,
+                        "manifest_digest": sealed["manifest_digest"],
+                    },
+                )
+                assert retained_setup["observation"] == setup
+                assert (
+                    setup["candidateSeed"]["context"]["regressionAttemptId"]
+                    == gateway.binding.task_id
+                )
+        with workspace_connection(binding.database, binding.workspace) as conn:
             with pytest.raises(runners.RunnerError, match="lifetime"), conn.transaction():
                 runners.admit_lease(
                     conn,
@@ -1402,7 +1504,7 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             on_candidate_session=controller,
         )
 
-    if reader_exit != "released":
+    if reader_exit not in {"released", "fresh-released", "fresh-preview"}:
         with pytest.raises(CleanupUnconfirmed, match="reader cleanup"):
             execute()
         with workspace_connection(binding.database, binding.workspace) as conn:
@@ -1420,6 +1522,15 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
         with pytest.raises(builds.BuildClaimRefused), conn.transaction():
             candidate_runs.assert_live(conn, run_id=str(prepared[0]["run_id"]))
         assert patches._regression_attestation(conn, str(prepared[0]["run_id"]))[0] is False
+        if fresh:
+            from accessforge_persistence import candidate_fixture_setups
+
+            if reader_exit == "fresh-preview":
+                with pytest.raises(builds.BuildClaimRefused, match="preview-observed"):
+                    candidate_fixture_setups.for_run(conn, run_id=str(prepared[0]["run_id"]))
+                return
+            history = candidate_fixture_setups.for_run(conn, run_id=str(prepared[0]["run_id"]))
+            assert history is not None and history["observation"]["application"]["effectCount"] == 0
 
 
 @pytest.mark.sandbox

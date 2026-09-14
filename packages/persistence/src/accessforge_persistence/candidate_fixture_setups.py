@@ -166,3 +166,56 @@ def read(conn: psycopg.Connection[dict[str, Any]], *, attempt_id: str) -> dict[s
         "SELECT * FROM candidate_fixture_reservation WHERE regression_attempt_id=%s", (attempt_id,)
     ).fetchone()
     return None if row is None else _view(row)
+
+
+def for_run(conn: psycopg.Connection[dict[str, Any]], *, run_id: str) -> dict[str, Any] | None:
+    """Recheck original seed lineage for retention, including after endpoint cleanup.
+
+    This is deliberately not a live authority check. A caller attaching the receipt before
+    dispatch must separately check candidate_runs.assert_live and exact execution approval.
+    """
+    bound = conn.execute(
+        "SELECT b.*,e.plan,e.binding_digest,e.origin,a.artifact_digest,a.policy_digest,"
+        "a.image_id,a.daemon_id FROM candidate_run_binding b "
+        "JOIN candidate_endpoint e ON e.attempt_id=b.regression_attempt_id "
+        "AND e.workspace_id=b.workspace_id JOIN candidate_regression_attempt a "
+        "ON a.id=b.regression_attempt_id AND a.workspace_id=b.workspace_id WHERE b.run_id=%s",
+        (run_id,),
+    ).fetchone()
+    if bound is None:
+        return None
+    # A preview can POST before there is a reader binding. Its initial empty observation
+    # must never be promoted into fresh-reader setup after those requests. Every gateway
+    # request records its pre-request artifact sample, including failed/unknown deliveries.
+    if conn.execute(
+        "SELECT 1 FROM candidate_artifact_observation WHERE regression_attempt_id=%s "
+        "AND payload->>'runId' IS NULL LIMIT 1",
+        (bound["regression_attempt_id"],),
+    ).fetchone():
+        raise Refused("preview-observed candidate fixture cannot become fresh reader setup")
+    receipt = read(conn, attempt_id=str(bound["regression_attempt_id"]))
+    if receipt is None or receipt["observation"] is None:
+        raise Refused("original confirmed candidate fixture evidence unavailable")
+    context, observation = receipt["context"], receipt["observation"]
+    expected = {
+        "workspaceId": str(bound["workspace_id"]),
+        "regressionAttemptId": str(bound["regression_attempt_id"]),
+        "buildId": str(bound["build_id"]),
+        "artifactDigest": bound["artifact_digest"],
+        "runtimePolicyDigest": bound["policy_digest"],
+        "imageId": bound["image_id"],
+        "daemonId": bound["daemon_id"],
+        "nonce": bound["fixture_nonce"],
+        "templateDigest": bound["fixture_template_digest"],
+    }
+    if (
+        any(context.get(key) != value for key, value in expected.items())
+        or bound["binding_digest"] != bound["endpoint_binding_digest"]
+        or bound["plan"]["path"] != "/form/" + context["nonce"]
+        or context["processes"]["candidate"] != bound["plan"]["candidateId"]
+        or context["processes"]["driver"] != bound["plan"]["driverId"]
+        or observation.get("meaning")
+        != "INDEPENDENT_INITIAL_CANDIDATE_FIXTURE_NOT_READER_ATTESTATION"
+    ):
+        raise Refused("candidate fixture receipt differs from original run lineage")
+    return receipt

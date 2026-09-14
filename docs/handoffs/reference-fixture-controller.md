@@ -100,9 +100,25 @@ is never the source of this measurement.
 The forced-RLS receipt has immutable context and a one-way pending-to-confirmed transition.
 Revoked, expired, fenced or already endpoint-bound workers cannot confirm it. History survives
 endpoint cleanup but supplies neither a RUN_EFFECTS approval nor reader/OS evidence. Browser
-setup/observer routes remain private. Candidate run attachment, origin instantiation and the
-required execution artifact must consume this original receipt in a subsequent integration;
-this build-worker receipt alone does not satisfy the fresh-fixture desktop admission gate.
+setup/observer routes remain private. Candidate origin instantiation remains separate; seed
+history alone does not satisfy the fresh-fixture desktop admission gate.
+
+The trusted `accessforge_orchestrator.candidate_fixture_setup` controller now attaches the
+original receipt to an existing candidate run only after independent RUN_EFFECTS approval,
+live endpoint/build checks, exact reviewed private configuration and queued/unleased state.
+It issues no approval, sends no HTTP and performs no reset. Invoke its `--help` for the same
+configuration-file and credential-reference arguments as baseline setup; only the product DB
+connection is needed. The attachment records the original pre-seed reservation time separately
+from the later run-side confirmation. Repeating an identical attachment is idempotent only
+while current authority still holds.
+
+A candidate with unbound preview artifact observations cannot be promoted into fresh reader
+setup: preview requests may already have used the fixture. Every gateway request records its
+pre-request observation, including uncertain requests. The finalizer exports and compares the
+full original seed receipt, not just copied hashes, against its protected regression/build/run
+lineage. Historical validation remains available after endpoint cleanup without renewing live
+authority. This remains point-in-time initial setup evidence, not a guarantee against later
+application mutations or proof of successful physical-reader execution.
 
 Focused tests use real loopback TCP with synthetic replies for transport and separate
 disposable product/application PostgreSQL databases with in-process HTTP for successful
