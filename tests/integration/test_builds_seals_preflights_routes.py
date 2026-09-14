@@ -218,6 +218,11 @@ def execution_body(
     journey_id = str(uuid.uuid4())
     body = _seal_body(build.json()["buildId"], environment)
     setup_case = getattr(request, "param", None) in {"fixture-setup", "fresh-stop-policy"}
+    setup_case = (
+        setup_case
+        or getattr(getattr(request.node, "callspec", None), "params", {}).get("fault")
+        == "runtime-endpoint"
+    )
     if setup_case:
         prepared_environment = client.post(
             f"/v1/workspaces/{WS}/projects/{project}/environments",
@@ -799,7 +804,17 @@ def baseline_archive_stores() -> Iterator[list[Any]]:
 
 @pytest.mark.parametrize(
     "fault",
-    [None, "readback", "revoked", "upload", "substitution", "s3", "runtime", "runtime-expired"],
+    [
+        None,
+        "readback",
+        "revoked",
+        "upload",
+        "substitution",
+        "s3",
+        "runtime",
+        "runtime-expired",
+        "runtime-endpoint",
+    ],
 )
 def test_baseline_archive_retention_boundary(
     db: str,
@@ -931,7 +946,7 @@ def test_baseline_archive_retention_boundary(
     retain_baseline(db, workspace_id=WS, result=result, store=store)
     args: dict[str, Any] = dict(workspace_id=WS, build_id=claim.attempt_id, store=store)
     assert read_retained_baseline(db, **args) == artifact
-    if fault in {"runtime", "runtime-expired"}:
+    if fault in {"runtime", "runtime-expired", "runtime-endpoint"}:
         from accessforge_domain.functional_validation import (
             INVALID_VALUES,
             VALIDATION_SUITE_DIGEST,
@@ -948,6 +963,7 @@ def test_baseline_archive_retention_boundary(
                 image_id=inputs["image_id"],
                 daemon_endpoint=inputs["daemon_endpoint"],
                 daemon_id=inputs["daemon_id"],
+                endpoint_required=fault == "runtime-endpoint",
             )
             task = runtime.claim(conn, **runtime_inputs)
             with pytest.raises(runtime.Refused), conn.transaction():
@@ -964,6 +980,22 @@ def test_baseline_archive_retention_boundary(
                     (str(uuid.uuid4()), WS, binding["run_id"]),
                 )
             receipts: list[tuple[str, str, str]] = []
+            if fault == "runtime-endpoint":
+                from accessforge_domain.candidate_endpoint import CSP, PROTOCOL
+                from accessforge_domain.timestamps import to_rfc3339_utc
+                from accessforge_orchestrator import baseline_fixture_runtime as seed
+                from accessforge_persistence import baseline_endpoints as endpoints
+
+                context = seed.prepare_context(
+                    conn,
+                    workspace_id=WS,
+                    run_id=binding["run_id"],
+                    origin="http://127.0.0.1:8081",
+                    reset_credential_ref="reset-profile",
+                    observer_credential_ref="observer-profile",
+                    reset_values={"variant": "inaccessible"},
+                    observer_config={"effect": "CREATE_TEST_REQUEST"},
+                )
             for i, role in enumerate(ROLES):
                 runtime.planned(
                     conn,
@@ -993,8 +1025,57 @@ def test_baseline_archive_retention_boundary(
                     ).fetchone() == {"state": "UNKNOWN", "epoch": 2}
                     return
                 runtime.assert_active(conn, claim=task)
-                runtime.removed(conn, claim=task, role=role)
+                if fault == "runtime-endpoint" and role == "candidate":
+                    fingerprint = seed.reserve(
+                        conn, claim=task, context=context, nonce=context["nonce"]
+                    )
+                    moment = to_rfc3339_utc(datetime.now(UTC))
+                    seed.confirm(
+                        conn,
+                        claim=task,
+                        context=context,
+                        context_digest=fingerprint,
+                        application={
+                            "nonce": context["nonce"],
+                            "templateDigest": context["templateDigest"],
+                            "variant": "inaccessible",
+                            "createdAt": moment,
+                            "observedAt": moment,
+                            "effectCount": 0,
+                        },
+                    )
+                    identity = dict(
+                        protocol=PROTOCOL,
+                        contentSecurityPolicy=CSP,
+                        wallSeconds=30,
+                        taskId=task.attempt_id,
+                        artifactDigest=artifact.archive_digest,
+                        runtimePolicyDigest="e" * 64,
+                        imageId=inputs["image_id"],
+                        daemonEndpoint=inputs["daemon_endpoint"],
+                        daemonId=inputs["daemon_id"],
+                        candidateId="2" * 64,
+                        driverId="1" * 64,
+                        listenOrigin=context["origin"],
+                        path="/form/" + context["nonce"],
+                    )
+                    endpoints.plan(conn, claim=task, identity=identity)
+                    with pytest.raises(endpoints.Refused), conn.transaction():
+                        endpoints.plan(conn, claim=task, identity=identity)
+                    receipt = {**identity, "origin": context["origin"]}
+                    receipt["bindingDigest"] = digest(receipt)
+                    changed = {**identity, "origin": "http://127.0.0.1:8082"}
+                    changed["bindingDigest"] = digest(changed)
+                    with pytest.raises(endpoints.Refused), conn.transaction():
+                        endpoints.bound(conn, claim=task, receipt=changed)
+                    endpoints.bound(conn, claim=task, receipt=receipt)
+                    endpoints.assert_live(conn, claim=task)
+                    endpoints.closed(conn, claim=task, cleanup_confirmed=True)
+                    with pytest.raises(endpoints.Refused), conn.transaction():
+                        endpoints.assert_live(conn, claim=task)
                 receipts.append((role, str(i) * 64, inputs["image_id"]))
+            for role in ROLES:
+                runtime.removed(conn, claim=task, role=role)
             observation = ValidationObservation(
                 VALIDATION_SUITE_DIGEST, tuple((field, 422, 0) for field, _ in INVALID_VALUES)
             )
