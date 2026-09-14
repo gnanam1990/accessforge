@@ -1079,10 +1079,7 @@ def test_baseline_archive_retention_boundary(
                     with pytest.raises(sessions.Refused), conn.transaction():
                         sessions.assert_request(conn, run_id=binding["run_id"], method="POST")
                     # Real SQL lease binding, synthetic desktop identity: never starts AT.
-                    with (
-                        pytest.raises(RuntimeError, match="rollback synthetic lease"),
-                        conn.transaction(),
-                    ):
+                    with conn.transaction():
                         reader_id, lease_id = str(uuid.uuid4()), str(uuid.uuid4())
                         conn.execute(
                             "INSERT INTO runner(id,workspace_id,name,status,session_key,platform,"
@@ -1227,7 +1224,6 @@ def test_baseline_archive_retention_boundary(
                             (lease_id,),
                         )
                         sessions.assert_reader_released(conn, attempt_id=task.attempt_id)
-                        raise RuntimeError("rollback synthetic lease")
                     endpoints.closed(conn, claim=task, cleanup_confirmed=True)
                     with pytest.raises(endpoints.Refused), conn.transaction():
                         endpoints.assert_live(conn, claim=task)
@@ -1242,7 +1238,11 @@ def test_baseline_archive_retention_boundary(
                 claim=task,
                 policy_digest="e" * 64,
                 artifact_digest=artifact.archive_digest,
-                checks=("synthetic_fixture_validation",),
+                checks=tuple(
+                    f"{prefix}_{field}"
+                    for prefix in ("reject_invalid", "no_invalid_write")
+                    for field, _ in INVALID_VALUES
+                ),
                 containers=tuple(receipts),
                 validation=observation,
             )
@@ -1260,7 +1260,34 @@ def test_baseline_archive_retention_boundary(
                 "format": "accessforge.functional-producer.v1",
                 "validation": observation.canonical_form(),
                 "runEvidence": None,
-            }  # No durable reader lease in these harness cases; do not manufacture a run verdict.
+            }  # These prose-only fixtures cannot manufacture executable assertion evidence.
+            if fault == "runtime-endpoint":
+                from accessforge_persistence import functional_regression_evidence as evidence
+
+                original = evidence.for_run(conn, run_id=binding["run_id"])
+                assert original is not None and original["runtimeKind"] == "BASELINE"
+                assert original["producerReceipt"] == functional["functional_receipt"]
+                assert len(original["checks"]) == 8
+                bundle = evidence.snapshot(
+                    conn,
+                    {
+                        "run_id": binding["run_id"],
+                        "workspace_id": WS,
+                        "lease_id": lease_id,
+                        "epoch": 1,
+                        "attempt_id": "synthetic-attempt",
+                        "manifest_digest": binding["manifest_digest"],
+                    },
+                )
+                assert bundle["receiptDigest"] == digest(original)
+                with pytest.raises(evidence.Refused), conn.transaction():
+                    conn.execute(
+                        "UPDATE desktop_lease SET stop_acknowledged_at=NULL,"
+                        "stop_acknowledged_epoch=NULL "
+                        "WHERE id=%s",
+                        (lease_id,),
+                    )
+                    evidence.for_run(conn, run_id=binding["run_id"])
             with pytest.raises(psycopg.IntegrityError), conn.transaction():
                 conn.execute(
                     "UPDATE baseline_regression_attempt SET functional_receipt='{}' WHERE id=%s",
