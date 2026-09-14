@@ -196,6 +196,8 @@ def _build(receipt: Any, source: dict[str, Any], context: dict[str, Any]) -> str
 def _source_lineage(receipt: dict[str, Any], build: str) -> str | None:
     """Only after _build verifies this original, server-resolved measurement receipt."""
     payload = receipt["receipt"]
+    if payload.get("runtimeKind") == "BASELINE":
+        return _baseline_source_lineage(payload, build)
     lineage = payload.get("sourceLineage")
     if lineage is None:
         return None  # Older receipts cannot be enriched from today's mutable control-plane rows.
@@ -248,6 +250,59 @@ def _source_lineage(receipt: dict[str, Any], build: str) -> str | None:
         raise Refused("runtime source lineage identity or time malformed") from exc
     if any(left > right for left, right in zip(moments, moments[1:], strict=False)):
         raise Refused("runtime source lineage does not precede the measured deployment")
+    return str(lineage["sourceTreeDigest"])
+
+
+def _baseline_source_lineage(payload: dict[str, Any], build: str) -> str | None:
+    lineage = payload.get("baselineSourceLineage")
+    if lineage is None:
+        return None
+    fields = {
+        "meaning",
+        "workspaceId",
+        "buildId",
+        "sourceSnapshotId",
+        "sourceTreeDigest",
+        "sourceArchiveDigest",
+        "artifactDigest",
+        "buildContainerId",
+        "imageId",
+        "daemonId",
+        "buildReservedAt",
+        "buildFinishedAt",
+        "artifactRetainedAt",
+    }
+    if (
+        not isinstance(lineage, dict)
+        or set(lineage) != fields
+        or any(not isinstance(value, str) or not value for value in lineage.values())
+        or lineage["meaning"] != "CAPTURED_BASELINE_INPUT_LINK_NOT_RUNTIME_SOURCE_READ"
+        or lineage["workspaceId"] != payload["workspaceId"]
+        or lineage["buildId"] != payload.get("buildId")
+        or lineage["artifactDigest"] != build
+        or lineage["imageId"] != payload["observation"].get("imageId")
+        or lineage["daemonId"] != payload["observation"].get("daemonId")
+        or any(
+            len(lineage[key]) != 64 or any(c not in "0123456789abcdef" for c in lineage[key])
+            for key in ("sourceTreeDigest", "sourceArchiveDigest", "buildContainerId")
+        )
+    ):
+        raise Refused("baseline source lineage differs from its measured build")
+    try:
+        for key in ("workspaceId", "buildId", "sourceSnapshotId"):
+            UUID(lineage[key])
+        moments = [
+            parse_rfc3339_utc(lineage[key])
+            for key in (
+                "buildReservedAt",
+                "buildFinishedAt",
+                "artifactRetainedAt",
+            )
+        ] + [parse_rfc3339_utc(payload["observation"]["observedAt"])]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise Refused("baseline source lineage identity or chronology malformed") from exc
+    if any(left > right for left, right in zip(moments, moments[1:], strict=False)):
+        raise Refused("baseline source/build retention does not precede deployment measurement")
     return str(lineage["sourceTreeDigest"])
 
 

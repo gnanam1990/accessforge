@@ -242,6 +242,7 @@ def finish(
     containers: tuple[tuple[str, str, str], ...],
     validation: ValidationObservation,
 ) -> None:
+    from .baseline_functional_assertions import receipt
     from .baseline_runs import assert_reader_released
 
     with conn.transaction():
@@ -269,10 +270,17 @@ def finish(
         ):
             raise Refused("baseline runtime lacks exact process cleanup")
         _owned(conn, claim, "DISPATCHED")
+        functional_receipt = receipt(conn, attempt_id=claim.attempt_id, observation=validation)
         conn.execute(
             "UPDATE baseline_regression_attempt SET state='PASSED',cleanup_confirmed=true,"
-            "checks=%s,validation=%s,finished_at=clock_timestamp() WHERE id=%s",
-            (list(checks), Jsonb(validation.canonical_form()), claim.attempt_id),
+            "checks=%s,validation=%s,functional_receipt=%s,finished_at=clock_timestamp() "
+            "WHERE id=%s",
+            (
+                list(checks),
+                Jsonb(validation.canonical_form()),
+                Jsonb(functional_receipt),
+                claim.attempt_id,
+            ),
         )
 
 
