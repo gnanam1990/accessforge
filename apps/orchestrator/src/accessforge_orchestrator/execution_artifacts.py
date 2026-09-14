@@ -190,7 +190,7 @@ def _bundle(
     producers = {
         kind: producer
         for kind, producer in required.items()
-        if kind not in {"RUNNER_JOURNAL", "MODEL_RUNTIME"}
+        if kind not in {"RUNNER_JOURNAL", "MODEL_RUNTIME", "FIXTURE_SETUP"}
     }
     streams = conn.execute(
         "SELECT * FROM producer_stream WHERE attempt_id=%s", (row["attempt_id"],)
@@ -244,6 +244,18 @@ def _bundle(
             required["MODEL_RUNTIME"],
             "application/json",
             canonicalize(model_snapshot).encode(),
+        )
+    if "FIXTURE_SETUP" in required:
+        from accessforge_persistence.fixture_setup_evidence import snapshot as setup_snapshot
+
+        try:
+            original_setup = setup_snapshot(conn, row)
+        except ValueError as exc:
+            raise Refused("original confirmed fixture setup evidence unavailable") from exc
+        result["FIXTURE_SETUP"] = (
+            required["FIXTURE_SETUP"],
+            "application/json",
+            canonicalize(original_setup).encode(),
         )
     for kind, producer in producers.items():
         content = {

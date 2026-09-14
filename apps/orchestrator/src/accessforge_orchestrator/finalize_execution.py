@@ -42,7 +42,7 @@ from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements
 
-EVALUATOR_VERSION = "1.6.0"
+EVALUATOR_VERSION = "1.7.0"
 
 
 def _retained(
@@ -105,7 +105,9 @@ def _retained(
         run_id=str(row["run_id"]),
         attempt_id=str(row["attempt_id"]),
         required_producers=frozenset(
-            p for k, p in required.items() if k not in {"RUNNER_JOURNAL", "MODEL_RUNTIME"}
+            p
+            for k, p in required.items()
+            if k not in {"RUNNER_JOURNAL", "MODEL_RUNTIME", "FIXTURE_SETUP"}
         ),
     )
     if not complete.complete:

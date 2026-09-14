@@ -2774,6 +2774,25 @@ def test_queued_fixture_setup_reconciles_reserved_nonce(
             with pytest.raises(ValueError):
                 load_destination(conn, **{**destination_args, **change})
     assert setup.prepare(db, owned_observer_database, **kwargs) == observed
+    from accessforge_persistence.evidence.session import requirements
+    from accessforge_persistence.fixture_setup_evidence import snapshot
+
+    # Real retained setup, synthetic attempt identifier: this checks source snapshot/binding,
+    # not desktop execution or end-to-end object-store promotion.
+    evidence_context = {
+        "id": str(uuid.uuid4()),
+        "workspace_id": WS,
+        "run_id": run_id,
+        "attempt_id": str(uuid.uuid4()),
+        "manifest_digest": manual_seal["manifestDigest"],
+    }
+    with workspace_connection(db, WS) as conn:
+        retained_setup = snapshot(conn, evidence_context)
+        assert retained_setup["observation"] == observed
+        assert retained_setup["observationDigest"] == digest(observed)
+        assert requirements(conn, evidence_context)["FIXTURE_SETUP"] == retained_setup["producerId"]
+        with pytest.raises(ValueError):
+            snapshot(conn, {**evidence_context, "manifest_digest": "0" * 64})
     assert statuses == ([201, 200] if case == "lost-response" else [201])
     assert len(set(nonces)) == 1
     with workspace_connection(db, WS) as conn:
