@@ -4575,7 +4575,14 @@ def _retain_stopped_artifact_case(
                     with pytest.raises(RuntimeError, match="synthetic failure"):
                         finalize(db, store, workspace_id=WS, run_id=ref.run_id)
             else:
-                result = finalize(db, store, workspace_id=WS, run_id=ref.run_id)
+                from accessforge_orchestrator.complete_execution import complete as complete_run
+
+                spool = tmp_path / "original-completion-journal"
+                spool.write_bytes(journal)
+                spool.chmod(0o600)
+                result = complete_run(
+                    db, store, workspace_id=WS, run_id=ref.run_id, journal_path=str(spool)
+                )
                 assert result["snapshot"]["outcome"] == "INCONCLUSIVE"
                 assert result["snapshot"]["assertions"][0]["condition"] == "FALSE"
                 assert any("BUILD" in reason for reason in result["snapshot"]["reasons"])
@@ -4593,6 +4600,16 @@ def _retain_stopped_artifact_case(
                         == result["snapshot"]["sealedIdentities"]["FIXTURE_INSTANCE"]
                     )
                 assert finalize(db, store, workspace_id=WS, run_id=ref.run_id) == result
+                assert (
+                    complete_run(
+                        db,
+                        store,
+                        workspace_id=WS,
+                        run_id=ref.run_id,
+                        journal_path=str(tmp_path / "no-spool-needed-for-historical-replay"),
+                    )
+                    == result
+                )
                 response = client.get(endpoint)
                 assert response.status_code == 200 and response.json() == result
                 assert response.headers["Cache-Control"] == "no-store"
