@@ -30,7 +30,7 @@ from accessforge_persistence.evidence.objectstore import (
     assert_uploadable,
     compute_digest,
 )
-from accessforge_persistence.evidence.session import requirements
+from accessforge_persistence.evidence.session import requirements, stream_requirements
 
 
 class Refused(Exception):
@@ -187,11 +187,7 @@ def _bundle(
         (row["run_id"], row["attempt_id"]),
     ).fetchall()
     _journal(journal, actions, row)
-    producers = {
-        kind: producer
-        for kind, producer in required.items()
-        if kind not in {"RUNNER_JOURNAL", "MODEL_RUNTIME", "FIXTURE_SETUP", "FUNCTIONAL_REGRESSION"}
-    }
+    producers = stream_requirements(required)
     streams = conn.execute(
         "SELECT * FROM producer_stream WHERE attempt_id=%s", (row["attempt_id"],)
     ).fetchall()

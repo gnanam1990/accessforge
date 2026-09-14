@@ -22,6 +22,15 @@ from accessforge_persistence import sequencer
 from . import artifacts
 
 
+def stream_requirements(required: dict[str, str]) -> dict[str, str]:
+    """Artifact-only receipts have no canonical event stream or stream-close obligation."""
+    return {
+        kind: producer
+        for kind, producer in required.items()
+        if kind not in {"RUNNER_JOURNAL", "MODEL_RUNTIME", "FIXTURE_SETUP", "FUNCTIONAL_REGRESSION"}
+    }
+
+
 def observer_producer(credential_ref: str, attempt_id: str) -> str:
     return "observer:" + digest({"credentialRef": credential_ref, "attempt": attempt_id})
 

@@ -30,6 +30,7 @@ from accessforge_domain.functional_validation import (
     INVALID_VALUES,
     VALID_VALUES,
     VALIDATION_SUITE_DIGEST,
+    ValidationObservation,
 )
 
 from .candidate_gateway import CandidateEndpointBinding, CandidateGateway, gateway_policy
@@ -122,6 +123,7 @@ class ReferenceRegressionResult:
     checks: tuple[str, ...]
     # Result construction occurs only after exact owned-resource cleanup is confirmed.
     containers: tuple[tuple[str, str, str], ...]  # role, immutable container ID, image ID
+    validation: ValidationObservation
 
 
 class ReferenceRegressions:
@@ -706,14 +708,15 @@ class ReferenceRegressions:
             expect(http("GET", f"/form/{nonce}")["status"] == 200, "form_available")
             valid = dict(VALID_VALUES)
             form = {"Content-Type": "application/x-www-form-urlencoded"}
+            validation_cases: list[tuple[str, int, int]] = []
             for field, value in INVALID_VALUES:
                 response = http(
                     "POST", f"/form/{nonce}", headers=form, body=urlencode({**valid, field: value})
                 )
                 expect(response["status"] == 422, "reject_invalid_" + field)
-                expect(
-                    sql("SELECT count(*) FROM service_request") == "0", "no_invalid_write_" + field
-                )
+                count = int(sql("SELECT count(*) FROM service_request"))
+                expect(count == 0, "no_invalid_write_" + field)
+                validation_cases.append((field, response["status"], count))
             for headers in ({}, {"x-observer-token": setup}, {"x-observer-token": "wrong"}):
                 expect(
                     http("GET", f"/api/_test/receipt/{nonce}", headers=headers)["status"] == 403,
@@ -790,7 +793,12 @@ class ReferenceRegressions:
             )
             sandbox._assert_daemon(deadline=deadline)
             result = ReferenceRegressionResult(
-                artifact.archive_digest, task, sandbox.daemon, tuple(checks), tuple(receipts)
+                artifact.archive_digest,
+                task,
+                sandbox.daemon,
+                tuple(checks),
+                tuple(receipts),
+                ValidationObservation(VALIDATION_SUITE_DIGEST, tuple(validation_cases)),
             )
         finally:
             failures: list[str] = []
