@@ -2602,6 +2602,134 @@ def owned_observer_database(db: str, backup_database_url: str) -> Iterator[str]:
             conn.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
 
+@pytest.mark.parametrize("execution_body", ["fixture-setup"], indirect=True)
+@pytest.mark.parametrize("case", ["success", "lost-response", "revoked-during-setup"])
+def test_queued_fixture_setup_reconciles_reserved_nonce(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    manual_seal: dict[str, Any],
+    owned_observer_database: str,
+    runner: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    """Real product/app DBs, in-process HTTP; no desktop or model invocation."""
+    from accessforge_orchestrator import reference_fixture_setup as setup
+    from reference_app.app import create_app as create_reference_app
+    from reference_app.config import ReferenceAppSettings
+
+    approval_url = _approval_url(project, manual_seal)
+    approved = client.post(
+        approval_url,
+        json=_approval_body(manual_seal),
+        headers={CSRF_HEADER: csrf, "If-Match": "0"},
+    )
+    assert approved.status_code == 201, approved.text
+    queued = client.post(
+        f"/v1/workspaces/{WS}/runs",
+        json={"manifestDigest": manual_seal["manifestDigest"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert queued.status_code == 202, queued.text
+    run_id = queued.json()["runId"]
+    token = "synthetic-controller-setup-token"
+    app = create_reference_app(
+        ReferenceAppSettings(
+            database_url=owned_observer_database,
+            setup_token=token,
+            observer_token="synthetic-independent-observer-token",
+            environment="test",
+        )
+    )
+    nonces: list[str] = []
+    statuses: list[int] = []
+
+    def provision(context: dict[str, Any], setup_token: str) -> int:
+        with workspace_connection(db, WS) as conn:
+            row = conn.execute(
+                "SELECT context,observation FROM fixture_setup_reservation WHERE run_id=%s",
+                (run_id,),
+            ).fetchone()
+            assert row is not None and row["context"] == context and row["observation"] is None
+        nonces.append(context["nonce"])
+        with TestClient(app) as reference_client:
+            response = reference_client.post(
+                "/api/_test/fixtures",
+                params={"variant": context["variant"], "nonce": context["nonce"]},
+                headers={"x-setup-token": setup_token},
+            )
+        assert response.status_code in {200, 201}, response.text
+        statuses.append(response.status_code)
+        if case == "lost-response" and len(nonces) == 1:
+            raise TimeoutError("synthetic lost reply after committed app insertion")
+        if case == "revoked-during-setup":
+            revoked = client.post(
+                approval_url + "/revocation",
+                json={"manifestDigest": manual_seal["manifestDigest"]},
+                headers={CSRF_HEADER: csrf, "If-Match": "0"},
+            )
+            assert revoked.status_code == 200, revoked.text
+        return response.status_code
+
+    monkeypatch.setattr(setup, "_provision", provision)
+    kwargs: dict[str, Any] = dict(
+        workspace_id=WS,
+        run_id=run_id,
+        origin="http://127.0.0.1:8081",
+        reset_credential_ref="reset-profile",
+        observer_credential_ref="observer-profile",
+        setup_token=token,
+        reset_values={"variant": "inaccessible"},
+        observer_config={"effect": "CREATE_TEST_REQUEST"},
+    )
+    if case != "success":
+        expected_error = TimeoutError if case == "lost-response" else execution_approvals.Refused
+        with pytest.raises(expected_error):
+            setup.prepare(db, owned_observer_database, **kwargs)
+        with workspace_connection(db, WS) as conn:
+            row = conn.execute(
+                "SELECT observation FROM fixture_setup_reservation WHERE run_id=%s", (run_id,)
+            ).fetchone()
+            assert row == {"observation": None}
+            with pytest.raises(
+                runner_store.RunnerError,
+                match="fixture setup is unresolved" if case == "lost-response" else None,
+            ):
+                runner_store.admit_lease(
+                    conn,
+                    workspace_id=WS,
+                    runner_id=runner["runnerId"],
+                    run_id=run_id,
+                    attempt_id=str(uuid.uuid4()),
+                )
+        if case == "revoked-during-setup":
+            return
+    observed = setup.prepare(db, owned_observer_database, **kwargs)
+    assert observed["application"]["effectCount"] == 0
+    assert observed["meaning"] == "INDEPENDENT_INITIAL_EMPTY_FIXTURE_NOT_DESKTOP_ATTESTATION"
+    assert setup.prepare(db, owned_observer_database, **kwargs) == observed
+    assert statuses == ([201, 200] if case == "lost-response" else [201])
+    assert len(set(nonces)) == 1
+    with workspace_connection(db, str(uuid.uuid4())) as conn:
+        assert conn.execute("SELECT 1 FROM fixture_setup_reservation").fetchone() is None
+    with workspace_connection(db, WS) as conn:
+        row = conn.execute(
+            "SELECT observation,observation_digest FROM fixture_setup_reservation WHERE run_id=%s",
+            (run_id,),
+        ).fetchone()
+        assert row == {"observation": observed, "observation_digest": digest(observed)}
+    with pytest.raises(psycopg.Error), workspace_connection(db, WS) as conn:
+        conn.execute("DELETE FROM fixture_setup_reservation WHERE run_id=%s", (run_id,))
+    with pytest.raises(psycopg.Error), workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE fixture_setup_reservation SET observation=NULL,observation_digest=NULL,"
+            "observed_at=NULL WHERE run_id=%s",
+            (run_id,),
+        )
+
+
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
 @pytest.mark.parametrize(
     "case",

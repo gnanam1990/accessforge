@@ -7,15 +7,15 @@ An uncertain request leaves its durable nonce pending; explicit retry reconciles
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
-import time
 import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+import httpx
 import psycopg
 from psycopg.types.json import Jsonb
 
@@ -142,13 +142,15 @@ def _context(
     }
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
-        raise Refused("setup redirect refused")
+_SETUP_DEADLINE_SECONDS = 10.0
 
 
 def _provision(context: dict[str, Any], setup_token: str) -> int:
-    request = Request(  # noqa: S310 - exact loopback HTTP origin validated before reservation
+    return asyncio.run(_provision_async(context, setup_token))
+
+
+async def _provision_async(context: dict[str, Any], setup_token: str) -> int:
+    url = (
         context["origin"]
         + "/api/_test/fixtures?"
         + urlencode(
@@ -156,33 +158,30 @@ def _provision(context: dict[str, Any], setup_token: str) -> int:
                 "variant": context["variant"],
                 "nonce": context["nonce"],
             }
-        ),
-        method="POST",
-        headers={"x-setup-token": setup_token},
+        )
     )
-    # No environment proxy or redirects may receive the setup identity.
-    deadline = time.monotonic() + 10
-    with build_opener(ProxyHandler({}), _NoRedirect()).open(request, timeout=5) as response:
-        body = b""
-        while len(body) <= 16384:
-            if time.monotonic() >= deadline:
-                raise Refused("setup response deadline elapsed")
-            chunk = response.read1(16385 - len(body))
-            if time.monotonic() >= deadline:
-                raise Refused("setup response deadline elapsed")
-            if not chunk:
-                break
-            body += chunk
-        if len(body) > 16384 or response.status not in {200, 201}:
-            raise Refused("setup response unavailable or oversized")
-        if json.loads(body) != {
-            "nonce": context["nonce"],
-            "variant": context["variant"],
-            "template_digest": REFERENCE_FIXTURE_DIGEST,
-            "template_version": REFERENCE_FIXTURE_VERSION,
-        }:
-            raise Refused("setup response differs from the reserved identity")
-        return int(response.status)
+    # The total cancellation deadline includes connect, slow-drip headers and body.
+    # No proxy, redirect or automatic retry may receive/replay the setup identity.
+    async with asyncio.timeout(_SETUP_DEADLINE_SECONDS):
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=5) as client:
+            async with client.stream(
+                "POST", url, headers={"x-setup-token": setup_token}
+            ) as response:
+                if response.status_code not in {200, 201}:
+                    raise Refused("setup response unavailable")
+                body = bytearray()
+                async for chunk in response.aiter_raw():
+                    body.extend(chunk)
+                    if len(body) > 16384:
+                        raise Refused("setup response oversized")
+                if json.loads(body) != {
+                    "nonce": context["nonce"],
+                    "variant": context["variant"],
+                    "template_digest": REFERENCE_FIXTURE_DIGEST,
+                    "template_version": REFERENCE_FIXTURE_VERSION,
+                }:
+                    raise Refused("setup response differs from the reserved identity")
+                return response.status_code
 
 
 def prepare(
@@ -252,6 +251,7 @@ def prepare(
         or measured["variant"] != context["variant"]
         or measured["effectCount"] != 0
         or parse_rfc3339_utc(measured["createdAt"]) < prepared_at
+        or parse_rfc3339_utc(measured["createdAt"]) > parse_rfc3339_utc(measured["observedAt"])
     ):
         raise Refused("independent application state is not the fresh empty reserved fixture")
     observation = {
