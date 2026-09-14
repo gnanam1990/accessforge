@@ -338,8 +338,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
             win32: ['TAB', 'ENTER', 'DOWN'],
           },
           allowedEffects: ['FIXTURE_SUBMIT', 'FIXTURE_RESET'],
-          assertionKinds: ['TASK_COMPLETION', 'REQUIRED_ANNOUNCEMENT', 'READING_ORDER'],
+          assertionKinds: ['TASK_COMPLETION', 'REQUIRED_ANNOUNCEMENT', 'READING_ORDER', 'FUNCTIONAL_VALIDATION'],
           evaluationRules: {
+            PROTECTED_REFERENCE_VALIDATION: { assertionKind: 'FUNCTIONAL_VALIDATION', suiteDigest: 'f'.repeat(64) },
             READER_NEXT_SEQUENCE: { assertionKind: 'READING_ORDER', action: 'NEXT', minSteps: 2,
               maxSteps: 20, maxActionSequence: 1000, maxPhraseCharacters: 8192, maxTotalPhraseBytes: 32768 },
             EXACT_READER_PHRASE: { assertionKind: 'REQUIRED_ANNOUNCEMENT', maxActionSequence: 1000,

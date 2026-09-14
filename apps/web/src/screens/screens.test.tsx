@@ -339,6 +339,16 @@ describe('journey authoring', () => {
     await user.type(screen.getByLabelText(/Assertion 3 starting NEXT action/), '2')
     await user.type(screen.getByLabelText(/Assertion 3 step 1 exact reader phrase/), '  Name\nedit text  ')
     await user.type(screen.getByLabelText(/Assertion 3 step 2 exact reader phrase/), 'Email, edit text')
+    const addFunctional = screen.getByRole('button', { name: 'Add a protected functional-validation assertion' })
+    await user.click(addFunctional)
+    expect(screen.getByLabelText(/Assertion 4 description/)).toHaveFocus()
+    await user.click(screen.getByRole('button', { name: 'Remove assertion 4' }))
+    expect(addFunctional).toHaveFocus()
+    await user.click(addFunctional)
+    await user.type(screen.getByLabelText(/Assertion 4 description/), 'Reject invalid submissions without writes')
+    await user.click(screen.getByLabelText('Freeze an executable rule for assertion 4'))
+    expect(screen.getByLabelText(/Assertion 4 protected suite digest/)).toHaveAttribute('readonly')
+    expect(screen.getByLabelText(/Assertion 4 protected suite digest/)).toHaveValue('f'.repeat(64))
     await user.click(screen.getByRole('button', { name: 'Freeze version' }))
     const sent = server.bodies.find((entry) => entry.url.endsWith('/journeys'))
     const body = sent?.body as { assertions: { evaluationRule: unknown }[] }
@@ -349,6 +359,7 @@ describe('journey authoring', () => {
       { type: 'READER_NEXT_SEQUENCE', steps: [
         { actionSequence: 2, phrase: '  Name\nedit text  ' }, { actionSequence: 3, phrase: 'Email, edit text' },
       ] },
+      { type: 'PROTECTED_REFERENCE_VALIDATION', suiteDigest: 'f'.repeat(64) },
     ])
   })
 

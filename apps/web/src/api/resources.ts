@@ -273,6 +273,10 @@ export interface RetentionPolicy {
 export interface JourneyCapabilities {
   /** Absent on older servers: do not offer unsupported executable authoring. */
   readonly evaluationRules?: {
+    readonly PROTECTED_REFERENCE_VALIDATION?: {
+      readonly assertionKind: string;
+      readonly suiteDigest: string;
+    };
     readonly READER_NEXT_SEQUENCE?: {
       readonly assertionKind: string;
       readonly action: string;
