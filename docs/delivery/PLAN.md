@@ -14,6 +14,12 @@ Status is tracked in four independent fields, because a merged foundation is not
 
 ## Module ledger
 
+The ledger is historical unless a row explicitly cites the current checkpoint. Before choosing
+work, read [REMAINING.md](REMAINING.md), refreshed against main through PR #116. In particular,
+old module 14/15 statements that no build worker exists, and module 23 statements that no assertion
+results are served, have been superseded by merged code. They are not pending implementation tasks.
+This note does not upgrade the ledger to completed physical, model or release acceptance.
+
 | # | Module | Depends on | Requirements | Impl | Verify | Deliver | Scope |
 |---|---|---|---|---|---|---|---|
 | 00 | Repository and runtime capability gate | — | FR-004, 008, 022, 024 | implemented | passed | merged | E0 |
