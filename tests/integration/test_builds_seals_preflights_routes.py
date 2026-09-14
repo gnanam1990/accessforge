@@ -304,6 +304,40 @@ def execution_body(
             )
             reviewer_summary["assertionContract"] = assertions.canonical_form()
             body["assertionSetDigest"] = str(digest(assertions.canonical_form()))
+    if (
+        getattr(getattr(request.node, "callspec", None), "params", {}).get("fault")
+        == "runtime-endpoint"
+    ):
+        from accessforge_domain.functional_validation import VALIDATION_SUITE_DIGEST
+        from accessforge_domain.journeys.assertions import (
+            Assertion,
+            AssertionKind,
+            AssertionSet,
+            EvaluationRule,
+            UnknownReason,
+        )
+
+        assertions = AssertionSet(
+            (
+                Assertion(
+                    "completion",
+                    AssertionKind.TASK_COMPLETION,
+                    "Complete",
+                    unknown_reasons=frozenset({UnknownReason.OBSERVATION_MISSING}),
+                ),
+                Assertion(
+                    "validation",
+                    AssertionKind.FUNCTIONAL_VALIDATION,
+                    "Protected validation",
+                    unknown_reasons=frozenset({UnknownReason.OBSERVATION_MISSING}),
+                    evaluation_rule=EvaluationRule(
+                        "PROTECTED_REFERENCE_VALIDATION", suite_digest=VALIDATION_SUITE_DIGEST
+                    ),
+                ),
+            )
+        )
+        reviewer_summary["assertionContract"] = assertions.canonical_form()
+        body["assertionSetDigest"] = digest(assertions.canonical_form())
     policy.setdefault("fixtureValues", {"name": "Private Fixture Name"})
     reviewer_summary["fixtureContract"] = {
         "schemaVersion": 2,
@@ -1256,11 +1290,12 @@ def test_baseline_archive_retention_boundary(
                 (task.attempt_id,),
             ).fetchone()
             assert functional is not None
-            assert functional["functional_receipt"] == {
-                "format": "accessforge.functional-producer.v1",
-                "validation": observation.canonical_form(),
-                "runEvidence": None,
-            }  # These prose-only fixtures cannot manufacture executable assertion evidence.
+            assert (
+                functional["functional_receipt"]["format"] == "accessforge.functional-producer.v1"
+            )
+            assert functional["functional_receipt"]["validation"] == observation.canonical_form()
+            if fault != "runtime-endpoint":
+                assert functional["functional_receipt"]["runEvidence"] is None
             if fault == "runtime-endpoint":
                 from accessforge_persistence import functional_regression_evidence as evidence
 
@@ -1280,6 +1315,42 @@ def test_baseline_archive_retention_boundary(
                     },
                 )
                 assert bundle["receiptDigest"] == digest(original)
+                from accessforge_orchestrator.execution_artifacts import Refused as ArtifactRefused
+                from accessforge_orchestrator.functional_evidence import observed_assertions
+                from accessforge_persistence import journeys
+
+                sealed = conn.execute(
+                    "SELECT canonical_manifest FROM sealed_manifest WHERE run_id=%s",
+                    (binding["run_id"],),
+                ).fetchone()
+                assert sealed is not None
+                manifest = sealed["canonical_manifest"]
+                frozen = journeys.load_assertion_contract(
+                    conn,
+                    version_id=manifest["journeyVersionId"],
+                    expected_digest=manifest["assertionSetDigest"],
+                )
+                values: dict[str, Any] = dict(
+                    bundle=bundle,
+                    context={
+                        "run_id": binding["run_id"],
+                        "workspace_id": WS,
+                        "lease_id": lease_id,
+                        "epoch": 1,
+                        "attempt_id": "synthetic-attempt",
+                        "manifest_digest": binding["manifest_digest"],
+                    },
+                    assertions=frozen,
+                    observed_build=artifact.archive_digest,
+                    artifact_digest=digest(bundle),
+                )
+                outcomes = observed_assertions(**values)
+                assert set(outcomes) == {"validation"}
+                assert outcomes["validation"].condition.value == "TRUE"
+                assert outcomes["validation"].provenance.value == "OBSERVER_AUTHORED"
+                assert observed_assertions(**{**values, "observed_build": None}) == {}
+                with pytest.raises(ArtifactRefused):
+                    observed_assertions(**{**values, "artifact_digest": None})
                 from accessforge_persistence.evidence.session import (
                     requirements,
                     stream_requirements,
