@@ -19,6 +19,7 @@ from accessforge_persistence.candidate_regressions import RegressionClaim
 
 from .artifacts import CandidateArchiveStore
 from .baseline_artifacts import read_retained_baseline
+from .baseline_session import BaselineSession
 from .candidate_gateway import CandidateGateway
 from .reference_regressions import ReferenceRegressionResult, ReferenceRegressions
 from .sandbox import CleanupUnconfirmed
@@ -32,7 +33,7 @@ def execute_baseline_regressions(
     runner: ReferenceRegressions,
     store: CandidateArchiveStore,
     cancelled: Callable[[], bool] = lambda: False,
-    on_baseline_session: Callable[[CandidateGateway], None] | None = None,
+    on_baseline_session: Callable[[BaselineSession], None] | None = None,
     endpoint_origin: str | None = None,
     endpoint_fixture_nonce: str | None = None,
     reserve_fixture: Callable[[RegressionClaim, str], str] | None = None,
@@ -168,7 +169,7 @@ def execute_baseline_regressions(
             baseline_runs.prepare(conn, claim=claim)
         assert on_baseline_session is not None
         try:
-            on_baseline_session(gateway)
+            on_baseline_session(BaselineSession(database_url, workspace_id, claim, gateway))
         finally:
             try:
                 with workspace_connection(database_url, workspace_id) as conn:

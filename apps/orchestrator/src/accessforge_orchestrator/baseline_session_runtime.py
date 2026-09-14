@@ -9,7 +9,7 @@ from typing import Any
 
 from accessforge_build_worker.artifacts import CandidateArchiveStore
 from accessforge_build_worker.baseline_regression_coordinator import execute_baseline_regressions
-from accessforge_build_worker.candidate_gateway import CandidateGateway
+from accessforge_build_worker.baseline_session import BaselineSession
 from accessforge_build_worker.reference_regressions import (
     ReferenceRegressionResult,
     ReferenceRegressions,
@@ -31,7 +31,7 @@ def execute_baseline_session(
     observer_credential_ref: str,
     runner: ReferenceRegressions,
     store: CandidateArchiveStore,
-    on_session: Callable[[CandidateGateway], None],
+    on_session: Callable[[BaselineSession], None],
     cancelled: Callable[[], bool] = lambda: False,
 ) -> ReferenceRegressionResult:
     if cancelled():
