@@ -146,11 +146,18 @@ def _build(receipt: Any, source: dict[str, Any], context: dict[str, Any]) -> str
     if not isinstance(receipt, dict) or not isinstance(receipt.get("receipt"), dict):
         raise Refused("runtime build receipt malformed")
     payload = receipt["receipt"]
+    kind = payload.get("runtimeKind")
+    if "runtimeKind" in payload and kind != "BASELINE":
+        raise Refused("runtime build receipt kind unavailable")
+    namespace = (
+        "accessforge:baseline-artifact-observation:"
+        if kind == "BASELINE"
+        else "accessforge:artifact-observation:"
+    )
     fingerprint = digest(payload)
     if (
         receipt.get("receiptDigest") != fingerprint
-        or receipt.get("receiptId")
-        != str(uuid5(NAMESPACE_URL, "accessforge:artifact-observation:" + fingerprint))
+        or receipt.get("receiptId") != str(uuid5(NAMESPACE_URL, namespace + fingerprint))
         or any(
             payload.get(key) != value
             for key, value in {

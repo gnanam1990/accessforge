@@ -15,6 +15,29 @@ from accessforge_orchestrator.runtime_evidence import interpret
 CONTEXT = {"workspace_id": "workspace", "run_id": "run", "lease_id": "lease", "epoch": 1}
 
 
+@pytest.mark.parametrize("fault", [None, "candidate-namespace", "unknown-kind", "missing-kind"])
+def test_baseline_receipt_requires_its_explicit_kind_and_namespace(fault: str | None) -> None:
+    snapshots = fixture()
+    for event in snapshots["PREFLIGHT_RECORD"]["records"]:
+        receipt = event["payload"]["buildArtifactReceipt"]
+        payload = receipt["receipt"]
+        if fault != "missing-kind":
+            payload["runtimeKind"] = "UNTRUSTED" if fault == "unknown-kind" else "BASELINE"
+        fingerprint = digest(payload)
+        namespace = (
+            "accessforge:artifact-observation:"
+            if fault == "candidate-namespace"
+            else "accessforge:baseline-artifact-observation:"
+        )
+        receipt["receiptDigest"] = fingerprint
+        receipt["receiptId"] = str(uuid5(NAMESPACE_URL, namespace + fingerprint))
+    if fault is None:
+        assert interpret(snapshots, CONTEXT).observed_build == "a" * 64
+    else:
+        with pytest.raises(Refused):
+            interpret(snapshots, CONTEXT)
+
+
 @pytest.mark.parametrize("case", ["complete", "missing", "changed", "unknown", "extra"])
 def test_runner_profile_requires_complete_matching_observations(case: str) -> None:
     snapshots = fixture()

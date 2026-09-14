@@ -82,6 +82,7 @@ def retain(
         ):
             raise Refused("baseline binding changed during artifact measurement")
         payload = {
+            "runtimeKind": "BASELINE",
             "observation": observation,
             "workspaceId": workspace,
             "buildId": claim.build_id,
@@ -133,6 +134,7 @@ def _view(row: dict[str, Any]) -> dict[str, Any]:
     payload = row["payload"]
     if (
         not isinstance(payload, dict)
+        or payload.get("runtimeKind") != "BASELINE"
         or digest(payload) != row["receipt_digest"]
         or payload.get("workspaceId") != str(row["workspace_id"])
         or payload.get("regressionAttemptId") != str(row["regression_attempt_id"])

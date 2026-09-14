@@ -1153,6 +1153,16 @@ def test_baseline_archive_retention_boundary(
                             epoch=1,
                         )
                         sample_manifest = {"buildArtifactDigest": artifact.archive_digest}
+                        from accessforge_orchestrator.runtime_evidence import _build
+
+                        assert (
+                            _build(
+                                measured_receipt,
+                                {"capturedAtUtc": measurement["observedAt"]},
+                                sample_session,
+                            )
+                            == artifact.archive_digest
+                        )
                         assert (
                             observations.for_runtime_preflight(
                                 conn,
