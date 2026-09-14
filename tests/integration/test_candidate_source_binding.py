@@ -1723,6 +1723,36 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             assert conn.execute(
                 "SELECT state FROM evidence_artifact WHERE id=%s", (artifact.artifact_id,)
             ).fetchone() == {"state": "PROMOTED"}
+            from accessforge_orchestrator.execution_artifacts import Refused as EvidenceRefused
+            from accessforge_orchestrator.functional_evidence import observed_assertions
+            from accessforge_persistence import journeys
+
+            original_manifest = conn.execute(
+                "SELECT canonical_manifest FROM sealed_manifest WHERE run_id=%s",
+                (session["run_id"],),
+            ).fetchone()
+            assert original_manifest is not None
+            contract = journeys.load_assertion_contract(
+                conn,
+                version_id=original_manifest["canonical_manifest"]["journeyVersionId"],
+                expected_digest=authored["assertionSetDigest"],
+            )
+            # Actual retained bytes and original DB receipt; runtime argument is a controlled
+            # join input here, not proof of native reader/runtime interpretation.
+            join = {
+                "bundle": json.loads(store.get(key=artifact.object_key)),
+                "context": session,
+                "assertions": contract,
+                "observed_build": regression.artifact_digest,
+                "artifact_digest": digest(bundle),
+            }
+            consumed = observed_assertions(**join)
+            assert consumed["validation"].condition.value == "TRUE"
+            assert consumed["legacy-validation"].condition.value == "UNKNOWN"
+            assert consumed["validation"].evidence_refs == (digest(bundle),)
+            assert observed_assertions(**{**join, "observed_build": None}) == {}
+            with pytest.raises(EvidenceRefused):
+                observed_assertions(**{**join, "observed_build": "0" * 64})
         with workspace_connection(binding.database, str(uuid.uuid4())) as other:
             from accessforge_persistence import functional_regression_evidence
 

@@ -21,10 +21,19 @@ artifacts include the original receipt when present, preserving the old byte sha
 when absent. The artifact remains mandatory for candidate sessions, but does not
 invent a canonical event stream; bundling and finalization share that distinction.
 
-This is not yet a canonical functional verdict: the finalizer still needs a
-consumer that joins this retained producer receipt to observed runtime build
-identity. The patch verification gate remains closed. Actual VoiceOver/NVDA,
-billable model calls, deployment and live migration acceptance are not claimed.
+Evaluator 1.10.0 consumes the original conditions only after retained artifact
+verification, exact run/attempt/manifest/assertion-set/lease binding, and agreement
+with independently observed runtime build identity. It preserves observer-authored
+provenance and references the retained artifact digest; it does not derive backend
+conditions from check names. Missing runtime build or historical producer evidence
+leaves assertions UNKNOWN. Conflicting bindings, duplicate conditions and attempts
+to supply another observer's assertion family refuse. Existing evaluations remain
+immutable, and older sealed evaluator identities are not silently upgraded.
+
+This functional condition alone does not establish a passing run. The patch
+verification gate remains closed pending full proof integration. Actual
+VoiceOver/NVDA, billable model calls, deployment and live migration acceptance are
+not claimed.
 
 Validation covers synthetic measured conditions and malformed inputs, a fresh
 disposable PostgreSQL forward migration, and the existing real-container/S3
