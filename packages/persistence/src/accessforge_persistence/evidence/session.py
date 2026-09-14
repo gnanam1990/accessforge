@@ -28,7 +28,8 @@ def observer_producer(credential_ref: str, attempt_id: str) -> str:
 
 def requirements(conn: psycopg.Connection[Any], row: dict[str, Any]) -> dict[str, str]:
     environment = conn.execute(
-        "SELECT e.observer_credential_ref FROM environment_manifest e JOIN sealed_manifest s "
+        "SELECT e.observer_credential_ref,e.fixture_reset_strategy "
+        "FROM environment_manifest e JOIN sealed_manifest s "
         "ON s.environment_manifest_id=e.id WHERE s.run_id=%s",
         (row["run_id"],),
     ).fetchone()
@@ -54,6 +55,15 @@ def requirements(conn: psycopg.Connection[Any], row: dict[str, Any]) -> dict[str
         from accessforge_persistence.navigator_runtime import producer
 
         required["MODEL_RUNTIME"] = producer(str(row["attempt_id"]))
+    if (
+        environment["fixture_reset_strategy"] == "FRESH_FIXTURE_NONCE"
+        or conn.execute(
+            "SELECT 1 FROM fixture_setup_reservation WHERE run_id=%s", (row["run_id"],)
+        ).fetchone()
+    ):
+        from accessforge_persistence.fixture_setup_evidence import producer as setup_producer
+
+        required["FIXTURE_SETUP"] = setup_producer(str(row["attempt_id"]))
     return required
 
 

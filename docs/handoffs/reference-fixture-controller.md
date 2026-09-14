@@ -65,8 +65,26 @@ Only the URL enters model context, never setup context, credential references or
 results. Legacy literal URLs retain their original payload shape; unresolved placeholders
 and fresh-fixture environments without confirmation refuse projection.
 
-Setup evidence still needs retained-artifact/preflight/finalizer wiring. The real operator
-host entry remains pending. Mandatory setup admission is now enforced for fresh-fixture
+Fresh-fixture sessions now declare a required `FIXTURE_SETUP` JSON artifact at session
+opening. Materialization exports the original confirmed context and observation with their
+hashes and run/attempt binding. The finalizer regenerates these exact bytes from the
+protected source rows and verifies the retained object against them. Missing, replaced or
+deleted setup evidence therefore cannot leave artifact completeness true. This artifact
+uses outcome-evidence retention (`READER_SPEECH`), not short-lived diagnostic retention.
+It has no synthetic sequencer stream and does not count as a physical reader observation.
+Migration 0053 extends the database's closed artifact-kind constraint to admit this kind;
+the object-store validator and SQL boundary must agree before materialization can succeed.
+Evaluator version is 1.7.0; historical seals are never rewritten to match a newer evaluator.
+
+This establishes retained initial-setup evidence only: it does not populate an observed
+environment identity or imply task success. Focused setup tests cover real source snapshots
+with a synthetic attempt identifier. Fresh-fixture lifecycle cases also cover real lease/session,
+object-store materialization, finalizer refusal for corrupt/deleted bytes, and inconclusive
+outcomes without physical-reader proof. These cases require the integration CI services;
+they do not establish an actual desktop run. The real operator host entry and isolated candidate setup producer remain
+pending. The candidate gateway deliberately does not expose setup/observer routes, so its
+driver must supply independently bound evidence rather than calling baseline setup via
+that public gateway. Mandatory setup admission is now enforced for fresh-fixture
 environments; this is not a substitute for current approval, physical preflight or outcome proof.
 
 Focused tests use real loopback TCP with synthetic replies for transport and separate

@@ -217,7 +217,7 @@ def execution_body(
     assert build.status_code == 201, build.text
     journey_id = str(uuid.uuid4())
     body = _seal_body(build.json()["buildId"], environment)
-    setup_case = getattr(request, "param", None) == "fixture-setup"
+    setup_case = getattr(request, "param", None) in {"fixture-setup", "fresh-stop-policy"}
     if setup_case:
         prepared_environment = client.post(
             f"/v1/workspaces/{WS}/projects/{project}/environments",
@@ -243,6 +243,7 @@ def execution_body(
         "stop-policy",
         "model-policy",
         "navigator-policy",
+        "fresh-stop-policy",
     }:
         policy = {
             "allowedActions": ["READ_CURRENT", "NEXT", "TYPE_TEXT", "KEY_CHORD"],
@@ -272,7 +273,7 @@ def execution_body(
             )
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
-        if request.param == "stop-policy":
+        if request.param in {"stop-policy", "fresh-stop-policy"}:
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
             from accessforge_domain.journeys.assertions import (
@@ -1097,6 +1098,7 @@ def manual_dispatch_reference(
     project: str,
     execution_body: dict[str, Any],
     runner: dict[str, Any],
+    request: pytest.FixtureRequest,
 ) -> DispatchReference:
     """Synthetic desktop/preflight, real API consent and PostgreSQL lease. Not actual AT proof."""
     execution_body["runnerProfileDigest"] = runner["profileDigest"]
@@ -1136,6 +1138,49 @@ def manual_dispatch_reference(
         == 202
     )
     run_id = created["canonicalManifest"]["runId"]
+    with workspace_connection(db, WS) as conn:
+        fresh = conn.execute("SELECT fixture_setup_unresolved(%s) AS needed", (run_id,)).fetchone()
+    if fresh is not None and fresh["needed"]:
+        from unittest.mock import patch
+
+        from accessforge_orchestrator import reference_fixture_setup as setup
+        from reference_app.app import create_app as reference_app
+        from reference_app.config import ReferenceAppSettings
+
+        application_db = request.getfixturevalue("owned_observer_database")
+        token = "synthetic-fixture-lifecycle-setup"
+        app = reference_app(
+            ReferenceAppSettings(
+                database_url=application_db,
+                setup_token=token,
+                observer_token="synthetic-fixture-lifecycle-observer",
+                environment="test",
+            )
+        )
+
+        def provision(context: dict[str, Any], credential: str) -> int:
+            with TestClient(app) as application:
+                seeded = application.post(
+                    "/api/_test/fixtures",
+                    params={"nonce": context["nonce"], "variant": context["variant"]},
+                    headers={"x-setup-token": credential},
+                )
+            assert seeded.status_code == 201, seeded.text
+            return seeded.status_code
+
+        with patch.object(setup, "_provision", provision):
+            setup.prepare(
+                db,
+                application_db,
+                workspace_id=WS,
+                run_id=run_id,
+                origin="http://127.0.0.1:8081",
+                reset_credential_ref="reset-profile",
+                observer_credential_ref="observer-profile",
+                setup_token=token,
+                reset_values={"variant": "inaccessible"},
+                observer_config={"effect": "CREATE_TEST_REQUEST"},
+            )
     with workspace_connection(db, WS) as conn:
         attempt_id = run_store.start_attempt(conn, run_id=run_id, workspace_id=WS, lease_epoch=1)
         lease = runner_store.admit_lease(
@@ -2774,6 +2819,25 @@ def test_queued_fixture_setup_reconciles_reserved_nonce(
             with pytest.raises(ValueError):
                 load_destination(conn, **{**destination_args, **change})
     assert setup.prepare(db, owned_observer_database, **kwargs) == observed
+    from accessforge_persistence.evidence.session import requirements
+    from accessforge_persistence.fixture_setup_evidence import snapshot
+
+    # Real retained setup, synthetic attempt identifier: this checks source snapshot/binding,
+    # not desktop execution or end-to-end object-store promotion.
+    evidence_context = {
+        "id": str(uuid.uuid4()),
+        "workspace_id": WS,
+        "run_id": run_id,
+        "attempt_id": str(uuid.uuid4()),
+        "manifest_digest": manual_seal["manifestDigest"],
+    }
+    with workspace_connection(db, WS) as conn:
+        retained_setup = snapshot(conn, evidence_context)
+        assert retained_setup["observation"] == observed
+        assert retained_setup["observationDigest"] == digest(observed)
+        assert requirements(conn, evidence_context)["FIXTURE_SETUP"] == retained_setup["producerId"]
+        with pytest.raises(ValueError):
+            snapshot(conn, {**evidence_context, "manifest_digest": "0" * 64})
     assert statuses == ([201, 200] if case == "lost-response" else [201])
     assert len(set(nonces)) == 1
     with workspace_connection(db, WS) as conn:
@@ -3068,21 +3132,36 @@ def test_authenticated_execution_finish(
             "WHERE attempt_id=%s AND producer_id=%s",
             (ref.attempt_id, f"supervisor:{ticket.ticket_id}:reader"),
         ).fetchone() == {"admitted_through": 0, "closed_at_sequence": None}
-        fixture = create_instance(
-            conn,
-            workspace_id=WS,
-            run_id=ref.run_id,
-            template_id="service-request",
-            template_digest=REFERENCE_FIXTURE_DIGEST,
-            navigator_values={"name": "Private Fixture Name"},
-            observer_config={"effect": "CREATE_TEST_REQUEST"},
-        )
-    with psycopg.connect(owned_observer_database, row_factory=psycopg.rows.dict_row) as conn:
-        conn.execute(
-            "INSERT INTO fixture_instance(nonce,template_digest,variant) "
-            "VALUES(%s,%s,'accessible')",
-            (fixture.nonce, fixture.template_digest),
-        )
+        existing = conn.execute(
+            "SELECT * FROM run_fixture_instance WHERE run_id=%s", (ref.run_id,)
+        ).fetchone()
+        if existing is None:
+            fixture = create_instance(
+                conn,
+                workspace_id=WS,
+                run_id=ref.run_id,
+                template_id="service-request",
+                template_digest=REFERENCE_FIXTURE_DIGEST,
+                navigator_values={"name": "Private Fixture Name"},
+                observer_config={"effect": "CREATE_TEST_REQUEST"},
+            )
+        else:
+            from accessforge_persistence.fixtures import FixtureInstance
+
+            fixture = FixtureInstance(
+                str(existing["id"]),
+                existing["nonce"],
+                existing["template_id"],
+                existing["template_digest"],
+            )
+    if existing is None:
+        with psycopg.connect(owned_observer_database, row_factory=psycopg.rows.dict_row) as conn:
+            conn.execute(
+                "INSERT INTO fixture_instance(nonce,template_digest,variant) "
+                "VALUES(%s,%s,'accessible')",
+                (fixture.nonce, fixture.template_digest),
+            )
+    origin = "http://127.0.0.1:8081" if existing is not None else "https://app.example.test"
     stop_id = ""
     for sequence, action in enumerate(
         ["STOP"]
@@ -3098,7 +3177,7 @@ def test_authenticated_execution_finish(
             json={
                 "action": action,
                 "sequence": sequence,
-                "origin": "https://app.example.test",
+                "origin": origin,
             },
         )
         assert intent.status_code == 201
@@ -3108,7 +3187,7 @@ def test_authenticated_execution_finish(
             client.post(
                 action_url + "/dispatch",
                 headers=headers,
-                json={"origin": "https://app.example.test"},
+                json={"origin": origin},
             ).status_code
             == 200
         )
@@ -3210,7 +3289,7 @@ def test_authenticated_execution_finish(
         if closes:
             assert response.json()["status"] == "FINALIZING"
             assert response.json()["outcome"] == "NOT_EVALUATED"
-            assert response.json()["missingArtifactCount"] == 5
+            assert response.json()["missingArtifactCount"] == (6 if existing is not None else 5)
             assert (
                 client.post(
                     base + "/action-intents",
@@ -3256,9 +3335,9 @@ def test_authenticated_execution_finish(
                 ).fetchone() == {"n": 0}
             assert lease["release_reason"] == "STOP_ACKNOWLEDGED"
             assert lease["stop_acknowledged_epoch"] == ref.epoch
-        assert (
-            len(missing_required_artifacts(conn, run_id=ref.run_id, attempt_id=ref.attempt_id)) == 5
-        )
+        assert len(
+            missing_required_artifacts(conn, run_id=ref.run_id, attempt_id=ref.attempt_id)
+        ) == (6 if existing is not None else 5)
         finished = conn.execute(
             "SELECT 1 FROM canonical_event WHERE event_type='RUN_FINISHED'"
         ).fetchall()
@@ -3332,6 +3411,39 @@ def _check_runtime_preflight(
     )
 
 
+@pytest.mark.parametrize("execution_body", ["fresh-stop-policy"], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        "artifact-finalize",
+        "artifact-finalize-corrupt",
+        "artifact-finalize-incomplete",
+        "artifact-deleted",
+    ],
+)
+def test_fresh_setup_retained_lifecycle(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    owned_observer_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    tmp_path: Path,
+) -> None:
+    """Real setup DB, lease/session, object store and finalizer; synthetic desktop only."""
+    test_authenticated_execution_finish(
+        db,
+        client,
+        supervisor_ticket,
+        manual_dispatch_reference,
+        owned_observer_database,
+        monkeypatch,
+        case,
+        tmp_path,
+    )
+
+
 def _retain_stopped_artifact_case(
     db: str,
     ref: DispatchReference,
@@ -3356,6 +3468,13 @@ def _retain_stopped_artifact_case(
     store.ensure_bucket()
     entries = []
     with workspace_connection(db, WS) as conn:
+        fresh = (
+            conn.execute(
+                "SELECT 1 FROM fixture_setup_reservation WHERE run_id=%s", (ref.run_id,)
+            ).fetchone()
+            is not None
+        )
+        expected_count = 6 if fresh else 5
         actions = conn.execute(
             "SELECT * FROM runner_action WHERE run_id=%s ORDER BY action_sequence", (ref.run_id,)
         ).fetchall()
@@ -3463,10 +3582,15 @@ def _retain_stopped_artifact_case(
             assert completed.returncode == 0, completed.stdout
             assert "count=5; outcome=NOT_EVALUATED" in completed.stdout
         ids = retain_bundle(db, store, **kwargs)
-        assert len(ids) == 5 and retain_bundle(db, store, **kwargs) == ids
+        assert len(ids) == expected_count and retain_bundle(db, store, **kwargs) == ids
         with workspace_connection(db, WS) as conn:
             rows = conn.execute("SELECT * FROM evidence_artifact").fetchall()
-            assert len(rows) == 5 and all(r["state"] == "PROMOTED" for r in rows)
+            assert len(rows) == expected_count and all(r["state"] == "PROMOTED" for r in rows)
+            if fresh:
+                setup_artifact = next(a for a in rows if a["kind"] == "FIXTURE_SETUP")
+                assert (
+                    json.loads(store.get(key=setup_artifact["object_key"]))["runId"] == ref.run_id
+                )
             for artifact in rows:
                 raw = store.get(key=artifact["object_key"])
                 assert evidence.compute_digest(raw) == artifact["content_digest"]
@@ -3481,7 +3605,7 @@ def _retain_stopped_artifact_case(
                 run_id=ref.run_id,
                 attempt_id=ref.attempt_id,
                 required_producers=frozenset(
-                    p for k, p in required.items() if k != "RUNNER_JOURNAL"
+                    p for k, p in required.items() if k not in {"RUNNER_JOURNAL", "FIXTURE_SETUP"}
                 ),
             )
             assert complete.complete and complete.artifacts_present and complete.producers_closed
@@ -3489,9 +3613,19 @@ def _retain_stopped_artifact_case(
             assert state.status.value == "FINALIZING" and state.outcome.value == "NOT_EVALUATED"
         if case == "artifact-deleted":
             with workspace_connection(db, WS) as conn:
-                evidence.delete_artifact_bytes(conn, store, artifact_id=ids[0], reason="owned test")
+                evidence.delete_artifact_bytes(
+                    conn,
+                    store,
+                    artifact_id=str(setup_artifact["id"]) if fresh else ids[0],
+                    reason="owned test",
+                )
             with pytest.raises(Refused, match="deleted"):
                 retain_bundle(db, store, **kwargs)
+            if fresh:
+                from accessforge_orchestrator.finalize_execution import finalize
+
+                with pytest.raises(Refused):
+                    finalize(db, store, workspace_id=WS, run_id=ref.run_id)
         if case == "artifact-stored-corrupt":
             key = rows[0]["object_key"]
             store.put(
@@ -3512,7 +3646,7 @@ def _retain_stopped_artifact_case(
             assert client.get(endpoint).status_code == 404
             if case == "artifact-finalize-corrupt":
                 store.put(
-                    key=rows[0]["object_key"],
+                    key=setup_artifact["object_key"] if fresh else rows[0]["object_key"],
                     payload=b"corrupt",
                     content_type=rows[0]["content_type"],
                 )
