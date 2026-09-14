@@ -15,6 +15,13 @@ export interface AssertionRow {
   readonly actionSequence?: string
   readonly effectCount?: string
   readonly sequencePhrases?: readonly string[]
+  readonly suiteDigest?: string
+}
+
+export function functionalValidationCapability(policy: JourneyCapabilities) {
+  const rule = policy.evaluationRules?.PROTECTED_REFERENCE_VALIDATION
+  return rule && rule.assertionKind === 'FUNCTIONAL_VALIDATION' &&
+    typeof rule.suiteDigest === 'string' && /^[a-f0-9]{64}$/.test(rule.suiteDigest) ? rule : null
 }
 
 /** Only the supported bounded NEXT profile is offered; absent/malformed capability is not a default. */
@@ -84,6 +91,12 @@ export function validateAssertionRules(
       if (phrases.reduce((sum, phrase) => sum + new TextEncoder().encode(phrase).length, 0) > rule.maxTotalPhraseBytes) {
         add('action', `all step phrases together exceed ${rule.maxTotalPhraseBytes} UTF-8 bytes.`)
       }
+    } else if (row.kind === 'FUNCTIONAL_VALIDATION') {
+      const rule = functionalValidationCapability(policy)
+      if (!rule) add('enabled', 'this server cannot freeze the protected functional-validation rule.')
+      else if (row.suiteDigest !== rule.suiteDigest) {
+        add('enabled', 'the protected suite changed or is missing. Turn the rule off and on to review the current suite before freezing.')
+      }
     } else add('enabled', 'this assertion kind has no supported executable rule.')
   })
   return errors
@@ -91,13 +104,18 @@ export function validateAssertionRules(
 
 export function serializeAssertionRule(row: AssertionRow): Record<string, unknown> {
   if (!row.ruleEnabled) return {}
+  if (row.kind === 'FUNCTIONAL_VALIDATION') {
+    if (!row.suiteDigest || !/^[a-f0-9]{64}$/.test(row.suiteDigest)) throw new Error('Original protected suite unavailable')
+    return { evaluationRule: { type: 'PROTECTED_REFERENCE_VALIDATION', suiteDigest: row.suiteDigest } }
+  }
   if (row.kind === 'TASK_COMPLETION') {
     return { evaluationRule: { type: 'EFFECT_COUNT', effect: 'CREATE_TEST_REQUEST', count: Number(row.effectCount) } }
   }
   if (row.kind === 'READING_ORDER') return { evaluationRule: { type: 'READER_NEXT_SEQUENCE',
     steps: (row.sequencePhrases ?? []).map((phrase, index) => ({ actionSequence: Number(row.actionSequence) + index, phrase })),
   } }
-  return { evaluationRule: { type: 'EXACT_READER_PHRASE', actionSequence: Number(row.actionSequence), phrase: row.phrase } }
+  if (row.kind === 'REQUIRED_ANNOUNCEMENT') return { evaluationRule: { type: 'EXACT_READER_PHRASE', actionSequence: Number(row.actionSequence), phrase: row.phrase } }
+  throw new Error('Unsupported executable assertion kind')
 }
 
 export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, onChange }: {
@@ -116,6 +134,8 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
   }
   const reader = row.kind === 'REQUIRED_ANNOUNCEMENT'
   const order = row.kind === 'READING_ORDER'
+  const functional = row.kind === 'FUNCTIONAL_VALIDATION'
+  const functionalRule = functionalValidationCapability(policy)
   const sequenceRule = readingOrderCapability(policy)
   const pendingStepFocus = useRef<number | null>(null)
   useEffect(() => {
@@ -127,11 +147,12 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
   const available = reader
     ? policy.evaluationRules?.EXACT_READER_PHRASE?.assertionKind === row.kind
     : order ? sequenceRule !== null
+    : functional ? functionalRule !== null
     : row.kind === 'TASK_COMPLETION' && policy.evaluationRules?.EFFECT_COUNT?.assertionKind === row.kind &&
       policy.evaluationRules.EFFECT_COUNT.effect === 'CREATE_TEST_REQUEST'
   return (
     <fieldset className="af-panel af-stack" disabled={disabled}>
-      <legend>Assertion {index + 1} — {reader ? 'Reader announcement' : order ? 'Consecutive NEXT reading order' : 'Independent completion'}</legend>
+      <legend>Assertion {index + 1} — {reader ? 'Reader announcement' : order ? 'Consecutive NEXT reading order' : functional ? 'Protected functional validation' : 'Independent completion'}</legend>
       <FormField id={fieldId('description')} label={`Assertion ${index + 1} description`}
         hint="Describe the requirement for a reviewer. This description is not an executable matcher." required {...error('description')}>
         {({ id, describedBy, invalid }) => <input id={id} value={row.description} aria-describedby={describedBy}
@@ -141,12 +162,17 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
         hint={available ? 'The expected answer stays on the evaluator/observer side; it is not added to navigator instructions.'
           : 'This server does not advertise this rule. Upgrade the server before enabling it.'} {...error('enabled')}>
         {({ id, describedBy, invalid }) => <input id={id} type="checkbox" checked={row.ruleEnabled ?? false}
-          disabled={!available} aria-describedby={describedBy} aria-invalid={invalid || undefined}
+          disabled={!available && !row.ruleEnabled} aria-describedby={describedBy} aria-invalid={invalid || undefined}
           onChange={(event) => onChange({ ...row, ruleEnabled: event.target.checked,
             actionSequence: row.actionSequence ?? '1', effectCount: row.effectCount ?? '1', phrase: row.phrase ?? '',
-            sequencePhrases: row.sequencePhrases ?? ['', ''] })} />}
+            sequencePhrases: row.sequencePhrases ?? ['', ''],
+            ...(functional && event.target.checked && functionalRule ? { suiteDigest: functionalRule.suiteDigest } : {}) })} />}
       </FormField>
       {!row.ruleEnabled && <p className="af-secondary">No executable rule: this condition remains UNKNOWN when evaluated; prose alone cannot establish it.</p>}
+      {row.ruleEnabled && functional && <FormField id={fieldId('suite')} label={`Assertion ${index + 1} protected suite digest`}
+        hint="Fixed by the server, not editable here. The protected worker must prove that invalid reference-form submissions are rejected without writes. Missing evidence remains UNKNOWN; this is not reader or task-completion proof.">
+        {({ id, describedBy }) => <textarea id={id} rows={2} readOnly value={row.suiteDigest ?? ''} aria-describedby={describedBy} />}
+      </FormField>}
       {row.ruleEnabled && reader && <>
         <FormField id={fieldId('action')} label={`Assertion ${index + 1} action sequence`} required {...error('action')}
           hint="The exact action after which to compare the retained utterance. Leave one action-budget slot for the required STOP.">

@@ -38,7 +38,7 @@ import { freezeJourneyVersion, getJourneyCapabilities } from '../api/resources'
 import type { FrozenVersion, JourneyCapabilities } from '../api/resources'
 import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
-import { AssertionEditor, assertionFieldId, readingOrderCapability, serializeAssertionRule, validateAssertionRules } from './AssertionEditor'
+import { AssertionEditor, assertionFieldId, functionalValidationCapability, readingOrderCapability, serializeAssertionRule, validateAssertionRules } from './AssertionEditor'
 import type { AssertionRow } from './AssertionEditor'
 
 const STARTING_ASSERTIONS: readonly AssertionRow[] = [
@@ -593,12 +593,12 @@ export const JourneyAuthoringSection = ({
                       errors={errors} disabled={busy}
                       onChange={(value) => setAssertions((current) => current.map((row) =>
                         row.assertionId === value.assertionId ? value : row))} />
-                    {['REQUIRED_ANNOUNCEMENT', 'READING_ORDER'].includes(assertion.kind) && <Button disabled={busy}
+                    {['REQUIRED_ANNOUNCEMENT', 'READING_ORDER', 'FUNCTIONAL_VALIDATION'].includes(assertion.kind) && <Button disabled={busy}
                       onClick={() => {
                         setAssertions((current) => current.filter((row) => row.assertionId !== assertion.assertionId))
                         setErrors([])
                         announce(`Assertion ${index + 1} removed from this draft.`)
-                        document.getElementById(`${assertionsId}-${assertion.kind === 'READING_ORDER' ? 'add-order' : 'add'}`)?.focus()
+                        document.getElementById(`${assertionsId}-${assertion.kind === 'READING_ORDER' ? 'add-order' : assertion.kind === 'FUNCTIONAL_VALIDATION' ? 'add-functional' : 'add'}`)?.focus()
                       }}>Remove assertion {index + 1}</Button>}
                   </div>
                 ))}
@@ -629,6 +629,17 @@ export const JourneyAuthoringSection = ({
                       required: true, unknownReasons: ['READER_UNAVAILABLE', 'OBSERVATION_MISSING'],
                       sequencePhrases: ['', ''] }])
                   }}>Add a consecutive reading-order assertion</Button>
+                <Button id={`${assertionsId}-add-functional`}
+                  disabled={busy || !policy.assertionKinds.includes('FUNCTIONAL_VALIDATION') || functionalValidationCapability(policy) === null}
+                  onClick={() => {
+                    const assertionId = `functional-${crypto.randomUUID()}`
+                    pendingAssertionFocus.current = assertionId
+                    setAssertions((current) => [...current, { assertionId, kind: 'FUNCTIONAL_VALIDATION', description: '',
+                      required: true, unknownReasons: ['OBSERVATION_MISSING'] }])
+                  }}>Add a protected functional-validation assertion</Button>
+                {functionalValidationCapability(policy) === null && <p className="af-secondary">
+                  Protected functional-validation authoring requires a server-advertised suite; none is available.
+                </p>}
               </fieldset>
 
               <Button type="submit" variant="primary" busy={busy}>
