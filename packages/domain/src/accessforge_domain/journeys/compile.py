@@ -102,27 +102,29 @@ def compile_journey(draft: JourneyDraft, *, version_id: str | None = None) -> Co
     }
     navigator_policy_digest = digest(navigator_policy)
 
-    journey_digest = digest(
-        {
-            "name": draft.name,
-            "platform": draft.platform,
-            "intent": {
-                "summary": draft.intent.summary,
-                "startUrl": draft.intent.start_url,
-                "successCondition": draft.intent.success_condition,
-            },
-            "assertionSetDigest": assertion_set_digest,
-            "fixtureDigest": fixture_digest,
-            "navigatorPolicyDigest": navigator_policy_digest,
-            "allowedEffects": sorted(draft.allowed_effects),
-            "budget": {
-                "maxActions": draft.budget.max_actions,
-                "wallTimeSeconds": draft.budget.wall_time_seconds,
-            },
-        }
-    )
+    journey_contract = {
+        "name": draft.name,
+        "platform": draft.platform,
+        "intent": {
+            "summary": draft.intent.summary,
+            "startUrl": draft.intent.start_url,
+            "successCondition": draft.intent.success_condition,
+        },
+        "assertionSetDigest": assertion_set_digest,
+        "fixtureDigest": fixture_digest,
+        "navigatorPolicyDigest": navigator_policy_digest,
+        "allowedEffects": sorted(draft.allowed_effects),
+        "budget": {
+            "maxActions": draft.budget.max_actions,
+            "wallTimeSeconds": draft.budget.wall_time_seconds,
+        },
+    }
+    journey_digest = digest(journey_contract)
 
     reviewer_summary: dict[str, object] = {
+        # Retain the exact hash preimage at creation. The finalizer must not reconstruct a
+        # historical journey from today's compiler or copy the manifest's claimed identity.
+        "journeyContract": journey_contract,
         # Stored on the protected reviewer side, never copied into navigator_policy. This is the
         # original complete contract (including optional assertions), not a reconstruction of prose.
         "assertionContract": draft.assertions.canonical_form(),

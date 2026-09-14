@@ -72,6 +72,55 @@ def load_assertion_contract(
     return result
 
 
+def load_journey_contract_digest(
+    conn: psycopg.Connection[Any],
+    *,
+    version_id: str,
+    expected_digest: str,
+    assertion_digest: str,
+    fixture_digest: str,
+    policy_digest: str,
+) -> str | None:
+    """Rehash the original protected journey used by this evaluator and navigator.
+
+    Older immutable versions have no preimage and remain unobserved. Never backfill them from
+    descriptions or seals. This is logical contract identity, not physical runner attestation.
+    """
+    row = conn.execute(
+        "SELECT journey_digest,reviewer_summary,navigator_policy FROM journey_version WHERE id=%s",
+        (version_id,),
+    ).fetchone()
+    if row is None or not isinstance(row["reviewer_summary"], dict):
+        raise JourneyPersistenceError("original journey version unavailable")
+    summary = row["reviewer_summary"]
+    if "journeyContract" not in summary:
+        return None
+    contract = summary["journeyContract"]
+    if (
+        not isinstance(contract, dict)
+        or set(contract)
+        != {
+            "name",
+            "platform",
+            "intent",
+            "assertionSetDigest",
+            "fixtureDigest",
+            "navigatorPolicyDigest",
+            "allowedEffects",
+            "budget",
+        }
+        or row["journey_digest"] != expected_digest
+        or digest(contract) != expected_digest
+        or contract["assertionSetDigest"] != assertion_digest
+        or contract["fixtureDigest"] != fixture_digest
+        or contract["navigatorPolicyDigest"] != policy_digest
+        or not isinstance(row["navigator_policy"], dict)
+        or digest(row["navigator_policy"]) != policy_digest
+    ):
+        raise JourneyPersistenceError("original journey contract or policy binding differs")
+    return digest(contract)
+
+
 def _as_uuid(value: str, *, what: str, field: str | None = None) -> str:
     """Refuse a value that is not a UUID, before it reaches a UUID comparison.
 

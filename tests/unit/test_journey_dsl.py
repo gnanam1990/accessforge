@@ -11,9 +11,12 @@ Invariants: INV-01, INV-02, INV-03, INV-04, INV-05, INV-08, INV-16.
 from __future__ import annotations
 
 import dataclasses
+from copy import deepcopy
+from typing import Any, cast
 
 import pytest
 
+from accessforge_domain.canonical import digest
 from accessforge_domain.journeys import (
     ASSERTION_OBSERVERS,
     ActionBudget,
@@ -29,6 +32,10 @@ from accessforge_domain.journeys import (
     UnknownReason,
     compile_journey,
     validate_draft,
+)
+from accessforge_persistence.journeys import (
+    JourneyPersistenceError,
+    load_journey_contract_digest,
 )
 
 # --- the E0 journey: form-error recovery ------------------------------------------------------
@@ -83,6 +90,60 @@ def e0_assertions() -> AssertionSet:
             ),
         )
     )
+
+
+@pytest.mark.parametrize(
+    "change", ["none", "legacy", "contract", "policy", "assertion", "fixture", "row", "null"]
+)
+def test_original_journey_preimage_is_bound_without_backfilling_legacy_versions(
+    change: str,
+) -> None:
+    compiled = compile_journey(e0_draft())
+    version = compiled.version
+    row: dict[str, Any] = {
+        "journey_digest": version.journey_digest,
+        "reviewer_summary": deepcopy(compiled.reviewer_summary),
+        "navigator_policy": deepcopy(compiled.navigator_policy),
+    }
+    assert digest(row["reviewer_summary"]["journeyContract"]) == version.journey_digest
+    assert "journeyContract" not in compiled.navigator_policy
+    expected = {
+        "version_id": version.version_id,
+        "expected_digest": version.journey_digest,
+        "assertion_digest": version.assertion_set_digest,
+        "fixture_digest": version.fixture_digest,
+        "policy_digest": version.navigator_policy_digest,
+    }
+    if change == "legacy":
+        del row["reviewer_summary"]["journeyContract"]
+    elif change == "contract":
+        row["reviewer_summary"]["journeyContract"]["name"] = "different"
+    elif change == "policy":
+        row["navigator_policy"]["maxActions"] = 999
+    elif change in {"assertion", "fixture"}:
+        expected[f"{change}_digest"] = "0" * 64
+    elif change == "row":
+        row["journey_digest"] = "0" * 64
+    elif change == "null":
+        row["reviewer_summary"]["journeyContract"] = None
+
+    class Connection:
+        def execute(self, query: str, params: tuple[str]) -> Connection:
+            assert "FROM journey_version WHERE id=%s" in query
+            assert params == (version.version_id,)
+            return self
+
+        def fetchone(self) -> dict[str, Any]:
+            return row
+
+    conn = cast(Any, Connection())
+    if change in {"none", "legacy"}:
+        assert load_journey_contract_digest(conn, **expected) == (
+            None if change == "legacy" else version.journey_digest
+        )
+    else:
+        with pytest.raises(JourneyPersistenceError, match="binding differs"):
+            load_journey_contract_digest(conn, **expected)
 
 
 def e0_draft(**over: object) -> JourneyDraft:
