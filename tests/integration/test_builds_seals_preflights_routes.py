@@ -3001,6 +3001,16 @@ def _check_runtime_preflight(
         "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "checks": {str(key): "UNKNOWN" for key in REQUIRED_PREFLIGHT_CHECKS},
     }
+    if sequence % 2:
+        source["runnerProfile"] = {
+            "platform": "darwin",
+            "readerName": "VoiceOver",
+            "readerVersion": "bundled with macOS 26.6 (build 25G72)",
+            "browserName": "Safari",
+            "browserVersion": "26.6",
+            "locale": "en-US",
+            "keyboardLayout": "com.apple.keylayout.US",
+        }
     envelope = {"sourceRecord": source, "sourceRecordDigest": digest(source)}
     url = action_url + "/preflight"
     assert client.post(url, json=envelope).status_code == 401
@@ -3011,6 +3021,8 @@ def _check_runtime_preflight(
         {**source, "checks": {str(key): True for key in REQUIRED_PREFLIGHT_CHECKS}},
         {**source, "capturedAtUtc": "2000-01-01T00:00:00Z"},
         {**source, "diagnostic": "private host path must not be retained"},
+        {**source, "runnerProfile": None},
+        {**source, "runnerProfile": {"platform": "darwin", "privatePath": "/private"}},
     ):
         assert (
             client.post(

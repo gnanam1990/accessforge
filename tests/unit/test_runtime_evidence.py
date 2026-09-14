@@ -15,6 +15,38 @@ from accessforge_orchestrator.runtime_evidence import interpret
 CONTEXT = {"workspace_id": "workspace", "run_id": "run", "lease_id": "lease", "epoch": 1}
 
 
+@pytest.mark.parametrize("case", ["complete", "missing", "changed", "unknown", "extra"])
+def test_runner_profile_requires_complete_matching_observations(case: str) -> None:
+    snapshots = fixture()
+    profile = {
+        "platform": "darwin",
+        "readerName": "VoiceOver",
+        "readerVersion": "bundled with macOS 26.6 (build 25G72)",
+        "browserName": "Safari",
+        "browserVersion": "26.6",
+        "locale": "en-US",
+        "keyboardLayout": "com.apple.keylayout.US",
+    }
+    reports = snapshots["PREFLIGHT_RECORD"]["records"]
+    for report in reports:
+        report["payload"]["sourceRecord"]["runnerProfile"] = dict(profile)
+    first = reports[0]["payload"]["sourceRecord"]
+    if case == "missing":
+        del first["runnerProfile"]
+    elif case == "changed":
+        first["runnerProfile"]["locale"] = "en-GB"
+    elif case == "unknown":
+        first["checks"]["DESKTOP_SESSION_OWNED"] = "UNKNOWN"
+    elif case == "extra":
+        first["runnerProfile"]["privatePath"] = "/private"
+    if case == "extra":
+        with pytest.raises(Refused):
+            interpret(snapshots, CONTEXT)
+    else:
+        result = interpret(snapshots, CONTEXT)
+        assert result.observed_runner_profile == (digest(profile) if case == "complete" else None)
+
+
 def fixture() -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     reports: list[dict[str, Any]] = []
@@ -76,6 +108,7 @@ def test_complete_runtime_reports_use_measurement_not_sealed_build() -> None:
     assert result.observed_source is None
     assert result.reasons == (
         "captured source-to-build lineage does not cover every original action",
+        "matching observed runner profiles do not cover every original action",
     )
 
 
@@ -118,7 +151,11 @@ def _with_lineage() -> dict[str, Any]:
 def test_source_is_the_captured_input_linked_to_every_measured_build() -> None:
     result = interpret(_with_lineage(), CONTEXT)
     assert result.observed_source == "c" * 64  # Not the output archive digest or a sealed input.
-    assert result.observed_build == "a" * 64 and not result.reasons
+    assert result.observed_build == "a" * 64
+    assert result.observed_runner_profile is None
+    assert result.reasons == (
+        "matching observed runner profiles do not cover every original action",
+    )
 
 
 @pytest.mark.parametrize("fault", ["missing", "different-source", "build-unknown"])

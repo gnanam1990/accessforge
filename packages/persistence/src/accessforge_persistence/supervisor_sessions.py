@@ -469,7 +469,11 @@ def retain_runtime_preflight(
     if (
         set(record) != {"sourceRecord", "sourceRecordDigest"}
         or not isinstance(source, dict)
-        or set(source) != {"actionId", "actionSequence", "capturedAtUtc", "checks"}
+        or set(source)
+        not in (
+            {"actionId", "actionSequence", "capturedAtUtc", "checks"},
+            {"actionId", "actionSequence", "capturedAtUtc", "checks", "runnerProfile"},
+        )
         or source["actionId"] != action_id
         or type(source["actionSequence"]) is not int
         or source["actionSequence"] != action["action_sequence"]
@@ -480,6 +484,13 @@ def retain_runtime_preflight(
         or len(source["capturedAtUtc"]) > 40
     ):
         raise Refused("closed action-bound runtime preflight required")
+    if "runnerProfile" in source:
+        from accessforge_domain.runners.runtime_profile import observed_profile
+
+        try:
+            observed_profile(source["runnerProfile"])
+        except ValueError as exc:
+            raise Refused("runtime profile fields unavailable") from exc
     try:
         captured = parse_rfc3339_utc(source["capturedAtUtc"])
         source_digest = digest(source)

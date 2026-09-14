@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { BLOCKED_REASON, TARGET_MACOS_VERSION, TARGET_MATRIX } from './profile.js';
+import { observeRunnerProfile, type ObservedRunnerProfile } from './runner-profile.js';
 
 /** Mirrors `accessforge_domain.states.Condition`. UNKNOWN is a value, not an error. */
 export type Condition = 'TRUE' | 'FALSE' | 'UNKNOWN';
@@ -55,6 +56,9 @@ export interface ProbeResult {
 }
 
 export interface ProbeEnvironment {
+  readonly platform?: () => string;
+  /** Read current locale and active keyboard input source; never target/enrollment values. */
+  readonly localeAndKeyboard?: () => { readonly locale: string; readonly keyboardLayout: string } | undefined;
   /** Whether a path exists. Injected so tests do not need a configured VoiceOver. */
   readonly pathExists: (path: string) => boolean;
   /** Reads a macOS preference. Returns undefined when absent or unreadable. */
@@ -349,6 +353,8 @@ export function probeDesktopOwned(env: ProbeEnvironment, expectedSessionId?: str
 }
 
 export interface PreflightReport {
+  /** Absent when any exact field cannot be observed. This is not physical-reader attestation. */
+  readonly runnerProfile?: ObservedRunnerProfile;
   readonly checks: Readonly<Record<PreflightCheck, ProbeResult>>;
   /** Checks an operator must act on, with instructions. */
   readonly operatorActions: readonly string[];
@@ -418,6 +424,7 @@ export function runPreflight(
   env: ProbeEnvironment,
   evidence: RuntimeProbeEvidence = {},
 ): PreflightReport {
+  const runnerProfile = observeRunnerProfile(env);
   const checks = {
     READER_ACTIVE: probeReaderActive(env),
     READER_VERSION_MATCHES_PROFILE: probeReaderVersion(env),
@@ -464,6 +471,7 @@ export function runPreflight(
 
   return {
     checks,
+    ...(runnerProfile === undefined ? {} : { runnerProfile }),
     operatorActions,
     realReaderAvailable: false,
     blockedReason: BLOCKED_REASON,
@@ -480,6 +488,23 @@ export function createHostEnvironment(options: HostEnvironmentOptions = {}): Pro
   const run = options.run ?? systemRun;
   const pathExists = options.pathExists ?? existsSync;
   return {
+    platform: () => process.platform,
+    localeAndKeyboard: () => {
+      const result = run('/usr/bin/xcrun', ['swift', '-e',
+        'import Foundation; import Carbon; ' +
+        'guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(), ' +
+        'let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { exit(2) }; ' +
+        'let key = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String; ' +
+        'let data = try JSONSerialization.data(withJSONObject: ["locale": Locale.current.identifier, "keyboardLayout": key]); ' +
+        'print(String(data: data, encoding: .utf8)!)',
+      ]);
+      if (result.status !== 0 || result.stdout.length > 1024) return undefined;
+      try {
+        const value = JSON.parse(result.stdout) as Record<string, unknown>;
+        if (typeof value.locale !== 'string' || typeof value.keyboardLayout !== 'string') return undefined;
+        return { locale: value.locale, keyboardLayout: value.keyboardLayout };
+      } catch { return undefined; }
+    },
     pathExists,
     readPreference: (domain, key) => {
       const result = run('/usr/bin/defaults', ['read', domain, key]);
