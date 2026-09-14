@@ -712,6 +712,7 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
     manual_seal: dict[str, Any],
     preview_fault: str | None,
     client: TestClient,
+    csrf: str,
 ) -> None:
     from accessforge_domain.authorization import HumanPrincipal, Role
     from accessforge_orchestrator.github_check_preview import Refused
@@ -784,7 +785,23 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
     from accessforge_orchestrator.github_preview_approval import approve_preview, store_preview
     from accessforge_persistence import approvals, github_previews
 
-    stored = store_preview(db, principal=principal, binding_id=binding_id, run_id=manifest["runId"])
+    previews_url = f"/v1/workspaces/{WS}/github/publication-previews"
+    preview_body = {"bindingId": binding_id, "runId": manifest["runId"]}
+    preview_headers = {CSRF_HEADER: csrf, "Idempotency-Key": "github-preview-first"}
+    assert client.post(previews_url, json=preview_body).status_code == 403
+    created_preview = client.post(previews_url, json=preview_body, headers=preview_headers)
+    assert created_preview.status_code == 201, created_preview.text
+    assert created_preview.headers["cache-control"] == "no-store"
+    stored = created_preview.json()
+    assert client.post(previews_url, json=preview_body, headers=preview_headers).json() == stored
+    assert (
+        client.post(
+            previews_url,
+            json={**preview_body, "runId": str(uuid.uuid4())},
+            headers=preview_headers,
+        ).status_code
+        == 409
+    )
     preview_id, expected = stored["previewId"], stored["preview"]["previewDigest"]
     with workspace_connection(db, str(uuid.UUID(int=0x9FF))) as conn:
         with pytest.raises(github_previews.Refused, match="unavailable"):
@@ -884,11 +901,30 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
         assert conn.execute("SELECT * FROM github_publication_intent").fetchall() == []
     # Creating and explicitly approving a different preview does not reopen the create slot.
     again = store_preview(db, principal=principal, binding_id=binding_id, run_id=manifest["runId"])
-    again_approval = approve_preview(
-        db,
-        principal=principal,
-        preview_id=again["previewId"],
-        expected_digest=again["preview"]["previewDigest"],
+    approval_url = previews_url + "/" + again["previewId"] + "/approval"
+    approval_body = {"previewDigest": again["preview"]["previewDigest"]}
+    approval_headers = {CSRF_HEADER: csrf, "Idempotency-Key": "github-approval-once"}
+    assert client.post(approval_url, json=approval_body).status_code == 403
+    assert (
+        client.post(
+            approval_url,
+            json={"previewDigest": "0" * 64},
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 409
+    )
+    approved = client.post(approval_url, json=approval_body, headers=approval_headers)
+    assert approved.status_code == 201, approved.text
+    assert approved.headers["cache-control"] == "no-store"
+    assert approved.json()["meaning"] == "RECORDED_DECISION_NOT_CURRENT_AUTHORITY"
+    again_approval = approved.json()["approvalId"]
+    assert (
+        client.post(approval_url, json=approval_body, headers=approval_headers).json()
+        == approved.json()
+    )
+    assert (
+        client.post(approval_url, json=approval_body, headers={CSRF_HEADER: csrf}).status_code
+        == 409
     )
     assert (
         read_publication_state(db, principal=principal, preview_id=again["previewId"]) == recovered
@@ -916,6 +952,30 @@ def test_github_preview_reads_original_seal_and_live_local_authority(
             with pytest.raises(AuthorityError):
                 replace(approval, scope=other_scope).check(**check)
         assert approvals.revoke_approval(conn, approval_id=decision)
+    revocation_url = approval_url + "/revocation"
+    revocation_body = {"approvalId": again_approval}
+    assert client.post(revocation_url, json=revocation_body).status_code == 403
+    assert (
+        client.post(
+            revocation_url,
+            json={"approvalId": decision},
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 409
+    )
+    for _ in range(2):
+        revoked = client.post(revocation_url, json=revocation_body, headers={CSRF_HEADER: csrf})
+        assert revoked.status_code == 200 and revoked.json()["revoked"] is True
+    # A replay returns the recorded decision, never renews a revoked approval.
+    assert (
+        client.post(approval_url, json=approval_body, headers=approval_headers).json()
+        == approved.json()
+    )
+    with workspace_connection(db, WS) as conn:
+        assert approvals.load_for_check(conn, approval_id=again_approval).revoked
+        assert conn.execute(
+            "SELECT count(*) AS n FROM audit_event WHERE action='GITHUB_PREVIEW_APPROVAL_REVOKE'"
+        ).fetchone() == {"n": 1}
     with pytest.raises(psycopg.IntegrityError):
         approve_preview(db, principal=principal, preview_id=fresh_id, expected_digest=fresh_digest)
     with workspace_connection(db, WS) as conn:
