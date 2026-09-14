@@ -1607,6 +1607,47 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             assert functional_regression_evidence.VALIDATION_CHECKS.issubset(functional["checks"])
             assert history["context"]["nonce"] not in json.dumps(functional)
             assert all(process["state"] == "REMOVED" for process in functional["processes"])
+            from accessforge_domain.canonical import canonicalize
+            from accessforge_persistence.evidence import artifacts
+
+            session = conn.execute(
+                "SELECT l.workspace_id,l.run_id,l.id AS lease_id,l.epoch,l.attempt_id,"
+                "r.manifest_digest FROM desktop_lease l JOIN run r "
+                "ON r.id=l.run_id AND r.workspace_id=l.workspace_id WHERE l.id=%s",
+                (functional["leaseId"],),
+            ).fetchone()
+            assert session is not None
+            bundle = functional_regression_evidence.snapshot(conn, session)
+            assert bundle["receipt"] == functional
+            assert bundle["receiptDigest"] == digest(functional)
+            with pytest.raises(builds.BuildClaimRefused):
+                functional_regression_evidence.snapshot(
+                    conn, {**session, "epoch": session["epoch"] + 1}
+                )
+            payload = canonicalize(bundle).encode()
+            artifact = artifacts.upload_to_quarantine(
+                conn,
+                store,
+                workspace_id=binding.workspace,
+                run_id=str(session["run_id"]),
+                attempt_id=str(session["attempt_id"]),
+                kind="FUNCTIONAL_REGRESSION",
+                producer_id=bundle["producerId"],
+                lease_epoch=session["epoch"],
+                manifest_digest=session["manifest_digest"],
+                content_type="application/json",
+                payload=payload,
+            )
+            artifacts.promote(
+                conn,
+                store,
+                artifact_id=artifact.artifact_id,
+                expected_manifest_digest=session["manifest_digest"],
+            )
+            assert store.get(key=artifact.object_key) == payload
+            assert conn.execute(
+                "SELECT state FROM evidence_artifact WHERE id=%s", (artifact.artifact_id,)
+            ).fetchone() == {"state": "PROMOTED"}
         with workspace_connection(binding.database, str(uuid.uuid4())) as other:
             from accessforge_persistence import functional_regression_evidence
 

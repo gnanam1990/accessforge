@@ -190,7 +190,7 @@ def _bundle(
     producers = {
         kind: producer
         for kind, producer in required.items()
-        if kind not in {"RUNNER_JOURNAL", "MODEL_RUNTIME", "FIXTURE_SETUP"}
+        if kind not in {"RUNNER_JOURNAL", "MODEL_RUNTIME", "FIXTURE_SETUP", "FUNCTIONAL_REGRESSION"}
     }
     streams = conn.execute(
         "SELECT * FROM producer_stream WHERE attempt_id=%s", (row["attempt_id"],)
@@ -256,6 +256,23 @@ def _bundle(
             required["FIXTURE_SETUP"],
             "application/json",
             canonicalize(original_setup).encode(),
+        )
+    if "FUNCTIONAL_REGRESSION" in required:
+        from accessforge_persistence.functional_regression_evidence import (
+            Refused as FunctionalRefused,
+        )
+        from accessforge_persistence.functional_regression_evidence import (
+            snapshot as functional_snapshot,
+        )
+
+        try:
+            original_functional = functional_snapshot(conn, row)
+        except FunctionalRefused as exc:
+            raise Refused("original completed functional regression evidence unavailable") from exc
+        result["FUNCTIONAL_REGRESSION"] = (
+            required["FUNCTIONAL_REGRESSION"],
+            "application/json",
+            canonicalize(original_functional).encode(),
         )
     for kind, producer in producers.items():
         content = {
