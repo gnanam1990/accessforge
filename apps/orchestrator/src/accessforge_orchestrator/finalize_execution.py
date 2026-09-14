@@ -35,6 +35,7 @@ from accessforge_orchestrator.execution_artifacts import (
     _bundle,
     _context,
 )
+from accessforge_orchestrator.fixture_evidence import observed_fixture
 from accessforge_orchestrator.runtime_evidence import interpret as interpret_runtime
 from accessforge_orchestrator.runtime_evidence import observed_model, reader_samples
 from accessforge_persistence import evaluations, journeys, runs, workspace_connection
@@ -42,7 +43,7 @@ from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements
 
-EVALUATOR_VERSION = "1.7.0"
+EVALUATOR_VERSION = "1.8.0"
 
 
 def _retained(
@@ -202,6 +203,17 @@ def _decide(
     model_digest = observed_model(snapshots, row)
     if model_digest is not None:
         observed[IdentityKind.MODEL] = model_digest
+    fixture_digest = observed_fixture(
+        setup=snapshots.get("FIXTURE_SETUP"),
+        final_source=source,
+        context=row,
+        fixture=conn.execute(
+            "SELECT * FROM run_fixture_instance WHERE run_id=%s AND workspace_id=%s",
+            (row["run_id"], row["workspace_id"]),
+        ).fetchone(),
+    )
+    if fixture_digest is not None:
+        observed[IdentityKind.FIXTURE_INSTANCE] = fixture_digest
     runtime = interpret_runtime(snapshots, row)
     if runtime.observed_build is not None:
         observed[IdentityKind.BUILD] = runtime.observed_build
