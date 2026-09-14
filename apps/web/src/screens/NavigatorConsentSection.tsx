@@ -42,6 +42,7 @@ const ConsentPanel = ({ workspaceId, run, canApprove, onClose }: {
 }): JSX.Element => {
   const { client } = useSession()
   const [search, setSearch] = useSearchParams()
+  const address = useRef({ search, setSearch }); address.current = { search, setSearch }
   const attempted = search.has(OPERATION)
   const history = useResource(signal => readNavigatorConsent(client, workspaceId, run.runId, signal), [client, workspaceId, run.runId])
   const [busy, setBusy] = useState(false)
@@ -111,11 +112,15 @@ const ConsentPanel = ({ workspaceId, run, canApprove, onClose }: {
     const refused = result.kind === 'problem' &&
       ((result.problem.status === 400 && result.problem.code === 'INVALID_INPUT') ||
        (result.problem.status === 403 && ['PERMISSION_DENIED', 'CSRF_REQUIRED'].includes(result.problem.code)))
-    if (refused) setSearch(current => {
-      const updated = new URLSearchParams(current)
-      if (updated.get(OPERATION) === key) updated.delete(OPERATION)
-      return updated
-    }, { replace: true })
+    if (refused) {
+      // Router setters capture a render's search parameters; unlike React state updaters,
+      // their callback does not read the newest location after an awaited request.
+      const updated = new URLSearchParams(address.current.search)
+      if (!updated.has(OPERATION) || updated.get(OPERATION) === key) {
+        updated.delete(OPERATION)
+        address.current.setSearch(updated, { replace: true })
+      }
+    }
     setMessage(result.kind === 'ok' ? 'Model consent stored. No provider or desktop work was started by this button.' :
       refused ? 'The server refused this request before storing consent. Read the current state and review a new scope before submitting again.' : failure(result))
     history.reload()

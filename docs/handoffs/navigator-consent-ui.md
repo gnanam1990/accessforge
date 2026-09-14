@@ -10,7 +10,8 @@ provider, a runner process, reader startup or a desktop action.
   consent and invocation history. The server remains authoritative for roles and execution approval.
 - The review displays provider/model/region, the full sealed profile and both digests, reserved
   tokens per call, maximum calls, UTC expiry and billable disclosure. The checkbox starts unchecked;
-  changing either limit clears it. A grant uses the reviewed revision and manifest with a fresh
+  changing either limit clears it. The server caps the offered model calls at 500 even when execution
+  permits more actions. A grant uses the reviewed revision and manifest with a fresh
   idempotency key. The server derives the approver from the current session.
 - Invalid fields retain linked inline errors and focus the existing ErrorSummary. Pending controls
   remain mounted and disable concurrent submit, close and history refresh. Workspace/run/actor/
@@ -50,3 +51,10 @@ acceptance, provider invocation, deployment or end-to-end E0 completion.
 
 The real platform readiness matrix, independent observer, scoped execution/reader approvals and
 billable-call authorization remain mandatory. This delivery does not alter those gates.
+
+Follow-up review corrected non-string invocation status coercion and the server scope's model-call
+cap. CI exposed two assertions observing URL navigation before it committed; they now await the
+actual address while still requiring removal of only the operation marker and preservation of
+unrelated search parameters. The component uses the newest router location/setter after its awaited
+request, not a stale render's search parameters. A local verification command intended to select
+the new file instead ran all 22 web test files once (392 tests passed); no repeat suite was run.

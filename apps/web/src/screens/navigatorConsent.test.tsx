@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { expect, it } from 'vitest'
@@ -126,10 +126,10 @@ it('retains an unknown write marker through close, reopen and a new mount withou
 })
 
 it.each([400, 403])('allows fresh explicit review after a recognised pre-write refusal (%s)', async status => {
-  const f = fixture({ beforeWrite: async () => problem(status, status === 400 ? 'INVALID_INPUT' : 'PERMISSION_DENIED') }), user = await review()
+  const f = fixture({ address: '/run?panel=cost', beforeWrite: async () => problem(status, status === 400 ? 'INVALID_INPUT' : 'PERMISSION_DENIED') }), user = await review()
   await submit(user)
   await screen.findByText(/server refused this request before storing/)
-  expect(screen.getByLabelText('Current address')).toBeEmptyDOMElement()
+  await waitFor(() => expect(screen.getByLabelText('Current address')).toHaveTextContent(/^\?panel=cost$/))
   await user.click(await screen.findByRole('button', { name: 'Review model disclosure and limits' }))
   expect(await screen.findByRole('checkbox')).not.toBeChecked()
   expect(f.writes).toHaveLength(1)
@@ -195,5 +195,6 @@ it('validates closed model fields, exact run identity and invocation states befo
   expect(parseNavigatorConsent({ ...grant, invocations: [call] }, run.runId)).not.toBeNull()
   expect(parseNavigatorConsent({ ...grant, invocations: [call, call] }, run.runId)).toBeNull()
   expect(parseNavigatorConsent({ ...grant, invocations: [{ ...call, status: 'SUCCEEDED' }] }, run.runId)).toBeNull()
+  expect(parseNavigatorConsent({ ...grant, invocations: [{ ...call, status: ['STARTED'], finishedAt: call.createdAt }] }, run.runId)).toBeNull()
   expect(parseNavigatorConsent({ ...grant, invocations: [{ ...call, status: 'UNCONFIRMED' }] }, run.runId)).toBeNull()
 })

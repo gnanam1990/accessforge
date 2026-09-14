@@ -76,7 +76,8 @@ export function parseNavigatorConsent(value: unknown, runId: string): NavigatorC
   for (const call of value.invocations) {
     if (!object(call) || !uuid(call.operationId) || ids.has(call.operationId) ||
         !integer(call.afterActionSequence, 0, 499) || !utc(call.createdAt) ||
-        !['STARTED', 'RECORDED', 'UNCONFIRMED', 'NOT_CALLED'].includes(String(call.status)) ||
+        typeof call.status !== 'string' ||
+        !['STARTED', 'RECORDED', 'UNCONFIRMED', 'NOT_CALLED'].includes(call.status) ||
         call.reservedTokens !== value.tokensPerCall ||
         !(call.status === 'STARTED' ? call.finishedAt === null : utc(call.finishedAt))) return null
     ids.add(call.operationId)

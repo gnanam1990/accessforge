@@ -71,7 +71,8 @@ def review_scope(
         "manifestDigest": run["manifest_digest"],
         "modelConfigDigest": manifest["modelConfigDigest"],
         "modelProfile": profile,
-        "maximumCalls": manifest["actionBudget"],
+        # A larger execution action budget cannot widen the model-consent call cap.
+        "maximumCalls": min(manifest["actionBudget"], 500),
         "tokensPerCall": reserved_tokens(profile),
         "maximumExpiresAt": to_rfc3339_utc(
             min(approval["expires_at"], parse_rfc3339_utc(manifest["expiresAt"]))
