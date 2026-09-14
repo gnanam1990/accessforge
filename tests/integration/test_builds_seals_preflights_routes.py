@@ -1121,6 +1121,66 @@ def test_baseline_archive_retention_boundary(
                             conn, run_id=binding["run_id"], lease_id=lease_id, epoch=1
                         )
                         runtime.assert_active(conn, claim=task)
+                        from accessforge_persistence import baseline_observations as observations
+
+                        measured_at = conn.execute("SELECT clock_timestamp() AS now").fetchone()[
+                            "now"
+                        ]
+                        measurement = dict(
+                            taskId=task.attempt_id,
+                            candidateId=identity["candidateId"],
+                            imageId=inputs["image_id"],
+                            daemonId=inputs["daemon_id"],
+                            artifactDigest=artifact.archive_digest,
+                            artifactTreeDigest="f" * 64,
+                            observedAt=to_rfc3339_utc(measured_at),
+                            meaning="DEPLOYED_FILESYSTEM_MEASUREMENT_NOT_EXECUTION_ATTESTATION",
+                        )
+                        measured_receipt = observations.retain(
+                            conn, claim=task, observation=measurement
+                        )
+                        assert (
+                            observations.retain(conn, claim=task, observation=measurement)
+                            == measured_receipt
+                        )
+                        sample_session = dict(
+                            workspace_id=WS,
+                            run_id=binding["run_id"],
+                            lease_id=lease_id,
+                            epoch=1,
+                        )
+                        sample_manifest = {"buildArtifactDigest": artifact.archive_digest}
+                        assert (
+                            observations.for_runtime_preflight(
+                                conn,
+                                session=sample_session,
+                                dispatched_at=measured_at,
+                                captured_at=measured_at,
+                                manifest=sample_manifest,
+                            )
+                            == measured_receipt
+                        )
+                        assert (
+                            observations.for_runtime_preflight(
+                                conn,
+                                session=sample_session,
+                                dispatched_at=measured_at + timedelta(seconds=1),
+                                captured_at=measured_at + timedelta(seconds=1),
+                                manifest=sample_manifest,
+                            )
+                            is None
+                        )
+                        with pytest.raises(observations.Refused), conn.transaction():
+                            observations.retain(
+                                conn,
+                                claim=task,
+                                observation={**measurement, "artifactDigest": "0" * 64},
+                            )
+                        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                            conn.execute(
+                                "UPDATE baseline_artifact_observation SET payload='{}' WHERE id=%s",
+                                (measured_receipt["receiptId"],),
+                            )
                         with pytest.raises(builds.Refused), conn.transaction():
                             builds.read_binding(conn, workspace_id=WS, run_id=binding["run_id"])
                         with pytest.raises(sessions.Refused), conn.transaction():
