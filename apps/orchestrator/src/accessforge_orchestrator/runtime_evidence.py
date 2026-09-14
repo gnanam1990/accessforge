@@ -13,6 +13,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from accessforge_domain.canonical import digest
 from accessforge_domain.evaluation.rules import ReaderSample
+from accessforge_domain.navigator_runtime import validate_observation
 from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
 from accessforge_domain.runners.runtime_profile import observed_profile
 from accessforge_domain.timestamps import parse_rfc3339_utc
@@ -26,6 +27,61 @@ class RuntimeEvidence:
     reasons: tuple[str, ...]
     observed_source: str | None = None
     observed_runner_profile: str | None = None
+
+
+def observed_model(snapshots: dict[str, Any], context: dict[str, Any]) -> str | None:
+    """Use original retained SDK observations only when every action has an admitted model turn.
+
+    This observes requested model configuration, not provider-internal weights or physical AT.
+    Reservation/STARTED/checkpoint model names alone never establish a model identity.
+    """
+    model = snapshots.get("MODEL_RUNTIME")
+    if model is None:
+        return None
+    if (
+        not isinstance(model, dict)
+        or model.get("format") != "accessforge.model-runtime.v1"
+        or model.get("runId") != str(context["run_id"])
+        or model.get("attemptId") != str(context["attempt_id"])
+        or model.get("manifestDigest") != context["manifest_digest"]
+    ):
+        raise Refused("model runtime artifact context differs")
+    turns = model.get("turns")
+    if not isinstance(turns, list) or not 1 <= len(turns) <= 500:
+        raise Refused("bounded model runtime turns unavailable")
+    actions = [
+        event["payload"]["sourceRecord"]
+        for event in snapshots["ACTION_TRACE"]["records"]
+        if event["eventType"] == "ACTION_INTENT"
+    ]
+    if len(turns) != len(actions):
+        return None
+    identities: set[str] = set()
+    operations: set[str] = set()
+    for sequence, (turn, action) in enumerate(zip(turns, actions, strict=True)):
+        if (
+            turn.get("status") != "RECORDED"
+            or turn.get("observation") is None
+            or turn.get("actionSequence") != sequence
+            or action.get("sequence") != sequence + 1
+            or turn.get("resolvedActionId") != action.get("actionId")
+        ):
+            return None
+        try:
+            observation = validate_observation(turn["observation"])
+        except ValueError as exc:
+            raise Refused("invalid original model runtime observation") from exc
+        if (
+            digest(observation) != turn.get("observationDigest")
+            or digest(observation["profile"]) != turn.get("modelConfigDigest")
+            or turn["operationId"] in operations
+        ):
+            raise Refused("model runtime observation digest or operation differs")
+        operations.add(turn["operationId"])
+        identities.add(digest(observation["profile"]))
+    if len(identities) != 1:
+        raise Refused("runtime model identity changed between actions")
+    return identities.pop()
 
 
 def reader_samples(snapshots: dict[str, Any]) -> tuple[ReaderSample, ...]:

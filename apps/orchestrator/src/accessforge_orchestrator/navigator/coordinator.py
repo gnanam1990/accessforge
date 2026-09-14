@@ -24,7 +24,7 @@ from accessforge_navigation_tools import (
     ToolRefusal,
 )
 from accessforge_orchestrator.manual_dispatch import DispatchReference
-from accessforge_persistence import navigator_model_calls, workspace_connection
+from accessforge_persistence import navigator_model_calls, navigator_runtime, workspace_connection
 
 from .agent import (
     NavigatorAgent,
@@ -223,6 +223,14 @@ class NativeNavigatorSession:
             outcome = await StrandsNavigator(
                 profile=self._profile, checkpoints=sink, utc_now=utc_now, agent_builder=build
             ).run_turn(turn.projection, cancel_signal=self._fence)
+            if outcome.runtime_observation is not None:
+                with workspace_connection(self._database_url, self._reference.workspace_id) as conn:
+                    navigator_runtime.retain(
+                        conn,
+                        workspace_id=self._reference.workspace_id,
+                        operation_id=operation_id,
+                        observation=outcome.runtime_observation,
+                    )
             if provider_entered and outcome.stop_reason in {
                 NavigatorStopReason.COMPLETED,
                 NavigatorStopReason.SDK_LIMIT,

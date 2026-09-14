@@ -36,7 +36,7 @@ from accessforge_orchestrator.execution_artifacts import (
     _context,
 )
 from accessforge_orchestrator.runtime_evidence import interpret as interpret_runtime
-from accessforge_orchestrator.runtime_evidence import reader_samples
+from accessforge_orchestrator.runtime_evidence import observed_model, reader_samples
 from accessforge_persistence import evaluations, journeys, runs, workspace_connection
 from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
@@ -52,10 +52,11 @@ def _retained(
         "SELECT * FROM evidence_artifact WHERE attempt_id=%s ORDER BY kind,id FOR UPDATE",
         (row["attempt_id"],),
     ).fetchall()
-    if len(artifacts) != 5 or any(
+    required = requirements(conn, row)
+    if len(artifacts) != len(required) or any(
         a["state"] != "PROMOTED" or a["retention"] != "RETAINED" for a in artifacts
     ):
-        raise Refused("five retained promoted execution artifacts are required")
+        raise Refused("all originally required retained execution artifacts are required")
     for artifact in artifacts:
         expected_key = artifact_key(
             workspace_id=str(row["workspace_id"]),
@@ -98,13 +99,14 @@ def _retained(
         )
         if kind != "RUNNER_JOURNAL":
             snapshots[kind] = json.loads(payload)
-    required = requirements(conn, row)
     complete = assess_completeness(
         conn,
         bounded,
         run_id=str(row["run_id"]),
         attempt_id=str(row["attempt_id"]),
-        required_producers=frozenset(p for k, p in required.items() if k != "RUNNER_JOURNAL"),
+        required_producers=frozenset(
+            p for k, p in required.items() if k not in {"RUNNER_JOURNAL", "MODEL_RUNTIME"}
+        ),
     )
     if not complete.complete:
         raise Refused("evidence cannot be finalized: " + "; ".join(complete.reasons))
@@ -195,6 +197,9 @@ def _decide(
     )
     if journey_digest is not None:
         observed[IdentityKind.JOURNEY_VERSION] = journey_digest
+    model_digest = observed_model(snapshots, row)
+    if model_digest is not None:
+        observed[IdentityKind.MODEL] = model_digest
     runtime = interpret_runtime(snapshots, row)
     if runtime.observed_build is not None:
         observed[IdentityKind.BUILD] = runtime.observed_build
