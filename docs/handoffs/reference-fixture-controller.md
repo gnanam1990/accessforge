@@ -129,6 +129,16 @@ this validated candidate URL; it is not a JSON/model field and is not exported i
 payload. Arbitrary origins, substituted baseline templates and revoked endpoints refuse
 projection. The result is a planning destination, not proof that a browser actually reached it.
 
+For confirmed fresh setup, the completion observer now reads fixture identity and count in
+the same independent read-only PostgreSQL snapshot. Nonce, template, variant and creation time
+must still match the original initial observation. Missing/recreated/substituted fixtures produce
+UNKNOWN, never a count of zero. The effect source retains only an identity digest, not the raw
+nonce or private configuration. This binds the final sample to the original fixture incarnation;
+it does not prove uninterrupted state between samples, full environment identity or actual AT.
+Legacy runs without confirmed setup keep their original count-only evidence shape. Two focused
+disposable-DB cases exercise original-instance acceptance and same-nonce recreation refusal
+through the actual observer and session closure, with synthetic desktop records only.
+
 Focused tests use real loopback TCP with synthetic replies for transport and separate
 disposable product/application PostgreSQL databases with in-process HTTP for successful
 setup, lost-response reconciliation, revocation, pending lease refusal and immutability.
