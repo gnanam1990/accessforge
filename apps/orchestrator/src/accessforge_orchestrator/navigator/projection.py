@@ -20,7 +20,7 @@ from accessforge_navigation_tools import (
     SealedNavigatorPolicy,
 )
 from accessforge_orchestrator.manual_dispatch import DispatchReference
-from accessforge_persistence import journeys, runners, workspace_connection
+from accessforge_persistence import journeys, keyboard_focus, runners, workspace_connection
 
 from .destination import load_destination
 
@@ -230,6 +230,17 @@ def _observation(source: dict[str, Any], action: dict[str, Any]) -> ReaderObserv
     keys = {"actionId", "actionSequence", "capturedAtUtc"} | (
         {"provenance", "reason"} if unknown else {"phrase"}
     )
+    reader_keys = frozenset(keys)
+    if "keyboardFocus" in source:
+        keys.add("keyboardFocus")
+        try:
+            keyboard_focus.validate(
+                source["keyboardFocus"],
+                dispatched_at=action["dispatched_at"],
+                now=action["result_at"],
+            )
+        except (ValueError, TypeError) as exc:
+            raise ProjectionRefused("original private focus binding differs") from exc
     if (
         set(source) != keys
         or source["actionId"] != str(action["id"])
@@ -245,5 +256,8 @@ def _observation(source: dict[str, Any], action: dict[str, Any]) -> ReaderObserv
     ):
         raise ProjectionRefused("reader timestamp differs from original dispatch/result")
     return ReaderObservation.model_validate(
-        {**source, "provenance": "CAPTURE_UNKNOWN" if unknown else "ACTUAL_READER"}
+        {
+            **{key: source[key] for key in reader_keys},
+            "provenance": "CAPTURE_UNKNOWN" if unknown else "ACTUAL_READER",
+        }
     )

@@ -6,13 +6,14 @@ import { PREFLIGHT_CHECKS } from '@accessforge/at-voiceover';
 import { parseReference, type DispatchReference } from './dispatch-receiver.js';
 import { Supervisor, type ActionCommand, type Clock, type DispatchOutcome, type Journal, type LeaseState } from './supervisor.js';
 import { createVoiceOverDispatch, type VoiceOverRuntime } from './voiceover.js';
+import type { KeyboardFocusRecord } from './keyboard-focus.js';
 
 export interface ExecutionSessionPort {
   readonly receipt: Readonly<Record<string, unknown>>;
   retainIntent(command: unknown): Promise<Readonly<Record<string, unknown>>>;
   commitDispatch(actionId: string, origin: string): Promise<ActionCommand>;
   completeAction(actionId: string, status: 'SUCCEEDED' | 'FAILED' | 'AMBIGUOUS'): Promise<void>;
-  retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string): Promise<void>;
+  retainObservation(command: ActionCommand, observation: RawObservation | UnknownObservation, capturedAtUtc: string, keyboardFocus?: KeyboardFocusRecord): Promise<void>;
   retainRuntimePreflight(command: ActionCommand, report: PreflightReport, capturedAtUtc: string): Promise<void>;
   authorizeCandidateFormEffect(command: ActionCommand): Promise<void>;
   finish(): Promise<Readonly<Record<string, unknown>>>;

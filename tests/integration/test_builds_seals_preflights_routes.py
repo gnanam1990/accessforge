@@ -3045,6 +3045,32 @@ def test_authenticated_reader_evidence(
         "capturedAtUtc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "phrase": "x" * 8193 if fault == "oversize" else f"Speech {fixture_text}",
     }
+    if fault is None:
+        # Synthetic native metadata, bound by the real original action/session admission.
+        source["keyboardFocus"] = {
+            "measurementKind": "AX_KEYBOARD_FOCUS",
+            "status": "KNOWN",
+            "capturedAtUtc": source["capturedAtUtc"],
+            "role": "AXTextField",
+            "identifierDigest": "a" * 64,
+        }
+        for invalid in (
+            {**source["keyboardFocus"], "capturedAtUtc": "2000-01-01T00:00:00Z"},
+            {**source["keyboardFocus"], "value": "private field content"},
+        ):
+            bad = {**source, "keyboardFocus": invalid}
+            assert (
+                client.post(
+                    url + "/observation",
+                    headers=headers,
+                    json={
+                        "producerSequence": 1,
+                        "sourceRecordDigest": digest(bad),
+                        "sourceRecord": bad,
+                    },
+                ).status_code
+                == 403
+            )
     if fault == "extra-field":
         source["eventType"] = "EFFECT_RECEIPT"
     body = {
@@ -3065,6 +3091,7 @@ def test_authenticated_reader_evidence(
             assert "[REDACTED_FIXTURE]" in payload["sourceRecord"]["phrase"]
             assert payload["sourceRecordDigest"] == digest(payload["sourceRecord"])
             assert payload["submittedSourceRecordDigest"] == digest(source)
+            assert payload["sourceRecord"]["keyboardFocus"] == source["keyboardFocus"]
         assert run_store.load_run(conn, run_id=ref.run_id).state.outcome.value == "NOT_EVALUATED"
     if fault is None:
         # Same content is idempotent evidence admission, not permission to repeat an OS action.

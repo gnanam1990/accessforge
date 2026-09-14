@@ -85,7 +85,7 @@ export function createExecutionBootstrap(options: ExecutionBootstrapOptions): Ex
     retainIntent: (command) => requireMachine().retainIntent(command),
     commitDispatch: (actionId, origin) => requireMachine().commitDispatch(actionId, origin),
     completeAction: (actionId, status) => requireMachine().completeAction(actionId, status),
-    retainObservation: (command, observation, capturedAt) => requireMachine().retainObservation(command, observation, capturedAt),
+    retainObservation: (command, observation, capturedAt, keyboardFocus) => requireMachine().retainObservation(command, observation, capturedAt, keyboardFocus),
     retainRuntimePreflight: (command, report, capturedAt) => requireMachine().retainRuntimePreflight(command, report, capturedAt),
     authorizeCandidateFormEffect: (command) => requireMachine().authorizeCandidateFormEffect(command),
     finish: () => requireMachine().finish(),
