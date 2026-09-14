@@ -19,6 +19,30 @@ VALIDATION_CHECKS = frozenset(
 )
 
 
+def producer(attempt_id: str) -> str:
+    return "functional-regression:" + attempt_id
+
+
+def snapshot(conn: psycopg.Connection[dict[str, Any]], session: dict[str, Any]) -> dict[str, Any]:
+    receipt = for_run(conn, run_id=str(session["run_id"]))
+    if (
+        receipt is None
+        or receipt["workspaceId"] != str(session["workspace_id"])
+        or receipt["leaseId"] != str(session["lease_id"])
+        or receipt["leaseEpoch"] != session["epoch"]
+    ):
+        raise Refused("original completed functional receipt for this execution is unavailable")
+    return {
+        "format": "accessforge.functional-regression-artifact.v1",
+        "runId": str(session["run_id"]),
+        "attemptId": str(session["attempt_id"]),
+        "manifestDigest": session["manifest_digest"],
+        "producerId": producer(str(session["attempt_id"])),
+        "receipt": receipt,
+        "receiptDigest": digest(receipt),
+    }
+
+
 def for_run(conn: psycopg.Connection[dict[str, Any]], *, run_id: str) -> dict[str, Any] | None:
     """Read an original completed receipt, including after endpoint/reader cleanup.
 

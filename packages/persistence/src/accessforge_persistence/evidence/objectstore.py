@@ -49,6 +49,7 @@ ALLOWED_CONTENT_TYPES: dict[str, frozenset[str]] = {
     "EFFECT_RECEIPT": frozenset({"application/json"}),
     "MODEL_RUNTIME": frozenset({"application/json"}),
     "FIXTURE_SETUP": frozenset({"application/json"}),
+    "FUNCTIONAL_REGRESSION": frozenset({"application/json"}),
     "DIAGNOSTIC_LOG": frozenset({"text/plain", "application/json"}),
     "SCREENSHOT": frozenset({"image/png"}),
 }

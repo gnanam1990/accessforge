@@ -105,6 +105,7 @@ ARTIFACT_CLASS: dict[str, str] = {
     # Client-observed model identity is outcome-bearing proof, not disposable diagnostics.
     "MODEL_RUNTIME": "READER_SPEECH",
     "FIXTURE_SETUP": "READER_SPEECH",
+    "FUNCTIONAL_REGRESSION": "READER_SPEECH",
 }
 
 #: Which class each canonical event type's payload belongs to, on the same terms.

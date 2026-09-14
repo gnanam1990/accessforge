@@ -64,6 +64,14 @@ def requirements(conn: psycopg.Connection[Any], row: dict[str, Any]) -> dict[str
         from accessforge_persistence.fixture_setup_evidence import producer as setup_producer
 
         required["FIXTURE_SETUP"] = setup_producer(str(row["attempt_id"]))
+    if conn.execute(
+        "SELECT 1 FROM candidate_run_binding WHERE run_id=%s", (row["run_id"],)
+    ).fetchone():
+        from accessforge_persistence.functional_regression_evidence import (
+            producer as functional_producer,
+        )
+
+        required["FUNCTIONAL_REGRESSION"] = functional_producer(str(row["attempt_id"]))
     return required
 
 
