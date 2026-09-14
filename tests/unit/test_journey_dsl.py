@@ -180,9 +180,12 @@ def test_original_fixture_preimage_requires_original_bound_material(change: str)
 
     conn = cast(Any, Connection())
     if change == "none":
-        assert load_fixture_contract(
-            conn, version_id=version.version_id, expected_digest=version.fixture_digest
-        ) == original
+        assert (
+            load_fixture_contract(
+                conn, version_id=version.version_id, expected_digest=version.fixture_digest
+            )
+            == original
+        )
     else:
         with pytest.raises(JourneyPersistenceError, match="sealed fixture contract"):
             load_fixture_contract(
