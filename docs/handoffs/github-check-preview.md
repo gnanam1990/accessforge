@@ -125,7 +125,21 @@ and revoked-consent refusals, and refusal to create again through a new approved
 Together with 38 forward-migration cases, 43 focused checks passed on disposable databases.
 Ruff and strict mypy passed across 388 files. No live migration or GitHub publication occurred.
 
-Next: outbound controller, retained-byte revalidation and ambiguous-response reconciliation.
+### Lost local response recovery
+
+`read_publication_state` reads a durable reservation using the original request's preview ID;
+the caller need not know the intent ID lost with the response. A later preview for the same
+workspace/App/repository/run resolves to the original slot after its stored integrity is checked.
+Only original intent ID, original preview ID/digest and timestamp are returned, not payloads,
+tokens or new authority. A current workspace owner/session is required. Disconnected bindings
+or revoked publication approvals do not hide historical ambiguity from an authorized owner.
+
+Both RECORDED and NOT_OBSERVED have remote outcome UNKNOWN and retry_allowed=false. A missing
+local row is not proof that no write happened: a concurrent commit, restore or workspace deletion
+can make the local view incomplete. No remote receipt, lease renewal, new intent, audit mutation
+or publication occurs in this read path. Remote outcome reconciliation is still separate work.
+
+Next: outbound controller, retained-byte revalidation and remote ambiguous-response reconciliation.
 Actual outbound checks still require separately scoped credentials and explicit GITHUB_PUBLISH.
 
 Protocol reference: [GitHub check-run API](https://docs.github.com/en/rest/checks/runs).
