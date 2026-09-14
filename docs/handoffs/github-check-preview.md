@@ -91,6 +91,12 @@ publication receipt: current repository/commit permissions, evidence retention, 
 revocation/expiry and exact current payload must all be checked at dispatch, with a durable remote
 intent and ambiguous-response reconciliation. No claim of completed publication is made here.
 
+Backup restore reconciliation now irreversibly revokes all unrevoked GITHUB_PUBLISH approvals
+across every workspace, including expired or orphaned targets. The operator report and atomic
+restore audit include the count. Original previews and evaluations remain historical evidence;
+restored consent is not publication authority. This does not discover remote writes that occurred
+after the snapshot, so remote reconciliation remains required before any future publication.
+
 Next: fresh remote repository/commit verification,
 stale-state revalidation, durable publication intent and ambiguous-response reconciliation.
 Actual outbound checks still require separately scoped credentials and explicit GITHUB_PUBLISH.

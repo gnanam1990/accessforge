@@ -341,6 +341,78 @@ def test_reconciliation_invalidates_every_credential_and_lease(
         assert reason and str(reason["release_reason"]) == "RESTORED_DATABASE"
 
 
+def test_restore_revokes_publication_consent_across_workspaces(
+    populated: str, request: pytest.FixtureRequest
+) -> None:
+    """Actual pg_dump/psql recovery; no GitHub calls or real publication decisions."""
+    from accessforge_domain.states import ApprovalScope
+    from accessforge_persistence import approvals
+
+    other = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    old_revocation = now - timedelta(minutes=2)
+    with unscoped_connection(populated) as conn:
+        conn.execute("INSERT INTO workspace(id,name) VALUES(%s,'Other restore tenant')", (other,))
+    decisions: list[tuple[str, str, bool]] = []
+    for workspace, expired, revoked in (
+        (WS, False, False),
+        (other, True, False),
+        (WS, False, True),
+    ):
+        with workspace_connection(populated, workspace) as conn:
+            decision = approvals.record_approval(
+                conn,
+                workspace_id=workspace,
+                scope=ApprovalScope.GITHUB_PUBLISH,
+                actor_id=USER,
+                target_id=str(uuid.uuid4()),
+                target_digest=MANIFEST,
+                expected_revision=0,
+                expires_at=(now + timedelta(minutes=-1 if expired else 10)).isoformat(),
+            )
+            if revoked:
+                approvals.revoke_approval(
+                    conn, approval_id=decision, now=old_revocation.isoformat()
+                )
+            decisions.append((workspace, decision, revoked))
+
+    # Force the existing dump/restore fixture to snapshot these approvals, not an earlier state.
+    restored_url, admin_url = request.getfixturevalue("restored_pair")
+    with connect(admin_url) as conn:
+        before = conn.execute("SELECT * FROM approval ORDER BY id").fetchall()
+        assert sum(row["revoked_at"] is None for row in before) == 2
+        with pytest.raises(RuntimeError, match="rollback"), conn.transaction():
+            result = restore.reconcile(conn, operator="publication-drill")
+            assert result.github_publication_approvals_revoked == 2
+            raise RuntimeError("rollback")
+        assert conn.execute("SELECT * FROM approval ORDER BY id").fetchall() == before
+        report = restore.reconcile(conn, operator="publication-drill")
+        assert report.github_publication_approvals_revoked == 2
+        assert "Revoked 2 GitHub publication approvals" in report.summary
+        audit = conn.execute(
+            "SELECT detail FROM global_audit_event WHERE action=%s",
+            (restore.RECONCILIATION_MARKER,),
+        ).fetchone()
+        assert audit is not None and audit["detail"]["githubPublicationApprovalsRevoked"] == 2
+    for workspace, decision, previously_revoked in decisions:
+        with workspace_connection(restored_url, workspace) as conn:
+            value = approvals.load_for_check(conn, approval_id=decision)
+            assert value.revoked
+            with pytest.raises(AuthorityError, match="revoked"):
+                value.check(
+                    now=now.isoformat(),
+                    scope=ApprovalScope.GITHUB_PUBLISH,
+                    workspace_id=workspace,
+                    target_id=value.target_id,
+                    target_digest=MANIFEST,
+                    current_revision=0,
+                )
+            if previously_revoked:
+                assert conn.execute(
+                    "SELECT revoked_at FROM approval WHERE id=%s", (decision,)
+                ).fetchone() == {"revoked_at": old_revocation}
+
+
 def test_a_restored_runner_is_quarantined_rather_than_available(
     restored: str, restored_admin_url: str
 ) -> None:
