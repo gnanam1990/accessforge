@@ -114,7 +114,7 @@ def load_retained_turn(
         ):
             raise ProjectionRefused("runtime fixture values differ from the approved template")
         try:
-            runtime_start_url = load_destination(
+            destination = load_destination(
                 conn,
                 workspace_id=reference.workspace_id,
                 run_id=reference.run_id,
@@ -208,7 +208,10 @@ def load_retained_turn(
             run_ref="navigator:" + digest(asdict(reference)),
             policy=raw_policy,
             reader_observations=observations,
-            runtime_start_url=runtime_start_url,
+            runtime_start_url=None if destination is None else destination.url,
+            authorized_candidate_origin=None
+            if destination is None
+            else destination.authorized_candidate_origin,
         )
         if expires <= datetime.now(UTC):
             raise ProjectionRefused("planning snapshot outlived its wall-time budget")
