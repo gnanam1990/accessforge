@@ -26,6 +26,11 @@ from accessforge_contracts.reference_fixture import (
     REFERENCE_FIXTURE_VERSION,
 )
 from accessforge_domain.canonical import digest
+from accessforge_domain.functional_validation import (
+    INVALID_VALUES,
+    VALID_VALUES,
+    VALIDATION_SUITE_DIGEST,
+)
 
 from .candidate_gateway import CandidateEndpointBinding, CandidateGateway, gateway_policy
 from .sandbox import (
@@ -132,6 +137,7 @@ class ReferenceRegressions:
         return digest(
             {
                 "version": "owned-reference-regressions-v1",
+                "validationSuiteDigest": VALIDATION_SUITE_DIGEST,
                 "code": _code_identity(ReferenceRegressions.run.__code__),
                 "schema": _SCHEMA,
                 "httpDriver": _HTTP,
@@ -698,19 +704,9 @@ class ReferenceRegressions:
                     "unauthorized_fixture_no_write_" + str(len(checks)),
                 )
             expect(http("GET", f"/form/{nonce}")["status"] == 200, "form_available")
-            valid = {
-                "full_name": "Test Person",
-                "email": "test.person@example.test",
-                "category": "access-request",
-                "description": "Keyboard access request for testing.",
-            }
+            valid = dict(VALID_VALUES)
             form = {"Content-Type": "application/x-www-form-urlencoded"}
-            for field, value in (
-                ("email", "not-an-email"),
-                ("full_name", ""),
-                ("category", "forbidden"),
-                ("description", "short"),
-            ):
+            for field, value in INVALID_VALUES:
                 response = http(
                     "POST", f"/form/{nonce}", headers=form, body=urlencode({**valid, field: value})
                 )

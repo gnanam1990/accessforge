@@ -18,6 +18,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
+from accessforge_domain.functional_validation import VALIDATION_SUITE_DIGEST
+
 
 class Observer(StrEnum):
     """Who is entitled to decide an assertion.
@@ -116,6 +118,10 @@ MAX_READER_SEQUENCE_STEPS = 20
 def evaluation_rule_capabilities() -> dict[str, Any]:
     """Authoring limits from the same constants used by frozen rule validation."""
     return {
+        "PROTECTED_REFERENCE_VALIDATION": {
+            "assertionKind": "FUNCTIONAL_VALIDATION",
+            "suiteDigest": VALIDATION_SUITE_DIGEST,
+        },
         "EXACT_READER_PHRASE": {
             "assertionKind": "REQUIRED_ANNOUNCEMENT",
             "maxActionSequence": MAX_RULE_ACTION_SEQUENCE,
@@ -170,8 +176,11 @@ class EvaluationRule:
     effect: str | None = None
     count: int | None = None
     steps: tuple[ReaderSequenceStep, ...] = ()
+    suite_digest: str | None = None
 
     def __post_init__(self) -> None:
+        if self.rule_type != "PROTECTED_REFERENCE_VALIDATION" and self.suite_digest is not None:
+            raise ValueError("validation suite cannot be attached to a different rule")
         if self.rule_type == "EXACT_READER_PHRASE":
             if (
                 type(self.action_sequence) is not int
@@ -213,6 +222,16 @@ class EvaluationRule:
                 )
             ):
                 raise ValueError("reader sequence requires bounded consecutive NEXT steps")
+        elif self.rule_type == "PROTECTED_REFERENCE_VALIDATION":
+            if (
+                self.suite_digest != VALIDATION_SUITE_DIGEST
+                or self.steps != ()
+                or any(
+                    v is not None
+                    for v in (self.action_sequence, self.phrase, self.effect, self.count)
+                )
+            ):
+                raise ValueError("functional rule requires the exact supported protected suite")
         else:
             raise ValueError("unsupported evaluation rule; no inferred predicate")
 
@@ -220,6 +239,8 @@ class EvaluationRule:
     def parse(cls, value: Any) -> EvaluationRule:
         if not isinstance(value, dict):
             raise ValueError("evaluationRule must be an object")
+        if set(value) == {"type", "suiteDigest"}:
+            return cls(value["type"], suite_digest=value["suiteDigest"])
         if set(value) == {"type", "actionSequence", "phrase"}:
             return cls(
                 value["type"], action_sequence=value["actionSequence"], phrase=value["phrase"]
@@ -242,6 +263,8 @@ class EvaluationRule:
         raise ValueError("evaluationRule fields are incomplete or unsupported")
 
     def canonical_form(self) -> dict[str, Any]:
+        if self.rule_type == "PROTECTED_REFERENCE_VALIDATION":
+            return {"type": self.rule_type, "suiteDigest": self.suite_digest}
         if self.rule_type == "READER_NEXT_SEQUENCE":
             return {
                 "type": self.rule_type,
@@ -283,6 +306,7 @@ class Assertion:
                 (AssertionKind.REQUIRED_ANNOUNCEMENT, "EXACT_READER_PHRASE"),
                 (AssertionKind.TASK_COMPLETION, "EFFECT_COUNT"),
                 (AssertionKind.READING_ORDER, "READER_NEXT_SEQUENCE"),
+                (AssertionKind.FUNCTIONAL_VALIDATION, "PROTECTED_REFERENCE_VALIDATION"),
             }
         ):
             raise ValueError("evaluation rule is not supported by this assertion's observer")
