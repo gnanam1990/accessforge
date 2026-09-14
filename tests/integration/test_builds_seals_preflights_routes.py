@@ -705,6 +705,133 @@ def _approval_url(project: str, sealed: dict[str, Any]) -> str:
     return f"/v1/workspaces/{WS}/projects/{project}/seals/{sealed['sealedManifestId']}/approval"
 
 
+@pytest.mark.parametrize("preview_fault", [None, "repository", "disconnect", "project", "session"])
+def test_github_preview_reads_original_seal_and_live_local_authority(
+    db: str, project: str, manual_seal: dict[str, Any], preview_fault: str | None
+) -> None:
+    from accessforge_domain.authorization import HumanPrincipal, Role
+    from accessforge_orchestrator.github_check_preview import Refused
+    from accessforge_orchestrator.github_connections import Refused as ConnectionRefused
+    from accessforge_orchestrator.github_preview_service import prepare_check_preview
+    from accessforge_persistence import github_bindings
+
+    manifest = manual_seal["canonicalManifest"]
+    with workspace_connection(db, WS) as conn:
+        # Explicit local test configuration, not verified remote repository ownership.
+        conn.execute(
+            "UPDATE project SET repository_url=%s,repository_authorized_by=%s WHERE id=%s",
+            ("https://github.com/fixture-owner/fixture-repository.git", OWNER, project),
+        )
+        run_store.create_run(
+            conn,
+            workspace_id=WS,
+            project_id=project,
+            run_id=manifest["runId"],
+            manifest_digest=manual_seal["manifestDigest"],
+            authorization_id=manifest["authorizationId"],
+        )
+        session = conn.execute("SELECT id FROM user_session WHERE user_id=%s", (OWNER,)).fetchone()
+        assert session is not None
+        principal = HumanPrincipal(OWNER, WS, Role.OWNER, str(session["id"]))
+        binding_id = github_bindings.record_verified(
+            conn,
+            workspace_id=WS,
+            app_id=7,
+            installation_id=42,
+            account_id=3,
+            repository_id=13,
+            owner="fixture-owner",
+            name="fixture-repository",
+            observed_at=datetime.now(UTC).isoformat(),
+        )
+        if preview_fault == "repository":
+            conn.execute("UPDATE project SET repository_url='https://github.com/other/repo'")
+        elif preview_fault == "disconnect":
+            github_bindings.disconnect(conn, workspace_id=WS, binding_id=binding_id)
+        elif preview_fault == "project":
+            conn.execute("UPDATE project SET revoked_at=clock_timestamp()")
+        elif preview_fault == "session":
+            conn.execute("UPDATE user_session SET revoked_at=clock_timestamp()")
+    if preview_fault is not None:
+        with pytest.raises((Refused, ConnectionRefused, github_bindings.Refused)):
+            prepare_check_preview(
+                db, principal=principal, binding_id=binding_id, run_id=manifest["runId"]
+            )
+        return
+    preview = prepare_check_preview(
+        db, principal=principal, binding_id=binding_id, run_id=manifest["runId"]
+    )
+    assert preview["request"]["body"]["head_sha"] == manifest["sourceCommitSha"]
+    assert preview["request"]["body"]["status"] == "queued"
+    assert "conclusion" not in preview["request"]["body"]
+    assert preview["identity"]["manifestDigest"] == manual_seal["manifestDigest"]
+    assert preview["identity"]["journeyDigest"] == manifest["journeyDigest"]
+    assert preview["identity"]["profileDigest"] == manifest["runnerProfileDigest"]
+    assert preview["evaluationDigest"] is None
+    assert preview["localAdmission"]["projectId"] == project
+    assert preview["previewDigest"] == digest(
+        {k: v for k, v in preview.items() if k != "previewDigest"}
+    )
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT id FROM run_evaluation").fetchall() == []
+
+    from accessforge_domain.authority import AuthorityError
+    from accessforge_domain.states import ApprovalScope
+    from accessforge_orchestrator.github_preview_approval import approve_preview, store_preview
+    from accessforge_persistence import approvals, github_previews
+
+    stored = store_preview(db, principal=principal, binding_id=binding_id, run_id=manifest["runId"])
+    preview_id, expected = stored["previewId"], stored["preview"]["previewDigest"]
+    with workspace_connection(db, str(uuid.UUID(int=0x9FF))) as conn:
+        with pytest.raises(github_previews.Refused, match="unavailable"):
+            github_previews.read(conn, preview_id=preview_id)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+            github_previews.record(conn, preview=preview)
+    with workspace_connection(db, WS) as conn:
+        assert github_previews.read(conn, preview_id=preview_id)["preview"] == preview
+        assert conn.execute("SELECT id FROM approval WHERE scope='GITHUB_PUBLISH'").fetchall() == []
+        for statement in (
+            "UPDATE github_publication_preview SET preview_digest=repeat('a',64)",
+            "DELETE FROM github_publication_preview",
+        ):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                conn.execute(statement)
+    with pytest.raises(github_previews.Refused, match="digest differs"):
+        approve_preview(db, principal=principal, preview_id=preview_id, expected_digest="0" * 64)
+    with workspace_connection(db, WS) as conn:
+        conn.execute("UPDATE project SET revision=revision+1 WHERE id=%s", (project,))
+    with pytest.raises(github_previews.Refused, match="stale"):
+        approve_preview(db, principal=principal, preview_id=preview_id, expected_digest=expected)
+    fresh = store_preview(db, principal=principal, binding_id=binding_id, run_id=manifest["runId"])
+    fresh_id, fresh_digest = fresh["previewId"], fresh["preview"]["previewDigest"]
+    assert fresh_digest != expected
+    decision = approve_preview(
+        db, principal=principal, preview_id=fresh_id, expected_digest=fresh_digest
+    )
+    with workspace_connection(db, WS) as conn:
+        approval = approvals.load_for_check(conn, approval_id=decision)
+        check = {
+            "now": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "scope": ApprovalScope.GITHUB_PUBLISH,
+            "workspace_id": WS,
+            "target_id": fresh_id,
+            "target_digest": fresh_digest,
+            "current_revision": 0,
+        }
+        approval.check(**check)
+        for other_scope in (ApprovalScope.RUN_EFFECTS, ApprovalScope.PATCH_APPLY):
+            with pytest.raises(AuthorityError):
+                replace(approval, scope=other_scope).check(**check)
+        assert approvals.revoke_approval(conn, approval_id=decision)
+    with pytest.raises(psycopg.IntegrityError):
+        approve_preview(db, principal=principal, preview_id=fresh_id, expected_digest=fresh_digest)
+    with workspace_connection(db, WS) as conn:
+        assert approvals.load_for_check(conn, approval_id=decision).revoked
+        assert conn.execute(
+            "SELECT count(*) AS n FROM approval WHERE scope='GITHUB_PUBLISH'"
+        ).fetchone() == {"n": 1}
+
+
 def _approval_body(sealed: dict[str, Any]) -> dict[str, Any]:
     return {
         "manifestDigest": sealed["manifestDigest"],
@@ -4439,6 +4566,62 @@ def test_original_native_focus_retained_finalization(
         tmp_path,
         focus_mode=focus_mode,
     )
+
+
+@pytest.mark.parametrize("execution_body", ["stop-policy"], indirect=True)
+def test_retained_evaluation_drives_github_check_preview(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    owned_observer_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Project original retained S3 evidence; physical observations are synthetic."""
+    from accessforge_domain.authorization import HumanPrincipal, Role
+    from accessforge_orchestrator.github_preview_service import prepare_check_preview
+    from accessforge_persistence import evaluations, github_bindings
+
+    test_authenticated_execution_finish(
+        db,
+        client,
+        supervisor_ticket,
+        manual_dispatch_reference,
+        owned_observer_database,
+        monkeypatch,
+        "artifact-finalize",
+        tmp_path,
+    )
+    run_id = manual_dispatch_reference.run_id
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE project SET repository_url='https://github.com/fixture-owner/fixture-repository',"
+            "repository_authorized_by=%s WHERE id=(SELECT project_id FROM run WHERE id=%s)",
+            (OWNER, run_id),
+        )
+        session = conn.execute("SELECT id FROM user_session WHERE user_id=%s", (OWNER,)).fetchone()
+        assert session is not None
+        principal = HumanPrincipal(OWNER, WS, Role.OWNER, str(session["id"]))
+        binding_id = github_bindings.record_verified(
+            conn,
+            workspace_id=WS,
+            app_id=7,
+            installation_id=42,
+            account_id=3,
+            repository_id=13,
+            owner="fixture-owner",
+            name="fixture-repository",
+            observed_at=datetime.now(UTC).isoformat(),
+        )
+        original = evaluations.read(conn, run_id=run_id)
+        assert original is not None
+    preview = prepare_check_preview(db, principal=principal, binding_id=binding_id, run_id=run_id)
+    assert preview["evaluationDigest"] == original["snapshotDigest"]
+    assert preview["outcome"] == original["snapshot"]["outcome"] == "INCONCLUSIVE"
+    assert preview["request"]["body"]["conclusion"] == "action_required"
+    assert preview["request"]["body"]["status"] == "completed"
+    assert preview["identity"]["manifestDigest"] == original["snapshot"]["manifestDigest"]
 
 
 def _retain_stopped_artifact_case(
