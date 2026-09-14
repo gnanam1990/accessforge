@@ -47,6 +47,7 @@ ALLOWED_CONTENT_TYPES: dict[str, frozenset[str]] = {
     "RUNNER_JOURNAL": frozenset({"application/x-ndjson", "application/json"}),
     "PREFLIGHT_RECORD": frozenset({"application/json"}),
     "EFFECT_RECEIPT": frozenset({"application/json"}),
+    "MODEL_RUNTIME": frozenset({"application/json"}),
     "DIAGNOSTIC_LOG": frozenset({"text/plain", "application/json"}),
     "SCREENSHOT": frozenset({"image/png"}),
 }

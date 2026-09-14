@@ -189,6 +189,137 @@ def test_navigator_transport_has_no_hidden_retries_or_configured_endpoint_overri
     agent.model.client.close()
 
 
+@pytest.mark.parametrize("case", ["complete", "partial", "over-budget", "wrong-model", "cancelled"])
+def test_runtime_request_observation_requires_bounded_completed_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from strands.models import BedrockModel
+
+    from accessforge_domain.navigator_runtime import validate_observation
+    from accessforge_orchestrator.navigator.runtime import ObservedBedrockModel
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-secret-key")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    configured, fence = profile(model_attempts=1), Event()
+    agent = build_strands_agent(
+        profile=configured,
+        gateway=gateway([]),
+        checkpoints=RecordingSink(),
+        cancel_fence=fence,
+        utc_now=lambda: NOW,
+    )
+    model = agent.model
+    assert isinstance(model, ObservedBedrockModel)
+    model.arm(
+        agent,
+        limits={"turns": 1, "output_tokens": 1024, "total_tokens": 12000},
+        timeout=30,
+        context_limit=24000,
+        fence=fence,
+        expected=configured,
+    )
+
+    # The real wrapper surrounds a synthetic SDK worker. No HTTP/provider invocation occurs.
+    def synthetic_worker(self: Any, callback: Any, *args: Any, **kwargs: Any) -> None:
+        if case == "cancelled":
+            fence.set()
+        for index in range(2 if case == "over-budget" else 1):
+            model._before_request(
+                {
+                    "modelId": "wrong" if case == "wrong-model" else configured.model_id,
+                    "inferenceConfig": {"maxTokens": 512, "temperature": 0},
+                },
+                SimpleNamespace(name="ConverseStream"),
+            )
+            model._after_response(
+                {"ResponseMetadata": {"RequestId": f"synthetic-{index}", "HTTPStatusCode": 200}}
+            )
+        callback({"contentBlockDelta": {"delta": {"text": "DO-NOT-RETAIN-THIS"}}})
+        callback({"messageStop": {"stopReason": "end_turn"}})
+        if case != "partial":
+            callback({"metadata": {"usage": {"inputTokens": 12}}})
+        callback()
+
+    monkeypatch.setattr(BedrockModel, "_stream", synthetic_worker)
+    try:
+        if case in {"wrong-model", "over-budget", "cancelled"}:
+            with pytest.raises(RuntimeError, match="bounded observed runtime"):
+                model._stream(lambda event=None: None, [])
+        else:
+            model._stream(lambda event=None: None, [])
+        observation = model.observation()
+        if case == "complete":
+            assert observation is not None
+            validate_observation(observation)
+            assert observation["profile"] == configured.model_dump(mode="json")
+            assert "DO-NOT-RETAIN" not in repr(observation)
+        else:
+            assert observation is None
+    finally:
+        model.client.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_receipt_uses_real_sdk_events_with_stubbed_provider_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from botocore.stub import Stubber
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-secret-key")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    configured, sink = profile(), RecordingSink()
+    fence = Event()
+    agent = build_strands_agent(
+        profile=configured,
+        gateway=gateway([]),
+        checkpoints=sink,
+        cancel_fence=fence,
+        utc_now=lambda: NOW,
+    )
+    from accessforge_orchestrator.navigator.runtime import ObservedBedrockModel
+
+    assert isinstance(agent.model, ObservedBedrockModel)
+    response: dict[str, Any] = {
+        "ResponseMetadata": {"RequestId": "synthetic-sdk-response", "HTTPStatusCode": 200},
+        "stream": {},
+    }
+    with Stubber(agent.model.client) as stub:
+        stub.add_response("converse_stream", response)
+        # Stubber validates the service's EventStream shape before the actual iterable is supplied.
+        # The SDK and botocore hooks are real; transport and stream bytes are entirely synthetic.
+        response["stream"] = [
+            {"messageStart": {"role": "assistant"}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "Synthetic stop."}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            {
+                "metadata": {
+                    "usage": {"inputTokens": 12, "outputTokens": 3, "totalTokens": 15},
+                    "metrics": {"latencyMs": 1},
+                }
+            },
+        ]
+        result = await StrandsNavigator(
+            profile=configured,
+            checkpoints=sink,
+            utc_now=lambda: NOW,
+            agent_builder=lambda _: agent,
+        ).run_turn(projection(), cancel_signal=fence)
+        stub.assert_no_pending_responses()
+    agent.model.client.close()
+    assert result.stop_reason is NavigatorStopReason.COMPLETED
+    assert result.runtime_observation is not None
+    assert result.runtime_observation["requests"] == [
+        {"requestId": "synthetic-sdk-response", "httpStatus": 200, "streamCompleted": True}
+    ]
+    assert "Synthetic stop." not in repr(result.runtime_observation)
+
+
 @pytest.mark.asyncio
 async def test_actual_strands_stream_path_rejects_unknown_model_fields_without_dispatch() -> None:
     dispatched: list[Any] = []

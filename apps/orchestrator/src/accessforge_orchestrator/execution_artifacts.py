@@ -21,7 +21,7 @@ import psycopg
 
 from accessforge_domain.canonical import canonicalize, digest
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
-from accessforge_persistence import sequencer, workspace_connection
+from accessforge_persistence import navigator_runtime, sequencer, workspace_connection
 from accessforge_persistence.evidence import artifacts
 from accessforge_persistence.evidence.objectstore import (
     MAX_ARTIFACT_BYTES,
@@ -187,7 +187,11 @@ def _bundle(
         (row["run_id"], row["attempt_id"]),
     ).fetchall()
     _journal(journal, actions, row)
-    producers = {kind: producer for kind, producer in required.items() if kind != "RUNNER_JOURNAL"}
+    producers = {
+        kind: producer
+        for kind, producer in required.items()
+        if kind not in {"RUNNER_JOURNAL", "MODEL_RUNTIME"}
+    }
     streams = conn.execute(
         "SELECT * FROM producer_stream WHERE attempt_id=%s", (row["attempt_id"],)
     ).fetchall()
@@ -231,6 +235,16 @@ def _bundle(
     if any(len(grouped[p]) != tails[p] for p in grouped):
         raise Refused("artifact sources do not cover closed tails")
     result = {"RUNNER_JOURNAL": (required["RUNNER_JOURNAL"], "application/x-ndjson", journal)}
+    if "MODEL_RUNTIME" in required:
+        try:
+            model_snapshot = navigator_runtime.snapshot(conn, row)
+        except ValueError as exc:
+            raise Refused("original settled navigator runtime evidence unavailable") from exc
+        result["MODEL_RUNTIME"] = (
+            required["MODEL_RUNTIME"],
+            "application/json",
+            canonicalize(model_snapshot).encode(),
+        )
     for kind, producer in producers.items():
         content = {
             "format": "accessforge.execution-evidence.v1",
