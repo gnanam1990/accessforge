@@ -170,7 +170,26 @@ even when application measurement is UNKNOWN: configuration identity is not appl
 Old records remain unchanged and do not acquire this new witness through replay. No credential
 values, fixture nonce or new raw environment fields are published by this addition.
 
-This witness is one input for subsequent runtime environment integration, not observed ENVIRONMENT
-or a new PASS path. Browser/action coverage, reset evidence and their original producer bindings
-must still be checked together by the finalizer. Actual host/reader and deployment acceptance remain
-unproven; this change starts no service, reader, application fixture or live migration.
+This witness alone is not observed ENVIRONMENT or a new PASS path. Actual host/reader and deployment
+acceptance remain unproven; creating a witness starts no reader or live migration.
+
+## Joined configured runtime environment identity
+
+Evaluator1.9.0 joins the original verified fixture setup, final observer configuration witness and
+complete per-action runtime preflight coverage. It reconstructs `EnvironmentSpec` from the original
+protected environment row; both producer digests and credential references must agree. Every
+authenticated action intent must carry the same independently sampled origin as the original
+prepared fixture, within the configured allowlist. Missing setup/witness/fixture identity, UNKNOWN
+application measurement or incomplete preflight leave observed ENVIRONMENT absent; contradictory
+original evidence refuses evaluation. The seal's expected digest is never copied into observed state.
+
+This is a configured environment identity, not a claim that every allowlisted origin was visited,
+an independent inspection of secret credential values, or uninterrupted physical-host attestation.
+Live expiry/effect permissions remain enforced by the setup, observer and action admission paths;
+expiry is not part of the environment configuration digest. Retained old observer records are not
+backfilled and immutable evaluations are not rewritten. Other missing model/profile/build identities
+and assertion evidence still prevent a complete successful outcome.
+
+Ten focused synthetic verified-input interpreter cases cover producer agreement, forged common
+digests, missing coverage, configuration drift and per-action origin divergence. These are not
+actual VoiceOver or deployment evidence. Full retained-artifact integration remains subject to CI.

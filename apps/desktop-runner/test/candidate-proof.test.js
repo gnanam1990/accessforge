@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { runPreflight } from '@accessforge/at-voiceover';
+import { runPreflight, PREFLIGHT_CHECKS } from '@accessforge/at-voiceover';
 
 import { CandidateProofRunner } from '../dist/candidate-proof.js';
 import { MemoryCandidateTraceSink, CandidateTraceWriter } from '../dist/candidate-trace.js';
@@ -41,7 +41,7 @@ function readyPreflight(env = readyEnvironment()) {
   });
 }
 
-function harness(preflight = readyPreflight()) {
+function harness(preflight = readyPreflight(), onRetain) {
   const calls = [];
   const observations = [];
   const adapter = {
@@ -62,6 +62,10 @@ function harness(preflight = readyPreflight()) {
     },
   };
   const sink = new MemoryCandidateTraceSink();
+  if (onRetain) {
+    const append = sink.appendAndFlush.bind(sink);
+    sink.appendAndFlush = async (line) => { onRetain(line); await append(line); };
+  }
   let id = 0;
   const trace = new CandidateTraceWriter({
     producerId: 'runner:voiceover:local',
@@ -120,6 +124,28 @@ test('the candidate proof runs only through the supervisor and closes its local 
     'RUN_FINISHED',
     'CANDIDATE_CLOSING_WATERMARK',
   ]);
+});
+
+test('empty or incomplete qualification preflight never starts the reader', async () => {
+  for (const missing of [null, ...PREFLIGHT_CHECKS]) {
+    const report = readyPreflight();
+    if (missing === null) report.checks = {};
+    else delete report.checks[missing];
+    const { runner, calls } = harness(report);
+    assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'BLOCKED');
+    assert.deepEqual(calls, []);
+  }
+});
+
+test('async trace retention cannot upgrade an UNKNOWN qualification check into startup', async () => {
+  const report = readyPreflight();
+  report.checks.DESKTOP_SESSION_OWNED = { ...report.checks.DESKTOP_SESSION_OWNED, condition: 'UNKNOWN' };
+  const { runner, calls, sink } = harness(report, () => {
+    report.checks.DESKTOP_SESSION_OWNED.condition = 'TRUE';
+  });
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'BLOCKED');
+  assert.deepEqual(calls, []);
+  assert.equal(sink.lines[0].sourceRecord.payload.checks.DESKTOP_SESSION_OWNED.condition, 'UNKNOWN');
 });
 
 test('any failed or unknown preflight check blocks before VoiceOver starts', async () => {
