@@ -9,17 +9,36 @@ text, comment instructions or credentials. No HTTP route or secret loading is en
 
 GitHub signs the body, not the delivery/event headers. Delivery ID is transport metadata,
 not authorization and not a sufficient replay key. Replaying signed bytes under another
-delivery ID produces the same body digest. This function does not implement durable
-deduplication, installation ownership, repository allowlisting, current permissions,
+delivery ID produces the same body digest. The authentication function does not implement
+installation ownership, repository allowlisting, current permissions,
 disconnect handling, freshness or publication authorization. No caller may dispatch work
 from this result alone. Installation-less ping/event processing is intentionally unsupported.
+
+## Transactional replay inbox
+
+Migration 0065 adds immutable, workspace-RLS authentication receipts, scoped by GitHub App.
+The trusted persistence function records one body digest and all observed delivery-ID aliases
+in the caller's transaction. Concurrent deliveries of the same bytes admit one body. Reusing
+any recorded alias for different bytes is refused and its savepoint rolls back the new body.
+Transaction rollback does not consume a delivery. Workspace deletion cascades these receipts;
+ordinary update/deletion is refused. No payload text or webhook secret is stored.
+
+These are authentication/replay receipts, not work claims. The integration service must obtain
+workspace/App scope from trusted receiver configuration and check current installation/repository
+authority before event processing. No public ingress route or event worker is enabled. A receipt
+must never be used as proof that an external write has or has not happened; restoration, deletion
+and remote-operation reconciliation need independent authorization/publication records.
+
+Four local integration checks passed against a newly created disposable PostgreSQL database:
+reconnect/alias replay, concurrent admission, RLS/immutability/cascade and rollback. The database
+was removed afterwards. No live migration was performed. This does not prove actual GitHub access.
 
 ## Remaining implementation
 
 1. Isolated integration-service configuration and repository/installation binding verified
    against current GitHub App API evidence, with workspace RLS and revocation.
-2. Transactional delivery/body-digest replay admission and event-specific schema handling;
-   event names and payload text do not broaden scope.
+2. Connect the replay inbox to the isolated ingress and event-specific schema handling;
+   event names and payload text do not broaden scope. Replay storage alone cannot authorize work.
 3. Immutable source-bound check preview and honest outcome/coverage rendering.
 4. Exact current payload-bound GITHUB_PUBLISH approval and outbound rechecks. Existing
    run grants, PATCH_APPLY and human ACCEPT cannot authorize any GitHub write.
