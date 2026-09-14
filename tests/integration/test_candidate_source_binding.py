@@ -1595,6 +1595,25 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
                 return
             history = candidate_fixture_setups.for_run(conn, run_id=str(prepared[0]["run_id"]))
             assert history is not None and history["observation"]["application"]["effectCount"] == 0
+            from accessforge_persistence import functional_regression_evidence
+
+            functional = functional_regression_evidence.for_run(
+                conn, run_id=str(prepared[0]["run_id"])
+            )
+            assert functional is not None
+            assert functional["regressionAttemptId"] == regression.task_id
+            assert functional["artifactDigest"] == regression.artifact_digest
+            assert functional["originalSeedDigest"] == digest(history)
+            assert functional_regression_evidence.VALIDATION_CHECKS.issubset(functional["checks"])
+            assert history["context"]["nonce"] not in json.dumps(functional)
+            assert all(process["state"] == "REMOVED" for process in functional["processes"])
+        with workspace_connection(binding.database, str(uuid.uuid4())) as other:
+            from accessforge_persistence import functional_regression_evidence
+
+            assert (
+                functional_regression_evidence.for_run(other, run_id=str(prepared[0]["run_id"]))
+                is None
+            )
 
 
 @pytest.mark.sandbox
