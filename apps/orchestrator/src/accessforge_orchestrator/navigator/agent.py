@@ -31,7 +31,8 @@ TYPE_TEXT takes only a text_value_ref present in the projection. The tool and su
 policy independently. Choose the smallest next action. Tool results report dispatch only; they do
 not prove task success. STOP when no safe action remains or a dispatch is ambiguous.
 When runtimeStartUrl is present, it instantiates the original policy's /form/FIXTURE destination
-for this run. It does not change the policy or grant navigation, HTTP or task-success authority.
+for this run, using its separately approved isolated origin for a candidate rerun. It does not
+change the policy or grant navigation, HTTP or task-success authority.
 """
 
 

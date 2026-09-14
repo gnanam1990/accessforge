@@ -105,7 +105,7 @@ def load_destination(
             )
         )
     original = conn.execute(
-        "SELECT s.canonical_manifest,e.allowed_origins FROM sealed_manifest s "
+        "SELECT s.canonical_manifest,s.manifest_digest,e.allowed_origins FROM sealed_manifest s "
         "JOIN environment_manifest e ON e.id=s.environment_manifest_id "
         "AND e.workspace_id=s.workspace_id WHERE s.run_id=%s AND s.workspace_id=%s",
         (candidate["baseline_run_id"], workspace_id),
@@ -115,7 +115,8 @@ def load_destination(
     baseline = original["canonical_manifest"]
     baseline_origin, marker, placeholder = sealed_url.rpartition("/form/")
     if (
-        not marker
+        digest(baseline) != original["manifest_digest"]
+        or not marker
         or placeholder != "FIXTURE"
         or baseline_origin not in original["allowed_origins"]
         or any(
