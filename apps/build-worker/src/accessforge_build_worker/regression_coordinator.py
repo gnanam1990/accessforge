@@ -10,6 +10,7 @@ from typing import Any
 from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_persistence import (
     candidate_effect_delivery,
+    candidate_fixture_setups,
     candidate_observations,
     candidate_runs,
     workspace_connection,
@@ -148,6 +149,17 @@ def execute_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             candidate_observations.retain(conn, claim=claim, observation=observation)
 
+    def reserve_fixture(nonce: str) -> str:
+        with workspace_connection(database_url, workspace_id) as conn:
+            receipt = candidate_fixture_setups.reserve(conn, claim=claim, nonce=nonce)
+        return str(receipt["contextDigest"])  # Commit before the driver sends setup HTTP.
+
+    def confirm_fixture(context_digest: str, application: dict[str, Any]) -> None:
+        with workspace_connection(database_url, workspace_id) as conn:
+            candidate_fixture_setups.confirm(
+                conn, claim=claim, context_digest=context_digest, application=application
+            )
+
     def session(gateway: CandidateGateway) -> None:
         def prepare_run(environment_id: str) -> dict[str, Any]:
             gateway.receipt()
@@ -195,6 +207,8 @@ def execute_regressions(
             on_endpoint_bound=endpoint_bound,
             on_endpoint_closed=endpoint_closed,
             on_artifact_observed=artifact_observed,
+            reserve_candidate_fixture=reserve_fixture,
+            confirm_candidate_fixture=confirm_fixture,
         )
         if result.task_id != claim.attempt_id or result.daemon != runner.sandbox.daemon:
             raise regressions.Refused("regression task or daemon identity changed")

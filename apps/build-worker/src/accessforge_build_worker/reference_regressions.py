@@ -170,6 +170,8 @@ class ReferenceRegressions:
         on_endpoint_bound: Callable[[dict[str, Any]], None] = lambda receipt: None,
         on_endpoint_closed: Callable[[bool], None] = lambda clean: None,
         on_artifact_observed: Callable[[dict[str, Any]], None] = lambda observation: None,
+        reserve_candidate_fixture: Callable[[str], str] | None = None,
+        confirm_candidate_fixture: Callable[[str, dict[str, Any]], None] | None = None,
         begin_candidate_effect: Callable[[str, str], dict[str, Any] | None] = lambda path, body: (
             None
         ),
@@ -513,20 +515,49 @@ class ReferenceRegressions:
                 # An opt-in trusted capability probe, not an automatically exposed browser port
                 # or matched-reader attestation. No setup/observer routes enter the bridge.
                 assert_endpoint_authority()
+                if reserve_candidate_fixture is None or confirm_candidate_fixture is None:
+                    raise SandboxRefused("candidate endpoint requires durable fixture setup")
+                reserved_nonce = secrets.token_urlsafe(24)
+                setup_context_digest = reserve_candidate_fixture(reserved_nonce)
                 seeded = http(
                     "POST",
-                    "/api/_test/fixtures?variant=inaccessible",
+                    "/api/_test/fixtures?"
+                    + urlencode(
+                        {
+                            "variant": "inaccessible",
+                            "nonce": reserved_nonce,
+                        }
+                    ),
                     headers={"x-setup-token": setup},
                 )
                 declaration = json.loads(seeded["body"])
                 if (
                     seeded["status"] != 201
+                    or declaration.get("nonce") != reserved_nonce
                     or declaration.get("template_digest") != REFERENCE_FIXTURE_DIGEST
                     or declaration.get("template_version") != REFERENCE_FIXTURE_VERSION
                     or sql("SELECT template_digest FROM fixture_instance")
                     != REFERENCE_FIXTURE_DIGEST
                 ):
                     raise SandboxRefused("browser candidate fixture identity differs")
+                # One independent SQL statement/snapshot, never the candidate's HTTP JSON.
+                # Require exactly one fixture; an empty/multiple-row result cannot be confirmed.
+                application = json.loads(
+                    sql(
+                        "SELECT json_build_object('nonce',nonce,'templateDigest',template_digest,"
+                        "'variant',variant,'createdAt',"
+                        "to_char(created_at AT TIME ZONE 'UTC',"
+                        '\'YYYY-MM-DD"T"HH24:MI:SS.US"Z"\'),'
+                        "'observedAt',to_char(clock_timestamp() AT TIME ZONE 'UTC',"
+                        '\'YYYY-MM-DD"T"HH24:MI:SS.US"Z"\'),'
+                        "'effectCount',(SELECT count(*) FROM service_request)) "
+                        "FROM fixture_instance WHERE (SELECT count(*) FROM fixture_instance)=1"
+                    )
+                )
+                if not isinstance(application, dict):
+                    raise SandboxRefused("independent candidate fixture observation unavailable")
+                confirm_candidate_fixture(setup_context_digest, application)
+                assert_endpoint_authority()
 
                 def observe_deployment(end: float) -> dict[str, Any]:
                     assert_endpoint_live()
