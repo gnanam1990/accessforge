@@ -242,8 +242,11 @@ def finish(
     containers: tuple[tuple[str, str, str], ...],
     validation: ValidationObservation,
 ) -> None:
+    from .baseline_runs import assert_reader_released
+
     with conn.transaction():
         row = _owned(conn, claim, "DISPATCHED")
+        assert_reader_released(conn, attempt_id=claim.attempt_id)
         if (row["policy_digest"], row["artifact_digest"]) != (policy_digest, artifact_digest):
             raise Refused("baseline runtime result identity changed")
         if (
@@ -274,6 +277,8 @@ def finish(
 
 
 def fail(conn: psycopg.Connection[Any], *, claim: RegressionClaim, cleanup_confirmed: bool) -> None:
+    from .baseline_runs import reader_cleanup_confirmed
+
     with conn.transaction():
         _owned(conn, claim, "DISPATCHED", authorize=False)
         unresolved = conn.execute(
@@ -284,7 +289,12 @@ def fail(conn: psycopg.Connection[Any], *, claim: RegressionClaim, cleanup_confi
             "SELECT 1 FROM baseline_endpoint WHERE attempt_id=%s AND state<>'CLOSED'",
             (claim.attempt_id,),
         ).fetchone()
-        clean = cleanup_confirmed and unresolved is None and endpoint is None
+        clean = (
+            cleanup_confirmed
+            and unresolved is None
+            and endpoint is None
+            and reader_cleanup_confirmed(conn, attempt_id=claim.attempt_id)
+        )
         conn.execute(
             "UPDATE baseline_regression_attempt SET state=%s,epoch=epoch+1,"
             "cleanup_confirmed=%s,failure_code=%s,finished_at=clock_timestamp() WHERE id=%s",

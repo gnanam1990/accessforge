@@ -1121,6 +1121,9 @@ def test_baseline_archive_retention_boundary(
                             conn, run_id=binding["run_id"], lease_id=lease_id, epoch=1
                         )
                         runtime.assert_active(conn, claim=task)
+                        assert not sessions.reader_cleanup_confirmed(
+                            conn, attempt_id=task.attempt_id
+                        )
                         from accessforge_persistence import baseline_observations as observations
 
                         measured_at = conn.execute("SELECT clock_timestamp() AS now").fetchone()[
@@ -1196,6 +1199,16 @@ def test_baseline_archive_retention_boundary(
                         )
                         with pytest.raises(sessions.Refused), conn.transaction():
                             sessions.assert_request(conn, run_id=binding["run_id"], method="GET")
+                        assert not sessions.reader_cleanup_confirmed(
+                            conn, attempt_id=task.attempt_id
+                        )
+                        conn.execute(
+                            "UPDATE desktop_lease SET stop_acknowledged_at=clock_timestamp(),"
+                            "stop_acknowledged_epoch=epoch,release_reason='STOP_ACKNOWLEDGED' "
+                            "WHERE id=%s",
+                            (lease_id,),
+                        )
+                        sessions.assert_reader_released(conn, attempt_id=task.attempt_id)
                         raise RuntimeError("rollback synthetic lease")
                     endpoints.closed(conn, claim=task, cleanup_confirmed=True)
                     with pytest.raises(endpoints.Refused), conn.transaction():

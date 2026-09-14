@@ -167,7 +167,14 @@ def execute_baseline_regressions(
         with workspace_connection(database_url, workspace_id) as conn:
             baseline_runs.prepare(conn, claim=claim)
         assert on_baseline_session is not None
-        on_baseline_session(gateway)
+        try:
+            on_baseline_session(gateway)
+        finally:
+            try:
+                with workspace_connection(database_url, workspace_id) as conn:
+                    baseline_runs.assert_reader_released(conn, attempt_id=claim.attempt_id)
+            except Exception as exc:
+                raise CleanupUnconfirmed("baseline reader stop could not be confirmed") from exc
 
     session_kwargs: dict[str, Any] = {}
     if on_baseline_session is not None:
