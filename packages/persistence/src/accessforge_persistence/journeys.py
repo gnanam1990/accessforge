@@ -72,6 +72,41 @@ def load_assertion_contract(
     return result
 
 
+def load_fixture_contract(
+    conn: psycopg.Connection[Any], *, version_id: str, expected_digest: str
+) -> dict[str, Any]:
+    """Read the original logical fixture preimage; never substitute an app template hash.
+
+    Historical versions without a preimage cannot provision an independently bound fixture.
+    This does not return reset/observer values or claim a physical fixture was created.
+    """
+    row = conn.execute(
+        "SELECT fixture_digest,reviewer_summary,navigator_policy FROM journey_version WHERE id=%s",
+        (version_id,),
+    ).fetchone()
+    if row is None or not isinstance(row["reviewer_summary"], dict):
+        raise JourneyPersistenceError("original fixture version unavailable")
+    contract = row["reviewer_summary"].get("fixtureContract")
+    if (
+        not isinstance(contract, dict)
+        or set(contract)
+        != {
+            "templateId",
+            "navigatorValues",
+            "resetKeys",
+            "observerKeys",
+            "resetValuesDigest",
+            "observerConfigDigest",
+        }
+        or row["fixture_digest"] != expected_digest
+        or digest(contract) != expected_digest
+        or not isinstance(row["navigator_policy"], dict)
+        or contract["navigatorValues"] != row["navigator_policy"].get("fixtureValues")
+    ):
+        raise JourneyPersistenceError("original sealed fixture contract unavailable or differs")
+    return contract
+
+
 def load_journey_contract_digest(
     conn: psycopg.Connection[Any],
     *,

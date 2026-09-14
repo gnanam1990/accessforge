@@ -35,6 +35,7 @@ from accessforge_domain.journeys import (
 )
 from accessforge_persistence.journeys import (
     JourneyPersistenceError,
+    load_fixture_contract,
     load_journey_contract_digest,
 )
 
@@ -144,6 +145,49 @@ def test_original_journey_preimage_is_bound_without_backfilling_legacy_versions(
     else:
         with pytest.raises(JourneyPersistenceError, match="binding differs"):
             load_journey_contract_digest(conn, **expected)
+
+
+@pytest.mark.parametrize("change", ["none", "legacy", "contract", "policy", "row"])
+def test_original_fixture_preimage_requires_original_bound_material(change: str) -> None:
+    compiled = compile_journey(e0_draft())
+    version = compiled.version
+    row: dict[str, Any] = {
+        "fixture_digest": version.fixture_digest,
+        "reviewer_summary": deepcopy(compiled.reviewer_summary),
+        "navigator_policy": deepcopy(compiled.navigator_policy),
+    }
+    original = row["reviewer_summary"]["fixtureContract"]
+    assert digest(original) == version.fixture_digest
+    assert "fixtureContract" not in compiled.navigator_policy
+    assert "observerConfig" not in original and "resetValues" not in original
+    if change == "legacy":
+        del row["reviewer_summary"]["fixtureContract"]
+    elif change == "contract":
+        original["observerConfigDigest"] = "0" * 64
+    elif change == "policy":
+        row["navigator_policy"]["fixtureValues"] = {}
+    elif change == "row":
+        row["fixture_digest"] = "0" * 64
+
+    class Connection:
+        def execute(self, query: str, params: tuple[str]) -> Connection:
+            assert "FROM journey_version WHERE id=%s" in query
+            assert params == (version.version_id,)
+            return self
+
+        def fetchone(self) -> dict[str, Any]:
+            return row
+
+    conn = cast(Any, Connection())
+    if change == "none":
+        assert load_fixture_contract(
+            conn, version_id=version.version_id, expected_digest=version.fixture_digest
+        ) == original
+    else:
+        with pytest.raises(JourneyPersistenceError, match="sealed fixture contract"):
+            load_fixture_contract(
+                conn, version_id=version.version_id, expected_digest=version.fixture_digest
+            )
 
 
 def e0_draft(**over: object) -> JourneyDraft:
