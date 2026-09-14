@@ -28,6 +28,7 @@ from accessforge_domain.evaluation.rules import derive_reader_assertion
 from accessforge_domain.evaluation.verdict import decide
 from accessforge_domain.journeys.assertions import AssertionKind
 from accessforge_domain.states import Condition
+from accessforge_orchestrator.environment_evidence import observed_environment
 from accessforge_orchestrator.execution_artifacts import (
     ExecutionArtifactStore,
     Refused,
@@ -43,7 +44,7 @@ from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements
 
-EVALUATOR_VERSION = "1.8.0"
+EVALUATOR_VERSION = "1.9.0"
 
 
 def _retained(
@@ -215,6 +216,20 @@ def _decide(
     if fixture_digest is not None:
         observed[IdentityKind.FIXTURE_INSTANCE] = fixture_digest
     runtime = interpret_runtime(snapshots, row)
+    environment_digest = observed_environment(
+        environment=conn.execute(
+            "SELECT e.* FROM environment_manifest e JOIN sealed_manifest s "
+            "ON s.environment_manifest_id=e.id AND s.workspace_id=e.workspace_id "
+            "WHERE s.run_id=%s AND s.workspace_id=%s",
+            (row["run_id"], row["workspace_id"]),
+        ).fetchone(),
+        snapshots=snapshots,
+        final_source=source,
+        runtime=runtime,
+        fixture_identity=fixture_digest,
+    )
+    if environment_digest is not None:
+        observed[IdentityKind.ENVIRONMENT] = environment_digest
     if runtime.observed_build is not None:
         observed[IdentityKind.BUILD] = runtime.observed_build
     if runtime.observed_source is not None:
