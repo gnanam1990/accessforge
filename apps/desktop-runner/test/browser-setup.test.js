@@ -44,6 +44,8 @@ for (const change of [
   { reservedNonce: undefined }, { reservedNonce: '..' }, { reservedNonce: 'bad?nonce' },
   { permittedOrigin: 'https://example.com' }, { permittedOrigin: 'http://127.0.0.1.evil.example:8081' },
   { permittedOrigin: 'file:///tmp/reference.html' }, { expectedFixtureDigest: '0'.repeat(64) },
+  { observedBuildDigest: 'b'.repeat(64) }, { observedBuildDigest: undefined },
+  { expectedBuildDigest: '', observedBuildDigest: '' },
 ]) {
   test('invalid controller configuration is inert: ' + JSON.stringify(change), async () => {
     let requests = 0;

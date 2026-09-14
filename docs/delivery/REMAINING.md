@@ -1,7 +1,56 @@
 # Remaining work, priority-ordered
 
-Baseline: `main` at `7c9e0bf` (PR #30 merged). This file is the working inventory; `PLAN.md` stays
-the module-to-requirement map and `STATUS.md` the evidence record.
+## Current delivery checkpoint — 2026-09-14
+
+Inspected baseline: `main` at `7d11f00152490069cbc4b28f7ff80e61d8ae465c` (PR #88).
+This checkpoint supersedes the historical branch-status statements below; it is not a claim of
+production readiness. `PLAN.md` remains the requirement map and handoffs retain scoped evidence.
+
+Merged code now includes independently observed initial fixture setup, candidate pre-seed
+reservation (#85), attachment to a separately approved reader run (#86), exact candidate runtime
+destination without rewriting navigator policy (#87), and final fixture incarnation comparison
+(#88). A recreated or missing fixture produces UNKNOWN, not an inferred zero effect count.
+See [fixture controller](../handoffs/reference-fixture-controller.md).
+
+PR #89 adds finalizer reconstruction of the logical fixture identity from protected configuration
+and matching initial/final measurements. At this checkpoint it is **open, not merged**; its full
+CI run is `34824959322`. Do not count a draft branch or a running CI job as delivered evidence.
+
+### Next implementation and acceptance gates
+
+1. **Environment runtime evidence.** The finalizer does not yet populate observed ENVIRONMENT.
+   The configuration digest covers name, allowed origins, reset strategy, observer/reset credential
+   references and permitted effects (`EnvironmentSpec.config_digest`). Expiry is a separate live
+   authorization gate, not part of that digest. Join original trusted configured producers to
+   retained runtime observations and authority checks; do not copy the seal's expected digest.
+   An initial empty fixture or a Safari URL sample alone cannot establish every environment field.
+2. **Trusted host controller composition.** `runProvisionedNavigatorExecution` joins the private
+   native action bridge and owned navigator process, but remains an embedding API. Finish concrete
+   operator-owned configuration, runtime-evidence callbacks, action authorization and independent
+   observer closure. Preserve one-shot session handling, retained uncertainty and separate startup
+   consent; do not introduce permissive callback defaults to make the first run pass.
+3. **Remaining assertion producers.** Required announcement, reader NEXT sequence and independent
+   task-completion count have implemented paths. Focus behaviour, forbidden effects and functional
+   validation still need their trusted measurements and frozen typed predicates. A final zero count
+   does not prove that no forbidden effect occurred earlier. Missing measurements remain UNKNOWN.
+4. **Actual reader qualification and full product flow.** VoiceOver `VERIFIED_MATRICES` is empty.
+   After explicit operator approval, qualify the actual host and retain original physical evidence;
+   then execute baseline → diagnosis → constrained repair → independently approved candidate rerun
+   → human review. Neither synthetic desktop integration nor Linux CI proves this acceptance path.
+   Windows/NVDA physical acceptance remains separate and unproven.
+5. **Release acceptance.** Reconcile every original module requirement against current code and
+   runtime evidence, then complete remaining pilot/deployment and release checks. Existing API/UI,
+   verifier and backup tests are evidence for their own boundaries, not a substitute for an actual
+   matched reader run or deployed isolation. No completion percentage is established here.
+
+Safe implementation and focused checks may proceed now. Billable model calls, actual AT startup,
+OS permission changes, live migrations and deployment require separate explicit approval. Required
+CI must complete before exact-tested-head merge and local main synchronization. Historical notes
+below must not be used to re-implement already merged work or to claim missing modules are complete.
+
+## Historical delivery notes
+
+Historical baseline: `main` at `7c9e0bf` (PR #30 merged).
 
 `PLAN.md` rows 08, 12 and 13 are **stale**: PR #30 landed the VoiceOver runner boundary, the
 constrained Strands navigator and the bounded diagnosis projection. Their rows still read
