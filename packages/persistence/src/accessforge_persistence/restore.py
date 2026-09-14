@@ -220,6 +220,7 @@ class Reconciliation:
     grants_requiring_revalidation: list[str] = field(default_factory=list)
     candidate_builds_fenced: int = 0
     baseline_builds_fenced: int = 0
+    baseline_regressions_fenced: int = 0
     candidate_regressions_fenced: int = 0
     candidate_endpoints_fenced: int = 0
     execution_approvals_revoked: int = 0
@@ -235,6 +236,7 @@ class Reconciliation:
             f"and suppressed {self.outbox_messages_suppressed} undelivered messages. "
             f"Fenced {self.candidate_builds_fenced} candidate builds without redispatch. "
             f"Fenced {self.baseline_builds_fenced} baseline builds without redispatch. "
+            f"Fenced {self.baseline_regressions_fenced} baseline regressions without redispatch. "
             f"Fenced {self.candidate_regressions_fenced} protected regressions without redispatch. "
             f"Fenced {self.candidate_endpoints_fenced} browser endpoints without resumption. "
             f"Revoked {self.execution_approvals_revoked} exact execution approvals. "
@@ -421,6 +423,11 @@ def reconcile(
     ).rowcount
 
     # Restored claim/dispatch state cannot prove that the original container stopped.
+    baseline_regressions = conn.execute(
+        "UPDATE baseline_regression_attempt SET state='UNKNOWN',epoch=epoch+1,finished_at=%s,"
+        "failure_code='RESTORED_DATABASE' WHERE state IN ('CLAIMED','DISPATCHED')",
+        (moment,),
+    ).rowcount
     baseline_builds = conn.execute(
         "UPDATE baseline_build_attempt SET state='UNKNOWN',epoch=epoch+1,finished_at=%s,"
         "failure_code='RESTORED_DATABASE' WHERE state IN ('CLAIMED','DISPATCHED')",
@@ -471,6 +478,7 @@ def reconcile(
                     "grantsRequiringRevalidation": len(grants),
                     "candidateBuildsFenced": candidate_builds,
                     "baselineBuildsFenced": baseline_builds,
+                    "baselineRegressionsFenced": baseline_regressions,
                     "candidateRegressionsFenced": candidate_regressions,
                     "candidateEndpointsFenced": candidate_endpoints,
                 }
@@ -489,6 +497,7 @@ def reconcile(
         grants_requiring_revalidation=grants,
         candidate_builds_fenced=candidate_builds,
         baseline_builds_fenced=baseline_builds,
+        baseline_regressions_fenced=baseline_regressions,
         candidate_regressions_fenced=candidate_regressions,
         candidate_endpoints_fenced=candidate_endpoints,
         execution_approvals_revoked=execution_approvals,
