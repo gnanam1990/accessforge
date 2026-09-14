@@ -8,6 +8,7 @@ import pytest
 
 from accessforge_build_worker import baseline_session as handoff
 from accessforge_build_worker.candidate_gateway import CandidateGateway
+from accessforge_persistence import baseline_runs, runners
 from accessforge_persistence.candidate_regressions import RegressionClaim
 
 
@@ -17,6 +18,9 @@ def test_original_lifetime_and_commit_bound_reader_handoff(
     monkeypatch: pytest.MonkeyPatch, seconds: float, ttl: int | None, lost_commit: bool
 ) -> None:
     events: list[str] = []
+    lease = runners.AdmittedLease(
+        "original-lease", "runner", "session-key", 1, "2026-09-14T00:00:00Z"
+    )
 
     class Connection:
         def execute(self, query: str, args: Any) -> Any:
@@ -43,13 +47,13 @@ def test_original_lifetime_and_commit_bound_reader_handoff(
             ttl_seconds=ttl,
         )
         events.append("admitted")
-        return "original-lease"
+        return lease
 
     monkeypatch.setattr(handoff, "workspace_connection", connection)
     monkeypatch.setattr(
-        handoff.baseline_runs, "assert_live", lambda *a, **kw: {"regression_attempt_id": "runtime"}
+        baseline_runs, "assert_live", lambda *a, **kw: {"regression_attempt_id": "runtime"}
     )
-    monkeypatch.setattr(handoff.runners, "admit_lease", admit)
+    monkeypatch.setattr(runners, "admit_lease", admit)
     gateway = cast(CandidateGateway, SimpleNamespace(receipt=lambda: events.append("gateway")))
     session = handoff.BaselineSession(
         "private-database-secret",
@@ -59,7 +63,7 @@ def test_original_lifetime_and_commit_bound_reader_handoff(
     )
     assert "private" not in repr(session)
     if ttl is None:
-        with pytest.raises(handoff.baseline_runs.Refused):
+        with pytest.raises(baseline_runs.Refused):
             session.admit_reader(runner_id="runner", attempt_id="attempt")
         assert events == ["gateway"]
     elif lost_commit:
@@ -67,5 +71,5 @@ def test_original_lifetime_and_commit_bound_reader_handoff(
             session.admit_reader(runner_id="runner", attempt_id="attempt")
         assert events == ["gateway", "admitted"]
     else:
-        assert session.admit_reader(runner_id="runner", attempt_id="attempt") == "original-lease"
+        assert session.admit_reader(runner_id="runner", attempt_id="attempt") == lease
         assert events == ["gateway", "admitted", "commit"]

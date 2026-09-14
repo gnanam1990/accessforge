@@ -20,6 +20,8 @@ from accessforge_domain.functional_validation import (
     VALIDATION_SUITE_DIGEST,
     ValidationObservation,
 )
+from accessforge_persistence import baseline_effect_delivery, baseline_observations, baseline_runs
+from accessforge_persistence import baseline_endpoints as endpoints
 from accessforge_persistence import baseline_regressions as regressions
 from accessforge_persistence.candidate_regressions import ROLES, RegressionClaim
 
@@ -122,14 +124,14 @@ def test_baseline_runtime_commits_facts_then_rechecks_before_activation(
         monkeypatch.setattr(regressions, name, stage(name))
     monkeypatch.setattr(regressions, "assert_active", stage("active"))
     monkeypatch.setattr(regressions, "fail", fail)
-    monkeypatch.setattr(coordinator.baseline_runs, "prepare", stage("prepare"))
-    monkeypatch.setattr(coordinator.baseline_runs, "assert_reader_released", stage("released"))
+    monkeypatch.setattr(baseline_runs, "prepare", stage("prepare"))
+    monkeypatch.setattr(baseline_runs, "assert_reader_released", stage("released"))
     for method in ("plan", "bound", "closed"):
-        monkeypatch.setattr(coordinator.endpoints, method, stage(method))
-    monkeypatch.setattr(coordinator.baseline_observations, "retain", stage("observed"))
-    monkeypatch.setattr(coordinator.baseline_effect_delivery, "begin", stage("consume"))
-    monkeypatch.setattr(coordinator.baseline_effect_delivery, "check", stage("check"))
-    monkeypatch.setattr(coordinator.baseline_effect_delivery, "retain_response", stage("response"))
+        monkeypatch.setattr(endpoints, method, stage(method))
+    monkeypatch.setattr(baseline_observations, "retain", stage("observed"))
+    monkeypatch.setattr(baseline_effect_delivery, "begin", stage("consume"))
+    monkeypatch.setattr(baseline_effect_delivery, "check", stage("check"))
+    monkeypatch.setattr(baseline_effect_delivery, "retain_response", stage("response"))
     args: dict[str, Any] = dict(
         workspace_id="ws",
         build_id="build",
