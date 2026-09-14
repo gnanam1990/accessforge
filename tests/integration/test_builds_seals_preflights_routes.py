@@ -281,10 +281,9 @@ def execution_body(
             body["assertionSetDigest"] = str(digest(assertions.canonical_form()))
     policy.setdefault("fixtureValues", {"name": "Private Fixture Name"})
     reviewer_summary["fixtureContract"] = {
+        "schemaVersion": 2,
         "templateId": "service-request",
         "navigatorValues": policy["fixtureValues"],
-        "resetKeys": [],
-        "observerKeys": ["effect"],
         "resetValuesDigest": digest({}),
         "observerConfigDigest": digest({"effect": "CREATE_TEST_REQUEST"}),
     }
