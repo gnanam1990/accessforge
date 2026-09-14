@@ -81,11 +81,28 @@ environment identity or imply task success. Focused setup tests cover real sourc
 with a synthetic attempt identifier. Fresh-fixture lifecycle cases also cover real lease/session,
 object-store materialization, finalizer refusal for corrupt/deleted bytes, and inconclusive
 outcomes without physical-reader proof. These cases require the integration CI services;
-they do not establish an actual desktop run. The real operator host entry and isolated candidate setup producer remain
-pending. The candidate gateway deliberately does not expose setup/observer routes, so its
-driver must supply independently bound evidence rather than calling baseline setup via
-that public gateway. Mandatory setup admission is now enforced for fresh-fixture
+they do not establish an actual desktop run. The real operator host entry and attachment of
+isolated candidate setup to its separately approved reader run remain pending. The candidate
+gateway deliberately does not expose setup/observer routes. Mandatory setup admission is now enforced for fresh-fixture
 environments; this is not a substitute for current approval, physical preflight or outcome proof.
+
+## Isolated candidate seed history
+
+The trusted regression coordinator now commits a `candidate_fixture_reservation` before its
+driver sends the private setup request. Migration 0054 binds this one-shot nonce intent to the
+original live regression worker, artifact/runtime policy, daemon and all three owned process
+identities. The seed must create that exact nonce with HTTP 201; uncertain outcomes are not
+retried or replaced. Before endpoint planning, the driver reads initial nonce, template, variant,
+creation time and total effect count in one independent PostgreSQL statement. Confirmation
+requires zero effects and creation after the committed reservation. A candidate's HTTP body
+is never the source of this measurement.
+
+The forced-RLS receipt has immutable context and a one-way pending-to-confirmed transition.
+Revoked, expired, fenced or already endpoint-bound workers cannot confirm it. History survives
+endpoint cleanup but supplies neither a RUN_EFFECTS approval nor reader/OS evidence. Browser
+setup/observer routes remain private. Candidate run attachment, origin instantiation and the
+required execution artifact must consume this original receipt in a subsequent integration;
+this build-worker receipt alone does not satisfy the fresh-fixture desktop admission gate.
 
 Focused tests use real loopback TCP with synthetic replies for transport and separate
 disposable product/application PostgreSQL databases with in-process HTTP for successful

@@ -140,7 +140,7 @@ class FaultStore:
 
 @pytest.fixture()
 def candidate_run_database(test_database_url: str, backup_database_url: str) -> Iterator[str]:
-    """Terminal baselines are immutable; dispose the exact test database, never bypass triggers."""
+    """Baselines and seed receipts are immutable; dispose the exact owned test database."""
     name = "accessforge_candidate_run_" + uuid.uuid4().hex[:12]
     owner = urlsplit(test_database_url).username
     assert owner is not None
@@ -167,7 +167,7 @@ def candidate_run_database(test_database_url: str, backup_database_url: str) -> 
 def binding(
     test_database_url: str, tmp_path: Path, request: pytest.FixtureRequest
 ) -> Iterator[BoundFixture]:
-    isolated_terminal = getattr(request, "param", None) == "reference-session"
+    isolated_terminal = getattr(request, "param", None) in {"reference", "reference-session"}
     if isolated_terminal:
         test_database_url = str(request.getfixturevalue("candidate_run_database"))
     assert_row_level_security_enforced(test_database_url)
@@ -778,6 +778,37 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
             original_endpoint_bound(conn, claim=claim, receipt=receipt)
 
     monkeypatch.setattr(endpoints, "bound", verify_binding_guards)
+    from accessforge_persistence import candidate_fixture_setups
+
+    original_confirm_fixture = candidate_fixture_setups.confirm
+
+    def verify_initial_fixture(
+        conn: Any, *, claim: Any, context_digest: str, application: dict[str, Any]
+    ) -> dict[str, Any]:
+        intent = candidate_fixture_setups.read(conn, attempt_id=claim.attempt_id)
+        assert intent is not None and intent["observation"] is None
+        assert intent["contextDigest"] == context_digest
+        assert conn.execute("SELECT 1 FROM candidate_endpoint").fetchone() is None
+        for key, value in {
+            "nonce": "different-reserved-nonce",
+            "templateDigest": "0" * 64,
+            "effectCount": 1,
+            "createdAt": "2000-01-01T00:00:00Z",
+        }.items():
+            with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+                original_confirm_fixture(
+                    conn,
+                    claim=claim,
+                    context_digest=context_digest,
+                    application={**application, key: value},
+                )
+        with pytest.raises(builds.BuildClaimRefused), conn.transaction():
+            candidate_fixture_setups.reserve(conn, claim=claim, nonce=application["nonce"])
+        return original_confirm_fixture(
+            conn, claim=claim, context_digest=context_digest, application=application
+        )
+
+    monkeypatch.setattr(candidate_fixture_setups, "confirm", verify_initial_fixture)
     endpoint_receipts: list[dict[str, Any]] = []
 
     def browser_endpoint_probe(gateway: CandidateGateway) -> None:
@@ -786,6 +817,22 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
         receipt = gateway.receipt()
         observation = gateway.observe_artifact()
         with workspace_connection(binding.database, binding.workspace) as conn:
+            initial_fixture = candidate_fixture_setups.read(
+                conn, attempt_id=gateway.binding.task_id
+            )
+            assert initial_fixture is not None and initial_fixture["confirmedAt"] is not None
+            assert "/form/" + initial_fixture["context"]["nonce"] == receipt["path"]
+            assert initial_fixture["context"]["artifactDigest"] == receipt["artifactDigest"]
+            assert initial_fixture["context"]["processes"]["candidate"] == receipt["candidateId"]
+            assert initial_fixture["observation"]["application"]["effectCount"] == 0
+            assert initial_fixture["observationDigest"] == digest(initial_fixture["observation"])
+            for statement in (
+                "UPDATE candidate_fixture_reservation SET observation=NULL,"
+                "observation_digest=NULL,observed_at=NULL",
+                "DELETE FROM candidate_fixture_reservation",
+            ):
+                with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                    conn.execute(statement)
             retained_observations = candidate_observations.list_for_attempt(
                 conn, attempt_id=gateway.binding.task_id
             )
@@ -811,6 +858,7 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
                 with pytest.raises(psycopg.IntegrityError), conn.transaction():
                     conn.execute(statement)
         with workspace_connection(binding.database, str(uuid.uuid4())) as conn:
+            assert candidate_fixture_setups.read(conn, attempt_id=gateway.binding.task_id) is None
             assert (
                 candidate_observations.list_for_attempt(conn, attempt_id=gateway.binding.task_id)
                 == []
