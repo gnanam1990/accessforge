@@ -230,6 +230,7 @@ def execute_regressions(
                 artifact_digest=result.artifact_digest,
                 checks=result.checks,
                 containers=result.containers,
+                validation=result.validation,
             )
         return result
     except Exception as exc:

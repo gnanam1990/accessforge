@@ -42,7 +42,7 @@ from accessforge_orchestrator.runtime_evidence import observed_model, reader_sam
 from accessforge_persistence import evaluations, journeys, runs, workspace_connection
 from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
-from accessforge_persistence.evidence.session import requirements
+from accessforge_persistence.evidence.session import requirements, stream_requirements
 
 EVALUATOR_VERSION = "1.9.0"
 
@@ -106,11 +106,7 @@ def _retained(
         bounded,
         run_id=str(row["run_id"]),
         attempt_id=str(row["attempt_id"]),
-        required_producers=frozenset(
-            p
-            for k, p in required.items()
-            if k not in {"RUNNER_JOURNAL", "MODEL_RUNTIME", "FIXTURE_SETUP"}
-        ),
+        required_producers=frozenset(stream_requirements(required).values()),
     )
     if not complete.complete:
         raise Refused("evidence cannot be finalized: " + "; ".join(complete.reasons))

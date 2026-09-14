@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from accessforge_domain.functional_validation import ValidationObservation
 from accessforge_domain.journeys.assertions import Assertion, AssertionKind, AssertionSet
 from accessforge_domain.states import Condition
 
@@ -145,6 +146,39 @@ def observer_count_assertions(
                 "provenance": "OBSERVER_AUTHORED",
                 **(
                     {"unknownReason": "measurement or matching frozen effect predicate unavailable"}
+                    if not known
+                    else {}
+                ),
+            }
+        )
+    return result
+
+
+def functional_validation_assertions(
+    assertions: AssertionSet, observation: ValidationObservation
+) -> list[dict[str, Any]]:
+    """Protected worker authors conditions before persistence, not the finalizer or navigator."""
+    result: list[dict[str, Any]] = []
+    for assertion in assertions.assertions:
+        if assertion.kind is not AssertionKind.FUNCTIONAL_VALIDATION:
+            continue
+        rule = assertion.evaluation_rule
+        known = (
+            rule is not None
+            and rule.rule_type == "PROTECTED_REFERENCE_VALIDATION"
+            and rule.suite_digest == observation.suite_digest
+        )
+        condition = Condition.UNKNOWN
+        if known:
+            condition = Condition.TRUE if observation.passed else Condition.FALSE
+        result.append(
+            {
+                "assertionId": assertion.assertion_id,
+                "kind": assertion.kind.value,
+                "condition": condition.value,
+                "provenance": "OBSERVER_AUTHORED",
+                **(
+                    {"unknownReason": "matching frozen functional predicate unavailable"}
                     if not known
                     else {}
                 ),

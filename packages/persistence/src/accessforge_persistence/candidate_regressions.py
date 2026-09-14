@@ -9,11 +9,13 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 
+from accessforge_domain.functional_validation import ValidationObservation
 from accessforge_domain.states import ApprovalScope, PatchStatus
 from accessforge_domain.timestamps import to_rfc3339_utc
 
-from . import approvals, patches, retention
+from . import approvals, functional_assertions, patches, retention
 from . import candidate_builds as builds
 
 ROLES = ("database", "driver", "candidate", "restarted-candidate")
@@ -263,6 +265,7 @@ def finish(
     artifact_digest: str,
     checks: tuple[str, ...],
     containers: tuple[tuple[str, str, str], ...],
+    validation: ValidationObservation | None = None,
 ) -> None:
     with conn.transaction():
         row = _owned(conn, claim, "DISPATCHED")
@@ -301,10 +304,24 @@ def finish(
         ):
             raise Refused("regression result lacks exact process/cleanup receipts")
         _owned(conn, claim, "DISPATCHED")
+        if validation is not None and (
+            type(validation) is not ValidationObservation or not validation.passed
+        ):
+            raise Refused("successful regression requires complete passing validation measurements")
+        producer_receipt = (
+            functional_assertions.receipt(conn, attempt_id=claim.attempt_id, observation=validation)
+            if validation is not None
+            else None
+        )
+        _owned(conn, claim, "DISPATCHED")
         conn.execute(
             "UPDATE candidate_regression_attempt SET state='PASSED',cleanup_confirmed=true,"
-            "checks=%s,finished_at=clock_timestamp() WHERE id=%s",
-            (list(checks), claim.attempt_id),
+            "checks=%s,functional_receipt=%s,finished_at=clock_timestamp() WHERE id=%s",
+            (
+                list(checks),
+                Jsonb(producer_receipt) if producer_receipt is not None else None,
+                claim.attempt_id,
+            ),
         )
 
 
