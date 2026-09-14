@@ -1709,6 +1709,12 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
             bundle = functional_regression_evidence.snapshot(conn, session)
             assert bundle["receipt"] == functional
             assert bundle["receiptDigest"] == digest(functional)
+            for changed in (
+                {"attempt_id": str(uuid.uuid4())},
+                {"manifest_digest": "0" * 64},
+            ):
+                with pytest.raises(builds.BuildClaimRefused):
+                    functional_regression_evidence.snapshot(conn, {**session, **changed})
             with pytest.raises(builds.BuildClaimRefused):
                 functional_regression_evidence.snapshot(
                     conn, {**session, "epoch": session["epoch"] + 1}

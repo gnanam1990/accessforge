@@ -53,6 +53,14 @@ It never finalizes inside the reader callback or retries execution after uncerta
 an implementation ordering boundary, not the full baseline DB/S3 or physical acceptance proof
 below. Operator controller configuration and explicit reader startup consent remain required.
 
+Functional snapshot assembly now also joins the original `run_attempt`, desktop lease and run
+manifest before stamping the artifact's attempt/producer identity. A caller cannot re-label a
+valid functional receipt with another attempt or manifest. The baseline DB regression now creates
+and uses the actual attempt row instead of a free-form synthetic attempt label; native/process
+observations remain synthetic. Its focused case passed locally. Candidate-side regression
+additions require CI: local execution stopped during object-store setup (port 9000 unavailable),
+not at a product assertion. This still does not close the full baseline retained-S3 proof below.
+
 1. **Composed baseline retention/finalization proof.** Baseline DB integration currently exercises
    original seed, endpoint, reader lease/STOP, protected receipt, snapshot and frozen functional
    assertion consumption with synthetic process/native observations. It does not execute the whole
