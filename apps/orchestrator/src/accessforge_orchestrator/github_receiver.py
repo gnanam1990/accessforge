@@ -5,6 +5,7 @@ It records authenticated bytes for the configured live binding; it does not disp
 approve work, or claim current GitHub access. No network publication or model calls occur.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -16,6 +17,8 @@ from starlette.responses import JSONResponse
 from accessforge_persistence import github_bindings, github_webhooks, workspace_connection
 
 from .github_webhooks import MAX_WEBHOOK_BYTES, Refused, authenticate
+
+BODY_READ_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,10 +99,16 @@ def create_receiver(config: ReceiverConfig) -> FastAPI:
         if encoding and encoding != ["identity"]:
             return JSONResponse({"status": "REFUSED"}, status_code=415)
         raw = bytearray()
-        async for chunk in request.stream():
-            if len(raw) + len(chunk) > MAX_WEBHOOK_BYTES:
-                return JSONResponse({"status": "REFUSED"}, status_code=413)
-            raw.extend(chunk)
+        try:
+            # One absolute deadline, not a fresh allowance for every trickled chunk.
+            # No authentication/database work starts until the complete original body arrives.
+            async with asyncio.timeout(BODY_READ_TIMEOUT_SECONDS):
+                async for chunk in request.stream():
+                    if len(raw) + len(chunk) > MAX_WEBHOOK_BYTES:
+                        return JSONResponse({"status": "REFUSED"}, status_code=413)
+                    raw.extend(chunk)
+        except TimeoutError:
+            return JSONResponse({"status": "REFUSED"}, status_code=408)
         try:
             await run_in_threadpool(
                 receive,
