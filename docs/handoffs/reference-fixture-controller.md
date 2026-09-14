@@ -35,7 +35,11 @@ empty app fixture, but cannot confirm the reservation or authorize dispatch.
 Migration 0051 adds a forced-RLS reservation table and guards. Confirmed observations
 and reserved context cannot be replaced or individually deleted. Workspace deletion
 retains its existing cascade semantics. Runs without a reservation retain legacy lease
-behavior: this is not yet mandatory setup for every run.
+behavior unless the original sealed environment selects `FRESH_FIXTURE_NONCE`.
+Migration 0052 makes setup mandatory for that strategy: both a missing reservation and
+an unconfirmed reservation refuse lease admission. The repository and SQL trigger call
+the same workspace-scoped predicate under the run lock. Existing environment strategies
+are unchanged; no historical observation is backfilled.
 
 ## Evidence and remaining wiring
 
@@ -54,8 +58,9 @@ Trusted controller embedding must supply `reservedNonce` from the confirmed obse
 `application.nonce` together with the same approved origin, variant and reference template
 digest. This helper is not a new authorization endpoint and must not accept model fields.
 The frozen `/form/FIXTURE` navigator URL still needs a protected per-run projection, and
-setup evidence still needs retained-artifact/preflight/finalizer wiring. Mandatory setup
-admission for fresh-fixture environments and the real operator host entry remain pending.
+setup evidence still needs retained-artifact/preflight/finalizer wiring. The real operator
+host entry remains pending. Mandatory setup admission is now enforced for fresh-fixture
+environments; this is not a substitute for current approval, physical preflight or outcome proof.
 
 Focused tests use real loopback TCP with synthetic replies for transport and separate
 disposable product/application PostgreSQL databases with in-process HTTP for successful
