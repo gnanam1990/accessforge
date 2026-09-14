@@ -35,7 +35,7 @@ def requirements(conn: psycopg.Connection[Any], row: dict[str, Any]) -> dict[str
     if environment is None:
         raise ValueError("sealed observer identity missing")
     prefix = f"supervisor:{row['id']}"
-    return {
+    required = {
         "RUNNER_JOURNAL": prefix + ":journal",
         "ACTION_TRACE": prefix + ":actions",
         "SPEECH_TRANSCRIPT": prefix + ":reader",
@@ -44,6 +44,17 @@ def requirements(conn: psycopg.Connection[Any], row: dict[str, Any]) -> dict[str
             environment["observer_credential_ref"], str(row["attempt_id"])
         ),
     }
+    if (
+        conn.execute(
+            "SELECT 1 FROM navigator_model_turn WHERE run_id=%s AND attempt_id=%s LIMIT 1",
+            (row["run_id"], row["attempt_id"]),
+        ).fetchone()
+        is not None
+    ):
+        from accessforge_persistence.navigator_runtime import producer
+
+        required["MODEL_RUNTIME"] = producer(str(row["attempt_id"]))
+    return required
 
 
 def emit(

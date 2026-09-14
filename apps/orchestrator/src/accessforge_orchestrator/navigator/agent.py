@@ -7,19 +7,19 @@ import json
 from collections.abc import Callable
 from enum import StrEnum
 from threading import Event
-from typing import Protocol
+from typing import Any, Protocol
 
 from botocore.config import Config as BotocoreConfig
 from pydantic import BaseModel, ConfigDict
 from strands import Agent, ModelRetryStrategy
 from strands.agent.agent_result import AgentResult
-from strands.models import BedrockModel
 from strands.types.agent import Limits
 
 from accessforge_navigation_tools import NavigationGateway, NavigatorProjection
 
 from .checkpoints import CheckpointKind, PlanningCheckpoint, PlanningCheckpointSink
 from .config import NavigatorModelProfile
+from .runtime import ObservedBedrockModel
 from .tooling import UtcClock, make_navigation_tool
 
 SYSTEM_PROMPT = """You are the AccessForge screen-reader navigator.
@@ -48,6 +48,7 @@ class NavigatorInvocationResult(BaseModel):
     stop_reason: NavigatorStopReason
     provider_stop_reason: str | None = None
     detail: str = ""
+    runtime_observation: dict[str, Any] | None = None
 
 
 class NavigatorAgent(Protocol):
@@ -74,7 +75,7 @@ def build_strands_agent(
     """Construct a credential-minimal agent with exactly one explicit tool."""
 
     profile.assert_installed_sdk()
-    model = BedrockModel(
+    model = ObservedBedrockModel(
         model_id=profile.model_id,
         region_name=profile.region_name,
         temperature=profile.temperature,
@@ -197,6 +198,15 @@ class StrandsNavigator:
         )
         try:
             agent = self._agent_builder(fence)
+            if isinstance(agent, Agent) and isinstance(agent.model, ObservedBedrockModel):
+                agent.model.arm(
+                    agent,
+                    limits=limits,
+                    timeout=self._profile.call_timeout_seconds,
+                    context_limit=self._profile.max_context_characters,
+                    fence=fence,
+                    expected=self._profile,
+                )
             result = await asyncio.wait_for(
                 agent.invoke_async(prompt, limits=limits, cancel_signal=fence),
                 timeout=self._profile.call_timeout_seconds,
@@ -224,6 +234,11 @@ class StrandsNavigator:
             outcome = NavigatorInvocationResult(
                 stop_reason=reason,
                 provider_stop_reason=provider_reason,
+                runtime_observation=(
+                    agent.model.observation()
+                    if isinstance(agent, Agent) and isinstance(agent.model, ObservedBedrockModel)
+                    else None
+                ),
             )
 
         await self._checkpoints.retain(
