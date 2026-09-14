@@ -273,6 +273,13 @@ export interface RetentionPolicy {
 export interface JourneyCapabilities {
   /** Absent on older servers: do not offer unsupported executable authoring. */
   readonly evaluationRules?: {
+    readonly EXACT_NATIVE_KEYBOARD_FOCUS?: {
+      readonly assertionKind: string;
+      readonly maxActionSequence: number;
+      readonly roles: readonly string[];
+      readonly measurementKind: string;
+      readonly identifierDigestDomain: string;
+    };
     readonly PROTECTED_REFERENCE_VALIDATION?: {
       readonly assertionKind: string;
       readonly suiteDigest: string;

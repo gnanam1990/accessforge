@@ -26,6 +26,15 @@ focus, not the VoiceOver cursor. Actual supported-profile qualification and suit
 fixture identity must be established separately. Full-run preflight, runtime identity,
 observer and retention gates are unchanged; this predicate alone cannot establish PASS.
 
-The API advertises the closed contract. A dedicated focus-authoring UI and actual
-native capture through retained storage into the finalizer remain separate acceptance
-work. No screen reader was started or permission changed for this implementation.
+The API advertises the closed contract. The journey editor now offers an explicit
+native-focus assertion only for a compatible advertised capability. Its labelled action,
+role and identifier-digest fields have linked inline/summary errors and preserve entered
+values. The role and digest are not guessed or derived from reader text. Changed or
+missing capabilities prevent freezing; an existing rule can still be disabled.
+Adding focuses the description and removing returns focus to the add button.
+
+Targeted web checks cover payload serialization, invalid digest/role/budget/capability,
+form errors and add/remove focus. Type-check and production build also passed locally.
+These DOM-based checks are not browser visual or physical screen-reader qualification.
+Actual native capture through retained storage into the finalizer remains separate
+acceptance work. No screen reader was started or permission changed for this implementation.

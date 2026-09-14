@@ -16,6 +16,18 @@ export interface AssertionRow {
   readonly effectCount?: string
   readonly sequencePhrases?: readonly string[]
   readonly suiteDigest?: string
+  readonly focusRole?: string
+  readonly focusIdentifierDigest?: string
+}
+
+export function keyboardFocusCapability(policy: JourneyCapabilities) {
+  const rule = policy.evaluationRules?.EXACT_NATIVE_KEYBOARD_FOCUS
+  const roles = ['AXTextField', 'AXTextArea', 'AXButton', 'AXCheckBox', 'AXRadioButton', 'AXPopUpButton', 'AXComboBox', 'AXLink']
+  return rule && rule.assertionKind === 'FOCUS_BEHAVIOUR' && rule.measurementKind === 'AX_KEYBOARD_FOCUS' &&
+    rule.identifierDigestDomain === 'accessforge.keyboard-focus-identifier.v1' &&
+    Number.isSafeInteger(rule.maxActionSequence) && rule.maxActionSequence > 0 && rule.maxActionSequence <= 1000 &&
+    Array.isArray(rule.roles) && rule.roles.length > 0 && rule.roles.length <= roles.length &&
+    new Set(rule.roles).size === rule.roles.length && rule.roles.every((role) => roles.includes(role)) ? rule : null
 }
 
 export function functionalValidationCapability(policy: JourneyCapabilities) {
@@ -91,6 +103,18 @@ export function validateAssertionRules(
       if (phrases.reduce((sum, phrase) => sum + new TextEncoder().encode(phrase).length, 0) > rule.maxTotalPhraseBytes) {
         add('action', `all step phrases together exceed ${rule.maxTotalPhraseBytes} UTF-8 bytes.`)
       }
+    } else if (row.kind === 'FOCUS_BEHAVIOUR') {
+      const rule = keyboardFocusCapability(policy)
+      if (!rule) { add('enabled', 'this server cannot freeze the supported native keyboard-focus rule.'); return }
+      const position = row.actionSequence ?? ''
+      const max = Math.min((actionBudget ?? policy.maxActions) - 1, rule.maxActionSequence)
+      if (!/^\d+$/.test(position) || !Number.isSafeInteger(Number(position)) || Number(position) < 1 || Number(position) > max) {
+        add('action', `the action sequence must be a whole number between 1 and ${max}, leaving one slot for STOP.`)
+      }
+      if (!rule.roles.includes(row.focusRole ?? '')) add('focus-role', 'select a supported native AX role.')
+      if (!/^[a-f0-9]{64}$/.test(row.focusIdentifierDigest ?? '')) {
+        add('focus-digest', 'enter the 64-character lowercase SHA-256 digest from qualified native identifier evidence, not a selector or spoken phrase.')
+      }
     } else if (row.kind === 'FUNCTIONAL_VALIDATION') {
       const rule = functionalValidationCapability(policy)
       if (!rule) add('enabled', 'this server cannot freeze the protected functional-validation rule.')
@@ -104,6 +128,10 @@ export function validateAssertionRules(
 
 export function serializeAssertionRule(row: AssertionRow): Record<string, unknown> {
   if (!row.ruleEnabled) return {}
+  if (row.kind === 'FOCUS_BEHAVIOUR') return { evaluationRule: {
+    type: 'EXACT_NATIVE_KEYBOARD_FOCUS', actionSequence: Number(row.actionSequence),
+    role: row.focusRole, identifierDigest: row.focusIdentifierDigest,
+  } }
   if (row.kind === 'FUNCTIONAL_VALIDATION') {
     if (!row.suiteDigest || !/^[a-f0-9]{64}$/.test(row.suiteDigest)) throw new Error('Original protected suite unavailable')
     return { evaluationRule: { type: 'PROTECTED_REFERENCE_VALIDATION', suiteDigest: row.suiteDigest } }
@@ -135,6 +163,8 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
   const reader = row.kind === 'REQUIRED_ANNOUNCEMENT'
   const order = row.kind === 'READING_ORDER'
   const functional = row.kind === 'FUNCTIONAL_VALIDATION'
+  const focus = row.kind === 'FOCUS_BEHAVIOUR'
+  const focusRule = keyboardFocusCapability(policy)
   const functionalRule = functionalValidationCapability(policy)
   const sequenceRule = readingOrderCapability(policy)
   const pendingStepFocus = useRef<number | null>(null)
@@ -148,11 +178,12 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
     ? policy.evaluationRules?.EXACT_READER_PHRASE?.assertionKind === row.kind
     : order ? sequenceRule !== null
     : functional ? functionalRule !== null
+    : focus ? focusRule !== null
     : row.kind === 'TASK_COMPLETION' && policy.evaluationRules?.EFFECT_COUNT?.assertionKind === row.kind &&
       policy.evaluationRules.EFFECT_COUNT.effect === 'CREATE_TEST_REQUEST'
   return (
     <fieldset className="af-panel af-stack" disabled={disabled}>
-      <legend>Assertion {index + 1} — {reader ? 'Reader announcement' : order ? 'Consecutive NEXT reading order' : functional ? 'Protected functional validation' : 'Independent completion'}</legend>
+      <legend>Assertion {index + 1} — {reader ? 'Reader announcement' : order ? 'Consecutive NEXT reading order' : functional ? 'Protected functional validation' : focus ? 'Native keyboard focus' : 'Independent completion'}</legend>
       <FormField id={fieldId('description')} label={`Assertion ${index + 1} description`}
         hint="Describe the requirement for a reviewer. This description is not an executable matcher." required {...error('description')}>
         {({ id, describedBy, invalid }) => <input id={id} value={row.description} aria-describedby={describedBy}
@@ -169,6 +200,30 @@ export const AssertionEditor = ({ row, index, prefix, policy, errors, disabled, 
             ...(functional && event.target.checked && functionalRule ? { suiteDigest: functionalRule.suiteDigest } : {}) })} />}
       </FormField>
       {!row.ruleEnabled && <p className="af-secondary">No executable rule: this condition remains UNKNOWN when evaluated; prose alone cannot establish it.</p>}
+      {row.ruleEnabled && focus && <>
+        <p>Checks AX keyboard focus, not the VoiceOver cursor. Use an identifier digest from separately qualified native evidence; hashes do not prove identity uniqueness or stability. Missing capture remains UNKNOWN.</p>
+        <FormField id={fieldId('action')} label={`Assertion ${index + 1} action sequence`} required {...error('action')}
+          hint="The successful non-STOP action after which to compare native focus. Leave one action-budget slot for STOP.">
+          {({ id, describedBy, invalid }) => <input id={id} type="text" inputMode="numeric" value={row.actionSequence ?? ''}
+            aria-describedby={describedBy} aria-invalid={invalid || undefined}
+            onChange={(event) => onChange({ ...row, actionSequence: event.target.value })} />}
+        </FormField>
+        <FormField id={fieldId('focus-role')} label={`Assertion ${index + 1} native AX role`} required {...error('focus-role')}>
+          {({ id, describedBy, invalid }) => <select id={id} value={row.focusRole ?? ''}
+            aria-describedby={describedBy} aria-invalid={invalid || undefined}
+            onChange={(event) => onChange({ ...row, focusRole: event.target.value })}>
+            <option value="">Select a native role</option>
+            {row.focusRole && !focusRule?.roles.includes(row.focusRole) && <option value={row.focusRole}>Unavailable: {row.focusRole}</option>}
+            {focusRule?.roles.map((role) => <option key={role} value={role}>{role}</option>)}
+          </select>}
+        </FormField>
+        <FormField id={fieldId('focus-digest')} label={`Assertion ${index + 1} native identifier digest`} required {...error('focus-digest')}
+          hint="Exactly 64 lowercase hexadecimal characters. Do not paste the raw identifier, input value, CSS selector or reader text. This form does not derive the digest or qualify the native target.">
+          {({ id, describedBy, invalid }) => <textarea id={id} rows={2} spellCheck={false} value={row.focusIdentifierDigest ?? ''}
+            aria-describedby={describedBy} aria-invalid={invalid || undefined}
+            onChange={(event) => onChange({ ...row, focusIdentifierDigest: event.target.value })} />}
+        </FormField>
+      </>}
       {row.ruleEnabled && functional && <FormField id={fieldId('suite')} label={`Assertion ${index + 1} protected suite digest`}
         hint="Fixed by the server, not editable here. The protected worker must prove that invalid reference-form submissions are rejected without writes. Missing evidence remains UNKNOWN; this is not reader or task-completion proof.">
         {({ id, describedBy }) => <textarea id={id} rows={2} readOnly value={row.suiteDigest ?? ''} aria-describedby={describedBy} />}

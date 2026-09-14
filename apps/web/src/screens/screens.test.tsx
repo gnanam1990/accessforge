@@ -349,6 +349,22 @@ describe('journey authoring', () => {
     await user.click(screen.getByLabelText('Freeze an executable rule for assertion 4'))
     expect(screen.getByLabelText(/Assertion 4 protected suite digest/)).toHaveAttribute('readonly')
     expect(screen.getByLabelText(/Assertion 4 protected suite digest/)).toHaveValue('f'.repeat(64))
+    const addFocus = screen.getByRole('button', { name: 'Add a native keyboard-focus assertion' })
+    await user.click(addFocus)
+    expect(screen.getByLabelText(/Assertion 5 description/)).toHaveFocus()
+    await user.click(screen.getByRole('button', { name: 'Remove assertion 5' }))
+    expect(addFocus).toHaveFocus()
+    await user.click(addFocus)
+    await user.type(screen.getByLabelText(/Assertion 5 description/), 'Qualified native keyboard target')
+    await user.click(screen.getByLabelText('Freeze an executable rule for assertion 5'))
+    await user.click(screen.getByRole('button', { name: 'Freeze version' }))
+    const focusDigest = screen.getByLabelText(/Assertion 5 native identifier digest/)
+    expect(focusDigest).toHaveAttribute('aria-invalid', 'true')
+    expect(within(screen.getByRole('alert')).getByRole('link', { name: /64-character lowercase/ }))
+      .toHaveAttribute('href', `#${focusDigest.id}`)
+    expect(server.bodies.filter((entry) => entry.url.endsWith('/journeys'))).toEqual([])
+    await user.selectOptions(screen.getByLabelText(/Assertion 5 native AX role/), 'AXTextField')
+    await user.type(focusDigest, 'a'.repeat(64))
     await user.click(screen.getByRole('button', { name: 'Freeze version' }))
     const sent = server.bodies.find((entry) => entry.url.endsWith('/journeys'))
     const body = sent?.body as { assertions: { evaluationRule: unknown }[] }
@@ -360,6 +376,7 @@ describe('journey authoring', () => {
         { actionSequence: 2, phrase: '  Name\nedit text  ' }, { actionSequence: 3, phrase: 'Email, edit text' },
       ] },
       { type: 'PROTECTED_REFERENCE_VALIDATION', suiteDigest: 'f'.repeat(64) },
+      { type: 'EXACT_NATIVE_KEYBOARD_FOCUS', actionSequence: 1, role: 'AXTextField', identifierDigest: 'a'.repeat(64) },
     ])
   })
 

@@ -1,6 +1,33 @@
 import { expect, it } from 'vitest'
 import type { JourneyCapabilities } from '../api/resources'
-import { functionalValidationCapability, readingOrderCapability, serializeAssertionRule, validateAssertionRules, type AssertionRow } from './AssertionEditor'
+import { functionalValidationCapability, keyboardFocusCapability, readingOrderCapability, serializeAssertionRule, validateAssertionRules, type AssertionRow } from './AssertionEditor'
+
+it('requires a compatible native focus capability and explicit qualified identity', () => {
+  const capability = { assertionKind: 'FOCUS_BEHAVIOUR', measurementKind: 'AX_KEYBOARD_FOCUS',
+    identifierDigestDomain: 'accessforge.keyboard-focus-identifier.v1', maxActionSequence: 1000,
+    roles: ['AXTextField', 'AXButton'] }
+  const supported = { ...policy, evaluationRules: { EXACT_NATIVE_KEYBOARD_FOCUS: capability } }
+  const focus = { ...row, kind: 'FOCUS_BEHAVIOUR', focusRole: 'AXTextField', focusIdentifierDigest: 'a'.repeat(64) }
+  expect(keyboardFocusCapability(supported)).not.toBeNull()
+  expect(validateAssertionRules([focus], supported, 40, 'test', [])).toEqual([])
+  expect(serializeAssertionRule(focus)).toEqual({ evaluationRule: { type: 'EXACT_NATIVE_KEYBOARD_FOCUS',
+    actionSequence: 2, role: 'AXTextField', identifierDigest: 'a'.repeat(64) } })
+  expect(serializeAssertionRule({ ...focus, ruleEnabled: false })).toEqual({})
+  for (const invalid of ['', 'a'.repeat(63), 'A'.repeat(64), ' ' + 'a'.repeat(64), '#email']) {
+    expect(validateAssertionRules([{ ...focus, focusIdentifierDigest: invalid }], supported, 40, 'test', [])
+      .some((e) => e.fieldId.endsWith('-focus-digest'))).toBe(true)
+  }
+  expect(validateAssertionRules([{ ...focus, actionSequence: '40' }], supported, 40, 'test', [])
+    .some((e) => e.fieldId.endsWith('-action'))).toBe(true)
+  expect(validateAssertionRules([{ ...focus, focusRole: 'AXWindow' }], supported, 40, 'test', [])
+    .some((e) => e.fieldId.endsWith('-focus-role'))).toBe(true)
+  for (const change of [{ roles: [] }, { roles: ['AXWindow'] }, { roles: ['AXButton', 'AXButton'] },
+    { identifierDigestDomain: 'different' }, { maxActionSequence: 0 }, { measurementKind: 'VOICEOVER_CURSOR' }]) {
+    const unavailable = { ...supported, evaluationRules: { EXACT_NATIVE_KEYBOARD_FOCUS: { ...capability, ...change } } }
+    expect(keyboardFocusCapability(unavailable)).toBeNull()
+    expect(validateAssertionRules([focus], unavailable, 40, 'test', [])[0]?.fieldId).toBe('test-order-enabled')
+  }
+})
 
 const policy: JourneyCapabilities = {
   allowedActions: ['NEXT'], allowedEffects: [], allowedKeyChordsByPlatform: {}, assertionKinds: ['READING_ORDER'],
