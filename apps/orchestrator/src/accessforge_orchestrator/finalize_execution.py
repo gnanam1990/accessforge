@@ -42,7 +42,7 @@ from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements
 
-EVALUATOR_VERSION = "1.3.0"
+EVALUATOR_VERSION = "1.4.0"
 
 
 def _retained(
@@ -185,6 +185,16 @@ def _decide(
         IdentityKind.EVALUATOR: EVALUATOR_VERSION,
         IdentityKind.ASSERTION_SET: digest(assertions.canonical_form()),
     }
+    journey_digest = journeys.load_journey_contract_digest(
+        conn,
+        version_id=manifest["journeyVersionId"],
+        expected_digest=manifest["journeyDigest"],
+        assertion_digest=observed[IdentityKind.ASSERTION_SET],
+        fixture_digest=manifest["fixtureDigest"],
+        policy_digest=manifest["navigatorPolicyDigest"],
+    )
+    if journey_digest is not None:
+        observed[IdentityKind.JOURNEY_VERSION] = journey_digest
     runtime = interpret_runtime(snapshots, row)
     if runtime.observed_build is not None:
         observed[IdentityKind.BUILD] = runtime.observed_build
