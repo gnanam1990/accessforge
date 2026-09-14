@@ -23,6 +23,14 @@ need to establish its own runtime authority and independently retained evidence;
 are not yet promoted to finalizer assertion inputs. The current embedding API has no browser or
 reader session callback.
 
+The shared reference harness accepts explicit `endpoint_origin` and `endpoint_fixture_nonce`
+inputs for future baseline session wiring. They require an explicit endpoint callback. The gateway
+commits the requested IPv4 loopback origin in its plan and binds only that port; an occupied port
+fails instead of falling back to an origin the original seal did not authorize. Default candidate
+sessions retain their existing ephemeral-origin behavior and unchanged default plan shape. The
+endpoint receipt validator rejects a bound origin that differs from the explicit plan. This is
+listener/fixture identity support, not yet the baseline session authorization implementation.
+
 Focused checks cover the real PostgreSQL/HTTP authority lifecycle with synthetic process receipts,
 late creation/removal after expiry, immutable completion, desktop admission fencing, and forward
 migration. Separate synthetic coordinator checks verify commit-before-activation ordering and

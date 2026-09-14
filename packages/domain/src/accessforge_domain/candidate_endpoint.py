@@ -32,11 +32,13 @@ PLAN_KEYS = frozenset(
 
 def validate_endpoint_plan(plan: dict[str, Any]) -> None:
     if (
-        set(plan) != PLAN_KEYS
+        set(plan) not in (PLAN_KEYS, PLAN_KEYS | {"listenOrigin"})
         or plan["protocol"] != PROTOCOL
         or plan["contentSecurityPolicy"] != CSP
     ):
         raise ValueError("endpoint plan differs from the owned protocol")
+    if "listenOrigin" in plan:
+        validate_endpoint_origin(plan["listenOrigin"])
     if any(not isinstance(plan[key], str) for key in PLAN_KEYS - {"wallSeconds"}):
         raise ValueError("endpoint identity must be text")
     if type(plan["wallSeconds"]) is not int or not 1 <= plan["wallSeconds"] <= 60:

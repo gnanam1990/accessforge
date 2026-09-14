@@ -19,7 +19,70 @@ from accessforge_build_worker.candidate_gateway import (
     CandidateGateway,
 )
 from accessforge_build_worker.sandbox import CleanupUnconfirmed, DaemonBinding, SandboxRefused
+from accessforge_domain.candidate_endpoint import validate_endpoint_plan
 from accessforge_domain.canonical import digest
+
+
+@pytest.mark.parametrize("occupied", [False, True])
+def test_explicit_origin_is_committed_and_never_falls_back_to_another_port(occupied: bool) -> None:
+    held = socket.socket()
+    held.bind(("127.0.0.1", 0))
+    held.listen()
+    origin = f"http://127.0.0.1:{held.getsockname()[1]}"
+    events: list[str] = []
+
+    def planned(plan: dict[str, Any]) -> None:
+        validate_endpoint_plan(plan)
+        assert plan["listenOrigin"] == origin
+        events.append("plan")
+
+    def bound(receipt: dict[str, Any]) -> None:
+        assert receipt["origin"] == receipt["listenOrigin"] == origin
+        assert receipt["bindingDigest"] == digest(
+            {k: v for k, v in receipt.items() if k != "bindingDigest"}
+        )
+        events.append("bound")
+
+    gateway = CandidateGateway(
+        binding=binding(),
+        nonce="n" * 24,
+        transport=lambda *args: {"status": 200, "body": "owned fixture"},
+        listen_origin=origin,
+        on_planned=planned,
+        on_bound=bound,
+    )
+    try:
+        if occupied:
+            with pytest.raises(OSError):
+                with gateway:
+                    pytest.fail("occupied approved port must not bind another port")
+            assert events == ["plan"]
+        else:
+            held.close()
+            with gateway:
+                assert gateway.origin == origin
+                assert request(gateway)[0] == 200
+            assert events == ["plan", "bound"]
+    finally:
+        held.close()
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:8081",
+        "http://0.0.0.0:8081",
+        "http://127.0.0.1:0",
+        "http://127.0.0.1:65536",
+        "https://127.0.0.1:8081",
+        "http://127.0.0.1:8081/path",
+    ],
+)
+def test_explicit_origin_refuses_nonexact_or_nonlocal_addresses(origin: str) -> None:
+    with pytest.raises(SandboxRefused):
+        CandidateGateway(
+            binding=binding(), nonce="n" * 24, transport=lambda *args: {}, listen_origin=origin
+        )
 
 
 def binding() -> CandidateEndpointBinding:

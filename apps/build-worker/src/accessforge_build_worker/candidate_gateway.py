@@ -20,7 +20,7 @@ from types import CodeType, FunctionType
 from typing import Any
 
 from accessforge_domain.candidate_endpoint import CSP as CSP
-from accessforge_domain.candidate_endpoint import PROTOCOL
+from accessforge_domain.candidate_endpoint import PROTOCOL, validate_endpoint_origin
 from accessforge_domain.canonical import digest
 from accessforge_domain.timestamps import parse_rfc3339_utc
 
@@ -95,6 +95,7 @@ class CandidateGateway:
         transport: Callable[[str, str, str], dict[str, Any]],
         observe_artifact: Callable[[], dict[str, Any]] | None = None,
         wall_seconds: int = 30,
+        listen_origin: str | None = None,
         on_planned: Callable[[dict[str, Any]], None] = lambda identity: None,
         on_bound: Callable[[dict[str, Any]], None] = lambda receipt: None,
         on_admit: Callable[[], None] = lambda: None,
@@ -104,6 +105,12 @@ class CandidateGateway:
             raise SandboxRefused("gateway requires the exact seeded fixture nonce")
         if type(wall_seconds) is not int or not 1 <= wall_seconds <= 60:
             raise SandboxRefused("gateway lifetime must be between 1 and 60 seconds")
+        if listen_origin is not None:
+            try:
+                validate_endpoint_origin(listen_origin)
+            except ValueError as exc:
+                raise SandboxRefused("gateway requires an exact IPv4 loopback origin") from exc
+        self._listen_origin = listen_origin
         self.binding = binding
         self.path = "/form/" + nonce
         self.transport = transport
@@ -145,6 +152,7 @@ class CandidateGateway:
             "daemonId": b.daemon.daemon_id,
             "contentSecurityPolicy": CSP,
             "wallSeconds": self.wall_seconds,
+            **({"listenOrigin": self._listen_origin} if self._listen_origin is not None else {}),
         }
 
     def receipt(self) -> dict[str, Any]:
@@ -316,7 +324,8 @@ class CandidateGateway:
         self._on_planned(self.plan())
         self._planned = True
         try:
-            self._server = Server(("127.0.0.1", 0), Handler)
+            port = int(self._listen_origin.rsplit(":", 1)[1]) if self._listen_origin else 0
+            self._server = Server(("127.0.0.1", port), Handler)
             self._server.timeout = 0.05
             self._deadline = time.monotonic() + self.wall_seconds
             self._expiry = threading.Timer(self.wall_seconds, self._expire)

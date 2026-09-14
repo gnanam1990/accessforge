@@ -25,6 +25,7 @@ from accessforge_contracts.reference_fixture import (
     REFERENCE_FIXTURE_DIGEST,
     REFERENCE_FIXTURE_VERSION,
 )
+from accessforge_domain.candidate_endpoint import validate_endpoint_origin
 from accessforge_domain.canonical import digest
 from accessforge_domain.functional_validation import (
     INVALID_VALUES,
@@ -171,6 +172,8 @@ class ReferenceRegressions:
         on_created: Callable[[str, str, str], None] = lambda role, container, image: None,
         on_removed: Callable[[str], None] = lambda role: None,
         on_candidate_endpoint: Callable[[CandidateGateway], None] | None = None,
+        endpoint_origin: str | None = None,
+        endpoint_fixture_nonce: str | None = None,
         assert_endpoint_authority: Callable[[], None] = lambda: None,
         assert_endpoint_live: Callable[[], None] = lambda: None,
         assert_candidate_request: Callable[[str], None] = lambda method: None,
@@ -188,6 +191,19 @@ class ReferenceRegressions:
             [dict[str, Any], dict[str, Any]], None
         ] = lambda permission, response: None,
     ) -> ReferenceRegressionResult:
+        if endpoint_origin is not None:
+            validate_endpoint_origin(endpoint_origin)
+            if on_candidate_endpoint is None:
+                raise SandboxRefused("a pinned origin requires an explicit endpoint session")
+        if endpoint_fixture_nonce is not None:
+            if (
+                not isinstance(endpoint_fixture_nonce, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", endpoint_fixture_nonce)
+                or on_candidate_endpoint is None
+            ):
+                raise SandboxRefused(
+                    "a pinned fixture requires an exact nonce and endpoint session"
+                )
         wheel = "out/accessforge_reference_app-0.0.0-py3-none-any.whl"
         if len(artifact.files) != 1 or artifact.files[0].path != wheel:
             raise SandboxRefused("regressions require the captured owned reference wheel")
@@ -525,7 +541,7 @@ class ReferenceRegressions:
                 assert_endpoint_authority()
                 if reserve_candidate_fixture is None or confirm_candidate_fixture is None:
                     raise SandboxRefused("candidate endpoint requires durable fixture setup")
-                reserved_nonce = secrets.token_urlsafe(24)
+                reserved_nonce = endpoint_fixture_nonce or secrets.token_urlsafe(24)
                 setup_context_digest = reserve_candidate_fixture(reserved_nonce)
                 seeded = http(
                     "POST",
@@ -653,6 +669,7 @@ class ReferenceRegressions:
                         daemon=sandbox.daemon,
                     ),
                     nonce=declaration["nonce"],
+                    listen_origin=endpoint_origin,
                     transport=transport,
                     observe_artifact=lambda: observe_deployment(
                         min(deadline, time.monotonic() + 5)
