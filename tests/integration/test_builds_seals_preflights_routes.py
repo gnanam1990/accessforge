@@ -2808,9 +2808,9 @@ def test_queued_fixture_setup_reconciles_reserved_nonce(
             fixture=reserved_fixture,
             sealed_url="http://127.0.0.1:8081/form/FIXTURE",
         )
-        assert load_destination(conn, **destination_args) == (
-            "http://127.0.0.1:8081/form/" + observed["application"]["nonce"]
-        )
+        destination = load_destination(conn, **destination_args)
+        assert destination is not None and destination.authorized_candidate_origin is None
+        assert destination.url == ("http://127.0.0.1:8081/form/" + observed["application"]["nonce"])
         for change in (
             {"fixture": {**reserved_fixture, "nonce": "another-nonce-12345"}},
             {"manifest": {**manual_seal["canonicalManifest"], "fixtureDigest": "0" * 64}},

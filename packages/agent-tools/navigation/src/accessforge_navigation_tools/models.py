@@ -5,10 +5,13 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal, Self
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 from accessforge_domain.journeys.dsl import ALLOWED_ACTIONS
-from accessforge_domain.reference_destination import reference_destination
+from accessforge_domain.reference_destination import (
+    candidate_reference_destination,
+    reference_destination,
+)
 
 
 class ActionName(StrEnum):
@@ -100,9 +103,27 @@ class NavigatorProjection(_SealedModel):
     runtime_start_url: str | None = Field(default=None, alias="runtimeStartUrl", max_length=2048)
 
     @model_validator(mode="after")
-    def destination_preserves_original_policy(self) -> Self:
+    def destination_preserves_original_policy(self, info: ValidationInfo) -> Self:
         if self.runtime_start_url is not None:
             origin, separator, nonce = self.runtime_start_url.rpartition("/form/")
+            candidate_origin = (info.context or {}).get("authorized_candidate_origin")
+            if candidate_origin is not None:
+                baseline_origin, marker, placeholder = self.policy.start_url.rpartition("/form/")
+                if (
+                    not marker
+                    or placeholder != "FIXTURE"
+                    or not separator
+                    or origin != candidate_origin
+                    or candidate_reference_destination(
+                        sealed_url=self.policy.start_url,
+                        baseline_origin=baseline_origin,
+                        candidate_origin=candidate_origin,
+                        nonce=nonce,
+                    )
+                    != self.runtime_start_url
+                ):
+                    raise ValueError("runtime destination differs from the authorized candidate")
+                return self
             if (
                 not separator
                 or reference_destination(
@@ -121,6 +142,7 @@ class NavigatorProjection(_SealedModel):
         policy: dict[str, object],
         reader_observations: list[ReaderObservation],
         runtime_start_url: str | None = None,
+        authorized_candidate_origin: str | None = None,
     ) -> NavigatorProjection:
         # Validate the whole sealed policy first. Extra oracle/source keys are rejected rather than
         # copied and then filtered, so an upstream boundary expansion is a visible failure.
@@ -131,7 +153,9 @@ class NavigatorProjection(_SealedModel):
                 "policy": sealed,
                 "reader_observations": tuple(reader_observations),
                 "runtime_start_url": runtime_start_url,
-            }
+            },
+            # Trusted construction context, never a wire field, model choice or policy rewrite.
+            context={"authorized_candidate_origin": authorized_candidate_origin},
         )
 
     def model_payload(self) -> dict[str, Any]:

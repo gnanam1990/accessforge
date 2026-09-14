@@ -392,6 +392,20 @@ def _prepare_owned_build(
                 policy = {
                     "fixtureValues": {"email": "fixture@example.test"},
                     "startUrl": "http://localhost:8000/form/FIXTURE",
+                    "taskSummary": "Inspect the isolated reference form.",
+                    "successCondition": "Stop after inspection.",
+                    "allowedActions": ["STOP"],
+                    "allowedKeyChords": [],
+                    "maxActions": 10,
+                    "wallTimeSeconds": 20,
+                    "forbiddenObservations": [
+                        "DOM",
+                        "SELECTORS",
+                        "SCREENSHOTS",
+                        "SOURCE",
+                        "OBSERVER_RECEIPTS",
+                        "ASSERTION_EXPECTATIONS",
+                    ],
                 }
                 summary["fixtureContract"] = {
                     "schemaVersion": 2,
@@ -1392,6 +1406,56 @@ def test_live_candidate_session_binds_exact_seal_fresh_fixture_and_first_lease(
                     },
                 )
                 assert retained_setup["observation"] == setup
+                from accessforge_navigation_tools import NavigatorProjection
+                from accessforge_orchestrator.navigator.destination import load_destination
+
+                fixture_row = conn.execute(
+                    "SELECT * FROM run_fixture_instance WHERE run_id=%s", (run_id,)
+                ).fetchone()
+                assert fixture_row is not None
+                destination_arguments = {
+                    "workspace_id": binding.workspace,
+                    "run_id": run_id,
+                    "manifest": manifest,
+                    "fixture": fixture_row,
+                    "sealed_url": "http://localhost:8000/form/FIXTURE",
+                }
+                destination = load_destination(conn, **destination_arguments)
+                assert destination is not None and destination.url == gateway.start_url
+                original_policy = conn.execute(
+                    "SELECT navigator_policy FROM journey_version WHERE id=%s",
+                    (manifest["journeyVersionId"],),
+                ).fetchone()
+                assert original_policy is not None
+                view = NavigatorProjection.from_policy(
+                    run_ref=run_id,
+                    policy=original_policy["navigator_policy"],
+                    reader_observations=[],
+                    runtime_start_url=destination.url,
+                    authorized_candidate_origin=destination.authorized_candidate_origin,
+                )
+                assert view.model_payload()["policy"] == original_policy["navigator_policy"]
+                assert view.model_payload()["runtimeStartUrl"] == gateway.start_url
+                assert set(view.model_payload()) == {
+                    "runRef",
+                    "policy",
+                    "readerObservations",
+                    "runtimeStartUrl",
+                }
+                with pytest.raises(ValueError):
+                    load_destination(
+                        conn,
+                        **{
+                            **destination_arguments,
+                            "sealed_url": "http://127.0.0.1:8000/form/FIXTURE",
+                        },
+                    )
+                with pytest.raises(ValueError), conn.transaction():
+                    conn.execute(
+                        "UPDATE environment_manifest SET revoked_at=clock_timestamp() WHERE id=%s",
+                        (environment_id,),
+                    )
+                    load_destination(conn, **destination_arguments)
                 assert (
                     setup["candidateSeed"]["context"]["regressionAttemptId"]
                     == gateway.binding.task_id

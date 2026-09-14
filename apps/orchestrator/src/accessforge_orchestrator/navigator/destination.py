@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import psycopg
@@ -9,7 +10,17 @@ import psycopg
 from accessforge_contracts.reference_fixture import REFERENCE_FIXTURE_DIGEST
 from accessforge_domain.canonical import digest
 from accessforge_domain.origins import normalize_origin
-from accessforge_domain.reference_destination import reference_destination
+from accessforge_domain.reference_destination import (
+    candidate_reference_destination,
+    reference_destination,
+)
+from accessforge_persistence import candidate_runs
+
+
+@dataclass(frozen=True)
+class RuntimeDestination:
+    url: str
+    authorized_candidate_origin: str | None = None
 
 
 def load_destination(
@@ -20,7 +31,7 @@ def load_destination(
     manifest: dict[str, Any],
     fixture: dict[str, Any],
     sealed_url: str,
-) -> str | None:
+) -> RuntimeDestination | None:
     """No observer configuration, counts, receipts or assertion expectations enter this read.
 
     Confirmed setup is a point-in-time identity boundary, not actual desktop evidence.
@@ -83,6 +94,58 @@ def load_destination(
         not in {normalize_origin(o) for o in environment["allowed_origins"]}
     ):
         raise ValueError("reserved destination differs from original execution identity")
-    return reference_destination(
-        sealed_url=sealed_url, origin=context["origin"], nonce=context["nonce"]
+    try:
+        candidate = candidate_runs.assert_live(conn, run_id=run_id)
+    except candidate_runs.Refused as exc:
+        raise ValueError("candidate destination no longer has live authority") from exc
+    if candidate is None:
+        return RuntimeDestination(
+            reference_destination(
+                sealed_url=sealed_url, origin=context["origin"], nonce=context["nonce"]
+            )
+        )
+    original = conn.execute(
+        "SELECT s.canonical_manifest,s.manifest_digest,e.allowed_origins FROM sealed_manifest s "
+        "JOIN environment_manifest e ON e.id=s.environment_manifest_id "
+        "AND e.workspace_id=s.workspace_id WHERE s.run_id=%s AND s.workspace_id=%s",
+        (candidate["baseline_run_id"], workspace_id),
+    ).fetchone()
+    if original is None or not isinstance(original["canonical_manifest"], dict):
+        raise ValueError("original baseline destination identity unavailable")
+    baseline = original["canonical_manifest"]
+    baseline_origin, marker, placeholder = sealed_url.rpartition("/form/")
+    if (
+        digest(baseline) != original["manifest_digest"]
+        or not marker
+        or placeholder != "FIXTURE"
+        or baseline_origin not in original["allowed_origins"]
+        or any(
+            baseline[key] != manifest[key]
+            for key in (
+                "journeyVersionId",
+                "navigatorPolicyDigest",
+                "fixtureDigest",
+                "assertionSetDigest",
+            )
+        )
+        or candidate["fixture_nonce"] != context["nonce"]
+        or candidate["permitted_differences"]
+        != [
+            {
+                "field": "environment_config_digest",
+                "baseline": baseline["environmentConfigDigest"],
+                "candidate": manifest["environmentConfigDigest"],
+                "reason": "exact authorized isolated candidate origin",
+            }
+        ]
+    ):
+        raise ValueError("candidate destination differs from its frozen baseline or allowed change")
+    return RuntimeDestination(
+        candidate_reference_destination(
+            sealed_url=sealed_url,
+            baseline_origin=baseline_origin,
+            candidate_origin=context["origin"],
+            nonce=context["nonce"],
+        ),
+        context["origin"],
     )

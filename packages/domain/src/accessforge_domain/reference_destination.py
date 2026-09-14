@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
+from .candidate_endpoint import validate_endpoint_origin
+
 
 def reference_destination(*, sealed_url: str, origin: str, nonce: str) -> str:
     parsed = urlsplit(origin)
@@ -24,3 +26,14 @@ def reference_destination(*, sealed_url: str, origin: str, nonce: str) -> str:
         raise ValueError("exact reviewed reference URL template and reserved nonce required")
     # No generic substitutions, URL joins, query strings, redirects or new origins.
     return origin + "/form/" + nonce
+
+
+def candidate_reference_destination(
+    *, sealed_url: str, baseline_origin: str, candidate_origin: str, nonce: str
+) -> str:
+    """Shape check only; trusted persistence must authorize the exact candidate origin first."""
+    reference_destination(sealed_url=sealed_url, origin=baseline_origin, nonce=nonce)
+    validate_endpoint_origin(candidate_origin)
+    return reference_destination(
+        sealed_url=candidate_origin + "/form/FIXTURE", origin=candidate_origin, nonce=nonce
+    )

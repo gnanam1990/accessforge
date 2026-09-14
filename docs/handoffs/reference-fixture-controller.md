@@ -81,8 +81,8 @@ environment identity or imply task success. Focused setup tests cover real sourc
 with a synthetic attempt identifier. Fresh-fixture lifecycle cases also cover real lease/session,
 object-store materialization, finalizer refusal for corrupt/deleted bytes, and inconclusive
 outcomes without physical-reader proof. These cases require the integration CI services;
-they do not establish an actual desktop run. The real operator host entry and attachment of
-isolated candidate setup to its separately approved reader run remain pending. The candidate
+they do not establish an actual desktop run. The real operator host entry and physical baseline
+and candidate acceptance remain pending. The candidate
 gateway deliberately does not expose setup/observer routes. Mandatory setup admission is now enforced for fresh-fixture
 environments; this is not a substitute for current approval, physical preflight or outcome proof.
 
@@ -100,8 +100,8 @@ is never the source of this measurement.
 The forced-RLS receipt has immutable context and a one-way pending-to-confirmed transition.
 Revoked, expired, fenced or already endpoint-bound workers cannot confirm it. History survives
 endpoint cleanup but supplies neither a RUN_EFFECTS approval nor reader/OS evidence. Browser
-setup/observer routes remain private. Candidate origin instantiation remains separate; seed
-history alone does not satisfy the fresh-fixture desktop admission gate.
+setup/observer routes remain private. Seed history alone does not satisfy the fresh-fixture
+desktop admission gate.
 
 The trusted `accessforge_orchestrator.candidate_fixture_setup` controller now attaches the
 original receipt to an existing candidate run only after independent RUN_EFFECTS approval,
@@ -119,6 +119,15 @@ full original seed receipt, not just copied hashes, against its protected regres
 lineage. Historical validation remains available after endpoint cleanup without renewing live
 authority. This remains point-in-time initial setup evidence, not a guarantee against later
 application mutations or proof of successful physical-reader execution.
+
+Candidate navigator projections now resolve the runtime destination only after the live
+candidate binding, confirmed setup identity, frozen baseline manifest and sole permitted
+environment-digest change agree. The original baseline URL must be the exact approved
+`/form/FIXTURE` template. Only the bound IPv4 loopback candidate listener can replace its
+origin. The original navigator policy is unchanged. A private construction context enables
+this validated candidate URL; it is not a JSON/model field and is not exported in the model
+payload. Arbitrary origins, substituted baseline templates and revoked endpoints refuse
+projection. The result is a planning destination, not proof that a browser actually reached it.
 
 Focused tests use real loopback TCP with synthetic replies for transport and separate
 disposable product/application PostgreSQL databases with in-process HTTP for successful
