@@ -1,8 +1,9 @@
 # Frozen fixture contract integration
 
 The compiler now retains the original logical fixture hash preimage in the protected reviewer
-summary. Its hash is unchanged: it includes template ID, navigator values, reset/observer key names
-and hashes of private reset/observer values. It does not include those private values or expose the
+summary. Contract schema version 2 includes template ID, navigator values and hashes of the entire
+private reset/observer maps. Neither private key names nor values are published. New compilations
+receive new fixture and journey digests; historical versions and seals remain unchanged. It does not expose the
 contract through navigator policy. A loader checks the original row hash and navigator-value binding;
 historical versions without the preimage are refused rather than reconstructed.
 
@@ -22,3 +23,9 @@ The existing authenticated observer and finalizer integration fixtures now disti
 contract hashes from application-template hashes. Added wrong-value/oracle rejection cases run in
 CI; the full local integration suite was not repeated.
 No live fixture, database migration, AT session, billable provider call or deployment was performed.
+
+CI found that retaining private key names exposed oracle metadata. The v2 privacy correction was
+source-reviewed and applied through GitHub while the local host was unresponsive. The original
+no-oracle-material regression remains unchanged; an additional case checks that renaming a private
+key still changes identity without publishing either name. This correction awaits fresh CI and has
+not been locally executed. Pending controller work must consume v2 map hashes, not removed key lists.
