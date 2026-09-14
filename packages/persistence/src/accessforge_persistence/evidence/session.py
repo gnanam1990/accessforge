@@ -74,7 +74,9 @@ def requirements(conn: psycopg.Connection[Any], row: dict[str, Any]) -> dict[str
 
         required["FIXTURE_SETUP"] = setup_producer(str(row["attempt_id"]))
     if conn.execute(
-        "SELECT 1 FROM candidate_run_binding WHERE run_id=%s", (row["run_id"],)
+        "SELECT 1 FROM candidate_run_binding WHERE run_id=%s "
+        "UNION ALL SELECT 1 FROM baseline_session_binding WHERE run_id=%s",
+        (row["run_id"], row["run_id"]),
     ).fetchone():
         from accessforge_persistence.functional_regression_evidence import (
             producer as functional_producer,

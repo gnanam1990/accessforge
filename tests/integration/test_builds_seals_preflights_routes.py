@@ -304,6 +304,40 @@ def execution_body(
             )
             reviewer_summary["assertionContract"] = assertions.canonical_form()
             body["assertionSetDigest"] = str(digest(assertions.canonical_form()))
+    if (
+        getattr(getattr(request.node, "callspec", None), "params", {}).get("fault")
+        == "runtime-endpoint"
+    ):
+        from accessforge_domain.functional_validation import VALIDATION_SUITE_DIGEST
+        from accessforge_domain.journeys.assertions import (
+            Assertion,
+            AssertionKind,
+            AssertionSet,
+            EvaluationRule,
+            UnknownReason,
+        )
+
+        assertions = AssertionSet(
+            (
+                Assertion(
+                    "completion",
+                    AssertionKind.TASK_COMPLETION,
+                    "Complete",
+                    unknown_reasons=frozenset({UnknownReason.OBSERVATION_MISSING}),
+                ),
+                Assertion(
+                    "validation",
+                    AssertionKind.FUNCTIONAL_VALIDATION,
+                    "Protected validation",
+                    unknown_reasons=frozenset({UnknownReason.OBSERVATION_MISSING}),
+                    evaluation_rule=EvaluationRule(
+                        "PROTECTED_REFERENCE_VALIDATION", suite_digest=VALIDATION_SUITE_DIGEST
+                    ),
+                ),
+            )
+        )
+        reviewer_summary["assertionContract"] = assertions.canonical_form()
+        body["assertionSetDigest"] = digest(assertions.canonical_form())
     policy.setdefault("fixtureValues", {"name": "Private Fixture Name"})
     reviewer_summary["fixtureContract"] = {
         "schemaVersion": 2,
@@ -1079,10 +1113,7 @@ def test_baseline_archive_retention_boundary(
                     with pytest.raises(sessions.Refused), conn.transaction():
                         sessions.assert_request(conn, run_id=binding["run_id"], method="POST")
                     # Real SQL lease binding, synthetic desktop identity: never starts AT.
-                    with (
-                        pytest.raises(RuntimeError, match="rollback synthetic lease"),
-                        conn.transaction(),
-                    ):
+                    with conn.transaction():
                         reader_id, lease_id = str(uuid.uuid4()), str(uuid.uuid4())
                         conn.execute(
                             "INSERT INTO runner(id,workspace_id,name,status,session_key,platform,"
@@ -1227,7 +1258,6 @@ def test_baseline_archive_retention_boundary(
                             (lease_id,),
                         )
                         sessions.assert_reader_released(conn, attempt_id=task.attempt_id)
-                        raise RuntimeError("rollback synthetic lease")
                     endpoints.closed(conn, claim=task, cleanup_confirmed=True)
                     with pytest.raises(endpoints.Refused), conn.transaction():
                         endpoints.assert_live(conn, claim=task)
@@ -1242,7 +1272,11 @@ def test_baseline_archive_retention_boundary(
                 claim=task,
                 policy_digest="e" * 64,
                 artifact_digest=artifact.archive_digest,
-                checks=("synthetic_fixture_validation",),
+                checks=tuple(
+                    f"{prefix}_{field}"
+                    for prefix in ("reject_invalid", "no_invalid_write")
+                    for field, _ in INVALID_VALUES
+                ),
                 containers=tuple(receipts),
                 validation=observation,
             )
@@ -1256,11 +1290,90 @@ def test_baseline_archive_retention_boundary(
                 (task.attempt_id,),
             ).fetchone()
             assert functional is not None
-            assert functional["functional_receipt"] == {
-                "format": "accessforge.functional-producer.v1",
-                "validation": observation.canonical_form(),
-                "runEvidence": None,
-            }  # No durable reader lease in these harness cases; do not manufacture a run verdict.
+            assert (
+                functional["functional_receipt"]["format"] == "accessforge.functional-producer.v1"
+            )
+            assert functional["functional_receipt"]["validation"] == observation.canonical_form()
+            if fault != "runtime-endpoint":
+                assert functional["functional_receipt"]["runEvidence"] is None
+            if fault == "runtime-endpoint":
+                from accessforge_persistence import functional_regression_evidence as evidence
+
+                original = evidence.for_run(conn, run_id=binding["run_id"])
+                assert original is not None and original["runtimeKind"] == "BASELINE"
+                assert original["producerReceipt"] == functional["functional_receipt"]
+                assert len(original["checks"]) == 8
+                bundle = evidence.snapshot(
+                    conn,
+                    {
+                        "run_id": binding["run_id"],
+                        "workspace_id": WS,
+                        "lease_id": lease_id,
+                        "epoch": 1,
+                        "attempt_id": "synthetic-attempt",
+                        "manifest_digest": binding["manifest_digest"],
+                    },
+                )
+                assert bundle["receiptDigest"] == digest(original)
+                from accessforge_orchestrator.execution_artifacts import Refused as ArtifactRefused
+                from accessforge_orchestrator.functional_evidence import observed_assertions
+                from accessforge_persistence import journeys
+
+                sealed = conn.execute(
+                    "SELECT canonical_manifest FROM sealed_manifest WHERE run_id=%s",
+                    (binding["run_id"],),
+                ).fetchone()
+                assert sealed is not None
+                manifest = sealed["canonical_manifest"]
+                frozen = journeys.load_assertion_contract(
+                    conn,
+                    version_id=manifest["journeyVersionId"],
+                    expected_digest=manifest["assertionSetDigest"],
+                )
+                values: dict[str, Any] = dict(
+                    bundle=bundle,
+                    context={
+                        "run_id": binding["run_id"],
+                        "workspace_id": WS,
+                        "lease_id": lease_id,
+                        "epoch": 1,
+                        "attempt_id": "synthetic-attempt",
+                        "manifest_digest": binding["manifest_digest"],
+                    },
+                    assertions=frozen,
+                    observed_build=artifact.archive_digest,
+                    artifact_digest=digest(bundle),
+                )
+                outcomes = observed_assertions(**values)
+                assert set(outcomes) == {"validation"}
+                assert outcomes["validation"].condition.value == "TRUE"
+                assert outcomes["validation"].provenance.value == "OBSERVER_AUTHORED"
+                assert observed_assertions(**{**values, "observed_build": None}) == {}
+                with pytest.raises(ArtifactRefused):
+                    observed_assertions(**{**values, "artifact_digest": None})
+                from accessforge_persistence.evidence.session import (
+                    requirements,
+                    stream_requirements,
+                )
+
+                required = requirements(
+                    conn,
+                    {
+                        "id": str(uuid.uuid4()),
+                        "run_id": binding["run_id"],
+                        "attempt_id": str(uuid.uuid4()),
+                    },
+                )
+                assert "FUNCTIONAL_REGRESSION" in required
+                assert "FUNCTIONAL_REGRESSION" not in stream_requirements(required)
+                with pytest.raises(evidence.Refused), conn.transaction():
+                    conn.execute(
+                        "UPDATE desktop_lease SET stop_acknowledged_at=NULL,"
+                        "stop_acknowledged_epoch=NULL "
+                        "WHERE id=%s",
+                        (lease_id,),
+                    )
+                    evidence.for_run(conn, run_id=binding["run_id"])
             with pytest.raises(psycopg.IntegrityError), conn.transaction():
                 conn.execute(
                     "UPDATE baseline_regression_attempt SET functional_receipt='{}' WHERE id=%s",
