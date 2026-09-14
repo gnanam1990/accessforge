@@ -7,7 +7,7 @@ import uuid
 from typing import Annotated, Any
 
 import psycopg
-from fastapi import Depends, FastAPI, Form, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import db, templates
@@ -71,16 +71,44 @@ def create_app(settings: ReferenceAppSettings | None = None) -> FastAPI:
         status_code=status.HTTP_201_CREATED,
         dependencies=[Depends(require_setup)],
     )
-    def create_fixture(variant: str) -> dict[str, str]:
+    def create_fixture(
+        variant: str,
+        response: Response,
+        nonce: Annotated[
+            str | None, Query(min_length=16, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+        ] = None,
+    ) -> dict[str, str]:
         if variant not in ("accessible", "inaccessible"):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown variant")
-        nonce = secrets.token_urlsafe(16)
+        # The trusted controller may persist this identity before its HTTP call. An uncertain
+        # response can then be reconciled without creating another instance or clearing any run.
+        nonce = nonce if nonce is not None else secrets.token_urlsafe(16)
         digest = template_digest(variant)
         with db.transaction(config.database_url) as conn:
-            conn.execute(
-                "INSERT INTO fixture_instance (nonce, template_digest, variant) VALUES (%s,%s,%s)",
+            created = conn.execute(
+                "INSERT INTO fixture_instance (nonce, template_digest, variant) VALUES (%s,%s,%s) "
+                "ON CONFLICT (nonce) DO NOTHING RETURNING nonce",
                 (nonce, digest, variant),
-            )
+            ).fetchone()
+            if created is None:
+                existing = conn.execute(
+                    "SELECT template_digest,variant FROM fixture_instance "
+                    "WHERE nonce=%s FOR UPDATE",
+                    (nonce,),
+                ).fetchone()
+                used = conn.execute(
+                    "SELECT 1 FROM service_request WHERE fixture_nonce=%s LIMIT 1", (nonce,)
+                ).fetchone()
+                if (
+                    existing is None
+                    or existing["template_digest"] != digest
+                    or existing["variant"] != variant
+                    or used is not None
+                ):
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT, "fixture reservation differs or is already used"
+                    )
+                response.status_code = status.HTTP_200_OK
         return {
             "nonce": nonce,
             "variant": variant,
