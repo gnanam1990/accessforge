@@ -38,7 +38,12 @@ from typing import Any
 
 import psycopg
 
-from .evidence.objectstore import ObjectStoreUnavailable, S3ArtifactStore, is_candidate_archive_key
+from .evidence.objectstore import (
+    ObjectStoreUnavailable,
+    S3ArtifactStore,
+    is_baseline_archive_key,
+    is_candidate_archive_key,
+)
 
 
 class RestoreError(RuntimeError):
@@ -74,7 +79,7 @@ def assert_can_reconcile(conn: psycopg.Connection[dict[str, Any]]) -> None:
 
 def restore_object_bytes(store: S3ArtifactStore, *, key: str, payload: bytes) -> None:
     """Write and re-read one archive member before restored database authority is exposed."""
-    candidate = is_candidate_archive_key(key)
+    candidate = is_candidate_archive_key(key) or is_baseline_archive_key(key)
     if len(payload) > 64 * 1024 * 1024 or (not payload and not candidate):
         raise RestoreError("stored object is empty or exceeds the supported restore bound")
     if candidate:
@@ -144,6 +149,53 @@ def record_candidate_restore_locations(
             "INSERT INTO candidate_archive_restore_location "
             "(build_id,workspace_id,revision,restore_id,store_endpoint,store_bucket) "
             "VALUES (%s,%s,%s,%s,%s,%s)",
+            (
+                row["build_id"],
+                row["workspace_id"],
+                int(prior["revision"]) + 1,
+                restore_id,
+                *store.storage_identity,
+            ),
+        )
+
+
+def record_baseline_restore_locations(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    store: S3ArtifactStore,
+    restored_keys: set[str],
+    restore_id: str,
+) -> None:
+    """Bind verified baseline transfers; original capture/storage provenance remains immutable."""
+    assert_can_reconcile(conn)
+    rows = conn.execute("SELECT * FROM baseline_archive ORDER BY build_id").fetchall()
+    for row in rows:
+        if row["object_key"] not in restored_keys:
+            continue
+        if not is_baseline_archive_key(row["object_key"]):
+            raise RestoreError("invalid baseline restore namespace")
+        conn.execute(
+            "SELECT id FROM baseline_build_attempt WHERE id=%s FOR UPDATE", (row["build_id"],)
+        )
+        payload = store.get_bounded(key=row["object_key"], max_bytes=int(row["size_bytes"]))
+        if row["state"] == "DELETED":
+            if payload != b"":
+                raise RestoreError("restored baseline tombstone contains bytes")
+        elif row["state"] == "RETAINED" and (
+            len(payload) != row["size_bytes"]
+            or hashlib.sha256(payload).hexdigest() != row["content_digest"]
+        ):
+            raise RestoreError("restored baseline differs from its archive receipt")
+        prior = conn.execute(
+            "SELECT coalesce(max(revision),0) AS revision FROM baseline_archive_restore_location "
+            "WHERE build_id=%s",
+            (row["build_id"],),
+        ).fetchone()
+        assert prior is not None
+        conn.execute(
+            "INSERT INTO baseline_archive_restore_location"
+            "(build_id,workspace_id,revision,restore_id,store_endpoint,store_bucket) "
+            "VALUES(%s,%s,%s,%s,%s,%s)",
             (
                 row["build_id"],
                 row["workspace_id"],

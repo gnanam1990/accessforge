@@ -65,6 +65,13 @@ def is_candidate_archive_key(key: str) -> bool:
     )
 
 
+def is_baseline_archive_key(key: str) -> bool:
+    return (
+        re.fullmatch(rf"workspaces/{_UUID}/baseline-builds/{_UUID}/archives/[0-9a-f]{{64}}", key)
+        is not None
+    )
+
+
 class ArtifactStoreError(Exception):
     """An object-store operation was refused or failed."""
 

@@ -11,9 +11,32 @@ from typing import Any
 from accessforge_persistence import baseline_builds as builds
 from accessforge_persistence import workspace_connection
 
+from .artifacts import CandidateArchiveStore
+from .baseline_artifacts import retain_baseline
 from .baseline_source import PreparedBaselineSource
 from .coordinator import execution_policy
 from .sandbox import CleanupUnconfirmed, DockerSandbox, SandboxBuild, SandboxCreation
+
+
+def build_and_retain_baseline(
+    database_url: str,
+    *,
+    prepared: PreparedBaselineSource,
+    sandbox: DockerSandbox,
+    command: tuple[str, ...],
+    store: CandidateArchiveStore,
+    cancelled: Callable[[], bool] = lambda: False,
+) -> SandboxBuild:
+    """Build once and retain exact captured bytes. No endpoint or reader is started."""
+    result = execute_baseline_build(
+        database_url, prepared=prepared, sandbox=sandbox, command=command, cancelled=cancelled
+    )
+    if cancelled():
+        raise builds.Refused("baseline retention cancelled after capture")
+    retain_baseline(
+        database_url, workspace_id=prepared.binding.workspace_id, result=result, store=store
+    )
+    return result
 
 
 def execute_baseline_build(

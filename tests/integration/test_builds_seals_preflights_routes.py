@@ -771,6 +771,234 @@ def test_baseline_build_durable_fencing(
         }
 
 
+@pytest.fixture()
+def baseline_archive_stores() -> Iterator[list[Any]]:
+    """Only generated isolated buckets; never remove configured evidence objects."""
+    from accessforge_persistence.evidence.objectstore import S3ArtifactStore, S3Settings
+
+    stores: list[Any] = []
+    try:
+        for _ in range(2):
+            store = S3ArtifactStore(
+                S3Settings(
+                    endpoint_url=os.environ["OBJECT_STORE_ENDPOINT"],
+                    access_key=os.environ["OBJECT_STORE_ACCESS_KEY"],
+                    secret_key=os.environ["OBJECT_STORE_SECRET_KEY"],
+                    bucket=f"accessforge-baseline-drill-{uuid.uuid4().hex}",
+                )
+            )
+            store.ensure_bucket()
+            stores.append(store)
+        yield stores
+    finally:
+        for store in stores:
+            for key in store.iter_keys():
+                store.delete(key=key)
+            store._client.delete_bucket(Bucket=store.storage_identity[1])
+
+
+@pytest.mark.parametrize("fault", [None, "readback", "revoked", "upload", "substitution", "s3"])
+def test_baseline_archive_retention_boundary(
+    db: str,
+    client: TestClient,
+    csrf: str,
+    project: str,
+    execution_body: dict[str, Any],
+    fault: str | None,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Real DB/HTTP; s3 case uses isolated real stores; process receipt is synthetic, not Docker."""
+    from accessforge_build_worker.baseline_artifacts import (
+        read_retained_baseline,
+        retain_baseline,
+        retire_expired_baseline,
+    )
+    from accessforge_build_worker.sandbox import DaemonBinding, SandboxBuild
+    from accessforge_build_worker.snapshot import SourceFile, SourceSnapshot
+    from accessforge_persistence import baseline_builds as builds
+    from accessforge_persistence import retention
+
+    artifact = SourceSnapshot((SourceFile("index.html", b"synthetic output, never served"),))
+    build = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/builds",
+        json=_build_body(artifactDigest=artifact.archive_digest),
+        headers={CSRF_HEADER: csrf},
+    )
+    assert build.status_code == 201
+    response = client.post(
+        f"/v1/workspaces/{WS}/projects/{project}/seals",
+        json={**execution_body, "buildId": build.json()["buildId"]},
+        headers={CSRF_HEADER: csrf},
+    )
+    assert response.status_code == 201, response.text
+    sealed = response.json()
+    url = _approval_url(project, sealed)
+    headers = {CSRF_HEADER: csrf, "If-Match": "0"}
+    assert client.post(url, json=_approval_body(sealed), headers=headers).status_code == 201
+    assert (
+        client.post(
+            f"/v1/workspaces/{WS}/runs",
+            json={"manifestDigest": sealed["manifestDigest"]},
+            headers={CSRF_HEADER: csrf},
+        ).status_code
+        == 202
+    )
+    with workspace_connection(db, WS) as conn:
+        binding = builds.read_binding(
+            conn, workspace_id=WS, run_id=sealed["canonicalManifest"]["runId"]
+        )
+        inputs: dict[str, Any] = dict(
+            binding=binding,
+            source_archive_digest="a" * 64,
+            policy_digest="b" * 64,
+            image_id="sha256:" + "c" * 64,
+            daemon_endpoint="unix:///fixture/docker.sock",
+            daemon_id="fixture",
+        )
+        claim = builds.claim(conn, **inputs)
+        builds.dispatch(conn, value=claim, **inputs)
+        process = dict(
+            container_id="d" * 64,
+            platform="linux/amd64",
+            image_id=inputs["image_id"],
+            daemon_endpoint=inputs["daemon_endpoint"],
+            daemon_id=inputs["daemon_id"],
+        )
+        builds.created(conn, value=claim, **process)
+        builds.captured(
+            conn,
+            value=claim,
+            **process,
+            source_archive_digest="a" * 64,
+            artifact_digest=artifact.archive_digest,
+            policy_digest="b" * 64,
+        )
+    result = SandboxBuild(
+        claim.attempt_id,
+        inputs["image_id"],
+        "a" * 64,
+        artifact,
+        b"",
+        b"",
+        True,
+        DaemonBinding(inputs["daemon_endpoint"], "fixture"),
+        "d" * 64,
+        "linux/amd64",
+    )
+
+    class Store:
+        storage_identity = ("http://fixture-storage", "baseline-test")
+
+        def __init__(self) -> None:
+            self.data: dict[str, bytes] = {}
+
+        def put_create_only(self, *, key: str, payload: bytes, content_type: str) -> str:
+            if fault == "upload" or key in self.data:
+                raise RuntimeError("synthetic create-only failure")
+            self.data[key] = payload
+            if fault == "revoked":
+                assert (
+                    client.post(
+                        url + "/revocation",
+                        json={"manifestDigest": sealed["manifestDigest"]},
+                        headers=headers,
+                    ).status_code
+                    == 200
+                )
+            return key
+
+        def get_bounded(self, *, key: str, max_bytes: int) -> bytes:
+            return b"changed" if fault == "readback" else self.data[key][:max_bytes]
+
+        def retire_create_only(self, *, key: str) -> None:
+            self.data[key] = b""
+
+    real_stores = request.getfixturevalue("baseline_archive_stores") if fault == "s3" else None
+    store: Any = real_stores[0] if real_stores else Store()
+    if fault in {"upload", "readback", "revoked"}:
+        with pytest.raises((RuntimeError, execution_approvals.Refused)):
+            retain_baseline(db, workspace_id=WS, result=result, store=store)
+        with workspace_connection(db, WS) as conn:
+            assert conn.execute(
+                "SELECT state FROM baseline_archive WHERE build_id=%s", (claim.attempt_id,)
+            ).fetchone() == {"state": "QUARANTINED"}
+        with pytest.raises(builds.Refused):
+            read_retained_baseline(db, workspace_id=WS, build_id=claim.attempt_id, store=store)
+        return
+    retain_baseline(db, workspace_id=WS, result=result, store=store)
+    args: dict[str, Any] = dict(workspace_id=WS, build_id=claim.attempt_id, store=store)
+    assert read_retained_baseline(db, **args) == artifact
+    with pytest.raises(builds.Refused):
+        retain_baseline(db, workspace_id=WS, result=result, store=store)
+    if fault == "substitution":
+        store.data[next(iter(store.data))] = b"substituted"
+        with pytest.raises(builds.Refused):
+            read_retained_baseline(db, **args)
+        return
+    if real_stores:
+        from accessforge_persistence import connect, restore
+        from accessforge_persistence.evidence.objectstore import ObjectStoreUnavailable
+
+        target = real_stores[1]
+        key = next(iter(store.iter_keys()))
+        restore.restore_object_bytes(target, key=key, payload=artifact.archive())
+        with pytest.raises(builds.Refused, match="location"):
+            read_retained_baseline(db, **{**args, "store": target})
+        admin = urlsplit(request.getfixturevalue("backup_database_url"))
+        admin_url = urlunsplit(
+            (admin.scheme, admin.netloc, urlsplit(db).path, admin.query, admin.fragment)
+        )
+        with connect(admin_url) as conn:
+            restore.record_baseline_restore_locations(
+                conn, store=target, restored_keys={key}, restore_id=str(uuid.uuid4())
+            )
+        assert read_retained_baseline(db, **{**args, "store": target}) == artifact
+        with pytest.raises(builds.Refused, match="location"):
+            read_retained_baseline(db, **args)
+        # Original location is provenance, not rewritten to make a different bucket pass.
+        with workspace_connection(db, WS) as conn:
+            original = conn.execute(
+                "SELECT store_endpoint,store_bucket FROM baseline_archive WHERE build_id=%s",
+                (claim.attempt_id,),
+            ).fetchone()
+            assert original is not None
+            assert (original["store_endpoint"], original["store_bucket"]) == store.storage_identity
+        store = target
+        args["store"] = store
+    assert not retire_expired_baseline(db, **args)
+    with workspace_connection(db, WS) as conn:
+        policy = retention.current_policy(conn, workspace_id=WS)
+        retention.configure_policy(
+            conn,
+            workspace_id=WS,
+            configured_by=OWNER,
+            expected_revision=policy.revision,
+            entries=[
+                dict(
+                    evidenceClass=e.evidence_class,
+                    retainDays=0 if e.evidence_class == "SOURCE_SNAPSHOT" else e.retain_days,
+                    consentRequired=e.consent_required,
+                )
+                for e in policy.entries
+            ],
+        )
+    assert retire_expired_baseline(db, **args)
+    assert retire_expired_baseline(db, **args)
+    if real_stores:
+        assert store.get_bounded(key=key, max_bytes=1) == b""
+        with pytest.raises(ObjectStoreUnavailable):
+            store.put_create_only(
+                key=key, payload=artifact.archive(), content_type="application/x-tar"
+            )
+        with pytest.raises(ObjectStoreUnavailable):
+            restore.restore_object_bytes(store, key=key, payload=artifact.archive())
+        restore.restore_object_bytes(store, key=key, payload=b"")
+    else:
+        assert list(store.data.values()) == [b""]
+    with pytest.raises(builds.Refused):
+        read_retained_baseline(db, **args)
+
+
 def test_manual_approval_is_exact_independent_audited_and_revocable(
     db: str, client: TestClient, csrf: str, project: str, manual_seal: dict[str, Any]
 ) -> None:
