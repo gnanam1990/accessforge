@@ -7,7 +7,7 @@ import type {
   RawObservation,
   UnknownObservation,
 } from '@accessforge/at-voiceover';
-import { assertActionPermitted } from '@accessforge/at-voiceover';
+import { assertActionPermitted, PREFLIGHT_CHECKS } from '@accessforge/at-voiceover';
 
 import type { CandidateTraceWriter } from './candidate-trace.js';
 import { createVoiceOverDispatch, type VoiceOverRuntime } from './voiceover.js';
@@ -59,9 +59,14 @@ export interface CandidateProofResult {
 }
 
 function failedChecks(report: PreflightReport): readonly string[] {
-  return Object.entries(report.checks)
-    .filter(([, result]) => result.condition !== 'TRUE')
-    .map(([name, result]) => `${name}=${result.condition}`);
+  const missing = PREFLIGHT_CHECKS
+    .filter((name) => report.checks?.[name]?.condition !== 'TRUE')
+    .map((name) => `${name}=${report.checks?.[name]?.condition ?? 'UNKNOWN'}`);
+  const additional = Object.entries(report.checks ?? {})
+    .filter(([name, result]) => !PREFLIGHT_CHECKS.some((required) => required === name) &&
+      result?.condition !== 'TRUE')
+    .map(([name, result]) => `${name}=${result?.condition ?? 'UNKNOWN'}`);
+  return [...missing, ...additional];
 }
 
 export class CandidateProofRunner {
@@ -87,8 +92,10 @@ export class CandidateProofRunner {
       }
     }
 
-    await this.options.trace.record('PREFLIGHT_RESULT', this.options.preflight);
-    const blocked = failedChecks(this.options.preflight);
+    // Retain and decide from one snapshot before any async sink callback can mutate the report.
+    const preflight = structuredClone(this.options.preflight);
+    const blocked = failedChecks(preflight);
+    await this.options.trace.record('PREFLIGHT_RESULT', preflight);
     if (blocked.length > 0) {
       const detail = `candidate proof blocked by preflight: ${blocked.join(', ')}`;
       await this.options.trace.record('RUN_FINISHED', { status: 'BLOCKED', detail });
