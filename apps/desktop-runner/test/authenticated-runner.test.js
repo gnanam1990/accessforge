@@ -57,6 +57,45 @@ test('server claim -> fsynced local intent -> physical checks -> adapter -> obse
   assert.equal(h.journal.entries.length, 4);
 });
 
+test('configured focus is sampled after the adapter and retained privately before action success', async () => {
+  const h = harness();
+  const focus = { measurementKind: 'AX_KEYBOARD_FOCUS', status: 'KNOWN', role: 'AXTextField',
+    identifierDigest: 'a'.repeat(64), capturedAtUtc: new Date().toISOString() };
+  h.options.observeKeyboardFocus = async () => { h.calls.push('focus'); return focus; };
+  h.options.recordObservation = async observation => {
+    h.calls.push('observation');
+    assert.equal('keyboardFocus' in observation, false);
+  };
+  h.session.retainObservation = async (command, observation, capturedAt, privateFocus) => {
+    h.calls.push('server-observation');
+    assert.equal(command.actionId, observation.actionId);
+    assert.equal(command.sequence, observation.actionSequence);
+    assert.deepEqual(privateFocus, focus);
+    assert.ok(Object.isFrozen(privateFocus));
+  };
+  assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'SUCCEEDED');
+  assert.ok(h.calls.indexOf('adapter') < h.calls.indexOf('focus'));
+  assert.ok(h.calls.indexOf('focus') < h.calls.indexOf('observation'));
+  assert.ok(h.calls.indexOf('server-observation') < h.calls.indexOf('server-result:SUCCEEDED'));
+});
+
+test('configured missing or late focus cannot produce known success or publish late evidence', async () => {
+  for (const late of [false, true]) {
+    const h = harness({ actionTimeoutMs: 10 });
+    h.options.observeKeyboardFocus = async () => {
+      if (!late) throw new Error('private focus unavailable');
+      await new Promise(resolve => setTimeout(resolve, 40));
+      return { measurementKind: 'AX_KEYBOARD_FOCUS', status: 'KNOWN', role: 'AXTextField',
+        identifierDigest: 'a'.repeat(64), capturedAtUtc: new Date().toISOString() };
+    };
+    assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'AMBIGUOUS');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(h.calls.includes('server-observation'), false);
+    assert.equal(h.calls.includes('server-result:SUCCEEDED'), false);
+    assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'REFUSED');
+  }
+});
+
 test('incomplete preflight cannot pass vacuously or create a remote intent', async () => {
   const h = harness({ preflight: async () => ({ checks: {} }) });
   assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'REFUSED');

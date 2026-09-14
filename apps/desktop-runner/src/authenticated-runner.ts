@@ -6,7 +6,7 @@ import { PREFLIGHT_CHECKS } from '@accessforge/at-voiceover';
 import { parseReference, type DispatchReference } from './dispatch-receiver.js';
 import { Supervisor, type ActionCommand, type Clock, type DispatchOutcome, type Journal, type LeaseState } from './supervisor.js';
 import { createVoiceOverDispatch, type VoiceOverRuntime } from './voiceover.js';
-import type { KeyboardFocusRecord } from './keyboard-focus.js';
+import { parseKeyboardFocus, type KeyboardFocusRecord } from './keyboard-focus.js';
 
 export interface ExecutionSessionPort {
   readonly receipt: Readonly<Record<string, unknown>>;
@@ -30,6 +30,8 @@ export interface AuthenticatedRunnerOptions {
   readonly preflight: () => Promise<PreflightReport>;
   /** Trusted actual browser-origin observation, not the journey's intended URL. */
   readonly observeOrigin: () => Promise<string>;
+  /** Opt-in private post-action measurement. Failure fences, never borrows reader text. */
+  readonly observeKeyboardFocus?: () => Promise<KeyboardFocusRecord>;
   /** Fresh focus/effect authorization against the sealed environment; throws on unknown/refused. */
   readonly authorizePhysicalAction: (command: ActionCommand) => Promise<void>;
   /** Explicit trusted candidate setup only; permission does not itself perform a POST. */
@@ -80,9 +82,15 @@ export class AuthenticatedRunner {
         if (command === undefined || !this.#executing || this.#fenced || this.#stopping) {
           throw new Error('reader evidence outside active dispatch');
         }
+        const before = options.clock.monotonic();
+        const keyboardFocus = options.observeKeyboardFocus === undefined ? undefined
+          : parseKeyboardFocus(await bounded(options.observeKeyboardFocus(), this.#remaining()));
+        if (!this.#executing || this.#fenced || this.#stopping || this.#remaining() <= 0 ||
+            options.clock.monotonic() < before) throw new Error('post-action focus evidence fenced');
+        // The local reader sink and navigator projection receive only the original reader value.
         await options.recordObservation(observation);
         if (!this.#executing || this.#fenced || this.#stopping) throw new Error('reader evidence fenced');
-        await options.session.retainObservation(command, observation, options.clock.utc());
+        await options.session.retainObservation(command, observation, options.clock.utc(), keyboardFocus);
       },
     });
     this.#supervisor = new Supervisor({
