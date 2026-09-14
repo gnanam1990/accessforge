@@ -25,6 +25,8 @@ be presented as the actual working reader demonstration.
 - [ ] Prepare English description, setup/testing instructions, limitations and required IDs.
 - [ ] Disclose incorporated pre-existing work and verify participant eligibility.
 - [ ] Verify event deadline and required fields in submission account.
+- [ ] Verify public source repository URL, required source/assets and setup instructions.
+- [ ] Provide free working-project access for judges throughout the judging period.
 - [ ] Submit with owner authority and retain receipt.
 
 Original event: [Agents for Humans rules](https://agentsforhumans.devpost.com/rules).

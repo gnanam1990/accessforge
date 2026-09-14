@@ -156,9 +156,13 @@ def test_operator_dispatches_once_and_only_completes_after_stop(
 
         asyncio.run(inside_loop())
     else:
-        with pytest.raises(
-            (HandoffUnknown, ReaderTransportUnavailable, baseline_builds.Refused, ValueError)
-        ):
+        expected_exception = {
+            "stop": HandoffUnknown,
+            "unavailable": ReaderTransportUnavailable,
+            "cancelled": baseline_builds.Refused,
+            "timeout": ValueError,
+        }[fault]
+        with pytest.raises(expected_exception):
             invoke()
     if fault == "stop":
         assert events == ["runtime", "dispatch"]
