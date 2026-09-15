@@ -11,6 +11,7 @@ import {
   runPreflight,
   type ProbeEnvironment,
 } from '@accessforge/at-voiceover';
+import { runNativeHost } from './native-host.js';
 
 export const READER_UNAVAILABLE_MESSAGE =
   'accessforge-runner: the Guidepup VoiceOver adapter is implemented and wired to the durable ' +
@@ -27,6 +28,27 @@ export function main(
   return 78; // EX_CONFIG: code exists, but the real-reader capability remains unproven.
 }
 
+export async function cli(args: readonly string[], write: (line: string) => void = console.error): Promise<number> {
+  if (args.length === 0) return main(write);
+  if (args.length !== 4 || args[0] !== '--native-host' || args[2] !== '--handoff-file') {
+    write('usage: accessforge-runner [--native-host PRIVATE_OPERATOR.mjs --handoff-file NEW_PRIVATE_PATH]');
+    return 64;
+  }
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
+  try {
+    await runNativeHost(args[1]!, args[3]!, controller.signal);
+    write('accessforge-runner: native host execution closed; consult retained evidence for verdict');
+    return 0;
+  } catch {
+    write('accessforge-runner: native host unconfirmed or unavailable; reconcile original attempt, do not retry');
+    return 78;
+  } finally {
+    process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
+  }
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  process.exit(main());
+  process.exitCode = await cli(process.argv.slice(2));
 }
