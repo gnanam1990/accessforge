@@ -32,6 +32,15 @@ export async function prepareSafariReferenceApp(
   const expectedUrl = new URL(`/form/${encodeURIComponent(privateSetup.reservedNonce)}`,
     privateSetup.permittedOrigin).href;
   const launch = createSafariReferenceLauncher({ ...host, expectedUrl }, ports);
+  // Reconciliation sends an authenticated POST before launch() gets a chance to run its guards.
+  // Refuse a cancelled or unowned setup before that first effect, not only before opening Safari.
+  try {
+    if (host.signal.aborted) throw new Error('cancelled');
+    host.assertDesktopHeld();
+    if (host.signal.aborted) throw new Error('cancelled');
+  } catch {
+    throw new Error('reference setup authority unavailable; reconciliation was not dispatched');
+  }
   return prepareReferenceApp({ ...privateSetup, launch });
 }
 

@@ -195,3 +195,17 @@ Full Disk Access switch is OFF. No additional permission was granted. Source sel
 distinguishes absent metadata from inaccessible metadata: only ENOENT permits looking at the legacy
 path. An inaccessible or non-regular current file cannot select a stale legacy TRUE. The focused
 checks remain synthetic/source-selection evidence, not actual-reader qualification.
+
+## Baseline setup ownership checkpoint — 2026-09-15
+
+PR #175 passed exact-head CI and merged as `e416caef93267ee07dbf4ce2f316286e3426a7ca`;
+local main was synchronized and clean. Provider selection and additional preference-access
+confirmation remain pending; neither prevents this C1 source correction.
+
+The trusted Safari setup composition previously sent its authenticated fixture-reconciliation
+POST before checking cancellation or the existing desktop claim. It now checks both before the
+first setup effect, retaining the launcher's separate fresh authorization and native observation
+gates. A focused regression reproduced the cancelled-request dispatch against the old code.
+No fixture, browser, reader or OS setting was changed to exercise this synthetic test.
+C1 still needs concrete runtime/reset/stale-input/action provisioning and actual qualification;
+C2 window collection/authenticated finalization and the rest of the queue remain incomplete.
