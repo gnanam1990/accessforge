@@ -195,7 +195,7 @@ async def test_execution_wait_is_not_the_short_delivery_acknowledgement(
     async def stopped(*args: Any) -> bool:
         return True
 
-    monkeypatch.setattr(dispatch.asyncio, "timeout", bounded)
+    monkeypatch.setattr(asyncio, "timeout", bounded)
     monkeypatch.setattr(dispatch, "admit_and_dispatch_reader", deliver)
     monkeypatch.setattr(dispatch, "_reader_stopped", stopped)
     kwargs: dict[str, Any] = {} if timeout is None else {"timeout_seconds": timeout}
