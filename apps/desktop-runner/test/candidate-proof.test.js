@@ -94,7 +94,7 @@ function harness(preflight = readyPreflight(), onRetain) {
     approvedTextValues: new Set(['Test Person']),
     onObservation: async (observation) => observations.push(observation),
   });
-  return { calls, observations, runner, sink };
+  return { calls, observations, runner, sink, adapter };
 }
 
 test('the candidate proof runs only through the supervisor and closes its local source stream', async () => {
@@ -172,4 +172,36 @@ test('an empty action list cannot become a completed candidate proof', async () 
   await assert.rejects(() => runner.run([]), /requires at least one action/);
   assert.deepEqual(calls, []);
   assert.deepEqual(sink.lines, []);
+});
+
+test('partial reader startup failure still attempts cleanup before closing the trace', async () => {
+  const { runner, adapter, calls, sink } = harness();
+  adapter.start = async () => { calls.push('partial-start'); throw new Error('startup failed'); };
+  adapter.stop = async () => {
+    assert.equal(sink.lines.some(line => line.kind === 'CANDIDATE_CLOSING_WATERMARK'), false);
+    calls.push('stop');
+  };
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
+  assert.deepEqual(calls, ['partial-start', 'stop']);
+  assert.equal(sink.lines.at(-1).kind, 'CANDIDATE_CLOSING_WATERMARK');
+});
+
+test('cleanup failure cannot produce a completed candidate trace', async () => {
+  const { runner, adapter, calls, sink } = harness();
+  adapter.stop = async () => { calls.push('stop'); throw new Error('cleanup failed'); };
+  const result = await runner.run([{ action: 'NEXT' }]);
+  assert.equal(result.status, 'INTERRUPTED');
+  assert.match(result.detail, /cleanup unconfirmed/);
+  assert.deepEqual(calls, ['start', 'NEXT', 'stop']);
+  assert.equal(sink.lines.at(-2).sourceRecord.payload.status, 'INTERRUPTED');
+});
+
+test('successful implicit cleanup precedes the completed trace', async () => {
+  const { runner, adapter, calls, sink } = harness();
+  adapter.stop = async () => {
+    assert.equal(sink.lines.some(line => line.sourceRecord?.type === 'RUN_FINISHED'), false);
+    calls.push('stop');
+  };
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'CANDIDATE_COMPLETE');
+  assert.deepEqual(calls, ['start', 'NEXT', 'stop']);
 });
