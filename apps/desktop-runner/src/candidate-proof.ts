@@ -104,11 +104,16 @@ export class CandidateProofRunner {
     }
 
     const outcomes: DispatchOutcome[] = [];
-    let readerStarted = false;
+    let startupAttempted = false;
     let readerStoppedByAction = false;
+    let result: CandidateProofResult = {
+      status: 'CANDIDATE_COMPLETE', actions: outcomes,
+      detail: 'actual-reader actions completed as local CANDIDATE_PROOF; no canonical outcome or verified finding is claimed',
+    };
     try {
+      // Startup can change reader state before rejecting. Its cleanup is still owned here.
+      startupAttempted = true;
       await this.options.adapter.start();
-      readerStarted = true;
       const journal = new TracingJournal(this.options.journal, this.options.trace);
       const dispatch = createVoiceOverDispatch(this.options.adapter, {
         utc: this.options.clock.utc,
@@ -136,40 +141,34 @@ export class CandidateProofRunner {
         }
         if (outcome.status !== 'SUCCEEDED') {
           const detail = `candidate proof interrupted: ${outcome.status}`;
-          await this.options.trace.record('INTERRUPTION', { outcome, detail });
-          await this.options.trace.record('RUN_FINISHED', { status: 'INTERRUPTED', detail });
-          await this.options.trace.close();
-          return { status: 'INTERRUPTED', actions: outcomes, detail };
+          result = { status: 'INTERRUPTED', actions: outcomes, detail };
+          break;
         }
       }
 
-      const detail =
-        'actual-reader actions completed as local CANDIDATE_PROOF; no canonical outcome or ' +
-        'verified finding is claimed';
-      await this.options.trace.record('RUN_FINISHED', {
-        status: 'CANDIDATE_COMPLETE',
-        detail,
-      });
-      await this.options.trace.close();
-      return { status: 'CANDIDATE_COMPLETE', actions: outcomes, detail };
     } catch (error) {
       const detail = `candidate proof interrupted by ${
         error instanceof Error ? error.message : 'an unknown runtime error'
       }`;
-      await this.options.trace.record('INTERRUPTION', { detail });
-      await this.options.trace.record('RUN_FINISHED', { status: 'INTERRUPTED', detail });
-      await this.options.trace.close();
-      return { status: 'INTERRUPTED', actions: outcomes, detail };
+      result = { status: 'INTERRUPTED', actions: outcomes, detail };
     } finally {
-      if (readerStarted && !readerStoppedByAction) {
+      if (startupAttempted && !readerStoppedByAction) {
         try {
           await this.options.adapter.stop();
         } catch {
-          // The trace already says whether the run completed or was interrupted. A teardown failure
-          // must be surfaced by the caller's diagnostics and next preflight; it must not rewrite the
-          // already-fsynced action history.
+          result = {
+            status: 'INTERRUPTED', actions: outcomes,
+            detail: 'candidate proof reader cleanup unconfirmed; reconcile desktop state before another run',
+          };
         }
       }
     }
+    // Cleanup is part of the run. Never seal a successful trace while teardown can still fail.
+    if (result.status === 'INTERRUPTED') {
+      await this.options.trace.record('INTERRUPTION', { detail: result.detail });
+    }
+    await this.options.trace.record('RUN_FINISHED', { status: result.status, detail: result.detail });
+    await this.options.trace.close();
+    return result;
   }
 }
