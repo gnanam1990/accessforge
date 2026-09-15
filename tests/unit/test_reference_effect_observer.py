@@ -156,7 +156,16 @@ def test_ready_precedes_dispatch_and_closed_follows_rechecked_stop(wired: Any) -
     assert ready["startNs"] == closed["startNs"] == "10"
     assert closed["intervals"] == [{"startNs": "10", "endNs": "30", "occurrences": "1"}]
     assert closed["finalSample"] is False and closed["count"] is None
-    assert closed["assertionObservations"] == []
+    assert ready["assertionObservations"] == []
+    assert closed["conditionFormat"] == "accessforge.reference-effect-conditions.v1"
+    assert closed["assertionObservations"] == [
+        {
+            "assertionId": "none",
+            "kind": "FORBIDDEN_EFFECT",
+            "condition": "FALSE",
+            "provenance": "OBSERVER_AUTHORED",
+        }
+    ]
     assert "synthetic-fixture-001" not in str(wired.admitted)
     assert [item["producer_sequence"] for item in wired.admitted] == [1, 2]
 

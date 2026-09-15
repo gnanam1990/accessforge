@@ -44,6 +44,9 @@ from accessforge_orchestrator.functional_evidence import (
     observed_assertions as functional_assertions,
 )
 from accessforge_orchestrator.keyboard_focus_evidence import keyboard_focus_samples
+from accessforge_orchestrator.reference_effect_evidence import (
+    observed_assertions as reference_effect_assertions,
+)
 from accessforge_orchestrator.runtime_evidence import interpret as interpret_runtime
 from accessforge_orchestrator.runtime_evidence import observed_model, reader_samples
 from accessforge_persistence import evaluations, journeys, runs, workspace_connection
@@ -51,7 +54,7 @@ from accessforge_persistence.evidence import assess_completeness
 from accessforge_persistence.evidence.objectstore import artifact_key, compute_digest
 from accessforge_persistence.evidence.session import requirements, stream_requirements
 
-EVALUATOR_VERSION = "1.11.0"
+EVALUATOR_VERSION = "1.12.0"
 
 
 def _retained(
@@ -189,6 +192,10 @@ def _decide(
     if set(functional) & set(values):
         raise Refused("different observers cannot decide the same assertion")
     values.update(functional)
+    reference_effects = reference_effect_assertions(snapshots, assertions)
+    if set(reference_effects) & set(values):
+        raise Refused("different observers cannot decide the same assertion")
+    values.update(reference_effects)
     evaluated = evaluate_assertions(assertions.required, values)
     task_values = [
         a.condition for a in evaluated.outcomes if a.kind is AssertionKind.TASK_COMPLETION

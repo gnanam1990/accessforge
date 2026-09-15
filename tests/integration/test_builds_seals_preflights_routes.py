@@ -4201,7 +4201,14 @@ def test_reference_effect_lifecycle_records_use_real_sequencer(
             row["payload"]["sourceRecordDigest"] == digest(row["payload"]["sourceRecord"])
             for row in records
         )
-        assert final["finalSample"] is False and final["assertionObservations"] == []
+        assert final["finalSample"] is False
+        assert first["assertionObservations"] == []
+        assert final["conditionFormat"] == "accessforge.reference-effect-conditions.v1"
+        assert len(final["assertionObservations"]) == 1
+        condition = final["assertionObservations"][0]
+        assert condition["kind"] == "FORBIDDEN_EFFECT"
+        assert condition["condition"] == "FALSE"
+        assert condition["provenance"] == "OBSERVER_AUTHORED"
 
 
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
