@@ -9,6 +9,7 @@ import { startNavigatorActionBridge } from './navigator-action-bridge.js';
 import { startOwnedNavigatorExecution, type NavigatorProcessOptions } from './navigator-process.js';
 import { createObserverProcessClosure, type ObserverProcessOptions } from './observer-process.js';
 import { FileJournal } from './journal.js';
+import { createReferenceEffectProcess, type ReferenceEffectProcessOptions } from './reference-effect-process.js';
 
 export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhysicalSafariRunner>[0], 'session'> & {
   /** Independently provisioned private host configuration, never navigator fields. */
@@ -52,6 +53,7 @@ export async function runProvisionedNavigatorExecution(
   bootstrap: Parameters<typeof startProvisionedNavigatorExecution>[0],
   navigator: NavigatorProcessOptions | (Omit<NavigatorProcessOptions, 'closeIndependentObserver'> & {
     readonly independentObserver: ObserverProcessOptions;
+    readonly independentEffectObserver?: ReferenceEffectProcessOptions;
   }),
 ): Promise<Readonly<Record<string, unknown>>> {
   if (JSON.stringify(parseReference(bootstrap.receiver.localReference)) !==
@@ -61,12 +63,59 @@ export async function runProvisionedNavigatorExecution(
   }
   if ('independentObserver' in navigator) {
     if ('closeIndependentObserver' in navigator) throw new Error('ambiguous observer ownership');
-    const { independentObserver, ...planner } = navigator;
+    const { independentObserver, independentEffectObserver, ...planner } = navigator;
     const closeIndependentObserver = createObserverProcessClosure(independentObserver,
       planner.reference, planner.deadlineMonotonic);
+    if (independentEffectObserver !== undefined) {
+      if (independentEffectObserver.credentialRef !== independentObserver.credentialRef ||
+          independentEffectObserver.environment.ACCESSFORGE_DATABASE_URL !== independentObserver.environment.ACCESSFORGE_DATABASE_URL ||
+          independentEffectObserver.environment.ACCESSFORGE_OBSERVER_DATABASE_URL !== independentObserver.environment.ACCESSFORGE_OBSERVER_DATABASE_URL) {
+        throw new Error('effect and completion observer configurations differ');
+      }
+      const lifetime = new AbortController();
+      const cancel = () => lifetime.abort();
+      const effect = createReferenceEffectProcess(independentEffectObserver, planner.reference, planner.deadlineMonotonic);
+      let ready: Promise<void> | undefined;
+      planner.signal.addEventListener('abort', cancel, { once: true });
+      if (planner.signal.aborted) cancel();
+      // A failed worker fences the navigator/native bridge while the execution is still active.
+      void effect.failure.catch(cancel);
+      const observedBootstrap = { ...bootstrap,
+        readerStartup: { ...bootstrap.readerStartup, async authorize(signal: AbortSignal) {
+          await bootstrap.readerStartup.authorize(signal);
+          // createExecutionBootstrap opens the machine session before entering this callback.
+          // The callback can repeat for fresh consent, but never spawns another collector.
+          ready ??= effect.start(lifetime.signal);
+          await ready;
+          effect.assertActive();
+        } },
+        async authorizePhysicalAction(command: Parameters<typeof bootstrap.authorizePhysicalAction>[0]) {
+          effect.assertActive();
+          await bootstrap.authorizePhysicalAction(command);
+          effect.assertActive();
+        },
+      };
+      try {
+        return await Promise.race([
+          startOwnedNavigatorExecution(() => startProvisionedNavigatorExecution(observedBootstrap), {
+            ...planner, signal: lifetime.signal,
+            async closeIndependentObserver(signal: AbortSignal) {
+              await effect.finish(); // Original STOP is independently checked inside the worker.
+              await closeIndependentObserver(signal); // Ordinary final sample/producer closure follows.
+            },
+          }),
+          effect.failure,
+        ]);
+      } finally {
+        planner.signal.removeEventListener('abort', cancel);
+        lifetime.abort();
+        effect.abort();
+      }
+    }
     return startOwnedNavigatorExecution(() => startProvisionedNavigatorExecution(bootstrap),
       { ...planner, closeIndependentObserver });
   }
+  if ('independentEffectObserver' in navigator) throw new Error('effect observer requires independent completion ownership');
   return startOwnedNavigatorExecution(() => startProvisionedNavigatorExecution(bootstrap), navigator);
 }
 

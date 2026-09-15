@@ -7,12 +7,14 @@ import { assertRealReaderProven } from '@accessforge/at-voiceover';
 import { startNativeDispatchListener } from './native-start-listener.js';
 import type { NavigatorProcessOptions } from './navigator-process.js';
 import type { ObserverProcessOptions } from './observer-process.js';
+import type { ReferenceEffectProcessOptions } from './reference-effect-process.js';
 
 export interface NativeHostConfiguration {
   readonly privateDirectory: string;
   readonly bootstrap: Parameters<typeof startNativeDispatchListener>[1];
   readonly navigator: Omit<NavigatorProcessOptions, 'signal' | 'closeIndependentObserver'> & {
     readonly independentObserver: ObserverProcessOptions;
+    readonly independentEffectObserver?: ReferenceEffectProcessOptions;
   };
 }
 
