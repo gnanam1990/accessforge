@@ -26,7 +26,7 @@ export interface VoiceOverClient {
   act(): Promise<void>;
   type(text: string): Promise<void>;
   press(key: string): Promise<void>;
-  itemText(): Promise<string>;
+  readCurrent(): Promise<void>;
   lastSpokenPhrase(): Promise<string>;
   spokenPhraseLog(): Promise<string[]>;
 }
@@ -123,7 +123,7 @@ export class VoiceOverAdapter {
 
     // Guidepup's lastSpokenPhrase is a cached log tail. Its appended samples can also
     // repeat stale text or contain empty capture failures; require a distinguishable sample.
-    const before = request.action === 'READ_CURRENT' ? undefined : await this.speechLog();
+    const before = await this.speechLog();
     let phrase: string;
     switch (request.action) {
       case 'NEXT':
@@ -156,7 +156,8 @@ export class VoiceOverAdapter {
         break;
       }
       case 'READ_CURRENT':
-        phrase = await this.client.itemText();
+        await this.client.readCurrent();
+        phrase = '';
         break;
       default:
         throw new Error(`validated action ${request.action} has no VoiceOver implementation`);
@@ -237,7 +238,22 @@ export function createGuidepupVoiceOverAdapter(
   // Keep the host probe at the production construction boundary, where an unsupported host should
   // fail, instead of at package import time, where every platform-independent consumer would fail.
   const { voiceOver } = createRequire(import.meta.url)('@guidepup/guidepup') as {
-    readonly voiceOver: VoiceOverClient;
+    readonly voiceOver: Omit<VoiceOverClient, 'readCurrent'> & {
+      readonly keyboardCommands: { readonly describeItem: unknown };
+      perform(command: unknown): Promise<void>;
+    };
   };
-  return new VoiceOverAdapter(voiceOver, options);
+  // Keep SDK receivers bound. The port exposes only one fixed describe-current command,
+  // never the SDK's arbitrary command vocabulary or the cached itemText accessor.
+  const client: VoiceOverClient = {
+    get name() { return voiceOver.name; },
+    get version() { return voiceOver.version; },
+    detect: () => voiceOver.detect(), start: () => voiceOver.start(), stop: () => voiceOver.stop(),
+    next: () => voiceOver.next(), previous: () => voiceOver.previous(), act: () => voiceOver.act(),
+    type: text => voiceOver.type(text), press: key => voiceOver.press(key),
+    readCurrent: () => voiceOver.perform(voiceOver.keyboardCommands.describeItem),
+    lastSpokenPhrase: () => voiceOver.lastSpokenPhrase(),
+    spokenPhraseLog: () => voiceOver.spokenPhraseLog(),
+  };
+  return new VoiceOverAdapter(client, options);
 }
