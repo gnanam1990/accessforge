@@ -673,6 +673,195 @@ def test_pre_upgrade_legacy_seal_replay_is_preserved_but_not_cross_project(
         assert conn.execute("SELECT count(*) AS n FROM sealed_manifest").fetchone() == {"n": 1}
 
 
+@pytest.mark.parametrize(
+    "publication_fault",
+    [None, "lost-response", "revoke", "bad-response", "cleanup-failed", "read-only-checks"],
+)
+def test_approved_check_publication_is_one_shot_and_recoverable(
+    db: str,
+    client: TestClient,
+    project: str,
+    manual_seal: dict[str, Any],
+    publication_fault: str | None,
+) -> None:
+    """Real approval/intent/receipt DB; synthetic GitHub HTTP and no credential issuance."""
+    import httpx
+
+    from accessforge_domain.authorization import HumanPrincipal, Role
+    from accessforge_orchestrator.github_preview_approval import approve_preview, store_preview
+    from accessforge_orchestrator.github_publication_intent import read_publication_state
+    from accessforge_orchestrator.github_publisher import (
+        PublicationUnconfirmed,
+        publish_preview,
+        read_creation_receipt,
+    )
+    from accessforge_persistence import github_bindings
+
+    manifest = manual_seal["canonicalManifest"]
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE project SET repository_url=%s,repository_authorized_by=%s WHERE id=%s",
+            ("https://github.com/fixture-owner/fixture-repository.git", OWNER, project),
+        )
+        run_store.create_run(
+            conn,
+            workspace_id=WS,
+            project_id=project,
+            run_id=manifest["runId"],
+            manifest_digest=manual_seal["manifestDigest"],
+            authorization_id=manifest["authorizationId"],
+        )
+        session = conn.execute("SELECT id FROM user_session WHERE user_id=%s", (OWNER,)).fetchone()
+        assert session is not None
+        principal = HumanPrincipal(OWNER, WS, Role.OWNER, str(session["id"]))
+        binding_id = github_bindings.record_verified(
+            conn,
+            workspace_id=WS,
+            app_id=7,
+            installation_id=42,
+            account_id=3,
+            repository_id=13,
+            owner="fixture-owner",
+            name="fixture-repository",
+            observed_at=datetime.now(UTC).isoformat(),
+        )
+    stored = store_preview(db, principal=principal, binding_id=binding_id, run_id=manifest["runId"])
+    preview_id, expected = stored["previewId"], stored["preview"]["previewDigest"]
+    approval_id = approve_preview(
+        db, principal=principal, preview_id=preview_id, expected_digest=expected
+    )
+    body = stored["preview"]["request"]["body"]
+    calls: list[tuple[str, str]] = []
+    permissions = {"metadata": "read", "contents": "read", "checks": "write"}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        assert request.url.host == "api.github.com" and request.url.scheme == "https"
+        status, value = 200, {}
+        path = request.url.path
+        if path == "/app/installations/42":
+            value = {
+                "id": 42,
+                "app_id": 7,
+                "account": {"id": 3},
+                "suspended_at": None,
+                "permissions": permissions,
+            }
+            if publication_fault == "read-only-checks":
+                value["permissions"] = {**permissions, "checks": "read"}
+            if publication_fault == "revoke" and len(calls) > 1:
+                with workspace_connection(db, WS) as conn:
+                    conn.execute(
+                        "UPDATE approval SET revoked_at=clock_timestamp() WHERE id=%s",
+                        (approval_id,),
+                    )
+        elif path.endswith("/access_tokens"):
+            assert json.loads(request.content) == {
+                "repository_ids": [13],
+                "permissions": permissions,
+            }
+            status = 201
+            value = {
+                "token": "ghs_7_fixture.header.signature-with-dashes",
+                "permissions": permissions,
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=59))
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+        elif path == "/installation/token":
+            status = 500 if publication_fault == "cleanup-failed" else 204
+        elif path.endswith("/check-runs"):
+            assert request.method == "POST" and json.loads(request.content) == body
+            with workspace_connection(db, WS) as conn:
+                assert conn.execute(
+                    "SELECT count(*) AS n FROM github_publication_intent"
+                ).fetchone() == {"n": 1}
+            if publication_fault == "lost-response":
+                raise httpx.ReadTimeout("synthetic private response must not escape")
+            status = 201
+            value = {
+                **body,
+                "id": 91,
+                "app": {"id": 7},
+                "output": {**body["output"], "annotations_count": 0},
+            }
+            if publication_fault == "bad-response":
+                value["head_sha"] = "f" * 40
+        elif "/git/commits/" in path:
+            value = {"sha": manifest["sourceCommitSha"]}
+        else:
+            value = {"id": 13, "full_name": "fixture-owner/fixture-repository", "owner": {"id": 3}}
+        return httpx.Response(status, stream=httpx.ByteStream(json.dumps(value).encode()))
+
+    class NoArtifactReads:
+        def get_bounded(self, **kwargs: Any) -> bytes:
+            raise AssertionError("queued check must not pretend to have evaluated evidence")
+
+    from typing import cast
+
+    from accessforge_orchestrator.execution_artifacts import ExecutionArtifactStore
+
+    arguments = dict(
+        principal=principal,
+        preview_id=preview_id,
+        approval_id=approval_id,
+        expected_digest=expected,
+        app_jwt="a.b.c",
+        store=cast(ExecutionArtifactStore, NoArtifactReads()),
+        allow_temporary_token_issuance=True,
+        _transport=httpx.MockTransport(handle),
+    )
+    if publication_fault is None:
+        receipt = publish_preview(db, **arguments)
+        assert receipt.check_run_id == 91 and receipt.payload_digest == digest(body)
+        assert (
+            read_creation_receipt(db, principal=principal, intent_id=receipt.intent_id) == receipt
+        )
+    else:
+        with pytest.raises(PublicationUnconfirmed) as error:
+            publish_preview(db, **arguments)
+        assert "private response" not in str(error.value)
+    creates = [c for c in calls if c[1].endswith("/check-runs")]
+    no_reservation = publication_fault in {"revoke", "read-only-checks"}
+    assert len(creates) == (0 if no_reservation else 1)
+    if publication_fault == "read-only-checks":
+        assert calls == [("GET", "/app/installations/42")]
+    else:
+        assert calls[-1] == ("DELETE", "/installation/token")
+    recovery = read_publication_state(db, principal=principal, preview_id=preview_id)
+    assert recovery.retry_allowed is False
+    assert (recovery.original_creation is not None) is (publication_fault is None)
+    http_recovery = client.get(
+        f"/v1/workspaces/{WS}/github/publication-previews/{preview_id}/recovery"
+    )
+    assert http_recovery.status_code == 200
+    assert http_recovery.headers["Cache-Control"] == "no-store"
+    assert http_recovery.json()["remote_outcome"] == "UNKNOWN"
+    assert http_recovery.json()["retry_allowed"] is False
+    assert (http_recovery.json()["original_creation"] is not None) is (publication_fault is None)
+    if not no_reservation:
+        assert recovery.intent_id is not None
+        observed = read_creation_receipt(db, principal=principal, intent_id=recovery.intent_id)
+        assert (observed is not None) is (publication_fault is None)
+        before = len(calls)
+        with pytest.raises(PublicationUnconfirmed):
+            publish_preview(db, **arguments)
+        assert len(calls) == before  # No token or create retry after a known local reservation.
+        with workspace_connection(db, WS) as conn:
+            for statement in (
+                "UPDATE github_publication_receipt SET check_run_id=92",
+                "DELETE FROM github_publication_receipt",
+            ):
+                if publication_fault is None:
+                    with pytest.raises(psycopg.IntegrityError), conn.transaction():
+                        conn.execute(statement)
+        stranger = HumanPrincipal(OWNER, str(uuid.uuid4()), Role.OWNER, principal.session_id)
+        with workspace_connection(db, stranger.workspace_id) as conn:
+            assert conn.execute("SELECT * FROM github_publication_receipt").fetchall() == []
+        with pytest.raises(PublicationUnconfirmed):
+            read_creation_receipt(db, principal=stranger, intent_id=recovery.intent_id)
+
+
 @pytest.mark.parametrize("completed", [False, True])
 def test_incomplete_stored_seal_operation_refuses_without_reexecution(
     db: str,

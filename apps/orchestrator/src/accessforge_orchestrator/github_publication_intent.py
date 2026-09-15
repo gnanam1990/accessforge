@@ -17,6 +17,7 @@ from accessforge_domain.states import ApprovalScope
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_persistence import approvals, github_previews, workspace_connection
 
+from .github_access import CreatedCheck
 from .github_connections import _authorize
 from .github_preview_service import prepare_check_preview
 
@@ -32,6 +33,8 @@ class PublicationRecovery:
     created_at: str | None = None
     remote_outcome: Literal["UNKNOWN"] = "UNKNOWN"
     retry_allowed: Literal[False] = False
+    # A historical confirmed create does not establish current existence, contents or uniqueness.
+    original_creation: CreatedCheck | None = None
 
 
 def read_publication_state(
@@ -84,12 +87,24 @@ def read_publication_state(
                 ).fetchone()
         if row is None:
             return PublicationRecovery(local_state="NOT_OBSERVED")
+        receipt = conn.execute(
+            "SELECT * FROM github_publication_receipt WHERE intent_id=%s", (row["id"],)
+        ).fetchone()
         return PublicationRecovery(
             local_state="RECORDED",
             intent_id=str(row["id"]),
             original_preview_id=str(row["preview_id"]),
             preview_digest=row["preview_digest"],
             created_at=to_rfc3339_utc(row["created_at"]),
+            original_creation=None
+            if receipt is None
+            else CreatedCheck(
+                str(receipt["intent_id"]),
+                receipt["check_run_id"],
+                receipt["payload_digest"],
+                to_rfc3339_utc(receipt["observed_at"]),
+                receipt["token_revoked"],
+            ),
         )
 
 
