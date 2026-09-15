@@ -17,8 +17,9 @@ This can conservatively classify a genuinely repeated utterance or real silence 
 the SDK sample lacks independent evidence to distinguish those cases. Logs stay private.
 
 This checks a distinguishable sample across the action boundary, not acoustic output or causal
-attribution against every possible background announcement. READ_CURRENT remains the separate
-current-item API and WAIT_FOR_READER_IDLE retains its existing behavior. Errors or oversized
+attribution against every possible background announcement. READ_CURRENT was subsequently moved
+to a fixed reader command; see [read-current-command.md](read-current-command.md).
+WAIT_FOR_READER_IDLE retains its existing behavior. Errors or oversized
 logs remain unavailable; no automatic replay is introduced.
 
 API provenance: installed pinned Guidepup VoiceOverClient.js and the official

@@ -21,6 +21,7 @@ function fakeClient(overrides = {}) {
     act: async () => calls.push(['act']),
     type: async (text) => calls.push(['type', text]),
     press: async (key) => calls.push(['press', key]),
+    readCurrent: async () => calls.push(['readCurrent']),
     itemText: async () => {
       calls.push(['itemText']);
       return 'Current field';
@@ -30,7 +31,7 @@ function fakeClient(overrides = {}) {
       return 'Spoken phrase';
     },
     spokenPhraseLog: async () => calls.filter(([action]) =>
-      ['next', 'previous', 'act', 'type', 'press'].includes(action)).map(() => 'Spoken phrase'),
+      ['next', 'previous', 'act', 'type', 'press', 'readCurrent'].includes(action)).map(() => 'Spoken phrase'),
     ...overrides,
   };
 }
@@ -63,7 +64,7 @@ test('the real adapter maps only the eight sealed actions onto Guidepup', async 
     ['act'],
     ['type', 'Test Person'],
     ['press', 'Shift+Tab'],
-    ['itemText'],
+    ['readCurrent'],
     ['stop'],
   ]);
 });
@@ -78,6 +79,19 @@ test('every policy chord has one exact Guidepup key spelling', () => {
     'CTRL+OPT+RIGHT': 'Control+Alt+ArrowRight',
     'CTRL+OPT+LEFT': 'Control+Alt+ArrowLeft',
   });
+});
+
+test('READ_CURRENT requests reader speech instead of returning cached item text', async () => {
+  const client = fakeClient({itemText: async () => { throw new Error('cached path forbidden'); }});
+  const result = await new VoiceOverAdapter(client).perform({action: 'READ_CURRENT'}, context());
+  assert.deepEqual(client.calls, [['readCurrent']]);
+  assert.equal(result.observation.phrase, 'Spoken phrase');
+});
+
+test('READ_CURRENT does not borrow speech when the describe command has no new sample', async () => {
+  const client = fakeClient({spokenPhraseLog: async () => ['old']});
+  const result = await new VoiceOverAdapter(client).perform({action: 'READ_CURRENT'}, context());
+  assert.equal(result.observation.provenance, 'CAPTURE_UNKNOWN');
 });
 
 test('reader output is constructed as actual-reader evidence with action provenance', async () => {

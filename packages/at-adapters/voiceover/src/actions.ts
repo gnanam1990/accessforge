@@ -133,7 +133,7 @@ export const GUIDEPUP_MAPPING: Readonly<Record<AllowedAction, string>> = {
   ACTIVATE: 'voiceOver.act()',
   TYPE_TEXT: 'voiceOver.type(text)',
   KEY_CHORD: 'voiceOver.press(chord)',
-  READ_CURRENT: 'voiceOver.itemText()',
+  READ_CURRENT: 'voiceOver.perform(voiceOver.keyboardCommands.describeItem)',
   WAIT_FOR_READER_IDLE: 'voiceOver.lastSpokenPhrase() polled to quiescence',
   STOP: 'supervisor teardown; no reader call',
 };
