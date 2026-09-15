@@ -110,12 +110,11 @@ def _dump_postgres(database_url: str, destination: Path) -> None:
         check=False,
     )
     if result.returncode != 0:
-        # stderr from pg_dump does not echo the password, but it does echo the rest of the URL.
-        # Only the first line is kept, and the URL is not re-printed by us.
-        first = (result.stderr or "").strip().splitlines()
+        # Tool diagnostics can contain connection strings, database names or row contents.
+        # Never assume the first line is safe, and never forward either captured output stream.
         raise SystemExit(
-            "pg_dump failed: "
-            + (first[0] if first else f"exit {result.returncode}")
+            f"pg_dump failed (exit {result.returncode}); diagnostic output withheld. "
+            "The output file may be incomplete and must not be used as a backup."
             + "\nA backup role must bypass row-level security; the application role owns the "
             "tables and FORCE RLS applies to owners, so it can dump structure but no rows."
         )

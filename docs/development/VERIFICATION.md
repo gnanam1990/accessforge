@@ -109,6 +109,14 @@ Exit status is 0 when every applicable check passed and 1 when any integrity che
 
 ## Database migrations
 
+Run backup and migration in a fail-fast operator session. Never submit them as independent shell
+commands in one unchecked batch: a failed dump must stop the sequence. An application-role dump
+can fail because FORCE RLS applies; a partially written archive is not a successful backup.
+Use `scripts/backup.py` with the configured backup role and encryption key, check its exit status,
+and verify the backup before invoking `scripts/migrate.py`. Do not put a connection URI into
+`PGDATABASE`: PostgreSQL can treat it as a literal database name and echo it in errors. Never
+publish raw database-tool diagnostics; they can contain credentials or row contents.
+
 ```bash
 uv run python -c "from accessforge_persistence import migrate; print(migrate('<database-url>'))"
 ```
