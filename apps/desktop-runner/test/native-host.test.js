@@ -39,3 +39,55 @@ test('unqualified native host refuses before operator code import or publishing 
 test('malformed native host command refuses without importing configuration', async () => {
   assert.equal(await cli(['--native-host', '/missing/operator.mjs'], () => {}), 64);
 });
+
+test('candidate command requires explicit reader-startup option before importing operator code', async t => {
+  const root = directory(t), modulePath = join(root, 'candidate.mjs');
+  writeFileSync(modulePath, 'globalThis.__afCandidateImported = true;', {mode: 0o600});
+  t.after(() => { delete globalThis.__afCandidateImported; });
+  assert.equal(await cli(['--candidate-proof', modulePath, '--output-dir', join(root, 'proof')], () => {}), 64);
+  assert.equal(globalThis.__afCandidateImported, undefined);
+  assert.deepEqual(readdirSync(root), ['candidate.mjs']);
+});
+
+test('candidate provisioner failure is sanitized and never creates proof output', async t => {
+  const root = directory(t), modulePath = join(root, 'candidate.mjs');
+  writeFileSync(modulePath, 'export async function provisionCandidateProof() { throw new Error("private-candidate-marker"); }', {mode: 0o600});
+  const lines = [];
+  assert.equal(await cli(['--candidate-proof', modulePath, '--output-dir', join(root, 'proof'), '--allow-reader-startup'], v => lines.push(v)), 78);
+  assert.ok(lines.every(line => !line.includes('private-candidate-marker')));
+  assert.deepEqual(readdirSync(root), ['candidate.mjs']);
+});
+
+test('incomplete candidate configuration is refused before trace, claim or adapter creation', async t => {
+  const root = directory(t), modulePath = join(root, 'candidate.mjs');
+  writeFileSync(modulePath, 'export async function provisionCandidateProof() { return {}; }', {mode: 0o600});
+  assert.equal(await cli(['--candidate-proof', modulePath, '--output-dir', join(root, 'proof'), '--allow-reader-startup'], () => {}), 78);
+  assert.deepEqual(readdirSync(root), ['candidate.mjs']);
+});
+
+test('assembled candidate host retains the original claim when runtime evidence is unavailable', async t => {
+  const root = directory(t), modulePath = join(root, 'candidate.mjs');
+  const reference = { workspaceId: '00000000-0000-0000-0000-000000000001',
+    runId: '00000000-0000-0000-0000-000000000002', attemptId: '00000000-0000-0000-0000-000000000003',
+    runnerId: '00000000-0000-0000-0000-000000000004', leaseId: '00000000-0000-0000-0000-000000000005', epoch: 1 };
+  const artifactProbe = { expectedBuildDigest: 'a'.repeat(64), reference: {
+    protocol: 'accessforge.artifact-probe.v1', socketPath: join(root, 'unused.sock'), token: 'b'.repeat(64),
+    taskId: 'synthetic', candidateId: 'synthetic', imageId: 'synthetic', daemonId: 'synthetic' } };
+  writeFileSync(modulePath, `export async function provisionCandidateProof() { return {
+    desktop: ${JSON.stringify({directory: root, desktopSessionId: '123', reference})},
+    physicalPreflight: { expectedDesktopSessionId: '123', artifactProbe: ${JSON.stringify(artifactProbe)},
+      async observeRuntimeEvidence() { throw new Error('synthetic unavailable source'); } },
+    safari: { expectedUrl: 'http://127.0.0.1:8081/form/synthetic-fixture-123', expectedBrowserVersion: '26.6' },
+    actions: [{action: 'NEXT'}], approvedTextValues: [], maxDurationSeconds: 60, actionTimeoutMs: 100,
+    async authorizeStartup() { throw new Error('must never reach reader startup'); },
+    async authorizeAction() { throw new Error('must never reach physical action'); }
+  }; }`, {mode: 0o600});
+  const args = ['--candidate-proof', modulePath, '--output-dir', join(root, 'proof'), '--allow-reader-startup'];
+  assert.equal(await cli(args, () => {}), 78);
+  const claimPath = join(root, 'desktop-123.json');
+  const claim = readFileSync(claimPath, 'utf8');
+  assert.deepEqual(JSON.parse(claim).reference, reference);
+  assert.deepEqual(readdirSync(join(root, 'proof')), []);
+  assert.equal(await cli(args, () => {}), 78); // Existing output never replays or releases the claim.
+  assert.equal(readFileSync(claimPath, 'utf8'), claim);
+});

@@ -44,6 +44,8 @@ export interface CandidateProofOptions {
   readonly preflight: () => Promise<PreflightReport>;
   /** Trusted operator consent and reader-control configuration check; no default authorization. */
   readonly authorizeReaderStartup: () => Promise<void>;
+  /** Trusted host focus/effect gate; resolved before the same late-dispatch fence as preflight. */
+  readonly authorizePhysicalAction?: (request: ActionRequest) => Promise<void>;
   readonly trace: CandidateTraceWriter;
   readonly journal: Journal;
   readonly clock: Clock;
@@ -155,6 +157,7 @@ export class CandidateProofRunner {
           if ((await this.checkPhysical('BEFORE_ACTION')).length > 0) {
             throw new Error('action-time physical readiness unavailable');
           }
+          await this.options.authorizePhysicalAction?.(structuredClone(command) as ActionRequest);
           if (token === undefined || activeDispatch !== token) {
             throw new Error('late physical preflight fenced');
           }

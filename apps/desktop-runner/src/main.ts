@@ -12,6 +12,7 @@ import {
   type ProbeEnvironment,
 } from '@accessforge/at-voiceover';
 import { runNativeHost } from './native-host.js';
+import { runCandidateHost } from './candidate-host.js';
 
 export const READER_UNAVAILABLE_MESSAGE =
   'accessforge-runner: the Guidepup VoiceOver adapter is implemented and wired to the durable ' +
@@ -30,19 +31,26 @@ export function main(
 
 export async function cli(args: readonly string[], write: (line: string) => void = console.error): Promise<number> {
   if (args.length === 0) return main(write);
-  if (args.length !== 4 || args[0] !== '--native-host' || args[2] !== '--handoff-file') {
-    write('usage: accessforge-runner [--native-host PRIVATE_OPERATOR.mjs --handoff-file NEW_PRIVATE_PATH]');
+  const candidate = args.length === 5 && args[0] === '--candidate-proof' &&
+    args[2] === '--output-dir' && args[4] === '--allow-reader-startup';
+  if (!candidate && (args.length !== 4 || args[0] !== '--native-host' || args[2] !== '--handoff-file')) {
+    write('usage: accessforge-runner [--native-host PRIVATE_OPERATOR.mjs --handoff-file NEW_PRIVATE_PATH] or --candidate-proof PRIVATE_OPERATOR.mjs --output-dir NEW_PRIVATE_DIRECTORY --allow-reader-startup');
     return 64;
   }
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
   try {
+    if (candidate) {
+      const result = await runCandidateHost(args[1]!, args[3]!, controller.signal);
+      write(`accessforge-runner: ${result.status}; local unauthenticated candidate proof only, not a verified profile or canonical verdict`);
+      return result.status === 'CANDIDATE_COMPLETE' ? 0 : 78;
+    }
     await runNativeHost(args[1]!, args[3]!, controller.signal);
     write('accessforge-runner: native host execution closed; consult retained evidence for verdict');
     return 0;
   } catch {
-    write('accessforge-runner: native host unconfirmed or unavailable; reconcile original attempt, do not retry');
+    write(`accessforge-runner: ${candidate ? 'candidate proof' : 'native host'} unconfirmed or unavailable; reconcile original attempt, do not retry`);
     return 78;
   } finally {
     process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
