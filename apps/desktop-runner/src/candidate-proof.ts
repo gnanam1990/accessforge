@@ -40,7 +40,10 @@ class TracingJournal implements Journal {
 
 export interface CandidateProofOptions {
   readonly adapter: VoiceOverRuntime & { start(): Promise<void>; stop(): Promise<void> };
-  readonly preflight: PreflightReport;
+  /** Fresh physical measurements, not a saved setup report. Never starts/enables the reader. */
+  readonly preflight: () => Promise<PreflightReport>;
+  /** Trusted operator consent and reader-control configuration check; no default authorization. */
+  readonly authorizeReaderStartup: () => Promise<void>;
   readonly trace: CandidateTraceWriter;
   readonly journal: Journal;
   readonly clock: Clock;
@@ -58,9 +61,16 @@ export interface CandidateProofResult {
   readonly detail: string;
 }
 
-function failedChecks(report: PreflightReport): readonly string[] {
+function failedChecks(report: PreflightReport, beforeStartup = false): readonly string[] {
   const missing = PREFLIGHT_CHECKS
-    .filter((name) => report.checks?.[name]?.condition !== 'TRUE')
+    .filter((name) => {
+      const condition = report.checks?.[name]?.condition;
+      // Only reader activation/capture can be unavailable before an authorized startup. A
+      // missing check is still a malformed report, not evidence that the reader is inactive.
+      if (beforeStartup && (name === 'READER_ACTIVE' || name === 'SPEECH_CAPTURE_WORKING') &&
+          (condition === 'FALSE' || condition === 'UNKNOWN')) return false;
+      return condition !== 'TRUE';
+    })
     .map((name) => `${name}=${report.checks?.[name]?.condition ?? 'UNKNOWN'}`);
   const additional = Object.entries(report.checks ?? {})
     .filter(([name, result]) => !PREFLIGHT_CHECKS.some((required) => required === name) &&
@@ -71,6 +81,14 @@ function failedChecks(report: PreflightReport): readonly string[] {
 
 export class CandidateProofRunner {
   constructor(private readonly options: CandidateProofOptions) {}
+
+  private async checkPhysical(phase: 'BEFORE_STARTUP' | 'AFTER_STARTUP' | 'BEFORE_ACTION'): Promise<readonly string[]> {
+    const preflight = structuredClone(await this.options.preflight());
+    const blocked = failedChecks(preflight, phase === 'BEFORE_STARTUP');
+    // Snapshot both the decision and retained measurement before an async sink sees it.
+    await this.options.trace.record('PREFLIGHT_RESULT', { ...preflight, phase });
+    return blocked;
+  }
 
   async run(actions: readonly ActionRequest[]): Promise<CandidateProofResult> {
     // One private input snapshot across async retention/startup. Readonly types do not stop a
@@ -95,10 +113,7 @@ export class CandidateProofRunner {
       }
     }
 
-    // Retain and decide from one snapshot before any async sink callback can mutate the report.
-    const preflight = structuredClone(this.options.preflight);
-    const blocked = failedChecks(preflight);
-    await this.options.trace.record('PREFLIGHT_RESULT', preflight);
+    const blocked = await this.checkPhysical('BEFORE_STARTUP');
     if (blocked.length > 0) {
       const detail = `candidate proof blocked by preflight: ${blocked.join(', ')}`;
       await this.options.trace.record('RUN_FINISHED', { status: 'BLOCKED', detail });
@@ -107,6 +122,7 @@ export class CandidateProofRunner {
     }
 
     const outcomes: DispatchOutcome[] = [];
+    let activeDispatch: symbol | undefined;
     let startupAttempted = false;
     let readerStoppedByAction = false;
     let result: CandidateProofResult = {
@@ -114,11 +130,15 @@ export class CandidateProofRunner {
       detail: 'actual-reader actions completed as local CANDIDATE_PROOF; no canonical outcome or verified finding is claimed',
     };
     try {
+      await this.options.authorizeReaderStartup();
       // Startup can change reader state before rejecting. Its cleanup is still owned here.
       startupAttempted = true;
       await this.options.adapter.start();
+      if ((await this.checkPhysical('AFTER_STARTUP')).length > 0) {
+        throw new Error('post-start physical readiness unavailable');
+      }
       const journal = new TracingJournal(this.options.journal, this.options.trace);
-      const dispatch = createVoiceOverDispatch(this.options.adapter, {
+      const readerDispatch = createVoiceOverDispatch(this.options.adapter, {
         utc: this.options.clock.utc,
         recordObservation: async (observation) => {
           await this.options.trace.record('READER_OBSERVATION', observation);
@@ -128,16 +148,31 @@ export class CandidateProofRunner {
       const supervisor = new Supervisor({
         clock: this.options.clock,
         journal,
-        dispatch,
+        dispatch: async (command) => {
+          const token = activeDispatch;
+          // Measure after the durable intent, immediately before physical dispatch. A lock,
+          // origin/build change or lost permission between actions must not reuse initial TRUE.
+          if ((await this.checkPhysical('BEFORE_ACTION')).length > 0) {
+            throw new Error('action-time physical readiness unavailable');
+          }
+          if (token === undefined || activeDispatch !== token) {
+            throw new Error('late physical preflight fenced');
+          }
+          return readerDispatch(command);
+        },
         actionTimeoutMs: this.options.actionTimeoutMs,
       });
       supervisor.adoptLease(this.options.lease);
 
       for (const request of approvedActions) {
-        const outcome = await supervisor.performAction(request.action as AllowedAction, {
-          ...(request.keyChord !== undefined ? { keyChord: request.keyChord } : {}),
-          ...(request.text !== undefined ? { text: request.text } : {}),
-        });
+        let outcome: DispatchOutcome;
+        activeDispatch = Symbol();
+        try {
+          outcome = await supervisor.performAction(request.action as AllowedAction, {
+            ...(request.keyChord !== undefined ? { keyChord: request.keyChord } : {}),
+            ...(request.text !== undefined ? { text: request.text } : {}),
+          });
+        } finally { activeDispatch = undefined; }
         outcomes.push(outcome);
         if (request.action === 'STOP' && outcome.status === 'SUCCEEDED') {
           readerStoppedByAction = true;
