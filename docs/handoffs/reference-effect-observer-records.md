@@ -40,7 +40,13 @@ the ordinary final sample. Wrong source, scope, clock, action identity, sequence
 family is refused. Missing/historical conditions remain absent/UNKNOWN; the evaluator does not
 turn counters into observer-authored conditions. Historical evaluator records are unchanged.
 
-Remaining: actual private-operator execution and original artifact retention/finalization proof,
-plus real reader/model/environment qualification. Synthetic join tests and separate database
-collector tests do not establish that acceptance path. Do not construct execution authority by
-copying arbitrary measurement JSON or interpret an unclosed READY as coverage.
+Combined backend validation now covers real protected source/history and independent roles,
+canonical records, retained S3 bytes, finalization, API readback, immutable replay and export.
+Three cases distinguish no insertion, committed create/delete and rollback. Forbidden conditions
+and original READY/CLOSED references survive finalization; the overall result stays INCONCLUSIVE
+because desktop/journal evidence is synthetic and real runtime identities are missing.
+
+Remaining: actual private-operator/native execution, real reader/model/environment qualification
+and its original artifact proof. The backend integration is not physical acceptance. Do not
+construct execution authority by copying arbitrary measurement JSON or interpret an unclosed
+READY as coverage.

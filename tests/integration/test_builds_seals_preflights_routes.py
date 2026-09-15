@@ -4505,6 +4505,7 @@ def test_authenticated_execution_finish(
     case: str,
     tmp_path: Path,
     focus_mode: str | None = None,
+    effect_source: dict[str, str] | None = None,
 ) -> None:
     import secrets
 
@@ -4568,6 +4569,33 @@ def test_authenticated_execution_finish(
                 (fixture.nonce, fixture.template_digest),
             )
     origin = "http://127.0.0.1:8081" if existing is not None else "https://app.example.test"
+    collector = None
+    if effect_source is not None:
+        from accessforge_orchestrator.reference_effect_observer import ReferenceEffectObserver
+
+        collector = ReferenceEffectObserver(
+            db,
+            effect_source["observer"],
+            workspace_id=WS,
+            run_id=ref.run_id,
+            expected_attempt_id=ref.attempt_id,
+            credential_ref="observer-profile",
+            application_role=effect_source["role"],
+            installation_id=effect_source["installation"],
+        )
+        collector.begin()
+        if effect_source["mode"] != "absent":
+            with psycopg.connect(owned_observer_database) as writer:
+                request_id = str(uuid.uuid4())
+                writer.execute(
+                    "INSERT INTO service_request "
+                    "(id,fixture_nonce,full_name,email,category,description) "
+                    "VALUES(%s,%s,'Synthetic Person','synthetic@example.test','access','test')",
+                    (request_id, fixture.nonce),
+                )
+                writer.execute("DELETE FROM service_request WHERE id=%s", (request_id,))
+                if effect_source["mode"] == "rollback":
+                    writer.rollback()
     stop_id = ""
     for sequence, action in enumerate(
         ["STOP"]
@@ -4650,6 +4678,8 @@ def test_authenticated_execution_finish(
                 "VALUES(%s,%s,'inaccessible')",
                 (fixture.nonce, fixture.template_digest),
             )
+    if collector is not None:
+        collector.finish()
     if case not in {"missing-observer", "no-stop", "unresolved-stop"}:
         receipt = measure_once(
             db,
@@ -4856,7 +4886,21 @@ def test_authenticated_execution_finish(
         assert len(finished) == int(closes)
     if case.startswith("artifact"):
         _retain_stopped_artifact_case(
-            db, ref, ticket, monkeypatch, tmp_path, case, client, focus_mode=focus_mode
+            db,
+            ref,
+            ticket,
+            monkeypatch,
+            tmp_path,
+            case,
+            client,
+            focus_mode=focus_mode,
+            expected_effect=(
+                None
+                if effect_source is None
+                else "FALSE"
+                if effect_source["mode"] == "create-delete"
+                else "TRUE"
+            ),
         )
 
 
@@ -4969,6 +5013,94 @@ def test_fresh_setup_retained_lifecycle(
     )
 
 
+@pytest.fixture()
+def retained_effect_source(backup_database_url: str) -> Iterator[dict[str, str]]:
+    """Generated disposable source DB with real protected history and separate roles."""
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+
+    from accessforge_persistence.evidence.effect_audit import install_reference_effect_audit
+    from reference_app.db import SCHEMA
+
+    suffix = uuid.uuid4().hex
+    name, app, observer = (
+        prefix + suffix for prefix in ("af_retained_", "af_writer_", "af_reader_")
+    )
+    created_roles: list[str] = []
+    created_database = False
+    source_url = make_conninfo(backup_database_url, dbname=name)
+    with psycopg.connect(backup_database_url, autocommit=True) as admin:
+        try:
+            for role in (app, observer):
+                admin.execute(
+                    sql.SQL(
+                        "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                        "NOREPLICATION NOBYPASSRLS"
+                    ).format(sql.Identifier(role))
+                )
+                created_roles.append(role)
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+            created_database = True
+            with psycopg.connect(source_url, row_factory=psycopg.rows.dict_row) as source:
+                source.execute(SCHEMA)
+                installation = install_reference_effect_audit(
+                    source, application_role=app, observer_role=observer
+                )
+            yield {
+                "application": make_conninfo(source_url, options=f"-c role={app}"),
+                "observer": make_conninfo(source_url, options=f"-c role={observer}"),
+                "role": app,
+                "installation": installation,
+            }
+        finally:
+            if created_database:
+                admin.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(name)))
+            for role in reversed(created_roles):
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+@pytest.mark.parametrize("execution_body", ["collector-policy"], indirect=True)
+@pytest.mark.parametrize("effect_mode", ["absent", "create-delete", "rollback"])
+def test_protected_effect_collector_retained_finalization(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    retained_effect_source: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    effect_mode: str,
+) -> None:
+    """Real source/history, canonical stream, S3 and finalizer; synthetic desktop only."""
+    from accessforge_orchestrator import reference_effect_observer as module
+
+    original = module.ReferenceEffectObserver
+    collectors: list[module.ReferenceEffectObserver] = []
+
+    def owned(*args: Any, **kwargs: Any) -> module.ReferenceEffectObserver:
+        collector = original(*args, **kwargs)
+        collectors.append(collector)
+        return collector
+
+    # Track resource ownership only; all source observations and observer behavior remain real.
+    monkeypatch.setattr(module, "ReferenceEffectObserver", owned)
+    try:
+        test_authenticated_execution_finish(
+            db,
+            client,
+            supervisor_ticket,
+            manual_dispatch_reference,
+            retained_effect_source["application"],
+            monkeypatch,
+            "artifact-finalize",
+            tmp_path,
+            effect_source={**retained_effect_source, "mode": effect_mode},
+        )
+    finally:
+        for collector in collectors:
+            collector.abort()
+
+
 @pytest.mark.parametrize("execution_body", ["stop-policy"], indirect=True)
 @pytest.mark.parametrize("focus_mode", ["known", "mismatch", "missing", "unknown"])
 def test_original_native_focus_retained_finalization(
@@ -5061,6 +5193,7 @@ def _retain_stopped_artifact_case(
     client: TestClient,
     *,
     focus_mode: str | None = None,
+    expected_effect: str | None = None,
 ) -> None:
     from accessforge_orchestrator.execution_artifacts import Refused, retain_bundle
     from accessforge_persistence import evidence
@@ -5285,6 +5418,25 @@ def _retain_stopped_artifact_case(
                 )
                 assert result["snapshot"]["outcome"] == "INCONCLUSIVE"
                 assert result["snapshot"]["assertions"][0]["condition"] == "FALSE"
+                if expected_effect is not None:
+                    forbidden = next(
+                        a
+                        for a in result["snapshot"]["assertions"]
+                        if a["assertionId"] == "effect.no-request"
+                    )
+                    assert forbidden["condition"] == expected_effect
+                    assert forbidden["provenance"] == "OBSERVER_AUTHORED"
+                    with workspace_connection(db, WS) as conn:
+                        original_effect_events = conn.execute(
+                            "SELECT event_id FROM canonical_event WHERE run_id=%s "
+                            "AND payload->'sourceRecord'->>'collectorPhase' IN ('READY','CLOSED') "
+                            "ORDER BY sequence",
+                            (ref.run_id,),
+                        ).fetchall()
+                    assert forbidden["evidenceRefs"] == [
+                        str(r["event_id"]) for r in original_effect_events
+                    ]
+                    assert len(original_effect_events) == 2
                 if focus_mode is not None:
                     focus = next(
                         a

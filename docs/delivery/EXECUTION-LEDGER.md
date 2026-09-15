@@ -322,3 +322,15 @@ This completes code wiring, not C2 acceptance: combined original retained-artifa
 proof with the actual collector/native execution still remains. C1 operator provisioning,
 real VoiceOver qualification, the non-AWS provider choice/integration, baseline/repair/rerun,
 human review, outbound GitHub publication and release acceptance remain open.
+
+Combined retained proof follow-up: PR #181 passed exact-head CI and merged as
+`9692838a55fd0f4f3d983345c65c0f51e6452c9d`. Three new integration cases now exercise the actual
+protected collector and separate database roles through observer admission, closed canonical
+streams, retained S3 bytes, finalizer, API readback, immutable replay and evidence export.
+No committed insert and rolled-back insert yield TRUE for the forbidden-effect assertion;
+a committed create/delete yields FALSE despite the final table being empty. Original READY/CLOSED
+event references and observer provenance survive finalization. All three cases passed locally;
+Ruff and strict mypy passed. Their source databases/roles and isolated control-plane test database
+were removed after the run. The desktop and journal remain synthetic: missing actual build,
+reader and model identities correctly keep the overall result INCONCLUSIVE. This closes the
+combined backend retention proof gap, not actual native execution or full project acceptance.
