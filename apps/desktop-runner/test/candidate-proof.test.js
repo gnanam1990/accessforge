@@ -247,6 +247,46 @@ test('an empty action list cannot become a completed candidate proof', async () 
   assert.deepEqual(sink.lines, []);
 });
 
+test('STOP must be terminal before any physical preflight or reader startup', async () => {
+  for (const actions of [
+    [{ action: 'STOP' }, { action: 'NEXT' }],
+    [{ action: 'STOP' }, { action: 'STOP' }],
+  ]) {
+    let probes = 0;
+    const { runner, calls, sink } = harness(async () => { probes++; return readyPreflight(); });
+    await assert.rejects(() => runner.run(actions), /STOP must be the final action/);
+    assert.equal(probes, 0);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(sink.lines, []);
+  }
+});
+
+test('a candidate proof cannot be entered concurrently while its original preflight waits', async () => {
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const { runner, calls } = harness(async () => { await waiting; return readyPreflight(); });
+  const original = runner.run([{ action: 'NEXT' }]);
+  try {
+    await assert.rejects(() => runner.run([{ action: 'NEXT' }]), /already consumed/);
+    assert.deepEqual(calls, []);
+  } finally { release(); }
+  assert.equal((await original).status, 'CANDIDATE_COMPLETE');
+  assert.deepEqual(calls, ['start', 'NEXT', 'stop']);
+});
+
+test('blocked, failed and completed candidate attempts cannot reuse their original runner', async () => {
+  for (const mode of ['blocked', 'failed', 'completed']) {
+    const report = readyPreflight();
+    if (mode === 'blocked') report.checks.SCREEN_UNLOCKED.condition = 'FALSE';
+    const { runner, calls, sink } = harness(report);
+    if (mode === 'failed') await assert.rejects(() => runner.run([]));
+    else await runner.run([{ action: 'NEXT' }]);
+    const before = structuredClone({ calls, lines: sink.lines });
+    await assert.rejects(() => runner.run([{ action: 'NEXT' }]), /already consumed/);
+    assert.deepEqual({ calls, lines: sink.lines }, before);
+  }
+});
+
 test('partial reader startup failure still attempts cleanup before closing the trace', async () => {
   const { runner, adapter, calls, sink } = harness();
   adapter.start = async () => { calls.push('partial-start'); throw new Error('startup failed'); };

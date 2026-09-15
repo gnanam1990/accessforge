@@ -139,3 +139,22 @@ C2 is NOT complete: independent run-window collection, authenticated retention a
 finalizer integration remain. C1 concrete runtime/action configuration, E1 real reader qualification,
 E2 baseline/repair/rerun and the existing remaining release queue are still open. Protected database
 history and green CI are not actual VoiceOver acceptance or full-project completion.
+
+## Qualification entrypoint checkpoint — 2026-09-15
+
+Main is synchronized at `48cef6c0bd53f788d2ec22986e115d6b321d940a` after PRs #170–173.
+The protected history reader now requires the installed independent observer identity; local
+candidate trace storage pins private file identity; the explicit `--candidate-proof` host command
+assembles the physical probes, journal, shared desktop claim and lazy real reader adapter.
+These are implemented foundations, not completed C1/C2 or a qualified matrix.
+
+The next source correction makes candidate runners single-use and rejects nonterminal STOP
+before startup. TypeScript compilation and 43 focused synthetic/filesystem checks pass; two new
+regression cases failed against the prior compiled source. No actual reader was started.
+
+The VoiceOver Utility was inspected again: AppleScript control is OFF. The exact security-setting
+confirmation is pending; do not repeat the same question every continuation. Provider/profile and
+budget are still unspecified. Next C1 work remains concrete trusted runtime/reset/stale-input and
+action authorization provisioning, then actual reader qualification when its prerequisites exist.
+C2 still needs independently bound execution-window collection and authenticated finalization;
+the existing R1–R4, E2/E3 and D1 queue is unchanged. Do not substitute helper PRs for those outcomes.

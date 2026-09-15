@@ -37,3 +37,11 @@ incomplete-config refusal, assembled-host claim retention on unavailable runtime
 reader startup or replay, and a late action-authorization result fenced after timeout/cleanup.
 These are synthetic/local-file checks only; no reader was started. An actual private provisioner,
 dedicated session, permissions, physical qualification trace and end-to-end acceptance remain open.
+
+The underlying candidate runner is single-use, including attempts rejected during validation or
+blocked by preflight. Concurrent/repeated calls are refused before another probe, trace write or
+reader action. Reconcile the original attempt before provisioning a new one. An explicit STOP
+must be the final requested action; omitted STOP still uses the existing implicit cleanup. This
+prevents commands after reader shutdown and avoids sharing a trace/lease across overlapping runs.
+The 43 focused synthetic/filesystem checks include terminal STOP validation, concurrent entry
+while preflight is pending, and refusal to reuse failed, blocked or completed attempts.
