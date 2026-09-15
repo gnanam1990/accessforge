@@ -224,3 +224,13 @@ TypeScript compilation and 21 focused synthetic candidate-runner checks pass, in
 startup, late resolution/no input and hanging cleanup. This bounds SDK promise observation only,
 not synchronous SDK blocking or the complete host workflow. No actual reader or permission change.
 Concrete C1 runtime provisioning and C2 measurement/finalization remain the next open boundaries.
+
+## Startup authorization deadline — 2026-09-15
+
+PR #177 merged after exact-head CI as `bc1192a4cbf0be30111c7e58c76e1d00bb5777a6`.
+The candidate startup authorization callback now shares the bounded lifecycle observation
+deadline. An unresolved callback returns INTERRUPTED before SDK startup; its late approval cannot
+resume startup, dispatch input or reuse the attempt. No cleanup is invented for an SDK that was
+never called. TypeScript compilation and 22 focused synthetic candidate-runner checks pass.
+This is a startup control-path correction, not concrete runtime provisioning or actual acceptance.
+Provider selection and preference-access confirmation remain pending; C1/C2 are not complete.

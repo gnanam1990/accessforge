@@ -158,7 +158,9 @@ export class CandidateProofRunner {
       detail: 'actual-reader actions completed as local CANDIDATE_PROOF; no canonical outcome or verified finding is claimed',
     };
     try {
-      await this.options.authorizeReaderStartup();
+      // Consent observation is bounded too. A late result cannot resume this abandoned startup
+      // path, and no SDK cleanup is attempted when startup was never dispatched.
+      await bounded(Promise.resolve().then(() => this.options.authorizeReaderStartup()));
       // Startup can change reader state before rejecting. Its cleanup is still owned here.
       startupAttempted = true;
       await bounded(Promise.resolve().then(() => this.options.adapter.start()).finally(() => {
