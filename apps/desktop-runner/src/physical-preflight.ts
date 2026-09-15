@@ -7,6 +7,7 @@ import { createSafariAuthenticatedRunner, createSafariOriginProbe } from './safa
 import { createExclusiveDesktopRunner, type ExclusiveDesktopRunner } from './desktop-claim.js';
 import { parseReference } from './dispatch-receiver.js';
 import { createArtifactProbe, type ArtifactProbeOptions } from './artifact-probe.js';
+import { createVoiceOverCaptureProbe } from './capture-probe.js';
 
 export interface PhysicalPreflightOptions {
   /** The assigned dedicated audit session, provisioned independently of observed current state. */
@@ -158,7 +159,17 @@ export function createGuidepupPhysicalSafariRunner(
   options: Omit<Parameters<typeof createPhysicalSafariRunner>[0], 'adapter'>,
 ): ExclusiveDesktopRunner {
   let adapter: VoiceOverAdapter | undefined;
-  return createPhysicalSafariRunner({ ...options, adapter: {
+  const capture = createVoiceOverCaptureProbe();
+  return createPhysicalSafariRunner({ ...options,
+    physicalPreflight: {...options.physicalPreflight,
+      async observeRuntimeEvidence(signal) {
+        const evidence = await options.physicalPreflight.observeRuntimeEvidence(signal);
+        if (signal.aborted) throw new Error('capture preflight cancelled');
+        const speechCaptureWorking = await capture(signal);
+        if (signal.aborted) throw new Error('capture preflight cancelled');
+        return {...evidence, speechCaptureWorking};
+      },
+    }, adapter: {
     async start() {
       if (adapter !== undefined) throw new Error('reader initialization cannot be retried');
       adapter = createGuidepupVoiceOverAdapter({ monotonicNow: () => options.clock.monotonic() });

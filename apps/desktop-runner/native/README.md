@@ -12,6 +12,13 @@ temporary directory and atomic replacement after success. The output must be an 
 not writable by others; the executable is mode0700. No external binary, setup package or permission
 is installed. Linux does not build a synthetic helper.
 
+The same build also compiles `dist/native/voiceover-capture-probe`. Unlike the Safari AX probe,
+this helper uses one read-only Apple Event addressed to an already-running Apple-signed VoiceOver
+PID. It checks existing Automation permission without prompting and requests last-phrase content
+with interaction disabled. It cannot launch an app by name, type, copy, speak, reset or grant
+permissions. Only a static channel-health result is returned; phrase text is discarded.
+See [the capture handoff](../../../docs/handoffs/voiceover-capture-probe.md) for evidence limits.
+
 ## Read-only operator diagnostic
 
 Supply JSON through a private operator file/stdin, not arguments or navigator data:

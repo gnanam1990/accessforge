@@ -12,13 +12,17 @@ if (!directory.isDirectory() || directory.uid !== process.getuid() || (directory
 }
 const scratch = mkdtempSync(join(output, '.compile-'));
 try {
-  const binary = join(scratch, 'safari-origin-probe');
-  execFileSync('/usr/bin/xcrun', ['swiftc', '-O',
-    fileURLToPath(new URL('../native/safari-origin.swift', import.meta.url)),
-    '-o', binary], { stdio: 'inherit', timeout: 60000 });
-  chmodSync(binary, 0o700);
-  // A failed build leaves the previously installed helper intact; no partially linked executable.
-  renameSync(binary, join(output, 'safari-origin-probe'));
+  for (const name of ['safari-origin', 'voiceover-capture']) {
+    const binary = join(scratch, `${name}-probe`);
+    execFileSync('/usr/bin/xcrun', ['swiftc', '-O',
+      fileURLToPath(new URL(`../native/${name}.swift`, import.meta.url)),
+      '-o', binary], { stdio: 'inherit', timeout: 60000 });
+    chmodSync(binary, 0o700);
+  }
+  // Both compile before replacing either installed helper; never publish a partial executable.
+  for (const name of ['safari-origin', 'voiceover-capture']) {
+    renameSync(join(scratch, `${name}-probe`), join(output, `${name}-probe`));
+  }
 } finally {
   // Only the exact task-owned temporary directory created immediately above.
   rmSync(scratch, { recursive: true });
