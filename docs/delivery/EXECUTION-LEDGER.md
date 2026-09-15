@@ -124,3 +124,18 @@ and all independent native/lease/approval deadlines. The prior 60-second hard ce
 off a valid native execution. Forty focused synthetic checks, Ruff and strict mypy pass; see
 `docs/handoffs/baseline-reader-cancellation.md`. This is not C1 completion: concrete trusted runtime,
 physical focus/effect configuration and actual baseline/repair/rerun evidence remain outstanding.
+
+## Protected effect-source checkpoint — 2026-09-15
+
+PR #169 completed exact-head CI and merged as `9f6277901b5d1d9b6e95b17027d874fbb2014152`;
+the original checkout and temporary recovery clone were synchronized before this slice.
+The current C2 source component adds opt-in protected committed-insertion history for the reference
+app, preserving a create-then-delete and refusing weakened audit authority. It includes transactional
+installation rollback and real isolated PostgreSQL privilege/trigger checks. No live application
+schema, desktop security setting, model account or production deployment was changed.
+See `docs/handoffs/reference-effect-audit.md` for provisioning and evidence limits.
+
+C2 is NOT complete: independent run-window collection, authenticated retention and canonical
+finalizer integration remain. C1 concrete runtime/action configuration, E1 real reader qualification,
+E2 baseline/repair/rerun and the existing remaining release queue are still open. Protected database
+history and green CI are not actual VoiceOver acceptance or full-project completion.
