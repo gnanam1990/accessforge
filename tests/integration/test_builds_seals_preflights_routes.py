@@ -249,6 +249,7 @@ def execution_body(
         "model-policy",
         "navigator-policy",
         "fresh-stop-policy",
+        "collector-policy",
     }:
         policy = {
             "allowedActions": ["READ_CURRENT", "NEXT", "TYPE_TEXT", "KEY_CHORD"],
@@ -278,7 +279,7 @@ def execution_body(
             )
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
-        if request.param in {"stop-policy", "fresh-stop-policy"}:
+        if request.param in {"stop-policy", "fresh-stop-policy", "collector-policy"}:
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
             from accessforge_domain.journeys.assertions import (
@@ -316,6 +317,25 @@ def execution_body(
                                 action_sequence=1,
                                 role="AXTextField",
                                 identifier_digest="a" * 64,
+                            ),
+                        ),
+                    )
+                )
+            if request.param == "collector-policy":
+                from accessforge_domain.reference_effect_scope import REFERENCE_EFFECT_POLICY_DIGEST
+
+                assertions = AssertionSet(
+                    (
+                        *assertions.assertions,
+                        Assertion(
+                            "effect.no-request",
+                            AssertionKind.FORBIDDEN_EFFECT,
+                            "No committed request",
+                            unknown_reasons=frozenset({UnknownReason.OBSERVATION_MISSING}),
+                            evaluation_rule=EvaluationRule(
+                                "CONTINUOUS_EFFECT_ABSENCE",
+                                effect="CREATE_TEST_REQUEST",
+                                scope_digest=REFERENCE_EFFECT_POLICY_DIGEST,
                             ),
                         ),
                     )
@@ -4066,6 +4086,172 @@ def test_queued_fixture_setup_reconciles_reserved_nonce(
             "observed_at=NULL WHERE run_id=%s",
             (run_id,),
         )
+
+
+@pytest.mark.parametrize("execution_body", ["collector-policy"], indirect=True)
+def test_reference_effect_lifecycle_records_use_real_sequencer(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real API/DB provenance with a synthetic collector and STOP, not physical acceptance."""
+    import secrets
+
+    from accessforge_domain.effect_monitor import EffectCoverage, EffectInterval, EffectWindow
+    from accessforge_domain.reference_effect_scope import reference_effect_scope_digest
+    from accessforge_orchestrator import reference_effect_observer as module
+    from accessforge_persistence.fixtures import create_instance
+
+    class SyntheticCollector:
+        def __init__(self, conn: psycopg.Connection[Any], **options: Any) -> None:
+            self.conn, self.options = conn, options
+
+        def begin(self) -> int:
+            return 10
+
+        def finish(self) -> EffectCoverage:
+            self.conn.close()
+            target = EffectWindow(
+                self.options["run_id"],
+                self.options["attempt_id"],
+                reference_effect_scope_digest(
+                    self.options["installation_id"], self.options["fixture_nonce"]
+                ),
+                self.options["clock_epoch"],
+                "CREATE_TEST_REQUEST",
+                10,
+                30,
+            )
+            return EffectCoverage(target, (EffectInterval(10, 30, 1),))
+
+        def abort(self) -> None:
+            self.conn.close()
+
+    monkeypatch.setattr(module, "ReferenceEffectCollector", SyntheticCollector)
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    secret = secrets.token_urlsafe(32)
+    assert (
+        client.post(
+            _ticket_url(ticket).removesuffix("accept") + "session",
+            json={"sessionSecret": secret},
+            headers={"Authorization": f"Bearer {ticket.token}"},
+        ).status_code
+        == 201
+    )
+    with workspace_connection(db, WS) as conn:
+        create_instance(
+            conn,
+            workspace_id=WS,
+            run_id=ref.run_id,
+            template_id="service-request",
+            template_digest=REFERENCE_FIXTURE_DIGEST,
+            navigator_values={"name": "Private Fixture Name"},
+            observer_config={"effect": "CREATE_TEST_REQUEST"},
+        )
+    observer = module.ReferenceEffectObserver(
+        db,
+        db,
+        workspace_id=WS,
+        run_id=ref.run_id,
+        credential_ref="observer-profile",
+        application_role="synthetic-unused",
+        installation_id=str(uuid.uuid4()),
+    )
+    try:
+        ready_id = observer.begin()
+        headers = {"Authorization": f"Bearer {secret}"}
+        base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
+        intent = client.post(
+            base + "/action-intents",
+            headers=headers,
+            json={"action": "STOP", "origin": "https://app.example.test", "sequence": 1},
+        )
+        assert intent.status_code == 201
+        action = base + "/actions/" + intent.json()["actionId"]
+        assert (
+            client.post(
+                action + "/dispatch", headers=headers, json={"origin": "https://app.example.test"}
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                action + "/result", headers=headers, json={"status": "SUCCEEDED"}
+            ).status_code
+            == 200
+        )
+        closed_id = observer.finish()
+    finally:
+        observer.abort()
+    with workspace_connection(db, WS) as conn:
+        records = conn.execute(
+            "SELECT event_id,sequence,payload FROM canonical_event WHERE run_id=%s "
+            "AND event_id IN (%s,%s) ORDER BY sequence",
+            (ref.run_id, ready_id, closed_id),
+        ).fetchall()
+        assert len(records) == 2
+        assert all(row["payload"]["serviceIdentity"] == "OBSERVER" for row in records)
+        first, final = [row["payload"]["sourceRecord"] for row in records]
+        assert first["collectorPhase"] == "READY" and first["afterActionSequence"] == 0
+        assert final["collectorPhase"] == "CLOSED" and final["afterActionSequence"] == 1
+        assert final["startEventId"] == ready_id and final["intervals"][0]["occurrences"] == "1"
+        assert all(
+            row["payload"]["sourceRecordDigest"] == digest(row["payload"]["sourceRecord"])
+            for row in records
+        )
+        assert final["finalSample"] is False and final["assertionObservations"] == []
+
+
+@pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)
+def test_collector_context_requires_pre_action_boundary(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+) -> None:
+    import secrets
+
+    from accessforge_orchestrator.completion_observer import Refused, _context
+    from accessforge_persistence.fixtures import create_instance
+
+    ticket, ref = supervisor_ticket, manual_dispatch_reference
+    secret = secrets.token_urlsafe(32)
+    assert (
+        client.post(
+            _ticket_url(ticket).removesuffix("accept") + "session",
+            json={"sessionSecret": secret},
+            headers={"Authorization": f"Bearer {ticket.token}"},
+        ).status_code
+        == 201
+    )
+    with workspace_connection(db, WS) as conn:
+        create_instance(
+            conn,
+            workspace_id=WS,
+            run_id=ref.run_id,
+            template_id="service-request",
+            template_digest=REFERENCE_FIXTURE_DIGEST,
+            navigator_values={"name": "Private Fixture Name"},
+            observer_config={"effect": "CREATE_TEST_REQUEST"},
+        )
+    with workspace_connection(db, WS) as conn:
+        ready = _context(conn, WS, ref.run_id, "observer-profile", before_dispatch=True)
+        assert ready["afterActionSequence"] == 0 and ready["lastAction"] is None
+    with pytest.raises(Refused), workspace_connection(db, WS) as conn:
+        _context(conn, WS, ref.run_id, "wrong-observer", before_dispatch=True)
+    with pytest.raises(Refused), workspace_connection(db, WS) as conn:
+        _context(conn, WS, ref.run_id, "observer-profile")
+    # Even an intent that has not dispatched invalidates late collector startup.
+    response = client.post(
+        f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}/action-intents",
+        headers={"Authorization": f"Bearer {secret}"},
+        json={"action": "READ_CURRENT", "origin": "https://app.example.test", "sequence": 1},
+    )
+    assert response.status_code == 201
+    with pytest.raises(Refused), workspace_connection(db, WS) as conn:
+        _context(conn, WS, ref.run_id, "observer-profile", before_dispatch=True)
 
 
 @pytest.mark.parametrize("execution_body", ["action-policy"], indirect=True)

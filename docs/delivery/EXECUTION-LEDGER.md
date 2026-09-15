@@ -260,3 +260,19 @@ resolved concrete run/attempt/installation/nonce binding. Observer-side rule com
 both without rewriting the assertion or broadening the sink. Thirty-eight focused domain checks
 pass alongside the 25 isolated PostgreSQL checks. This resolves policy/resource matching only;
 authenticated provisioning/retention and production execution/finalizer callers remain required.
+
+## Independent collector lifecycle admission — 2026-09-15
+
+PR #179 passed exact-head CI and merged as `c921e75db4c5d5a4789c15d8295dc6dc2d38c75f`;
+local main was synchronized. The orchestrator now owns collector begin/finish and admits
+READY/CLOSED through the existing
+authenticated OBSERVER stream. Startup rechecks the frozen reference policy, observer context
+and zero action intents before its READY commit. Closure requires original successful STOP,
+matching concrete coverage and an unchanged context, then links back to READY. Neither record
+replaces the ordinary final task-completion measurement or closes its stream.
+
+Eight synthetic lifecycle checks and two real isolated API/PostgreSQL control-plane checks pass;
+Ruff and strict mypy pass. The latter uses synthetic collector values/STOP, not actual reader
+acceptance. No live migration, OS setting or provider call. See `reference-effect-observer-records.md`
+under `docs/handoffs/`. Independent-process/native startup wiring, original artifact retention proof
+and finalizer consumption are still pending; C2 and the full project are not complete.
