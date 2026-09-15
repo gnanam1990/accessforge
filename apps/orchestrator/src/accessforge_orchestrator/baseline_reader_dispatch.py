@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from collections.abc import Callable
 
 import psycopg
 from psycopg.rows import dict_row
@@ -130,6 +131,7 @@ async def admit_dispatch_and_wait_reader(
     attempt_id: str,
     transport: StartTransport | None = None,
     timeout_seconds: float = 60,
+    cancelled: Callable[[], bool] = lambda: False,
 ) -> DispatchReference:
     """Keep the baseline callback alive through original STOP, not merely delivery ACK.
 
@@ -143,6 +145,15 @@ async def admit_dispatch_and_wait_reader(
         or not 0 < timeout_seconds <= 60
     ):
         raise ValueError("baseline reader wait must be within (0, 60] seconds")
+    if cancelled():
+        raise baseline_runs.Refused("baseline cancelled before reader admission")
+
+    def guard() -> None:
+        if cancelled():
+            raise HandoffUnknown(
+                "baseline cancelled after possible dispatch; reconcile original reader STOP"
+            )
+
     try:
         async with asyncio.timeout(timeout_seconds):
             reference = await admit_and_dispatch_reader(
@@ -152,9 +163,13 @@ async def admit_dispatch_and_wait_reader(
                 transport=transport,
                 acknowledgement_timeout_seconds=min(10, timeout_seconds),
             )
-            while not await _reader_stopped(session, reference):
+            while True:
+                guard()
+                stopped = await _reader_stopped(session, reference)
+                guard()
+                if stopped:
+                    return reference
                 await asyncio.sleep(0.1)
-            return reference
     except TimeoutError:
         raise HandoffUnknown(
             "baseline reader STOP unconfirmed; reconcile original attempt, never redispatch"

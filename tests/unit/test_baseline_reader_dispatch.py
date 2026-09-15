@@ -217,3 +217,40 @@ async def test_stop_query_cancellation_closes_connection_without_executor_shutdo
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(dispatch._reader_stopped(session, reference), timeout=0.02)
     assert events == ["workspace", "query", "query-cancelled", "closed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["before", "dispatch", "query"])
+async def test_operator_cancellation_is_not_stop_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    cancelled = stage == "before"
+    calls: list[str] = []
+    reference = manual_dispatch.DispatchReference(
+        "workspace", "run", "attempt", "runner", "lease", 1
+    )
+
+    async def deliver(*args: Any, **kwargs: Any) -> Any:
+        nonlocal cancelled
+        calls.append("dispatch")
+        cancelled = stage == "dispatch"
+        return reference
+
+    async def stopped(*args: Any) -> bool:
+        nonlocal cancelled
+        calls.append("query")
+        cancelled = True
+        return True
+
+    monkeypatch.setattr(dispatch, "admit_and_dispatch_reader", deliver)
+    monkeypatch.setattr(dispatch, "_reader_stopped", stopped)
+    error = baseline_runs.Refused if stage == "before" else manual_dispatch.HandoffUnknown
+    with pytest.raises(error):
+        await dispatch.admit_dispatch_and_wait_reader(
+            cast(BaselineSession, None),
+            runner_id="runner",
+            attempt_id="attempt",
+            cancelled=lambda: cancelled,
+        )
+    assert calls == {"before": [], "dispatch": ["dispatch"], "query": ["dispatch", "query"]}[stage]

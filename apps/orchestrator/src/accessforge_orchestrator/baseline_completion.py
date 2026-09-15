@@ -75,6 +75,7 @@ def dispatch_and_complete(
                 attempt_id=attempt_id,
                 transport=selected_transport,
                 timeout_seconds=timeout_seconds,
+                cancelled=cancelled,
             )
         )
 
