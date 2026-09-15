@@ -58,6 +58,8 @@ def _context(
     workspace_id: str,
     run_id: str,
     credential_ref: str,
+    *,
+    before_dispatch: bool = False,
 ) -> dict[str, Any]:
     ticket = conn.execute(
         "SELECT * FROM supervisor_dispatch_ticket WHERE run_id=%s AND workspace_id=%s",
@@ -148,14 +150,19 @@ def _context(
         "FROM runner_action WHERE run_id=%s AND attempt_id=%s",
         (run_id, ticket["attempt_id"]),
     ).fetchone()
-    if actions is None or not actions["n"] or actions["unresolved"]:
+    if before_dispatch:
+        if actions is None or actions["n"] != 0:
+            raise Refused("collector startup requires no prior action intent")
+    elif actions is None or not actions["n"] or actions["unresolved"]:
         raise Refused("observer requires a settled action boundary")
     last = conn.execute(
         "SELECT action,result_status FROM runner_action WHERE run_id=%s AND attempt_id=%s "
         "ORDER BY action_sequence DESC LIMIT 1",
         (run_id, ticket["attempt_id"]),
     ).fetchone()
-    assert last is not None
+    if not before_dispatch and last is None:
+        raise Refused("settled observer action unavailable")
+    assert actions is not None
     journey = conn.execute(
         "SELECT reviewer_summary FROM journey_version WHERE id=%s", (manifest["journeyVersionId"],)
     ).fetchone()
@@ -200,8 +207,8 @@ def _context(
         "fixtureContract": contract,
         "initialFixture": initial_fixture,
         "afterActionSequence": int(actions["last"]),
-        "lastAction": last["action"],
-        "lastResult": last["result_status"],
+        "lastAction": None if last is None else last["action"],
+        "lastResult": None if last is None else last["result_status"],
         "producer": observer_producer(credential_ref, str(ticket["attempt_id"])),
     }
 
