@@ -391,5 +391,7 @@ scope/one-shot publisher services. Connection never grants publication approval.
 focused tests pass with synthetic database/signing/service ports; Ruff and strict mypy pass.
 These are usable invocation paths, not proof of an isolated deployment or actual App delivery.
 No real credential was loaded, token issued, check created, reader started or live DB migrated.
-Both PRs remain pending exact-head CI/merge at this checkpoint. See the operator handoff for
-precise configuration, authority boundaries and unconfirmed-outcome handling.
+PR #184 passed all applicable checks at `20794c7822c49dd5c956641e410c5ef56823c5f7`
+and merged as `705572af4f3d26940441b117644636a7bf79a36f`; local main is synchronized.
+PR #185 is being retargeted onto that main and still requires its own exact-head CI/merge.
+See the operator handoff for configuration, authority and unconfirmed-outcome boundaries.
