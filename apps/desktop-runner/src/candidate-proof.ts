@@ -82,6 +82,8 @@ function failedChecks(report: PreflightReport, beforeStartup = false): readonly 
 }
 
 export class CandidateProofRunner {
+  private consumed = false;
+
   constructor(private readonly options: CandidateProofOptions) {}
 
   private async checkPhysical(phase: 'BEFORE_STARTUP' | 'AFTER_STARTUP' | 'BEFORE_ACTION'): Promise<readonly string[]> {
@@ -93,6 +95,10 @@ export class CandidateProofRunner {
   }
 
   async run(actions: readonly ActionRequest[]): Promise<CandidateProofResult> {
+    // Claim synchronously before any validation, probe or trace await. An uncertain/failed
+    // attempt must not overlap or replay against this original journal, trace and reader.
+    if (this.consumed) throw new Error('candidate proof already consumed; reconcile the original attempt');
+    this.consumed = true;
     // One private input snapshot across async retention/startup. Readonly types do not stop a
     // caller from mutating the original array or text after validation but before dispatch.
     const approvedActions = structuredClone(actions);
@@ -102,8 +108,11 @@ export class CandidateProofRunner {
 
     // Reject unbound typing before VoiceOver starts. The allowlist constrains commands, but the
     // fixture binding constrains what those commands are permitted to type.
-    for (const action of approvedActions) {
+    for (const [index, action] of approvedActions.entries()) {
       assertActionPermitted(action);
+      if (action.action === 'STOP' && index !== approvedActions.length - 1) {
+        throw new Error('STOP must be the final action in a candidate proof');
+      }
       if (
         action.action === 'TYPE_TEXT' &&
         (action.text === undefined || !this.options.approvedTextValues.has(action.text))
