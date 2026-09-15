@@ -24,7 +24,7 @@ CHECK_BODY: dict[str, Any] = {
 
 
 def transport(
-    fault: str | None, calls: list[httpx.Request], *, check: bool = False
+    fault: str | None, calls: list[httpx.Request], *, check: bool = False, token: str = TOKEN
 ) -> httpx.MockTransport:
     permissions = {"metadata": "read", "contents": "read"}
     if check:
@@ -63,7 +63,7 @@ def transport(
             }
             status = 201
             value = {
-                "token": TOKEN,
+                "token": token,
                 "permissions": dict(permissions),
                 "expires_at": (datetime.now(UTC) + timedelta(minutes=59))
                 .isoformat()
@@ -79,7 +79,7 @@ def transport(
                 raise httpx.ReadTimeout("private credential details must not escape")
         elif path == "/repos/fixture-owner/fixture-repository/check-runs/91":
             assert check and request.method == "GET"
-            assert request.headers["Authorization"] == "Bearer " + TOKEN
+            assert request.headers["Authorization"] == "Bearer " + token
             value = {
                 **CHECK_BODY,
                 "id": 91,
@@ -108,7 +108,7 @@ def transport(
             if fault == "changed-summary":
                 value["output"]["summary"] = "Changed summary"
         elif path == f"/repos/fixture-owner/fixture-repository/git/commits/{COMMIT}":
-            assert request.headers["Authorization"] == "Bearer " + TOKEN
+            assert request.headers["Authorization"] == "Bearer " + token
             value = {
                 "sha": "b" * 40 if fault == "wrong-commit" else COMMIT,
                 "message": "untrusted commit text must not escape",
@@ -118,7 +118,7 @@ def transport(
             if fault == "commit-redirect":
                 status = 302
         elif path == "/repos/fixture-owner/fixture-repository" and request.method == "GET":
-            assert request.headers["Authorization"] == "Bearer " + TOKEN
+            assert request.headers["Authorization"] == "Bearer " + token
             value = {"id": 13, "full_name": "fixture-owner/fixture-repository", "owner": {"id": 3}}
             if fault == "wrong-repository":
                 value["id"] = 14
@@ -129,7 +129,7 @@ def transport(
             if fault == "late-transfer" and len(calls) > 3:
                 value["owner"]["id"] = 4
         elif path == "/installation/token" and request.method == "DELETE":
-            assert request.headers["Authorization"] == "Bearer " + TOKEN
+            assert request.headers["Authorization"] == "Bearer " + token
             status = 500 if fault == "revocation-failed" else 204
         else:
             pytest.fail("unexpected request")
@@ -154,6 +154,60 @@ def test_exact_read_probe_revokes_and_never_returns_credential() -> None:
     assert result.meaning == "POINT_IN_TIME_READ_ACCESS_NOT_PUBLICATION_AUTHORITY"
     assert TOKEN not in repr(result) and "a.b.c" not in repr(result)
     assert [call.method for call in calls] == ["GET", "POST", "GET", "GET", "DELETE"]
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        TOKEN,
+        "ghs_7_eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjp0cnVlfQ.test-signature_with-dashes",
+        "ghs_7_" + "a" * 1500 + "." + "b" * 1500 + ".test-signature",
+        "ghs_" + "a" * (8192 - 4),
+    ],
+    ids=["legacy", "stateless", "long-stateless", "header-boundary"],
+)
+def test_opaque_token_formats_preserve_scope_checks_and_cleanup(token: str) -> None:
+    calls: list[httpx.Request] = []
+    result = inspect_repository(
+        SCOPE,
+        app_jwt="a.b.c",
+        allow_temporary_token_issuance=True,
+        commit_sha=COMMIT,
+        check_run_id=91,
+        _transport=transport(None, calls, check=True, token=token),
+    )
+    assert result.token_revoked and result.check_observation is not None
+    assert result.check_observation.payload_digest == digest(CHECK_BODY)
+    assert token not in repr(result)
+    assert calls[-1].method == "DELETE"
+    assert calls[-1].headers["Authorization"] == "Bearer " + token
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "",
+        "short",
+        "ghs_" + "a" * 8189,
+        "ghs_" + "a" * 30 + "\r\nX-Injected: yes",
+        "ghs_" + "a" * 30 + " ",
+        "ghs_" + "a" * 30 + "\x00",
+        "ghs_" + "a" * 30 + "é",
+        "ghs_" + "a" * 30 + "=invalid-padding",
+    ],
+)
+def test_unsafe_or_oversized_token_never_enters_an_authorization_header(token: str) -> None:
+    calls: list[httpx.Request] = []
+    with pytest.raises(Refused):
+        inspect_repository(
+            SCOPE,
+            app_jwt="a.b.c",
+            allow_temporary_token_issuance=True,
+            _transport=transport(None, calls, token=token),
+        )
+    assert [call.method for call in calls] == ["GET", "POST"]
+    # An unusable issuance response is unconfirmed; never put unsafe bytes into cleanup headers.
+    assert all(call.headers["Authorization"] == "Bearer a.b.c" for call in calls)
 
 
 @pytest.mark.parametrize("fault", [None, "changed-summary"])
