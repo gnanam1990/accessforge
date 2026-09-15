@@ -18,7 +18,9 @@ Application credentials and fixture nonce are not included in either source reco
 ticks and counts use exact decimal strings, avoiding JSON safe-integer truncation.
 
 The new records deliberately do not pretend to be the current-row task-completion sample:
-`finalSample` is false, `count` is null and `assertionObservations` is empty. They do not close the
+`finalSample` is false and `count` is null. READY has empty `assertionObservations`; CLOSED now
+contains versioned forbidden-effect conditions authored by the independent observer using its
+configured installation, reserved fixture and frozen reference policy. They do not close the
 ordinary observer stream; its existing final completion measurement must still run. Original
 source records use the same sequencer, producer identity, digest and retention machinery. No
 new schema migration or live product/source change was needed to implement this service.
@@ -29,8 +31,22 @@ synthetic collector and synthetic STOP receipt. The protected database collector
 real PostgreSQL fixture tests. These facts are not combined into a claim of actual reader proof
 or an end-to-end independently authenticated physical run.
 
-Remaining: launch/own this service in the independent process, require its committed readiness
-before native actions, wait for confirmed STOP before closure, prove original artifact retention,
-and connect the finalizer to both ordered lifecycle records and the resolved frozen policy.
-The current finalizer does not consume the new coverage. Do not construct an expected execution
-window by copying arbitrary measurement JSON or interpret an unclosed READY as coverage.
+The private worker/native composition owns startup and STOP closure (see
+`reference-effect-worker-process.md`). Evaluator 1.12.0 consumes versioned CLOSED conditions
+only after original retained bytes and authenticated streams are verified. Its join requires
+unique matching READY/CLOSED records, the same final observer binding and canonical ordering:
+READY before every original action pair, successful final STOP before CLOSED, CLOSED before
+the ordinary final sample. Wrong source, scope, clock, action identity, sequence or condition
+family is refused. Missing/historical conditions remain absent/UNKNOWN; the evaluator does not
+turn counters into observer-authored conditions. Historical evaluator records are unchanged.
+
+Combined backend validation now covers real protected source/history and independent roles,
+canonical records, retained S3 bytes, finalization, API readback, immutable replay and export.
+Three cases distinguish no insertion, committed create/delete and rollback. Forbidden conditions
+and original READY/CLOSED references survive finalization; the overall result stays INCONCLUSIVE
+because desktop/journal evidence is synthetic and real runtime identities are missing.
+
+Remaining: actual private-operator/native execution, real reader/model/environment qualification
+and its original artifact proof. The backend integration is not physical acceptance. Do not
+construct execution authority by copying arbitrary measurement JSON or interpret an unclosed
+READY as coverage.

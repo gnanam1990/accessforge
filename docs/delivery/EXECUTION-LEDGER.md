@@ -295,8 +295,42 @@ remain the next boundaries; the entrypoint alone does not complete C2 or the ful
 Native wiring follow-up: the private host now accepts an explicit independent effect observer
 matching its ordinary observer's source/credential configuration. It starts exactly once after
 machine-session opening, awaits READY before reader flow, fences the composed execution on worker
-or receipt-pipe failure, and requires CLOSED plus clean exit before the ordinary final sample.
+or receipt-pipe failure, and requires CLOSED, complete pipe framing after the original STOP and
+clean worker exit before the ordinary final sample.
 Existing consent, physical authorization, profile eligibility and model-call gates remain intact.
 Twenty native process/observer checks pass with real children and synthetic receipts; TypeScript
 compiles. No actual reader/source execution. Original artifact proof and finalizer interpretation
 of the ordered lifecycle records remain pending; no C2 or project-complete claim.
+
+## Retained reference-effect verdict wiring — 2026-09-15
+
+The independent observer now authors versioned forbidden-effect conditions from its protected
+collector, configured source installation and controller-reserved fixture. Evaluator 1.12.0
+consumes them only through the existing verified original-artifact path. It joins the original
+READY, every settled action pair, the successful final STOP, CLOSED and final observer sample
+by canonical ordering and matching source/fixture/assertion identities. Historical records are
+not upgraded; missing conditions stay UNKNOWN. The evaluator does not turn a count into an
+observer-authored condition or rewrite the frozen policy to match source JSON.
+
+Normal source review covered startup/closure authority, retained producer provenance, wrong
+scope/clock/fixture, missing and duplicate conditions, early/failed STOP and historical behavior.
+66 focused service/worker/retained-join checks and one isolated real API/PostgreSQL sequencer
+check passed; Ruff and strict mypy passed. The isolated test database and role were removed.
+No actual reader, model call, live migration, deployment or permission change occurred.
+
+This completes code wiring, not C2 acceptance: combined original retained-artifact/finalization
+proof with the actual collector/native execution still remains. C1 operator provisioning,
+real VoiceOver qualification, the non-AWS provider choice/integration, baseline/repair/rerun,
+human review, outbound GitHub publication and release acceptance remain open.
+
+Combined retained proof follow-up: PR #181 passed exact-head CI and merged as
+`9692838a55fd0f4f3d983345c65c0f51e6452c9d`. Three new integration cases now exercise the actual
+protected collector and separate database roles through observer admission, closed canonical
+streams, retained S3 bytes, finalizer, API readback, immutable replay and evidence export.
+No committed insert and rolled-back insert yield TRUE for the forbidden-effect assertion;
+a committed create/delete yields FALSE despite the final table being empty. Original READY/CLOSED
+event references and observer provenance survive finalization. All three cases passed locally;
+Ruff and strict mypy passed. Their source databases/roles and isolated control-plane test database
+were removed after the run. The desktop and journal remain synthetic: missing actual build,
+reader and model identities correctly keep the overall result INCONCLUSIVE. This closes the
+combined backend retention proof gap, not actual native execution or full project acceptance.

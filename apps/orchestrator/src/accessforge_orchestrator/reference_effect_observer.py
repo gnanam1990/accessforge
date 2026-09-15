@@ -23,6 +23,7 @@ from accessforge_domain.authorization import (
 )
 from accessforge_domain.canonical import digest
 from accessforge_domain.effect_monitor import EffectCoverage
+from accessforge_domain.evaluation.rules import reference_effect_monitor_assertions
 from accessforge_domain.journeys.assertions import AssertionKind, AssertionSet
 from accessforge_domain.reference_effect_scope import (
     REFERENCE_EFFECT_POLICY_DIGEST,
@@ -248,6 +249,17 @@ class ReferenceEffectObserver:
                     raise Refused("original successful STOP and collector binding required")
             coverage = self._collector.finish()
             self._validate_coverage(coverage)
+            # The protected observer resolves its own configured installation and reserved
+            # fixture. The finalizer must never manufacture this binding from uploaded JSON.
+            binding = ReferenceEffectBinding(
+                self._run, before["attempt"], self._installation, before["fixtureNonce"]
+            )
+            conditions = reference_effect_monitor_assertions(
+                AssertionSet.from_canonical_form(before["assertionContract"]),
+                expected=coverage.window,
+                binding=binding,
+                measured=coverage,
+            )
             with workspace_connection(self._database, self._workspace) as conn:
                 after = self._context(conn, startup=False)
                 if after != before:
@@ -258,6 +270,8 @@ class ReferenceEffectObserver:
                     phase="CLOSED",
                     record_id=self._close_id,
                     extra={
+                        "conditionFormat": "accessforge.reference-effect-conditions.v1",
+                        "assertionObservations": conditions,
                         "startEventId": self._start_event,
                         "scopeDigest": coverage.window.scope_digest,
                         # Decimal strings preserve monotonic nanoseconds above JSON safe-int range.
