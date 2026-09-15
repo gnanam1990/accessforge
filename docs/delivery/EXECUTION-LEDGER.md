@@ -188,7 +188,8 @@ does not unlock startup. The next operation is to establish supported runner pre
 then perform actual qualification; no actual speech capture, journey, matrix enrollment or canonical
 reader evidence has been produced by this correction. C1/C2 and remaining acceptance work remain open.
 
-Follow-up read-only diagnosis: the actual Node executable is `/Users/kratos/.hermes/node/bin/node`.
+Follow-up read-only diagnosis: the actual Node executable was resolved via `process.execPath` and
+matched to its Full Disk Access entry using Show in Finder; its host-local path is not shipped.
 Its direct file read also returns EPERM, ruling out a defaults-only read failure. The matching
 Full Disk Access switch is OFF. No additional permission was granted. Source selection now
 distinguishes absent metadata from inaccessible metadata: only ENOENT permits looking at the legacy
