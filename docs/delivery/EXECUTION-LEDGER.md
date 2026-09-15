@@ -209,3 +209,18 @@ gates. A focused regression reproduced the cancelled-request dispatch against th
 No fixture, browser, reader or OS setting was changed to exercise this synthetic test.
 C1 still needs concrete runtime/reset/stale-input/action provisioning and actual qualification;
 C2 window collection/authenticated finalization and the rest of the queue remain incomplete.
+
+## Candidate reader lifecycle checkpoint — 2026-09-15
+
+PR #176 merged after exact-head CI as `99620c3cb25896f9b97ac5e0d8e8c2d39afaa321`;
+local main was synchronized before this slice. Candidate SDK startup and implicit cleanup now
+have a finite asynchronous observation deadline (30 seconds by default, never above 30 seconds).
+Unsettled startup returns INTERRUPTED without racing a STOP against the still-running startup;
+late completion cannot enter the action loop. Cleanup timeout also remains INTERRUPTED. The
+existing candidate host retains its desktop exclusion on that status: no SDK cancellation,
+physical STOP, successful trace or retry permission is inferred from a timeout.
+
+TypeScript compilation and 21 focused synthetic candidate-runner checks pass, including pending
+startup, late resolution/no input and hanging cleanup. This bounds SDK promise observation only,
+not synchronous SDK blocking or the complete host workflow. No actual reader or permission change.
+Concrete C1 runtime provisioning and C2 measurement/finalization remain the next open boundaries.

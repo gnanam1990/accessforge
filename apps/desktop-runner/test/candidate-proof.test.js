@@ -41,7 +41,7 @@ function readyPreflight(env = readyEnvironment()) {
   }));
 }
 
-function harness(preflight = readyPreflight(), onRetain, authorizeReaderStartup = async () => {}, authorizePhysicalAction) {
+function harness(preflight = readyPreflight(), onRetain, authorizeReaderStartup = async () => {}, authorizePhysicalAction, lifecycleTimeoutMs) {
   const calls = [];
   const observations = [];
   const adapter = {
@@ -93,11 +93,34 @@ function harness(preflight = readyPreflight(), onRetain, authorizeReaderStartup 
       maxWallTimeSeconds: 60,
     },
     actionTimeoutMs: 100,
+    lifecycleTimeoutMs,
     approvedTextValues: new Set(['Test Person']),
     onObservation: async (observation) => observations.push(observation),
   });
   return { calls, observations, runner, sink, adapter };
 }
+
+test('unsettled reader startup returns interrupted without racing cleanup or issuing late input', async () => {
+  const h = harness(undefined, undefined, undefined, undefined, 20);
+  let release;
+  h.adapter.start = () => new Promise(resolve => { release = resolve; });
+  const result = await h.runner.run([{ action: 'NEXT' }]);
+  assert.equal(result.status, 'INTERRUPTED');
+  assert.match(result.detail, /startup remains unresolved/);
+  assert.deepEqual(h.calls, []);
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.calls, []);
+  await assert.rejects(() => h.runner.run([{ action: 'NEXT' }]));
+});
+
+test('unsettled reader cleanup cannot hang or seal candidate completion', async () => {
+  const h = harness(undefined, undefined, undefined, undefined, 20);
+  h.adapter.stop = () => new Promise(() => {});
+  const result = await h.runner.run([{ action: 'NEXT' }]);
+  assert.equal(result.status, 'INTERRUPTED');
+  assert.match(result.detail, /cleanup unconfirmed/);
+});
 
 test('the candidate proof runs only through the supervisor and closes its local source stream', async () => {
   const { calls, observations, runner, sink } = harness();

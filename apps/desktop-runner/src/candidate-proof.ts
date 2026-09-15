@@ -51,6 +51,8 @@ export interface CandidateProofOptions {
   readonly clock: Clock;
   readonly lease: LeaseState;
   readonly actionTimeoutMs: number;
+  /** Bounds asynchronous SDK start/cleanup observation, not proof that the SDK was cancelled. */
+  readonly lifecycleTimeoutMs?: number;
   readonly approvedTextValues: ReadonlySet<string>;
   readonly onObservation?: (
     observation: RawObservation | UnknownObservation,
@@ -99,6 +101,20 @@ export class CandidateProofRunner {
     // attempt must not overlap or replay against this original journal, trace and reader.
     if (this.consumed) throw new Error('candidate proof already consumed; reconcile the original attempt');
     this.consumed = true;
+    const lifecycleTimeout = this.options.lifecycleTimeoutMs ?? 30000;
+    if (!Number.isFinite(lifecycleTimeout) || lifecycleTimeout <= 0 || lifecycleTimeout > 30000) {
+      throw new Error('candidate reader lifecycle deadline must be bounded');
+    }
+    const bounded = async (operation: Promise<void>): Promise<void> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([operation, new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('reader lifecycle outcome unconfirmed')), lifecycleTimeout);
+        })]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    };
     // One private input snapshot across async retention/startup. Readonly types do not stop a
     // caller from mutating the original array or text after validation but before dispatch.
     const approvedActions = structuredClone(actions);
@@ -135,6 +151,7 @@ export class CandidateProofRunner {
     const outcomes: DispatchOutcome[] = [];
     let activeDispatch: symbol | undefined;
     let startupAttempted = false;
+    let startupSettled = false;
     let readerStoppedByAction = false;
     let result: CandidateProofResult = {
       status: 'CANDIDATE_COMPLETE', actions: outcomes,
@@ -144,7 +161,9 @@ export class CandidateProofRunner {
       await this.options.authorizeReaderStartup();
       // Startup can change reader state before rejecting. Its cleanup is still owned here.
       startupAttempted = true;
-      await this.options.adapter.start();
+      await bounded(Promise.resolve().then(() => this.options.adapter.start()).finally(() => {
+        startupSettled = true;
+      }));
       if ((await this.checkPhysical('AFTER_STARTUP')).length > 0) {
         throw new Error('post-start physical readiness unavailable');
       }
@@ -202,9 +221,14 @@ export class CandidateProofRunner {
       }`;
       result = { status: 'INTERRUPTED', actions: outcomes, detail };
     } finally {
-      if (startupAttempted && !readerStoppedByAction) {
+      if (startupAttempted && !startupSettled) {
+        // Do not race STOP against an SDK startup which may still activate the reader later.
+        // The host retains the desktop claim for INTERRUPTED; this is not physical STOP proof.
+        result = { status: 'INTERRUPTED', actions: outcomes,
+          detail: 'reader startup remains unresolved; retain desktop exclusion and reconcile before any retry' };
+      } else if (startupAttempted && !readerStoppedByAction) {
         try {
-          await this.options.adapter.stop();
+          await bounded(Promise.resolve().then(() => this.options.adapter.stop()));
         } catch {
           result = {
             status: 'INTERRUPTED', actions: outcomes,
