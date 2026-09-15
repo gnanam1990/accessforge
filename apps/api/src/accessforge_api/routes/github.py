@@ -181,7 +181,7 @@ def revoke_github_publication_approval(
 def inspect_github_publication_recovery(
     workspace_id: str, preview_id: str, request: Request, response: Response, conn: Conn
 ) -> dict[str, Any]:
-    """Local intent history only: UNKNOWN never becomes permission to retry publication."""
+    """Original intent/create history, not current remote state or permission to retry."""
     context = authorize(conn, request, workspace_id, Permission.WORKSPACE_CONFIGURE)
     identifier = str(UUID(as_identifier(preview_id, what="publication preview")))
     try:

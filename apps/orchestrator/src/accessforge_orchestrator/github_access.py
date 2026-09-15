@@ -1,9 +1,11 @@
-"""Explicit GitHub.com App access probe with no publication capability.
+"""Public read-only GitHub App probe and private approved-check transport composition.
 
 This performs network operations only when invoked with temporary-token issuance enabled.
 It narrows that token to one repository and read permissions, keeps it inside this function,
 and requires successful token revocation before returning a metadata-only observation.
 Operator JWT provisioning and durable workspace binding remain outside this module.
+The public inspect_repository function cannot publish. The private create operation requires
+a trusted service callback that reauthorizes and commits a new original publication reservation.
 """
 
 from __future__ import annotations
@@ -11,9 +13,12 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -72,6 +77,24 @@ class RepositoryAccess:
     check_observation: CheckObservation | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CreatedCheck:
+    intent_id: str
+    check_run_id: int
+    payload_digest: str
+    observed_at: str
+    token_revoked: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class _CreateCheck:
+    """Trusted service composition only, never populated from an API request body."""
+
+    body: dict[str, Any]
+    # Must revalidate retained evidence/current authority and commit a NEW durable create slot.
+    authorize: Callable[[], str]
+
+
 def inspect_repository(
     scope: RepositoryScope,
     *,
@@ -81,6 +104,29 @@ def inspect_repository(
     check_run_id: int | None = None,
     _transport: httpx.BaseTransport | None = None,
 ) -> RepositoryAccess:
+    """Inspect current repository/check metadata without any check-write capability."""
+    result = _repository_operation(
+        scope,
+        app_jwt=app_jwt,
+        allow_temporary_token_issuance=allow_temporary_token_issuance,
+        commit_sha=commit_sha,
+        check_run_id=check_run_id,
+        _transport=_transport,
+    )
+    assert isinstance(result, RepositoryAccess)
+    return result
+
+
+def _repository_operation(
+    scope: RepositoryScope,
+    *,
+    app_jwt: str,
+    allow_temporary_token_issuance: bool = False,
+    commit_sha: str | None = None,
+    check_run_id: int | None = None,
+    _transport: httpx.BaseTransport | None = None,
+    create: _CreateCheck | None = None,
+) -> RepositoryAccess | CreatedCheck:
     """Check current App/installation/account/repository identity, without returning a token.
 
     `_transport` is a trusted test seam, never request data. Production fixes HTTPS GitHub.com,
@@ -90,6 +136,17 @@ def inspect_repository(
     """
     if allow_temporary_token_issuance is not True:
         raise Refused("temporary installation-token issuance requires explicit authorization")
+    if create is not None:
+        if commit_sha is None or check_run_id is not None or not callable(create.authorize):
+            raise Refused("one original create operation required")
+        create = _CreateCheck(deepcopy(create.body), create.authorize)
+        if (
+            create.body.get("head_sha") != commit_sha
+            or not set(create.body)
+            <= {"name", "head_sha", "external_id", "status", "conclusion", "output"}
+            or len(json.dumps(create.body).encode()) > 65536
+        ):
+            raise Refused("bounded original check payload required")
     if commit_sha is not None and (
         not isinstance(commit_sha, str)
         or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", commit_sha)
@@ -113,7 +170,10 @@ def inspect_repository(
     permissions = {"metadata": "read", "contents": "read"}
     if check_run_id is not None:
         permissions["checks"] = "read"
+    if create is not None:
+        permissions["checks"] = "write"
     check_observation: CheckObservation | None = None
+    created: CreatedCheck | None = None
     with httpx.Client(
         transport=_transport, trust_env=False, follow_redirects=False, timeout=5
     ) as client:
@@ -183,6 +243,7 @@ def inspect_repository(
                     not isinstance(granted.get(key), str) or granted[key] not in {"read", "write"}
                     for key in permissions
                 )
+                or (create is not None and granted.get("checks") != "write")
             ):
                 raise Refused("current installation scope or read permissions differ")
 
@@ -267,9 +328,43 @@ def inspect_repository(
             installation()  # Detect suspension/removal/permission change during the probe.
             if datetime.now(UTC) >= expires:
                 raise Refused("temporary credential expired during inspection")
+            if create is not None:
+                # All remote identity checks precede the final local authorization/unique
+                # reservation. The callback cannot reuse an existing intent as dispatch authority.
+                intent_id = create.authorize()
+                if str(UUID(intent_id)) != intent_id:
+                    raise Refused("original publication reservation unavailable")
+                if datetime.now(UTC) >= expires:
+                    raise Refused("temporary credential expired before publication")
+                value = request(
+                    "POST",
+                    f"/repos/{scope.owner}/{scope.name}/check-runs",
+                    token,
+                    201,
+                    create.body,
+                )
+                identifier = value.get("id")
+                if type(identifier) is not int or not 1 <= identifier <= 2**63 - 1:
+                    raise Refused("check creation response unconfirmed")
+                observation = _observe_check(
+                    value,
+                    scope=scope,
+                    commit_sha=commit_sha or "",
+                    check_run_id=identifier,
+                )
+                if observation.payload_digest != digest(create.body):
+                    raise Refused("created check differs from its approved payload")
+                created = CreatedCheck(
+                    intent_id,
+                    identifier,
+                    observation.payload_digest,
+                    to_rfc3339_utc(datetime.now(UTC)),
+                )
         finally:
             if token is not None:
                 request("DELETE", "/installation/token", token, 204, cleanup=True)
+    if created is not None:
+        return created  # Only after successful token revocation; failures remain unconfirmed.
     return RepositoryAccess(
         scope,
         to_rfc3339_utc(datetime.now(UTC)),
