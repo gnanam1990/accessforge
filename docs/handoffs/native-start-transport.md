@@ -31,6 +31,12 @@ directories are retained; no recursive production cleanup is introduced.
   use type-exact identity comparisons, not Python's boolean/integer equality.
 - One Node test proves the currently unqualified profile cannot advertise a socket.
   This is not a positive production-listener test or actual-reader acceptance.
+- A cross-language Python test now launches the actual TypeScript listener and sends through
+  NativeStartTransport, verifying the exact envelope, accepted receipt, no second send and
+  observed listener completion. Only profile qualification and execution are mocked through
+  Node's test-only module mocks; no production bypass/configuration flag is added. This proves
+  wire interoperability, not physical qualification or native execution. Python CI builds the
+  listener dependencies before executing this test; it does not skip a missing Node build.
 - Direct installed TypeScript compiler, focused Python mypy and Ruff pass.
 - No physical reader, provider call, live database migration or deployment was performed.
 
