@@ -121,8 +121,8 @@ export class VoiceOverAdapter {
       };
     }
 
-    // Guidepup's lastSpokenPhrase is a cached log tail, not a new capture. Snapshot the
-    // log before navigation so a silent action cannot borrow an earlier announcement.
+    // Guidepup's lastSpokenPhrase is a cached log tail. Its appended samples can also
+    // repeat stale text or contain empty capture failures; require a distinguishable sample.
     const before = request.action === 'READ_CURRENT' ? undefined : await this.speechLog();
     let phrase: string;
     switch (request.action) {
@@ -164,9 +164,11 @@ export class VoiceOverAdapter {
 
     if (before !== undefined) {
       const after = await this.speechLog();
-      if (after.length <= before.length || before.some((value, i) => after[i] !== value)) {
+      const latest = after[after.length - 1];
+      if (after.length <= before.length || before.some((value, i) => after[i] !== value) ||
+          latest === undefined || !latest.trim() || latest === before[before.length - 1]) {
         return { status: 'SUCCEEDED', observation: { provenance: 'CAPTURE_UNKNOWN',
-          reason: 'No append-only speech event was observed across this action; cached text is not new evidence.' } };
+          reason: 'No distinguishable nonempty speech sample was captured across this action; cached or empty SDK samples do not prove new speech or silence.' } };
       }
       phrase = after[after.length - 1]!;
     }

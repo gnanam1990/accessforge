@@ -93,11 +93,12 @@ test('reader output is constructed as actual-reader evidence with action provena
   });
 });
 
-test('an explicitly appended empty announcement remains a real empty observation', async () => {
+test('an appended empty SDK sample cannot distinguish silence from failed capture', async () => {
   let reads = 0;
   const client = fakeClient({ spokenPhraseLog: async () => ++reads === 1 ? [] : [''] });
   const result = await new VoiceOverAdapter(client).perform({ action: 'NEXT' }, context());
-  assert.equal(result.observation.phrase, '');
+  assert.equal(result.observation.provenance, 'CAPTURE_UNKNOWN');
+  assert.equal(result.observation.phrase, undefined);
 });
 
 test('a cached earlier phrase cannot become evidence for a silent new action', async () => {
@@ -114,12 +115,20 @@ test('speech history replacement cannot masquerade as an appended event', async 
   assert.equal(result.observation.provenance, 'CAPTURE_UNKNOWN');
 });
 
-test('a repeated phrase appended to the same SDK array is a new speech event', async () => {
+test('a repeated phrase appended to the same SDK array cannot prove new speech', async () => {
   const log = ['Same phrase'];
   const client = fakeClient({ spokenPhraseLog: async () => log,
     next: async () => { log.push('Same phrase'); } });
   const result = await new VoiceOverAdapter(client).perform({action: 'NEXT'}, context());
-  assert.equal(result.observation.phrase, 'Same phrase');
+  assert.equal(result.observation.provenance, 'CAPTURE_UNKNOWN');
+});
+
+test('a changed nonempty sample appended to the same SDK array is retained', async () => {
+  const log = ['Previous phrase'];
+  const client = fakeClient({ spokenPhraseLog: async () => log,
+    next: async () => { log.push('Current phrase'); } });
+  const result = await new VoiceOverAdapter(client).perform({action: 'NEXT'}, context());
+  assert.equal(result.observation.phrase, 'Current phrase');
 });
 
 test('a Guidepup action error stays unresolved instead of becoming FAILED', async () => {
