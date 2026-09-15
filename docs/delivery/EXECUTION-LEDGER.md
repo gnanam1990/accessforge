@@ -5,6 +5,13 @@ certificate. Original requirements remain in `specs/accessforge/`. Earlier PLAN/
 and handoffs are historical evidence, not current task selectors. Refresh source and GitHub state
 before changing a row. No overall completion percentage has been established.
 
+Latest operator state: local sign-in works, VoiceOver AppleScript control is ON, AWS is declined.
+Runner preference reads still return EPERM. System Settings confirms the exact runner Node's Full
+Disk Access entry exists but its switch is OFF; presence in Files & Folders was not a grant.
+Enabling that broader permission is awaiting a new action-time confirmation, not the previous
+AppleScript-control confirmation. No reader was started. See the final local-recovery checkpoint;
+older host, AWS and checkout notes below are historical, not current prerequisites.
+
 ## Verified checkpoint
 
 - Remote main refreshed at `59c929c041d704f2b5383e6314556841b815a5a0`: PRs #162–167
@@ -180,3 +187,10 @@ The controlling process still cannot read the preference on this host; this rema
 does not unlock startup. The next operation is to establish supported runner preference access,
 then perform actual qualification; no actual speech capture, journey, matrix enrollment or canonical
 reader evidence has been produced by this correction. C1/C2 and remaining acceptance work remain open.
+
+Follow-up read-only diagnosis: the actual Node executable is `/Users/kratos/.hermes/node/bin/node`.
+Its direct file read also returns EPERM, ruling out a defaults-only read failure. The matching
+Full Disk Access switch is OFF. No additional permission was granted. Source selection now
+distinguishes absent metadata from inaccessible metadata: only ENOENT permits looking at the legacy
+path. An inaccessible or non-regular current file cannot select a stale legacy TRUE. The focused
+checks remain synthetic/source-selection evidence, not actual-reader qualification.

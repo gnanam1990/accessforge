@@ -222,7 +222,7 @@ test('only a measured zero proves control is disabled', () => {
 test('host reads the preferred group-container file without stale legacy fallback', () => {
   const calls = [];
   const paths = voiceOverPreferencePaths();
-  const env = createHostEnvironment({pathExists: () => true, run: (command, args) => {
+  const env = createHostEnvironment({preferencePathState: () => 'PRESENT', run: (command, args) => {
     calls.push([command, ...args]);
     return {status: 1, stdout: '', stderr: 'unreadable'};
   }});
@@ -233,7 +233,7 @@ test('host reads the preferred group-container file without stale legacy fallbac
 test('host supports the current and legacy preference locations without changing settings', () => {
   const paths = voiceOverPreferencePaths();
   for (const selected of paths) {
-    const env = createHostEnvironment({pathExists: path => path === selected,
+    const env = createHostEnvironment({preferencePathState: path => path === selected ? 'PRESENT' : 'ABSENT',
       run: (command, args) => {
         assert.equal(command, '/usr/bin/defaults');
         assert.deepEqual(args, ['read', selected.replace(/\.plist$/, ''), 'SCREnableAppleScript']);
@@ -241,6 +241,26 @@ test('host supports the current and legacy preference locations without changing
       }});
     assert.equal(env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript'), '1');
   }
+});
+
+test('inaccessible current preference metadata cannot select a stale legacy TRUE', () => {
+  const paths = voiceOverPreferencePaths();
+  const inspected = [];
+  const env = createHostEnvironment({
+    preferencePathState: path => {
+      inspected.push(path);
+      return path === paths[0] ? 'UNKNOWN' : 'PRESENT';
+    },
+    run: () => { assert.fail('unknown source must not read either preference'); },
+  });
+  assert.equal(env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript'), undefined);
+  assert.deepEqual(inspected, [paths[0]]);
+});
+
+test('absent preference sources do not fall back to a defaults domain lookup', () => {
+  const env = createHostEnvironment({preferencePathState: () => 'ABSENT',
+    run: () => { assert.fail('no observable source'); }});
+  assert.equal(env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript'), undefined);
 });
 
 test('a configured and controllable VoiceOver that is not running is a plain FALSE', () => {

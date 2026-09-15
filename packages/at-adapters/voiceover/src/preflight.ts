@@ -16,7 +16,7 @@
  * locked" must never travel as "the screen was unlocked".
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -108,6 +108,17 @@ export type CommandRunner = (
 export interface HostEnvironmentOptions {
   readonly run?: CommandRunner;
   readonly pathExists?: (path: string) => boolean;
+  /** Unlike existsSync, denied access must not mean the legacy source is eligible. */
+  readonly preferencePathState?: (path: string) => 'PRESENT' | 'ABSENT' | 'UNKNOWN';
+}
+
+function preferencePathState(path: string): 'PRESENT' | 'ABSENT' | 'UNKNOWN' {
+  try {
+    return lstatSync(path).isFile() ? 'PRESENT' : 'UNKNOWN';
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+      ? 'ABSENT' : 'UNKNOWN';
+  }
 }
 
 const systemRun: CommandRunner = (executable, args, input) => {
@@ -485,6 +496,7 @@ export function runPreflight(
 export function createHostEnvironment(options: HostEnvironmentOptions = {}): ProbeEnvironment {
   const run = options.run ?? systemRun;
   const pathExists = options.pathExists ?? existsSync;
+  const inspectPreference = options.preferencePathState ?? preferencePathState;
   return {
     platform: () => process.platform,
     localeAndKeyboard: () => {
@@ -507,9 +519,19 @@ export function createHostEnvironment(options: HostEnvironmentOptions = {}): Pro
     readPreference: (domain, key) => {
       // Match the configured file, preferring the current group container. Never fall back
       // to a stale legacy TRUE if the current preference is disabled or unreadable.
-      const source = domain === 'com.apple.VoiceOver4/default'
-        ? voiceOverPreferencePaths().find(pathExists)?.replace(/\.plist$/, '') : domain;
-      if (source === undefined) return undefined;
+      let source = domain;
+      if (domain === 'com.apple.VoiceOver4/default') {
+        let selected: string | undefined;
+        for (const path of voiceOverPreferencePaths()) {
+          const state = inspectPreference(path);
+          if (state === 'ABSENT') continue;
+          if (state !== 'PRESENT') return undefined;
+          selected = path.replace(/\.plist$/, '');
+          break;
+        }
+        if (selected === undefined) return undefined;
+        source = selected;
+      }
       const result = run('/usr/bin/defaults', ['read', source, key]);
       return result.status === 0 ? result.stdout.trim() : undefined;
     },
