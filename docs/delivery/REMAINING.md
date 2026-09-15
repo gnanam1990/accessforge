@@ -1,5 +1,9 @@
 # Remaining work, priority-ordered
 
+> Superseded for task selection on 2026-09-15 by [EXECUTION-LEDGER.md](EXECUTION-LEDGER.md).
+> Everything below is a dated historical checkpoint. In particular, old open-PR and missing-module
+> statements are not current status. Use the ledger and live source/PR evidence to continue work.
+
 ## Current delivery checkpoint — 2026-09-14
 
 Inspected baseline: `main` at `987bb7fcedc5634f6f798c954dba1818294b4284` (PR #126).
