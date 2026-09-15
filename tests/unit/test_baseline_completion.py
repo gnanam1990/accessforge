@@ -104,6 +104,7 @@ def test_operator_dispatches_once_and_only_completes_after_stop(
             "attempt_id": "attempt",
             "transport": transport,
             "timeout_seconds": 30,
+            "cancelled": arguments["cancelled"],
         }
         events.append("dispatch")
         if fault == "stop":
