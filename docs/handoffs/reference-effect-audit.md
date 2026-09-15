@@ -24,6 +24,9 @@ visible; a rolled-back insertion does not. A final service-request row count is 
   installation UUID, and fixture nonce. Reads validate source/trigger identity, durability, role
   authority, and table/column privileges before returning a history count. SQL/validation failure
   is unavailable evidence, never zero. Do not grant the observer source or audit write authority.
+- Reads require the installed observer's effective `current_user`; an administrator connection
+  cannot substitute for that role. PostgreSQL read errors are normalized to `AuditUnavailable`
+  with their original cause retained for private diagnostics.
 
 The trigger function has a fixed trusted search path and PUBLIC execution revoked, following
 [PostgreSQL's SECURITY DEFINER guidance](https://www.postgresql.org/docs/16/sql-createfunction.html).

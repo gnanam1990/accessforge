@@ -206,3 +206,22 @@ def test_caught_install_failure_cannot_commit_partial_installation(
             "SELECT to_regnamespace('accessforge_effect_audit') AS schema"
         ).fetchone()
         assert row is not None and row["schema"] is None
+
+
+def test_administrator_is_not_an_independent_observer(audit_db: tuple[str, str, str, str]) -> None:
+    url, app, _, installation = audit_db
+    with connection(url) as conn:
+        with pytest.raises(AuditUnavailable, match="independent observer role"):
+            read_creation_history(
+                conn, application_role=app, installation_id=installation, fixture_nonce=NONCE
+            )
+    assert history(audit_db) == 0
+
+
+def test_missing_history_is_unavailable_not_zero(audit_db: tuple[str, str, str, str]) -> None:
+    url, _, _, _ = audit_db
+    with connection(url) as conn:
+        conn.execute("DROP TABLE accessforge_effect_audit.creation")
+    with pytest.raises(AuditUnavailable) as failure:
+        history(audit_db)
+    assert isinstance(failure.value.__cause__, psycopg.Error)
