@@ -234,3 +234,29 @@ resume startup, dispatch input or reuse the attempt. No cleanup is invented for 
 never called. TypeScript compilation and 22 focused synthetic candidate-runner checks pass.
 This is a startup control-path correction, not concrete runtime provisioning or actual acceptance.
 Provider selection and preference-access confirmation remain pending; C1/C2 are not complete.
+
+## Protected reference execution-window collector — 2026-09-15
+
+PR #178 passed exact-head CI and merged as `faefdc0f7bf7749e8a29e8482c86cfe9cd94a04b`.
+The current C2 slice adds a concrete independent database collector, not another final-row-count
+predicate. The installed trigger holds a shared transaction barrier through commit. Separate
+observer start/end barriers drain writers around fresh protected-history snapshots; the interval
+therefore includes committed create/delete effects and excludes commits after the end barrier.
+Only a pristine reserved fixture is accepted. No counter subtraction, reset or source write grant.
+
+Twenty-five focused real isolated PostgreSQL checks passed, with Ruff and strict mypy. Scope is
+one protected reference installation/fixture, not external sinks. No live database, reader, OS
+permission or model change. Old installations without the barrier are refused, not auto-upgraded.
+See `reference-effect-collector.md` under `docs/handoffs/` for semantics and deployment limits.
+
+Next C2 boundary: compose collector startup before dispatch and closure after independently
+confirmed STOP; authenticate/retain original records and bind finalization to the supervisor-owned
+window. No production caller/finalizer uses the new collector yet. C1, actual qualification,
+provider selection and all other uncompleted rows remain open; this is not project completion.
+
+Integration review found that a per-run nonce cannot be frozen into a reusable journey assertion.
+The same collector slice now separates a fixed reference policy digest from the independently
+resolved concrete run/attempt/installation/nonce binding. Observer-side rule composition validates
+both without rewriting the assertion or broadening the sink. Thirty-eight focused domain checks
+pass alongside the 25 isolated PostgreSQL checks. This resolves policy/resource matching only;
+authenticated provisioning/retention and production execution/finalizer callers remain required.

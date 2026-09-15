@@ -18,6 +18,10 @@ from accessforge_domain.journeys.assertions import (
     AssertionKind,
     AssertionSet,
 )
+from accessforge_domain.reference_effect_scope import (
+    REFERENCE_EFFECT_POLICY_DIGEST,
+    ReferenceEffectBinding,
+)
 from accessforge_domain.states import Condition
 
 from .assertions import AssertionOutcome, Provenance
@@ -220,6 +224,46 @@ def effect_monitor_assertions(
     This function grants no effects and mints no event references or run verdict. The finalizer
     must not call it on supervisor/navigator-supplied measurements as observer evidence.
     """
+    return _effect_monitor_assertions(
+        assertions, expected=expected, measured=measured, rule_scope_digest=expected.scope_digest
+    )
+
+
+def reference_effect_monitor_assertions(
+    assertions: AssertionSet,
+    *,
+    expected: EffectWindow,
+    binding: ReferenceEffectBinding,
+    measured: EffectCoverage | None,
+) -> list[dict[str, Any]]:
+    """Resolve only the fixed reference policy against independently loaded run authority.
+
+    The frozen journey keeps its original policy digest. The measured window keeps its
+    concrete installation/nonce digest. Neither is rewritten to agree with the other.
+    Source admission, execution boundary coverage and original-byte retention are required
+    separately; this function does not grant them or broaden the monitored resource scope.
+    """
+    matches = (
+        expected.run_id == binding.run_id
+        and expected.attempt_id == binding.attempt_id
+        and expected.effect == "CREATE_TEST_REQUEST"
+        and expected.scope_digest == binding.measurement_scope_digest()
+    )
+    return _effect_monitor_assertions(
+        assertions,
+        expected=expected,
+        measured=measured if matches else None,
+        rule_scope_digest=REFERENCE_EFFECT_POLICY_DIGEST,
+    )
+
+
+def _effect_monitor_assertions(
+    assertions: AssertionSet,
+    *,
+    expected: EffectWindow,
+    measured: EffectCoverage | None,
+    rule_scope_digest: str,
+) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for assertion in assertions.assertions:
         if assertion.kind is not AssertionKind.FORBIDDEN_EFFECT:
@@ -229,7 +273,7 @@ def effect_monitor_assertions(
             rule is not None
             and rule.rule_type == "CONTINUOUS_EFFECT_ABSENCE"
             and rule.effect == expected.effect
-            and rule.scope_digest == expected.scope_digest
+            and rule.scope_digest == rule_scope_digest
         )
         condition = assess_effect_absence(expected, measured) if matches else Condition.UNKNOWN
         result.append(
