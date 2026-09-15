@@ -7,6 +7,7 @@ import { parseReaderStartupConsentScope, type ReaderStartupConsentScope } from '
 import { readStartupConsentReference } from './startup-provisioning.js';
 import { startNavigatorActionBridge } from './navigator-action-bridge.js';
 import { startOwnedNavigatorExecution, type NavigatorProcessOptions } from './navigator-process.js';
+import { createObserverProcessClosure, type ObserverProcessOptions } from './observer-process.js';
 
 export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhysicalSafariRunner>[0], 'session'> & {
   /** Independently provisioned private host configuration, never navigator fields. */
@@ -48,12 +49,22 @@ export async function startProvisionedNavigatorExecution(options: Omit<Execution
  */
 export async function runProvisionedNavigatorExecution(
   bootstrap: Parameters<typeof startProvisionedNavigatorExecution>[0],
-  navigator: NavigatorProcessOptions,
+  navigator: NavigatorProcessOptions | (Omit<NavigatorProcessOptions, 'closeIndependentObserver'> & {
+    readonly independentObserver: ObserverProcessOptions;
+  }),
 ): Promise<Readonly<Record<string, unknown>>> {
   if (JSON.stringify(parseReference(bootstrap.receiver.localReference)) !==
       JSON.stringify(parseReference(navigator.reference)) ||
       navigator.deadlineMonotonic > bootstrap.lease.deadlineMonotonic) {
     throw new Error('navigator process does not match its native bootstrap lease');
+  }
+  if ('independentObserver' in navigator) {
+    if ('closeIndependentObserver' in navigator) throw new Error('ambiguous observer ownership');
+    const { independentObserver, ...planner } = navigator;
+    const closeIndependentObserver = createObserverProcessClosure(independentObserver,
+      planner.reference, planner.deadlineMonotonic);
+    return startOwnedNavigatorExecution(() => startProvisionedNavigatorExecution(bootstrap),
+      { ...planner, closeIndependentObserver });
   }
   return startOwnedNavigatorExecution(() => startProvisionedNavigatorExecution(bootstrap), navigator);
 }
