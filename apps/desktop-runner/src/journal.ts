@@ -7,18 +7,47 @@
  * did not kill the process, and would be useless for the one case it is for.
  */
 
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, openSync, readFileSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Journal, JournalEntry } from './supervisor.js';
 
 export class FileJournal implements Journal {
   constructor(private readonly path: string) {}
 
+  /** Exercise this exact journal's append descriptor and directory durability without adding
+   * a fake action. This is a current filesystem check, not permission to dispatch an action.
+   */
+  async probeWritable(): Promise<boolean> {
+    let fd: number | undefined;
+    try {
+      fd = this.openOwnedAppend();
+      fsyncSync(fd);
+      const directory = openSync(dirname(this.path), 'r');
+      try { fsyncSync(directory); } finally { closeSync(directory); }
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+
+  private openOwnedAppend(): number {
+    const fd = openSync(this.path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT |
+      constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+    try {
+      const info = fstatSync(fd);
+      if (!info.isFile() || typeof process.getuid !== 'function' || info.uid !== process.getuid() ||
+          info.nlink !== 1 || (info.mode & 0o077) !== 0) throw new Error('private journal required');
+      return fd;
+    } catch (error) { closeSync(fd); throw error; }
+  }
+
   async appendAndFlush(entry: JournalEntry): Promise<void> {
     // Synchronous and fsynced, deliberately. The asynchronous API would let the runtime hold the
     // bytes in a buffer while `dispatch` sends a keystroke to the operating system, which is the
     // exact ordering this journal exists to prevent.
-    const fd = openSync(this.path, 'a', 0o600);
+    const fd = this.openOwnedAppend();
     try {
       const bytes = Buffer.from(`${JSON.stringify(entry)}\n`);
       let written = 0;

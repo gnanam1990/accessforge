@@ -8,6 +8,7 @@ import { readStartupConsentReference } from './startup-provisioning.js';
 import { startNavigatorActionBridge } from './navigator-action-bridge.js';
 import { startOwnedNavigatorExecution, type NavigatorProcessOptions } from './navigator-process.js';
 import { createObserverProcessClosure, type ObserverProcessOptions } from './observer-process.js';
+import { FileJournal } from './journal.js';
 
 export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhysicalSafariRunner>[0], 'session'> & {
   /** Independently provisioned private host configuration, never navigator fields. */
@@ -101,7 +102,20 @@ export function createExecutionBootstrap(options: ExecutionBootstrapOptions): Ex
     authorizeCandidateFormEffect: (command) => requireMachine().authorizeCandidateFormEffect(command),
     finish: () => requireMachine().finish(),
   };
-  return createGuidepupPhysicalSafariRunner({ ...runtime, session, readerStartup: {
+  return createGuidepupPhysicalSafariRunner({ ...runtime, session,
+    physicalPreflight: {
+      ...runtime.physicalPreflight,
+      async observeRuntimeEvidence(signal) {
+        const evidence = await runtime.physicalPreflight.observeRuntimeEvidence(signal);
+        if (signal.aborted) throw new Error('runtime evidence cancelled');
+        // Production never trusts a configuration boolean for actual journal durability.
+        // Test/embedding memory journals cannot establish the physical runtime gate.
+        const journalWritable = runtime.journal instanceof FileJournal &&
+          await runtime.journal.probeWritable();
+        if (signal.aborted) throw new Error('runtime evidence cancelled');
+        return { ...evidence, journalWritable };
+      },
+    }, readerStartup: {
     timeoutMs: readerStartup.timeoutMs,
     async authorize(signal) {
       if (signal.aborted) throw new Error('execution startup cancelled');
