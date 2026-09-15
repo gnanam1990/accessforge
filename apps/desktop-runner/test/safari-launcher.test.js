@@ -7,6 +7,26 @@ import { REFERENCE_FIXTURE_DIGEST, REFERENCE_FIXTURE_VERSION } from '@accessforg
 const expectedUrl = 'http://127.0.0.1:3000/form/fixture_nonce_123456';
 const known = { schemaVersion: 1, status: 'KNOWN', bundleId: 'com.apple.Safari',
   pid: 312, launchedAt: 1700000000.5, browserVersion: '26.6', url: expectedUrl };
+
+test('cancelled or unowned baseline setup cannot send fixture reconciliation', async () => {
+  for (const reason of ['cancelled', 'unowned']) {
+    const controller = new AbortController();
+    if (reason === 'cancelled') controller.abort();
+    let requests = 0;
+    await assert.rejects(() => prepareSafariReferenceApp({
+      permittedOrigin: 'http://127.0.0.1:3000', reservedNonce: 'fixture_nonce_123456',
+      setupToken: 'synthetic-private-token', variant: 'inaccessible',
+      expectedFixtureDigest: REFERENCE_FIXTURE_DIGEST,
+      expectedBuildDigest: 'a'.repeat(64), observedBuildDigest: 'a'.repeat(64),
+      fetch: async () => { requests++; throw new Error('must not dispatch'); },
+    }, { expectedBrowserVersion: '26.6', signal: controller.signal,
+      authorize: async () => {},
+      assertDesktopHeld: () => { if (reason === 'unowned') throw new Error('private claim failure'); },
+    }, { open: async () => assert.fail('must not open'), read: async () => known }));
+    assert.equal(requests, 0, reason + ' setup dispatched a fixture request');
+  }
+});
+
 function fixture(changes = {}, ports = {}) {
   const events = [];
   const controller = new AbortController();
