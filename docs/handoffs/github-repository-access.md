@@ -107,3 +107,13 @@ Primary API contracts: [App installation/token endpoints](https://docs.github.co
 [App JWT requirements](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
 The optional commit check uses the [Git commit-object endpoint](https://docs.github.com/en/rest/git/commits#get-a-commit-object)
 with `contents:read`; it does not create a commit.
+
+Installation-token compatibility (2026-09-15): GitHub documents a staged rollout of stateless
+`ghs_APPID_JWT` tokens beginning April 27, 2026 on the installation-token endpoint above. Tokens
+are opaque bearer credentials: the access probe now accepts the bounded bearer alphabet,
+including dots/dashes and longer tokens, without decoding claims or assuming a legacy length.
+The 8 KiB local header limit and whitespace/control rejection remain explicit safety bounds.
+Remote App/repository/permission/expiry checks and cleanup still apply. An unusable issuance
+response is unconfirmed and never placed in another Authorization header; expiry is the fallback
+when no usable revocation credential was received. Fifty-eight synthetic HTTP checks pass;
+no actual token was issued. Outbound publication and credential-broker deployment remain pending.

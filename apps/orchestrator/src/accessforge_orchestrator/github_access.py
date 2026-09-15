@@ -196,7 +196,15 @@ def inspect_repository(
                 {"repository_ids": [scope.repository_id], "permissions": permissions},
             )
             value = issued.get("token")
-            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_]{20,1024}", value):
+            # Installation tokens are opaque bearer credentials, including GitHub's stateless
+            # ghs_APPID_JWT format. Do not assume a legacy length or alphanumeric-only body.
+            # Bound the header and forbid whitespace/control injection; remote identity and
+            # permissions are still checked independently below, never decoded from the token.
+            if (
+                not isinstance(value, str)
+                or not 20 <= len(value) <= 8192
+                or not re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", value)
+            ):
                 raise Refused("temporary installation credential unavailable")
             token = value  # Own cleanup before checking the rest of the issuance response.
             if issued.get("permissions") != permissions:

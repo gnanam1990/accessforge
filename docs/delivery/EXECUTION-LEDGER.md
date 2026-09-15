@@ -334,3 +334,20 @@ Ruff and strict mypy passed. Their source databases/roles and isolated control-p
 were removed after the run. The desktop and journal remain synthetic: missing actual build,
 reader and model identities correctly keep the overall result INCONCLUSIVE. This closes the
 combined backend retention proof gap, not actual native execution or full project acceptance.
+
+## Current continuation boundary — 2026-09-15
+
+PR #182 passed exact-head CI and merged as `5b31fc5d01efa7da68eca8dd0579478e8173cbfb`;
+the primary SSD checkout's local main was synchronized cleanly. C2 backend collector/retention/
+finalizer code and combined database/object-store proof are now merged, not pending implementation.
+Actual private native execution, qualified reader/model evidence and the full baseline/repair/
+rerun/review/release path remain unproven. Model audit confirmed Bedrock-specific sealed profiles,
+consent and runtime request hooks across navigator/diagnosis/repair; a non-AWS provider/model and
+spend limit are still awaiting the owner's selection. Do not replace those bindings with generic
+JSON or select Qwen implicitly.
+
+R1 prerequisite found against current official GitHub docs: the existing access probe rejected
+stateless installation tokens containing dots/dashes. The bounded opaque-bearer fix now preserves
+scope checks and revocation; 58 focused synthetic HTTP checks, Ruff and strict mypy pass. No actual
+token issuance/publication occurred. Outbound approved-preview dispatch and durable receipt/
+unknown-outcome reconciliation are still unfinished; this compatibility fix does not complete R1.
