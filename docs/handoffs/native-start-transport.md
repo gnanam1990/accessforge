@@ -25,8 +25,10 @@ directories are retained; no recursive production cleanup is introduced.
 
 ## Validation and limitations
 
-- Six Python tests use real Unix sockets with a synthetic host: exact receipt, foreign
-  identity, duplicate fields, extra data, oversized response and cancellation/no reuse.
+- Eight Python tests use real Unix sockets with a synthetic host: exact receipt, foreign
+  identity, boolean/floating-point epoch substitution, duplicate fields, extra data,
+  oversized response and cancellation/no reuse. Private references and acknowledgements
+  use type-exact identity comparisons, not Python's boolean/integer equality.
 - One Node test proves the currently unqualified profile cannot advertise a socket.
   This is not a positive production-listener test or actual-reader acceptance.
 - Direct installed TypeScript compiler, focused Python mypy and Ruff pass.

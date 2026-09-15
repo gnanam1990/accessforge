@@ -18,7 +18,19 @@ from accessforge_orchestrator.native_start_transport import PROTOCOL, NativeStar
 from accessforge_persistence.supervisor_dispatch import DispatchTicket
 
 
-@pytest.mark.parametrize("mode", ["valid", "foreign", "duplicate", "extra", "oversize", "cancel"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "valid",
+        "foreign",
+        "boolean_epoch",
+        "float_epoch",
+        "duplicate",
+        "extra",
+        "oversize",
+        "cancel",
+    ],
+)
 def test_one_shot_handoff(mode):
     async def run():
         reference = DispatchReference(*(str(uuid4()) for _ in range(5)), epoch=1)
@@ -52,6 +64,10 @@ def test_one_shot_handoff(mode):
                 ack = {"protocol": PROTOCOL, "reference": wire, "status": "HANDOFF_ACCEPTED"}
                 if mode == "foreign":
                     ack["reference"] = {**wire, "epoch": 2}
+                if mode == "boolean_epoch":
+                    ack["reference"] = {**wire, "epoch": True}
+                if mode == "float_epoch":
+                    ack["reference"] = {**wire, "epoch": 1.0}
                 raw = json.dumps(ack)
                 if mode == "duplicate":
                     raw = raw[:-1] + ', "status":"HANDOFF_ACCEPTED"}'

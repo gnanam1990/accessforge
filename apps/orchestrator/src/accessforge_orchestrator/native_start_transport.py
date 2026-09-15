@@ -40,6 +40,17 @@ def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _same_reference(value: Any, expected: dict[str, Any]) -> bool:
+    # Python considers True == 1 and 1.0 == 1; neither is the wire integer epoch.
+    return (
+        type(value) is dict
+        and value.keys() == expected.keys()
+        and all(
+            type(value[key]) is type(item) and value[key] == item for key, item in expected.items()
+        )
+    )
+
+
 class NativeStartTransport:
     """Construct only from the trusted host's privateReference, never navigator/browser input.
 
@@ -53,7 +64,7 @@ class NativeStartTransport:
         if (
             set(private_reference) != {"protocol", "socketPath", "token", "reference"}
             or private_reference["protocol"] != PROTOCOL
-            or private_reference["reference"] != self._reference
+            or not _same_reference(private_reference["reference"], self._reference)
             or not isinstance(private_reference["socketPath"], str)
             or not isinstance(private_reference["token"], str)
             or len(private_reference["token"]) != 64
@@ -120,11 +131,13 @@ class NativeStartTransport:
                 if await reader.read(1) or self._inspect() != self._identity:
                     raise ValueError("ambiguous acknowledgement")
                 received = json.loads(response, object_pairs_hook=_unique)
-                if received != {
-                    "protocol": PROTOCOL,
-                    "reference": self._reference,
-                    "status": "HANDOFF_ACCEPTED",
-                }:
+                if (
+                    type(received) is not dict
+                    or set(received) != {"protocol", "reference", "status"}
+                    or received["protocol"] != PROTOCOL
+                    or received["status"] != "HANDOFF_ACCEPTED"
+                    or not _same_reference(received["reference"], self._reference)
+                ):
                     raise ValueError("foreign acknowledgement")
         except asyncio.CancelledError:
             raise
