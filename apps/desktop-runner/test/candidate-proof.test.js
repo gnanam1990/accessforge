@@ -26,7 +26,7 @@ function readyEnvironment(overrides = {}) {
 }
 
 function readyPreflight(env = readyEnvironment()) {
-  return runPreflight(env, {
+  return structuredClone(runPreflight(env, {
     expectedDesktopSessionId: '100025',
     speechCaptureWorking: true,
     permittedOrigin: 'http://127.0.0.1:8081',
@@ -38,10 +38,10 @@ function readyPreflight(env = readyEnvironment()) {
     staleInputSourceDetected: false,
     journalWritable: true,
     monotonicClockHealthy: true,
-  });
+  }));
 }
 
-function harness(preflight = readyPreflight(), onRetain) {
+function harness(preflight = readyPreflight(), onRetain, authorizeReaderStartup = async () => {}) {
   const calls = [];
   const observations = [];
   const adapter = {
@@ -76,7 +76,8 @@ function harness(preflight = readyPreflight(), onRetain) {
   let now = 1;
   const runner = new CandidateProofRunner({
     adapter,
-    preflight,
+    preflight: typeof preflight === 'function' ? preflight : async () => preflight,
+    authorizeReaderStartup, // Synthetic operator/configuration authority only.
     trace,
     journal: new MemoryJournal(),
     clock: {
@@ -113,17 +114,78 @@ test('the candidate proof runs only through the supervisor and closes its local 
   );
   assert.deepEqual(kinds, [
     'PREFLIGHT_RESULT',
+    'PREFLIGHT_RESULT',
     'ACTION_INTENT',
+    'PREFLIGHT_RESULT',
     'READER_OBSERVATION',
     'ACTION_RESULT',
     'ACTION_INTENT',
+    'PREFLIGHT_RESULT',
     'READER_OBSERVATION',
     'ACTION_RESULT',
     'ACTION_INTENT',
+    'PREFLIGHT_RESULT',
     'ACTION_RESULT',
     'RUN_FINISHED',
     'CANDIDATE_CLOSING_WATERMARK',
   ]);
+});
+
+test('inactive reader may start only when a fresh post-start report becomes fully ready', async () => {
+  let probes = 0;
+  const { runner, calls, sink } = harness(async () => {
+    const report = readyPreflight();
+    if (probes++ === 0) {
+      report.checks.READER_ACTIVE = { ...report.checks.READER_ACTIVE, condition: 'FALSE' };
+      report.checks.SPEECH_CAPTURE_WORKING = { ...report.checks.SPEECH_CAPTURE_WORKING, condition: 'UNKNOWN' };
+    }
+    return report;
+  });
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'CANDIDATE_COMPLETE');
+  assert.deepEqual(calls, ['start', 'NEXT', 'stop']);
+  assert.deepEqual(sink.lines.filter(line => line.sourceRecord?.type === 'PREFLIGHT_RESULT')
+    .map(line => line.sourceRecord.payload.phase), ['BEFORE_STARTUP', 'AFTER_STARTUP', 'BEFORE_ACTION']);
+});
+
+test('ready physical checks cannot replace explicit startup authorization', async () => {
+  const { runner, calls, sink } = harness(readyPreflight(), undefined, async () => {
+    throw new Error('startup authorization unavailable');
+  });
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
+  assert.deepEqual(calls, []);
+  assert.equal(sink.lines.at(-1).kind, 'CANDIDATE_CLOSING_WATERMARK');
+});
+
+test('unavailable post-start speech capture cleans up without a journey action', async () => {
+  const report = readyPreflight();
+  report.checks.SPEECH_CAPTURE_WORKING = { ...report.checks.SPEECH_CAPTURE_WORKING, condition: 'UNKNOWN' };
+  const { runner, calls } = harness(report);
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
+  assert.deepEqual(calls, ['start', 'stop']);
+});
+
+test('changed physical state between actions cannot reuse the initial ready report', async () => {
+  let probes = 0;
+  const { runner, calls } = harness(async () => {
+    const report = readyPreflight();
+    if (++probes === 4) report.checks.SCREEN_UNLOCKED = { ...report.checks.SCREEN_UNLOCKED, condition: 'FALSE' };
+    return report;
+  });
+  assert.equal((await runner.run([{ action: 'NEXT' }, { action: 'TYPE_TEXT', text: 'Test Person' }])).status,
+    'INTERRUPTED');
+  assert.deepEqual(calls, ['start', 'NEXT', 'stop']);
+});
+
+test('a timed-out physical probe cannot dispatch after cleanup', async () => {
+  let probes = 0, release;
+  const { runner, calls } = harness(async () => {
+    if (++probes === 3) await new Promise(resolve => { release = resolve; });
+    return readyPreflight();
+  });
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['start', 'stop']);
 });
 
 test('empty or incomplete qualification preflight never starts the reader', async () => {

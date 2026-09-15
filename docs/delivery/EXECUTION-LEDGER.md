@@ -7,6 +7,16 @@ before changing a row. No overall completion percentage has been established.
 
 ## Verified checkpoint
 
+- Remote main refreshed at `59c929c041d704f2b5383e6314556841b815a5a0`: PRs #162–167
+  are merged, superseding their historical pending notes below. #167 exact head
+  `e4ec1dae4c4ba3ed6666256ec988c5a4579f0639` passed all applicable CI before merge.
+  The original external-SSD checkout is not confirmed synchronized: file reads and Git status
+  are stalled despite the volume remaining mounted. No disk reset or original checkout edits.
+  Work continues in a separate internal temporary clone from this verified remote main.
+- Current qualification-path slice: fresh candidate preflight before startup, after startup and
+  immediately before actions; separate mandatory startup authorization; late-probe input fence.
+  TypeScript build and 15 focused synthetic checks pass. See `candidate-proof-teardown.md` under
+  `docs/handoffs/`. This removes a cold-reader startup deadlock, not C1/E1 completion.
 - Local main: `2355e16f4b0a007ab1529d86415fa513aef029eb`, PRs #156–160 merged after #155.
   Exact PR heads passed applicable CI before merge; main CI is separate.
 - PR #155 delivered concrete independent observer process closure. Its exact checked head was
@@ -68,8 +78,8 @@ that no transient or external forbidden effect occurred. Missing coverage remain
 2. Complete one coherent code slice from C1/C2 before optional polish. Waiting CI is not a reason
    to stop independent work. Do not repeatedly restart CI or run local full suites.
 3. Use normal source review and focused checks. Merge only the exact checked head with applicable
-   CI passing and repository requirements satisfied. Merge #161 before retargeting #162 to main;
-   verify its current checks before merging. Synchronize local main after confirmed remote merge.
+   CI passing and repository requirements satisfied. Synchronize local main after confirmed remote
+   merge; distinguish temporary-checkout synchronization from the original SSD checkout.
 4. Update this file on material progress: code/commit, evidence class, precise blocker and next
    operation. A status-only cycle is not implementation progress. If all safe work is exhausted,
    identify the specific missing authority rather than silently looping.
