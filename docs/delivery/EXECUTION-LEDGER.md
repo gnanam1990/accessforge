@@ -7,11 +7,13 @@ before changing a row. No overall completion percentage has been established.
 
 ## Verified checkpoint
 
-- Local main: `12a6a91fd2f466f03d151a1a4a816d123df6bc12`, PR #151 merged.
-- PR #152: installation suspension, head `8dbd3a72045f202db4504ff43e4aeb7cc4544304`,
-  base main; Python CI still running at inspection.
-- PR #153: unified ingress, head `3e748abc1568effb79043ced78748b2ae3fde6e4`,
-  base `feat/github-installation-suspension`; Python CI still running at inspection.
+- Local main: `82873d688b1a51a1a0d18dabef21842126286cfe`, PR #153 merged after #152.
+  Both exact PR heads passed their applicable CI before merge; main CI is separate.
+- PR #155: concrete independent observer process closure, head
+  `6dc22e297d9256146c8bc8dcbca95c1f68c1aa4b`; Python CI pending at inspection.
+- PR #156: private one-shot Python-to-native handoff, head `29149cb`, stacked on #155.
+  Six synthetic-peer Unix socket tests and one unavailable-profile refusal test pass;
+  these do not establish actual reader or model execution. Refresh CI before merge.
 - PRs #147–151 delivered baseline dispatch/completion composition, loopback-only development
   login, submission drafts, webhook body deadline and explicit repository-removal denial.
   They did not establish actual-reader/model/end-to-end acceptance.
@@ -39,7 +41,9 @@ its real execution is not yet proven.
 
 Start **C1**, not another unrelated webhook enhancement. Trace each required callback from
 `runProvisionedNavigatorExecution` through physical preflight and the bounded child process.
-Implement the smallest missing concrete private configuration/transport composition, retaining
+Observer closure and private dispatch transport are implemented in #155/#156, not yet merged at
+this checkpoint. Finish the operator-owned runtime/action configuration and shipped entrypoint,
+retaining
 one-shot session ownership, original journal identity and independent observer closure. Do not
 replace a missing callback with an always-allow stub or populate VERIFIED_MATRICES from versions.
 Record the changed files, focused check result and exact next unfinished boundary here.
@@ -54,7 +58,7 @@ that no transient or external forbidden effect occurred. Missing coverage remain
 2. Complete one coherent code slice from C1/C2 before optional polish. Waiting CI is not a reason
    to stop independent work. Do not repeatedly restart CI or run local full suites.
 3. Use normal source review and focused checks. Merge only the exact checked head with applicable
-   CI passing and repository requirements satisfied. Merge #152 before retargeting #153 to main;
+   CI passing and repository requirements satisfied. Merge #155 before retargeting #156 to main;
    verify its current checks before merging. Synchronize local main after confirmed remote merge.
 4. Update this file on material progress: code/commit, evidence class, precise blocker and next
    operation. A status-only cycle is not implementation progress. If all safe work is exhausted,
@@ -73,3 +77,10 @@ specialized PR-review skills; preserve the user's focused-validation preference.
 2026-09-15: Consolidated the fragmented continuation queue and separated buildable code from
 physical/provider/release acceptance. Historical documents now point here. This change repairs
 work tracking, not product code. C1 remains the next implementation, and E0/R1 remain incomplete.
+
+The full build-flow audit is retained outside the checkout as
+`/Users/kratos/Documents/Codex/AccessForge-Build-Flow-Audit-2026-09-15.md`.
+It verifies all 43 original build-pack Markdown files match the checked-in requirements and
+maps the 30 modules, 25 requirement families and 80 scenario groups. Its F1–F8 findings separate
+missing production connections from missing actual acceptance; it is not a fresh runtime pass.
+Continue G2 baseline → G3 repair/rerun/review → G4 fresh operator → G5 faults → G6 release.
