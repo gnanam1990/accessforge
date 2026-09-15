@@ -16,7 +16,7 @@
  * locked" must never travel as "the screen was unlocked".
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -108,6 +108,17 @@ export type CommandRunner = (
 export interface HostEnvironmentOptions {
   readonly run?: CommandRunner;
   readonly pathExists?: (path: string) => boolean;
+  /** Unlike existsSync, denied access must not mean the legacy source is eligible. */
+  readonly preferencePathState?: (path: string) => 'PRESENT' | 'ABSENT' | 'UNKNOWN';
+}
+
+function preferencePathState(path: string): 'PRESENT' | 'ABSENT' | 'UNKNOWN' {
+  try {
+    return lstatSync(path).isFile() ? 'PRESENT' : 'UNKNOWN';
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+      ? 'ABSENT' : 'UNKNOWN';
+  }
 }
 
 const systemRun: CommandRunner = (executable, args, input) => {
@@ -232,30 +243,28 @@ export function probeReaderControlConfigured(env: ProbeEnvironment): ProbeResult
   const paths = voiceOverPreferencePaths();
   const configured = paths.some((p) => env.pathExists(p));
   if (!configured) {
-    return no(
-      'VoiceOver has no preferences file at either the Group Containers path or the legacy path, ' +
-        'which means it has never been run on this machine. Launch VoiceOver once, then enable ' +
-        '"Allow VoiceOver to be controlled with AppleScript" in VoiceOver Utility > General.',
-      true,
+    return unknown(
+      'VoiceOver preferences are not observable at the Group Containers or legacy path. ' +
+        'They may be absent or inaccessible to this process; this does not prove that VoiceOver ' +
+        'has never been configured. Check preference access from the runner process.',
     );
   }
 
   const appleScript = env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript');
   if (appleScript === undefined) {
-    return no(
-      'VoiceOver is configured but AppleScript control is not enabled. Enable "Allow VoiceOver to ' +
-        'be controlled with AppleScript" in VoiceOver Utility > General. Without it the adapter ' +
-        'cannot read a single announcement.',
-      true,
+    return unknown(
+      'VoiceOver AppleScript control could not be read by this process. A missing or inaccessible ' +
+        'preference is not evidence that the setting is OFF; verify runner preference access.',
     );
   }
-  if (appleScript !== '1') {
+  if (appleScript === '0') {
     return no(
       `VoiceOver AppleScript control is set to "${appleScript}", not enabled. Enable it in ` +
         'VoiceOver Utility > General.',
       true,
     );
   }
+  if (appleScript !== '1') return unknown('VoiceOver AppleScript control preference is not a recognized boolean');
   return ok;
 }
 
@@ -487,6 +496,7 @@ export function runPreflight(
 export function createHostEnvironment(options: HostEnvironmentOptions = {}): ProbeEnvironment {
   const run = options.run ?? systemRun;
   const pathExists = options.pathExists ?? existsSync;
+  const inspectPreference = options.preferencePathState ?? preferencePathState;
   return {
     platform: () => process.platform,
     localeAndKeyboard: () => {
@@ -507,7 +517,22 @@ export function createHostEnvironment(options: HostEnvironmentOptions = {}): Pro
     },
     pathExists,
     readPreference: (domain, key) => {
-      const result = run('/usr/bin/defaults', ['read', domain, key]);
+      // Match the configured file, preferring the current group container. Never fall back
+      // to a stale legacy TRUE if the current preference is disabled or unreadable.
+      let source = domain;
+      if (domain === 'com.apple.VoiceOver4/default') {
+        let selected: string | undefined;
+        for (const path of voiceOverPreferencePaths()) {
+          const state = inspectPreference(path);
+          if (state === 'ABSENT') continue;
+          if (state !== 'PRESENT') return undefined;
+          selected = path.replace(/\.plist$/, '');
+          break;
+        }
+        if (selected === undefined) return undefined;
+        source = selected;
+      }
+      const result = run('/usr/bin/defaults', ['read', source, key]);
       return result.status === 0 ? result.stdout.trim() : undefined;
     },
     processRunning: (name) => {

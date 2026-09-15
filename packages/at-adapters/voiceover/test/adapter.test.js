@@ -199,18 +199,68 @@ test('both VoiceOver preference paths are checked', () => {
   assert.ok(paths.some((p) => !p.includes('Group Containers')));
 });
 
-test('an unconfigured VoiceOver is a FALSE that names the operator action', () => {
+test('unobservable preferences cannot prove VoiceOver was never configured', () => {
   const result = probeReaderActive(bareEnvironment());
-  assert.equal(result.condition, 'FALSE');
-  assert.equal(result.requiresOperator, true);
-  assert.match(result.detail, /never been run on this machine/);
+  assert.equal(result.condition, 'UNKNOWN');
+  assert.match(result.detail, /absent or inaccessible/);
 });
 
-test('a configured VoiceOver without AppleScript control is a different FALSE', () => {
+test('an unreadable AppleScript preference is UNKNOWN rather than OFF', () => {
   // Different remedy, different message. Collapsing the two sends someone to the wrong pane.
   const result = probeReaderActive(bareEnvironment({ pathExists: () => true }));
-  assert.equal(result.condition, 'FALSE');
-  assert.match(result.detail, /AppleScript control is not enabled/);
+  assert.equal(result.condition, 'UNKNOWN');
+  assert.match(result.detail, /could not be read/);
+});
+
+test('only a measured zero proves control is disabled', () => {
+  for (const value of ['0', 'malformed']) {
+    const result = probeReaderActive(bareEnvironment({pathExists: () => true, readPreference: () => value}));
+    assert.equal(result.condition, value === '0' ? 'FALSE' : 'UNKNOWN');
+  }
+});
+
+test('host reads the preferred group-container file without stale legacy fallback', () => {
+  const calls = [];
+  const paths = voiceOverPreferencePaths();
+  const env = createHostEnvironment({preferencePathState: () => 'PRESENT', run: (command, args) => {
+    calls.push([command, ...args]);
+    return {status: 1, stdout: '', stderr: 'unreadable'};
+  }});
+  assert.equal(env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript'), undefined);
+  assert.deepEqual(calls, [['/usr/bin/defaults', 'read', paths[0].replace(/\.plist$/, ''), 'SCREnableAppleScript']]);
+});
+
+test('host supports the current and legacy preference locations without changing settings', () => {
+  const paths = voiceOverPreferencePaths();
+  for (const selected of paths) {
+    const env = createHostEnvironment({preferencePathState: path => path === selected ? 'PRESENT' : 'ABSENT',
+      run: (command, args) => {
+        assert.equal(command, '/usr/bin/defaults');
+        assert.deepEqual(args, ['read', selected.replace(/\.plist$/, ''), 'SCREnableAppleScript']);
+        return {status: 0, stdout: '1\n', stderr: ''};
+      }});
+    assert.equal(env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript'), '1');
+  }
+});
+
+test('inaccessible current preference metadata cannot select a stale legacy TRUE', () => {
+  const paths = voiceOverPreferencePaths();
+  const inspected = [];
+  const env = createHostEnvironment({
+    preferencePathState: path => {
+      inspected.push(path);
+      return path === paths[0] ? 'UNKNOWN' : 'PRESENT';
+    },
+    run: () => { assert.fail('unknown source must not read either preference'); },
+  });
+  assert.equal(env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript'), undefined);
+  assert.deepEqual(inspected, [paths[0]]);
+});
+
+test('absent preference sources do not fall back to a defaults domain lookup', () => {
+  const env = createHostEnvironment({preferencePathState: () => 'ABSENT',
+    run: () => { assert.fail('no observable source'); }});
+  assert.equal(env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript'), undefined);
 });
 
 test('a configured and controllable VoiceOver that is not running is a plain FALSE', () => {
@@ -268,7 +318,8 @@ test('preflight never reports itself available', () => {
 });
 
 test('preflight surfaces the operator actions separately from the failures', () => {
-  const report = runPreflight(bareEnvironment({ hasPermission: () => false }));
+  const report = runPreflight(bareEnvironment({ hasPermission: () => false,
+    pathExists: () => true, readPreference: () => '0' }));
   assert.ok(report.operatorActions.length >= 3);
   for (const action of report.operatorActions) {
     assert.match(action, /^[A-Z_]+: /, 'each action names the check it belongs to');

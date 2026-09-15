@@ -22,7 +22,7 @@ test('the runner reports an unavailable real-reader profile instead of false suc
   assert.equal(lines[0], READER_UNAVAILABLE_MESSAGE);
   const report = JSON.parse(lines[1]);
   assert.equal(report.realReaderAvailable, false);
-  assert.equal(report.checks.READER_ACTIVE.condition, 'FALSE');
+  assert.equal(report.checks.READER_ACTIVE.condition, 'UNKNOWN');
 });
 
 test('the message distinguishes implemented code from missing actual-reader proof', () => {

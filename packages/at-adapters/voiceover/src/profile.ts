@@ -78,8 +78,8 @@ export const PROFILE_STATUS: ProfileStatus =
  * place, so the three cannot drift into disagreeing about what is wrong.
  */
 export const BLOCKED_REASON =
-  'VoiceOver has never been configured on this host: there is no preferences file at either the ' +
-  'legacy path or the macOS Sequoia+ Group Containers path, which means VoiceOver has not been run. ' +
+  'No actual-reader qualification trace has enrolled this platform matrix. This static profile ' +
+  'status does not establish whether preferences exist or permissions are enabled on this host. ' +
   'Real-reader execution additionally requires "Allow VoiceOver to be controlled with AppleScript" ' +
   'in VoiceOver Utility > General, Accessibility and Automation permissions granted to the ' +
   'controlling process, and a dedicated signed-in desktop session that is not the operator\'s own ' +
