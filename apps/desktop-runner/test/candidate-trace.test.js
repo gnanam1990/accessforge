@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -60,7 +60,7 @@ test('a closed candidate trace refuses a hidden tail and close is idempotent', a
 });
 
 test('the file sink writes independently replayable fsynced JSONL', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'accessforge-candidate-trace-'));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'accessforge-candidate-trace-')));
   const path = join(directory, 'trace.jsonl');
   let id = 0;
   const trace = new CandidateTraceWriter({
@@ -76,4 +76,45 @@ test('the file sink writes independently replayable fsynced JSONL', async () => 
   assert.equal(lines.length, 2);
   assert.equal(lines[0].kind, 'CANDIDATE_SOURCE_RECORD');
   assert.equal(lines[1].kind, 'CANDIDATE_CLOSING_WATERMARK');
+});
+
+test('candidate file storage refuses an existing trace and a symlink without appending', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'accessforge-candidate-existing-')));
+  const original = join(directory, 'original.jsonl');
+  const link = join(directory, 'linked.jsonl');
+  await writeFile(original, 'original evidence\n', { mode: 0o600 });
+  await symlink(original, link);
+  for (const path of [original, link]) {
+    const { trace } = writer(new FileCandidateTraceSink(path));
+    await assert.rejects(() => trace.record('RUN_FINISHED', { status: 'BLOCKED' }));
+  }
+  assert.equal(await readFile(original, 'utf8'), 'original evidence\n');
+});
+
+test('candidate file replacement permanently fences the original sink', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'accessforge-candidate-replaced-')));
+  const path = join(directory, 'trace.jsonl');
+  const original = join(directory, 'retained-original.jsonl');
+  const { trace } = writer(new FileCandidateTraceSink(path));
+  await trace.record('ACTION_INTENT', { action: 'NEXT' });
+  const bytes = await readFile(path);
+  await rename(path, original);
+  await writeFile(path, bytes, { mode: 0o600 });
+  await assert.rejects(() => trace.record('ACTION_RESULT', { status: 'SUCCEEDED' }), /changed/);
+  assert.deepEqual(await readFile(path), bytes);
+  // Restoring the inode is not authorization to retry an uncertain producer write.
+  await rename(original, path);
+  await assert.rejects(() => trace.close(), /fenced/);
+  assert.deepEqual(await readFile(path), bytes);
+});
+
+test('candidate storage refuses public directories before creating a trace', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'accessforge-candidate-permissions-')));
+  await chmod(directory, 0o755);
+  const path = join(directory, 'trace.jsonl');
+  const { trace } = writer(new FileCandidateTraceSink(path));
+  try {
+    await assert.rejects(() => trace.record('ACTION_INTENT', {}), /directory/);
+    await assert.rejects(() => readFile(path), { code: 'ENOENT' });
+  } finally { await chmod(directory, 0o700); }
 });

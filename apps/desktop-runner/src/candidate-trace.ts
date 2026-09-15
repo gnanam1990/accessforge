@@ -7,8 +7,8 @@
  * submit the underlying source records using a real supervisor credential.
  */
 
-import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, realpathSync, writeSync, type Stats } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { digest } from '@accessforge/contracts';
 
@@ -61,16 +61,52 @@ export interface CandidateTraceSink {
 }
 
 export class FileCandidateTraceSink implements CandidateTraceSink {
+  private identity: Stats | undefined;
+  private parentIdentity: Stats | undefined;
+  private size = 0;
+  private fenced = false;
   constructor(private readonly path: string) {}
 
   async appendAndFlush(line: CandidateTraceLine): Promise<void> {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const fd = openSync(this.path, 'a', 0o600);
+    let fd: number | undefined;
+    let directory: number | undefined;
     try {
-      writeSync(fd, `${JSON.stringify(line)}\n`);
+      if (this.fenced) throw new Error('candidate trace storage fenced');
+      const parent = dirname(this.path);
+      if (!isAbsolute(this.path) || realpathSync(parent) !== resolve(parent)) throw new Error('private trace directory required');
+      directory = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      const root = fstatSync(directory);
+      const owned = (info: Stats) => typeof process.getuid === 'function' &&
+        info.uid === process.getuid() && (info.mode & 0o077) === 0;
+      const same = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
+      if (!root.isDirectory() || !owned(root) || !same(root, lstatSync(parent)) ||
+          (this.parentIdentity !== undefined && !same(root, this.parentIdentity))) throw new Error('trace directory changed');
+      fd = openSync(this.path, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW |
+        constants.O_NONBLOCK | (this.identity === undefined ? constants.O_CREAT | constants.O_EXCL : 0), 0o600);
+      const info = fstatSync(fd);
+      if (!info.isFile() || !owned(info) || info.nlink !== 1 || info.size !== this.size ||
+          (this.identity !== undefined && !same(info, this.identity))) throw new Error('trace file changed');
+      const bytes = Buffer.from(`${JSON.stringify(line)}\n`);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const count = writeSync(fd, bytes, offset, bytes.length - offset);
+        if (count <= 0) throw new Error('candidate trace write incomplete');
+        offset += count;
+      }
       fsyncSync(fd);
+      fsyncSync(directory);
+      if (!same(root, lstatSync(parent)) || !same(info, lstatSync(this.path))) throw new Error('trace storage replaced');
+      this.identity = info;
+      this.parentIdentity = root;
+      this.size += bytes.length;
+    } catch (error) {
+      // Retain any partial original bytes for reconciliation. Never append a new run or retry
+      // an uncertain flush into what might look like a complete producer history.
+      this.fenced = true;
+      throw error;
     } finally {
-      closeSync(fd);
+      if (fd !== undefined) closeSync(fd);
+      if (directory !== undefined) closeSync(directory);
     }
   }
 }
