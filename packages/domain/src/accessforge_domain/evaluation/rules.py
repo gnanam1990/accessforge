@@ -239,9 +239,7 @@ def effect_monitor_assertions(
                 "condition": condition.value,
                 "provenance": "OBSERVER_AUTHORED",
                 **(
-                    {
-                        "unknownReason": "frozen scope or complete independent coverage unavailable"
-                    }
+                    {"unknownReason": "frozen scope or complete independent coverage unavailable"}
                     if condition is Condition.UNKNOWN
                     else {}
                 ),
