@@ -138,6 +138,10 @@ def create_receiver(config: ReceiverConfig) -> FastAPI:
     async def webhook(request: Request) -> JSONResponse:
         return await handle(request, receive, "AUTHENTICATED_RECEIPT_ONLY")
 
+    @app.post("/events")
+    async def events(request: Request) -> JSONResponse:
+        return await handle(request, receive_event, "ACCEPTED_LOCAL_EVENT")
+
     @app.post("/repository-removal")
     async def removal(request: Request) -> JSONResponse:
         return await handle(request, receive_repository_removal, "LOCAL_BINDING_REVOKED")
@@ -147,6 +151,27 @@ def create_receiver(config: ReceiverConfig) -> FastAPI:
         return await handle(request, receive_installation_suspension, "LOCAL_BINDING_REVOKED")
 
     return app
+
+
+def receive_event(
+    config: ReceiverConfig, *, raw_body: bytes, signature: str, delivery_id: str
+) -> github_webhooks.Receipt:
+    """Single-URL dispatch from authenticated body fields; headers never select authority.
+
+    The selected handler independently authenticates/checks scope before mutation. The generic
+    acknowledgement means local receipt or denial handling, never agent dispatch or publishing.
+    Unsupported installation-only events refuse instead of manufacturing repository authority.
+    """
+    authenticate(
+        raw_body, secret=config.webhook_secret, signature=signature, delivery_id=delivery_id
+    )
+    payload = json.loads(raw_body)
+    operation = receive
+    if payload.get("action") == "removed" and "repositories_removed" in payload:
+        operation = receive_repository_removal
+    elif payload.get("action") == "suspend":
+        operation = receive_installation_suspension
+    return operation(config, raw_body=raw_body, signature=signature, delivery_id=delivery_id)
 
 
 def receive_repository_removal(
