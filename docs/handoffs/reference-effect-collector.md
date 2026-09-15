@@ -4,7 +4,18 @@
 database installation and one reserved fixture. Its scope digest explicitly names
 `PROTECTED_REFERENCE_COMMITTED_INSERTIONS_V1`, installation ID and fixture nonce. It does not
 measure email, payment, external submission, unrelated databases or uncommitted SQL attempts.
-The frozen assertion must use this narrow scope; a matching digest alone is not authentication.
+The concrete resource digest is not the journey policy digest; a matching digest alone is not
+authentication. Fresh fixture nonces are allocated per run and cannot be frozen into a reusable
+journey assertion in advance.
+
+`REFERENCE_EFFECT_POLICY_DIGEST` in the domain reference-scope module freezes the narrow resolution
+rule: the controller-reserved fixture through the sealed environment's independent observer.
+`ReferenceEffectBinding` separately carries the trusted run/attempt and actual installation/nonce.
+`reference_effect_monitor_assertions` requires that binding to match the expected measurement
+window, then evaluates only this specific frozen policy. Neither the frozen assertion nor the
+concrete measured digest is rewritten. Different run, attempt, installation, nonce, effect or
+policy stays UNKNOWN; the existing exact-concrete-scope evaluator is unchanged. Admission must
+load this binding from protected controller/source configuration, never from measurement JSON.
 
 ## Actual measurement boundary
 
@@ -45,6 +56,8 @@ Twenty-five focused checks passed on real disposable PostgreSQL databases, inclu
 create/delete, rollback, complete absence, pending-commit drainage, late-write exclusion, prior
 history refusal, source weakening, disconnect, abort, replay and invalid clock windows. These
 are synthetic fixture effects on a real database, not actual VoiceOver or canonical run evidence.
+Thirty-eight focused domain checks also pass, including fresh-nonce policy stability, separate
+resource identities, substitution refusal and preservation of missing/positive coverage results.
 
 Still required: start/STOP handshake integration, independently retained original collector
 records and closure, source/credential authentication, and finalizer binding to the actual sealed

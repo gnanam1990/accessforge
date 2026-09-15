@@ -10,17 +10,15 @@ binding the window to the actual execution are still the controller's responsibi
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from time import monotonic_ns
 from typing import Any
-from uuid import UUID
 
 import psycopg
 from psycopg.pq import TransactionStatus
 
-from accessforge_domain.canonical import digest
 from accessforge_domain.effect_monitor import EffectCoverage, EffectInterval, EffectWindow
+from accessforge_domain.reference_effect_scope import reference_effect_scope_digest
 
 from .effect_audit import (
     CREATION_BARRIER_KEY,
@@ -28,22 +26,6 @@ from .effect_audit import (
     CreationHistory,
     read_creation_history,
 )
-
-
-def reference_effect_scope_digest(installation_id: str, fixture_nonce: str) -> str:
-    """Freeze this exact narrow resource scope before provisioning an execution."""
-    if (
-        str(UUID(installation_id)) != installation_id
-        or re.fullmatch(r"[A-Za-z0-9_-]{16,64}", fixture_nonce) is None
-    ):
-        raise ValueError("exact audit installation and reserved fixture required")
-    return digest(
-        {
-            "kind": "PROTECTED_REFERENCE_COMMITTED_INSERTIONS_V1",
-            "installationId": installation_id,
-            "fixtureNonce": fixture_nonce,
-        }
-    )
 
 
 class ReferenceEffectCollector:

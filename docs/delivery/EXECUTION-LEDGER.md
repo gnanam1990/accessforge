@@ -253,3 +253,10 @@ Next C2 boundary: compose collector startup before dispatch and closure after in
 confirmed STOP; authenticate/retain original records and bind finalization to the supervisor-owned
 window. No production caller/finalizer uses the new collector yet. C1, actual qualification,
 provider selection and all other uncompleted rows remain open; this is not project completion.
+
+Integration review found that a per-run nonce cannot be frozen into a reusable journey assertion.
+The same collector slice now separates a fixed reference policy digest from the independently
+resolved concrete run/attempt/installation/nonce binding. Observer-side rule composition validates
+both without rewriting the assertion or broadening the sink. Thirty-eight focused domain checks
+pass alongside the 25 isolated PostgreSQL checks. This resolves policy/resource matching only;
+authenticated provisioning/retention and production execution/finalizer callers remain required.
