@@ -98,3 +98,19 @@ It verifies all 43 original build-pack Markdown files match the checked-in requi
 maps the 30 modules, 25 requirement families and 80 scenario groups. Its F1–F8 findings separate
 missing production connections from missing actual acceptance; it is not a fresh runtime pass.
 Continue G2 baseline → G3 repair/rerun/review → G4 fresh operator → G5 faults → G6 release.
+
+## Operator runtime checkpoint — 2026-09-15 follow-up
+
+The original SSD checkout recovered and local main was verified clean/synchronized at
+`59c929c041d704f2b5383e6314556841b815a5a0` before starting the next branch. This supersedes
+any earlier unresolved local-sync note; no SSD reset was performed. API/reference-app readiness
+and the web server responded. A read-only existing-fixture Safari diagnostic returned
+`SAFARI_NOT_FOREGROUND`, not focus proof or reader qualification. No form was submitted, fixture
+reset, reader started or permission changed. AWS configured-profile inventory remained empty.
+
+Current controller correction: share a 1800-second maximum/default original-STOP wait between
+the synchronous baseline operator and async dispatcher, retaining short delivery acknowledgement
+and all independent native/lease/approval deadlines. The prior 60-second hard ceiling could cut
+off a valid native execution. Forty focused synthetic checks, Ruff and strict mypy pass; see
+`docs/handoffs/baseline-reader-cancellation.md`. This is not C1 completion: concrete trusted runtime,
+physical focus/effect configuration and actual baseline/repair/rerun evidence remain outstanding.

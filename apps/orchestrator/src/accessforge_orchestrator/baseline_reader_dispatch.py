@@ -24,6 +24,19 @@ from .manual_dispatch import (
     UnavailableTransport,
 )
 
+# Match the native host's maximum execution window, not its short delivery acknowledgement.
+# Waiting does not renew the desktop lease, consent, provider budget or native action deadline.
+MAX_READER_WAIT_SECONDS = 1800
+
+
+def validate_reader_wait_timeout(timeout_seconds: float) -> None:
+    if (
+        isinstance(timeout_seconds, bool)
+        or not math.isfinite(timeout_seconds)
+        or not 0 < timeout_seconds <= MAX_READER_WAIT_SECONDS
+    ):
+        raise ValueError("baseline reader wait must be within (0, 1800] seconds")
+
 
 async def admit_and_dispatch_reader(
     session: BaselineSession,
@@ -130,7 +143,7 @@ async def admit_dispatch_and_wait_reader(
     runner_id: str,
     attempt_id: str,
     transport: StartTransport | None = None,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = MAX_READER_WAIT_SECONDS,
     cancelled: Callable[[], bool] = lambda: False,
 ) -> DispatchReference:
     """Keep the baseline callback alive through original STOP, not merely delivery ACK.
@@ -139,12 +152,7 @@ async def admit_dispatch_and_wait_reader(
     delivery or claims STOP. Protected runtime closure and evidence finalization still follow
     outside this callback; a STOP receipt is neither an evaluation nor physical qualification.
     """
-    if (
-        isinstance(timeout_seconds, bool)
-        or not math.isfinite(timeout_seconds)
-        or not 0 < timeout_seconds <= 60
-    ):
-        raise ValueError("baseline reader wait must be within (0, 60] seconds")
+    validate_reader_wait_timeout(timeout_seconds)
     if cancelled():
         raise baseline_runs.Refused("baseline cancelled before reader admission")
 
