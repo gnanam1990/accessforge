@@ -28,6 +28,7 @@ export interface VoiceOverClient {
   press(key: string): Promise<void>;
   itemText(): Promise<string>;
   lastSpokenPhrase(): Promise<string>;
+  spokenPhraseLog(): Promise<string[]>;
 }
 
 export const GUIDEPUP_CHORDS = {
@@ -120,26 +121,29 @@ export class VoiceOverAdapter {
       };
     }
 
+    // Guidepup's lastSpokenPhrase is a cached log tail, not a new capture. Snapshot the
+    // log before navigation so a silent action cannot borrow an earlier announcement.
+    const before = request.action === 'READ_CURRENT' ? undefined : await this.speechLog();
     let phrase: string;
     switch (request.action) {
       case 'NEXT':
         await this.client.next();
-        phrase = await this.client.lastSpokenPhrase();
+        phrase = '';
         break;
       case 'PREVIOUS':
         await this.client.previous();
-        phrase = await this.client.lastSpokenPhrase();
+        phrase = '';
         break;
       case 'ACTIVATE':
         await this.client.act();
-        phrase = await this.client.lastSpokenPhrase();
+        phrase = '';
         break;
       case 'TYPE_TEXT':
         // assertActionPermitted established that text exists. Keep the narrowing local rather than
         // using a non-null assertion at the call that can reach the keyboard.
         if (request.text === undefined) throw new Error('TYPE_TEXT passed validation without text');
         await this.client.type(request.text);
-        phrase = await this.client.lastSpokenPhrase();
+        phrase = '';
         break;
       case 'KEY_CHORD': {
         if (request.keyChord === undefined) {
@@ -148,7 +152,7 @@ export class VoiceOverAdapter {
         const key = GUIDEPUP_CHORDS[request.keyChord as keyof typeof GUIDEPUP_CHORDS];
         if (key === undefined) throw new Error('allowlisted chord has no Guidepup mapping');
         await this.client.press(key);
-        phrase = await this.client.lastSpokenPhrase();
+        phrase = '';
         break;
       }
       case 'READ_CURRENT':
@@ -158,7 +162,25 @@ export class VoiceOverAdapter {
         throw new Error(`validated action ${request.action} has no VoiceOver implementation`);
     }
 
+    if (before !== undefined) {
+      const after = await this.speechLog();
+      if (after.length <= before.length || before.some((value, i) => after[i] !== value)) {
+        return { status: 'SUCCEEDED', observation: { provenance: 'CAPTURE_UNKNOWN',
+          reason: 'No append-only speech event was observed across this action; cached text is not new evidence.' } };
+      }
+      phrase = after[after.length - 1]!;
+    }
     return { status: 'SUCCEEDED', observation: this.observation(phrase, context) };
+  }
+
+  private async speechLog(): Promise<readonly string[]> {
+    const log: unknown = await this.client.spokenPhraseLog();
+    if (!Array.isArray(log) || log.length > 10000 ||
+        log.some(value => typeof value !== 'string' || value.length > 32768) ||
+        log.reduce((size: number, value: string) => size + Buffer.byteLength(value), 0) > 4194304) {
+      throw new Error('bounded reader speech log unavailable');
+    }
+    return [...log] as string[]; // The SDK returns a mutable in-memory array.
   }
 
   private observation(phrase: string, context: ActionContext): RawObservation {
