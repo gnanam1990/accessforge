@@ -381,3 +381,17 @@ keeps each historical migration chain explicit, and proves a pre-existing irreve
 survives unchanged without inventing a creation receipt. The focused 39-case migration suite
 passed; the strengthened intent-preservation case also passed separately. Only generated
 disposable databases were migrated and removed by the fixture. New-head CI remains required.
+
+## Explicit GitHub operator workflow — 2026-09-16
+
+PR #185 depends on #184 and adds trusted-host commands for repository connection and separately
+approved publication. Both require explicit remote-operation flags, closed private scope files,
+private RSA key loading, current owner/session checks before key access, and the existing live
+scope/one-shot publisher services. Connection never grants publication approval. Twenty-three
+focused tests pass with synthetic database/signing/service ports; Ruff and strict mypy pass.
+These are usable invocation paths, not proof of an isolated deployment or actual App delivery.
+No real credential was loaded, token issued, check created, reader started or live DB migrated.
+PR #184 passed all applicable checks at `20794c7822c49dd5c956641e410c5ef56823c5f7`
+and merged as `705572af4f3d26940441b117644636a7bf79a36f`; local main is synchronized.
+PR #185 is being retargeted onto that main and still requires its own exact-head CI/merge.
+See the operator handoff for configuration, authority and unconfirmed-outcome boundaries.
