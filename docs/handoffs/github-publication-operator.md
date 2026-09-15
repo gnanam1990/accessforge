@@ -1,5 +1,24 @@
 # Explicit GitHub publication operator
 
+First connect the exact App installation/repository using the separate read-access service:
+
+```sh
+python -m accessforge_orchestrator.github_connection_operator \
+  --scope-file /canonical/private/connection.json \
+  --key-file /canonical/private/github-app.pem \
+  --allow-installation-token-issuance
+```
+
+Its closed JSON object contains exactly `schemaVersion` (integer 1), `workspaceId`, `userId`,
+`sessionId` (canonical UUIDs), `appId`, `installationId`, `accountId`, `repositoryId` (positive
+integers), and `owner`, `repository` (exact GitHub name components). The existing connection
+service verifies live App/installation/account/repository scope with a narrowed temporary token,
+requires cleanup, then rechecks local authority before retaining an audited binding. The command
+prints only the binding ID, never the token. Existing active bindings require deliberate
+disconnect/replacement through the trusted service; this command does not silently replace one.
+Connection does not approve or publish a check. After connection, the authenticated owner uses
+the existing preview and approval endpoints to review the exact publication payload.
+
 The trusted orchestrator host can now invoke the existing approved-preview publisher directly:
 
 ```sh
@@ -41,8 +60,12 @@ cleanup entirely. Missing terminal output is unconfirmed, not proof that nothing
 that the temporary token was revoked. Reconcile the original intent and installation credential
 through the operator's incident procedure; do not redispatch.
 
-Validation: 14 focused filesystem/closed-schema/explicit-flag/authority/wiring/error-redaction
+Validation: 23 focused filesystem/closed-schema/explicit-flag/authority/wiring/error-redaction
 checks passed with synthetic publisher/signing/database ports. Ruff and strict mypy passed.
 The existing publisher's real DB/S3 and mock GitHub checks are separate service evidence.
 No real App key was loaded, token issued or check created during implementation. Actual isolated
 host provisioning, authorized App delivery and uncertain-outcome rehearsal remain outstanding.
+
+Connection failures before service entry are `GITHUB_CONNECTION_REFUSED`; after entry they are
+`GITHUB_CONNECTION_UNCONFIRMED`. Inspect the original workspace bindings and installation-token
+state before another attempt. The same signal/termination/credential-isolation caveats apply.
