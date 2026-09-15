@@ -374,3 +374,10 @@ INCONCLUSIVE evaluation: retained evidence permits the synthetic check, deleted 
 prevent any create/reservation. They run before the separate diagnosis fixture intentionally
 deletes retention metadata. The generated OpenAPI description was refreshed after CI identified
 the stale contract; no runtime permission or retention guard was weakened.
+
+CI at `131c3f1` subsequently ran 1,380 integration cases: 1,365 passed and 15 failed because
+the explicitly pinned forward-migration boundary still named 0068. The drill now names 0069,
+keeps each historical migration chain explicit, and proves a pre-existing irreversible intent
+survives unchanged without inventing a creation receipt. The focused 39-case migration suite
+passed; the strengthened intent-preservation case also passed separately. Only generated
+disposable databases were migrated and removed by the fixture. New-head CI remains required.
