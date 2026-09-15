@@ -114,6 +114,19 @@ test('unsettled reader startup returns interrupted without racing cleanup or iss
   await assert.rejects(() => h.runner.run([{ action: 'NEXT' }]));
 });
 
+test('unsettled startup authorization cannot hang or start the reader on late approval', async () => {
+  let approve;
+  const h = harness(undefined, undefined,
+    () => new Promise(resolve => { approve = resolve; }), undefined, 20);
+  const result = await h.runner.run([{ action: 'NEXT' }]);
+  assert.equal(result.status, 'INTERRUPTED');
+  assert.deepEqual(h.calls, []);
+  approve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.calls, []);
+  await assert.rejects(() => h.runner.run([{ action: 'NEXT' }]));
+});
+
 test('unsettled reader cleanup cannot hang or seal candidate completion', async () => {
   const h = harness(undefined, undefined, undefined, undefined, 20);
   h.adapter.stop = () => new Promise(() => {});
