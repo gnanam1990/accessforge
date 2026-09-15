@@ -1,5 +1,9 @@
 # Delivery plan
 
+> Historical module map, not a current implementation queue. Several implementation/verification
+> cells predate merged work. Use [EXECUTION-LEDGER.md](EXECUTION-LEDGER.md) for the current ordered
+> queue and separately tracked code, acceptance evidence and approval gaps.
+
 Progress record for the MASTER-BUILD-AND-MERGE delivery loop. This is a **record**, not additional
 product scope. Requirement and invariant definitions are authoritative in
 `specs/accessforge/CONTRACTS.md`; the dependency graph is authoritative in

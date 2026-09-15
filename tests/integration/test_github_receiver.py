@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -72,6 +73,27 @@ def test_receipt_replay_and_header_aliases_commit_without_dispatch(config: Recei
         assert conn.execute("SELECT count(*) AS n FROM github_webhook_delivery").fetchone() == {
             "n": 2
         }
+        assert conn.execute("SELECT id FROM run").fetchall() == []
+
+
+def test_single_url_receives_then_revokes_without_header_authority(config: ReceiverConfig) -> None:
+    removed = json.dumps(
+        {
+            "action": "removed",
+            "installation": {"id": 42, "app_id": 7},
+            "repositories_removed": [{"id": 13}],
+        }
+    ).encode()
+    with TestClient(create_receiver(config)) as client:
+        assert client.post("/events", content=BODY, headers=headers()).status_code == 202
+        response = client.post(
+            "/events", content=removed, headers={**headers(removed, 2), "x-github-event": "push"}
+        )
+        assert response.status_code == 202
+        assert response.json() == {"status": "ACCEPTED_LOCAL_EVENT"}
+        assert client.post("/events", content=BODY, headers=headers(delivery=3)).status_code == 403
+    with workspace_connection(config.database_url, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM github_webhook_body").fetchone() == {"n": 2}
         assert conn.execute("SELECT id FROM run").fetchall() == []
 
 
@@ -192,6 +214,68 @@ def test_conflicting_removal_delivery_rolls_back_without_revocation(config: Rece
     with workspace_connection(config.database_url, WS) as conn:
         assert github_bindings.require_live(conn, workspace_id=WS, binding_id=config.binding_id)
         assert conn.execute("SELECT count(*) AS n FROM github_webhook_body").fetchone() == {"n": 1}
+
+
+def test_installation_suspension_revokes_without_automatic_unsuspend(
+    config: ReceiverConfig,
+) -> None:
+    payload = {
+        "action": "suspend",
+        "installation": {"id": 42, "app_id": 7, "suspended_at": "2026-09-15T00:00:00Z"},
+    }
+    body = json.dumps(payload).encode()
+    with TestClient(create_receiver(config)) as client:
+        for delivery in (20, 20, 21):
+            response = client.post(
+                "/installation-suspension", content=body, headers=headers(body, delivery)
+            )
+            assert response.status_code == 202
+            assert response.json() == {"status": "LOCAL_BINDING_REVOKED"}
+        payload["action"] = "unsuspend"
+        resumed = json.dumps(payload).encode()
+        assert (
+            client.post(
+                "/installation-suspension", content=resumed, headers=headers(resumed, 22)
+            ).status_code
+            == 403
+        )
+        assert client.post("/webhook", content=BODY, headers=headers()).status_code == 403
+    with workspace_connection(config.database_url, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM github_webhook_body").fetchone() == {"n": 1}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"id": 43},
+        {"app_id": 8},
+        {"app_id": True},
+        {"suspended_at": None},
+        {"suspended_at": "not-a-time"},
+    ],
+)
+def test_wrong_suspension_keeps_binding_live(
+    config: ReceiverConfig, change: dict[str, Any]
+) -> None:
+    body = json.dumps(
+        {
+            "action": "suspend",
+            "installation": {
+                "id": 42,
+                "app_id": 7,
+                "suspended_at": "2026-09-15T00:00:00Z",
+                **change,
+            },
+        }
+    ).encode()
+    with TestClient(create_receiver(config)) as client:
+        assert (
+            client.post("/installation-suspension", content=body, headers=headers(body)).status_code
+            == 403
+        )
+    with workspace_connection(config.database_url, WS) as conn:
+        assert github_bindings.require_live(conn, workspace_id=WS, binding_id=config.binding_id)
+        assert conn.execute("SELECT id FROM github_webhook_body").fetchall() == []
 
 
 def test_ambiguous_headers_compression_and_oversize_refuse(config: ReceiverConfig) -> None:

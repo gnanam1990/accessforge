@@ -8,6 +8,7 @@ No network publication or model calls occur.
 
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -16,9 +17,10 @@ from fastapi import FastAPI, Request
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
+from accessforge_domain.timestamps import parse_rfc3339_utc
 from accessforge_persistence import github_bindings, github_webhooks, workspace_connection
 
-from .github_webhooks import MAX_WEBHOOK_BYTES, Refused, authenticate
+from .github_webhooks import MAX_WEBHOOK_BYTES, AuthenticatedWebhook, Refused, authenticate
 
 BODY_READ_TIMEOUT_SECONDS = 5.0
 
@@ -89,9 +91,9 @@ def create_receiver(config: ReceiverConfig) -> FastAPI:
     """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-    @app.post("/repository-removal")
-    @app.post("/webhook")
-    async def webhook(request: Request) -> JSONResponse:
+    async def handle(
+        request: Request, operation: Callable[..., github_webhooks.Receipt], disposition: str
+    ) -> JSONResponse:
         # These headers are metadata, not body-HMAC authority. Refuse ambiguity instead of
         # relying on whichever duplicate value a proxy/library happens to select.
         signature = request.headers.getlist("x-hub-signature-256")
@@ -113,9 +115,8 @@ def create_receiver(config: ReceiverConfig) -> FastAPI:
         except TimeoutError:
             return JSONResponse({"status": "REFUSED"}, status_code=408)
         try:
-            removal = request.url.path == "/repository-removal"
             await run_in_threadpool(
-                receive_repository_removal if removal else receive,
+                operation,
                 config,
                 raw_body=bytes(raw),
                 signature=signature[0],
@@ -129,11 +130,48 @@ def create_receiver(config: ReceiverConfig) -> FastAPI:
             return JSONResponse({"status": "UNCONFIRMED"}, status_code=503)
         # Same response on first delivery/replay, and no tenant/binding/event content returned.
         return JSONResponse(
-            {"status": "LOCAL_BINDING_REVOKED" if removal else "AUTHENTICATED_RECEIPT_ONLY"},
+            {"status": disposition},
             status_code=202,
         )
 
+    @app.post("/webhook")
+    async def webhook(request: Request) -> JSONResponse:
+        return await handle(request, receive, "AUTHENTICATED_RECEIPT_ONLY")
+
+    @app.post("/events")
+    async def events(request: Request) -> JSONResponse:
+        return await handle(request, receive_event, "ACCEPTED_LOCAL_EVENT")
+
+    @app.post("/repository-removal")
+    async def removal(request: Request) -> JSONResponse:
+        return await handle(request, receive_repository_removal, "LOCAL_BINDING_REVOKED")
+
+    @app.post("/installation-suspension")
+    async def suspension(request: Request) -> JSONResponse:
+        return await handle(request, receive_installation_suspension, "LOCAL_BINDING_REVOKED")
+
     return app
+
+
+def receive_event(
+    config: ReceiverConfig, *, raw_body: bytes, signature: str, delivery_id: str
+) -> github_webhooks.Receipt:
+    """Single-URL dispatch from authenticated body fields; headers never select authority.
+
+    The selected handler independently authenticates/checks scope before mutation. The generic
+    acknowledgement means local receipt or denial handling, never agent dispatch or publishing.
+    Unsupported installation-only events refuse instead of manufacturing repository authority.
+    """
+    authenticate(
+        raw_body, secret=config.webhook_secret, signature=signature, delivery_id=delivery_id
+    )
+    payload = json.loads(raw_body)
+    operation = receive
+    if payload.get("action") == "removed" and "repositories_removed" in payload:
+        operation = receive_repository_removal
+    elif payload.get("action") == "suspend":
+        operation = receive_installation_suspension
+    return operation(config, raw_body=raw_body, signature=signature, delivery_id=delivery_id)
 
 
 def receive_repository_removal(
@@ -166,7 +204,34 @@ def receive_repository_removal(
         )
     ):
         raise Refused("explicit authenticated repository removal unavailable")
-    removed_ids = {item["id"] for item in removed}
+    return _revoke_binding(config, source, removed_ids={item["id"] for item in removed})
+
+
+def receive_installation_suspension(
+    config: ReceiverConfig, *, raw_body: bytes, signature: str, delivery_id: str
+) -> github_webhooks.Receipt:
+    """Deny-only suspension handling; unsuspend never automatically reauthorizes access."""
+    source = authenticate(
+        raw_body, secret=config.webhook_secret, signature=signature, delivery_id=delivery_id
+    )
+    payload = json.loads(raw_body)
+    installation = payload["installation"]
+    if (
+        payload.get("action") != "suspend"
+        or type(installation.get("app_id")) is not int
+        or installation["app_id"] != config.app_id
+    ):
+        raise Refused("explicit authenticated installation suspension unavailable")
+    try:
+        parse_rfc3339_utc(installation.get("suspended_at"))
+    except ValueError:
+        raise Refused("signed installation suspension timestamp unavailable") from None
+    return _revoke_binding(config, source, removed_ids=None)
+
+
+def _revoke_binding(
+    config: ReceiverConfig, source: AuthenticatedWebhook, *, removed_ids: set[int] | None
+) -> github_webhooks.Receipt:
     with workspace_connection(config.database_url, config.workspace_id) as conn:
         conn.execute("SET LOCAL statement_timeout='5s'")
         # Include already revoked rows for safe acknowledgement of original redeliveries.
@@ -178,7 +243,7 @@ def receive_repository_removal(
             binding is None
             or binding["app_id"] != config.app_id
             or binding["installation_id"] != source.installation_id
-            or binding["repository_id"] not in removed_ids
+            or (removed_ids is not None and binding["repository_id"] not in removed_ids)
             or source.repository_id not in (None, binding["repository_id"])
         ):
             raise Refused("repository removal differs from configured binding")
