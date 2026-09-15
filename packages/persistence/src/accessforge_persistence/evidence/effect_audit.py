@@ -274,13 +274,19 @@ def read_creation_history(
     """
     if conn.autocommit or conn.info.transaction_status != TransactionStatus.IDLE:
         raise AuditUnavailable("history requires a fresh explicit observer transaction")
-    conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-    conn.execute("SET LOCAL statement_timeout='5s'")
-    row = _check(conn, application_role=application_role, installation_id=installation_id)
-    count = conn.execute(
-        "SELECT count(*) AS n FROM accessforge_effect_audit.creation WHERE fixture_nonce=%s",
-        (fixture_nonce,),
-    ).fetchone()
+    try:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        conn.execute("SET LOCAL statement_timeout='5s'")
+        row = _check(conn, application_role=application_role, installation_id=installation_id)
+        identity = conn.execute("SELECT oid FROM pg_roles WHERE rolname=current_user").fetchone()
+        if identity is None or identity["oid"] != row["observer_role"]:
+            raise AuditUnavailable("history requires the installed independent observer role")
+        count = conn.execute(
+            "SELECT count(*) AS n FROM accessforge_effect_audit.creation WHERE fixture_nonce=%s",
+            (fixture_nonce,),
+        ).fetchone()
+    except psycopg.Error as error:
+        raise AuditUnavailable("protected creation history unavailable") from error
     assert count is not None
     return CreationHistory(
         installation_id, fixture_nonce, int(count["n"]), to_rfc3339_utc(row["installed_at"])
