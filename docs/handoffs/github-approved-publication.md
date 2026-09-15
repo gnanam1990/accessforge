@@ -44,7 +44,9 @@ Validation: 58 existing read-protocol checks and nine focused retention checks p
 real isolated approval/intent/receipt/API-recovery integration cases with synthetic GitHub HTTP.
 The cases cover success, lost response, revoked approval, mismatched response, failed token
 cleanup and read-only checks permission. Six existing preview/retained-evaluation integration
-checks also passed. Tests prove no duplicate dispatch after reservation, receipt immutability and
+checks also passed. Two additional completed-run cases use real S3-retained artifacts and the
+original INCONCLUSIVE evaluation: intact evidence allows synthetic publication, while deletion
+of the original object prevents reservation and check creation. Tests prove no duplicate dispatch after reservation, receipt immutability and
 cross-workspace isolation. Ruff and strict mypy passed. The generated test database and role were
 removed. Migration 0069 was applied only to that isolated database, never a live installation.
 

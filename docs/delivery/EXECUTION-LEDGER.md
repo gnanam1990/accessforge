@@ -354,16 +354,23 @@ unknown-outcome reconciliation are still unfinished; this compatibility fix does
 
 ## Approved GitHub publication composition — 2026-09-15
 
-PR #183 passed exact-head CI and merged as `a91c17d69e6ad7162e4527edf2128abe22459c36`.
-The next R1 slice now composes current local authority, exact remote scope/commit, retained bytes,
+Prerequisite PR #183 passed exact-head CI and merged as `a91c17d69e6ad7162e4527edf2128abe22459c36`.
+Publication composition is PR #184, pending exact-head CI and merge at this checkpoint.
+This R1 slice now composes current local authority, exact remote scope/commit, retained bytes,
 the original approval and a NEW durable reservation before a single check-create POST. A matched
 response and successful token cleanup are required before immutable receipt persistence. Existing
 reservation recovery now exposes historical `original_creation` without claiming current remote
 state or retry authority. The public read-only access probe has not gained a write argument.
 
-67 focused unit/protocol checks and 12 isolated integration checks passed; Ruff and strict mypy
+67 focused unit/protocol checks and 14 isolated integration checks passed; Ruff and strict mypy
 passed. HTTP was synthetic. Migration 0069 was applied only in the generated test DB, which was
 removed with its role. No live migration, App token issuance, check publication, reader or model
 call occurred. See `github-approved-publication.md` under `docs/handoffs/` for authority, retention,
 race/unknown boundaries and remaining real App/operator acceptance. R1 is not fully accepted;
 the core C1/E1/E2/E3 path and remaining R2/R3/R4/D1 deliverables remain open.
+
+The additional completed-run cases use real retained S3 bytes and the original immutable
+INCONCLUSIVE evaluation: retained evidence permits the synthetic check, deleted object bytes
+prevent any create/reservation. They run before the separate diagnosis fixture intentionally
+deletes retention metadata. The generated OpenAPI description was refreshed after CI identified
+the stale contract; no runtime permission or retention guard was weakened.

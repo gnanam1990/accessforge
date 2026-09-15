@@ -3955,7 +3955,7 @@
     },
     "/v1/workspaces/{workspace_id}/github/publication-previews/{preview_id}/recovery": {
       "get": {
-        "description": "Local intent history only: UNKNOWN never becomes permission to retry publication.",
+        "description": "Original intent/create history, not current remote state or permission to retry.",
         "operationId": "inspect_github_publication_recovery",
         "parameters": [
           {

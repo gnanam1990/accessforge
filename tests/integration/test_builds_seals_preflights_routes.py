@@ -4695,6 +4695,7 @@ def test_authenticated_execution_finish(
     tmp_path: Path,
     focus_mode: str | None = None,
     effect_source: dict[str, str] | None = None,
+    publication_case: str | None = None,
 ) -> None:
     import secrets
 
@@ -5090,6 +5091,7 @@ def test_authenticated_execution_finish(
                 if effect_source["mode"] == "create-delete"
                 else "TRUE"
             ),
+            publication_case=publication_case,
         )
 
 
@@ -5317,6 +5319,32 @@ def test_original_native_focus_retained_finalization(
 
 
 @pytest.mark.parametrize("execution_body", ["stop-policy"], indirect=True)
+@pytest.mark.parametrize("publication_case", ["retained", "deleted-bytes"])
+def test_completed_evidence_is_verified_before_check_publication(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    owned_observer_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    publication_case: str,
+) -> None:
+    """Actual retained S3 bytes and publication DB; synthetic desktop/GitHub HTTP only."""
+    test_authenticated_execution_finish(
+        db,
+        client,
+        supervisor_ticket,
+        manual_dispatch_reference,
+        owned_observer_database,
+        monkeypatch,
+        "artifact-finalize",
+        tmp_path,
+        publication_case=publication_case,
+    )
+
+
+@pytest.mark.parametrize("execution_body", ["stop-policy"], indirect=True)
 def test_retained_evaluation_drives_github_check_preview(
     db: str,
     client: TestClient,
@@ -5383,6 +5411,7 @@ def _retain_stopped_artifact_case(
     *,
     focus_mode: str | None = None,
     expected_effect: str | None = None,
+    publication_case: str | None = None,
 ) -> None:
     from accessforge_orchestrator.execution_artifacts import Refused, retain_bundle
     from accessforge_persistence import evidence
@@ -5706,7 +5735,10 @@ def _retain_stopped_artifact_case(
                         ),
                     )
                     assert bundle.outcome_reasons == tuple(result["snapshot"]["reasons"])
-                _check_diagnosis_occurrence(db, ref, result, ids[0], client)
+                if publication_case is not None:
+                    _check_completed_publication(db, ref, store, publication_case)
+                else:
+                    _check_diagnosis_occurrence(db, ref, result, ids[0], client)
                 client.cookies.clear()
                 assert client.get(endpoint).status_code == 401
                 with workspace_connection(db, WS) as conn:
@@ -5738,6 +5770,114 @@ def _retain_stopped_artifact_case(
             ).fetchall()
         for item in keys:
             store.delete(key=item["object_key"])
+
+
+def _check_completed_publication(db: str, ref: DispatchReference, store: Any, case: str) -> None:
+    import httpx
+
+    from accessforge_domain.authorization import HumanPrincipal, Role
+    from accessforge_orchestrator.github_preview_approval import approve_preview, store_preview
+    from accessforge_orchestrator.github_publication_intent import read_publication_state
+    from accessforge_orchestrator.github_publisher import PublicationUnconfirmed, publish_preview
+    from accessforge_persistence import github_bindings
+
+    with workspace_connection(db, WS) as conn:
+        conn.execute(
+            "UPDATE project SET repository_url='https://github.com/fixture-owner/fixture-repository',"
+            "repository_authorized_by=%s WHERE id=(SELECT project_id FROM run WHERE id=%s)",
+            (OWNER, ref.run_id),
+        )
+        session = conn.execute("SELECT id FROM user_session WHERE user_id=%s", (OWNER,)).fetchone()
+        assert session is not None
+        principal = HumanPrincipal(OWNER, WS, Role.OWNER, str(session["id"]))
+        binding_id = github_bindings.record_verified(
+            conn,
+            workspace_id=WS,
+            app_id=7,
+            installation_id=42,
+            account_id=3,
+            repository_id=13,
+            owner="fixture-owner",
+            name="fixture-repository",
+            observed_at=datetime.now(UTC).isoformat(),
+        )
+        artifact = conn.execute(
+            "SELECT object_key FROM evidence_artifact WHERE run_id=%s ORDER BY id LIMIT 1",
+            (ref.run_id,),
+        ).fetchone()
+        assert artifact is not None
+    if case == "deleted-bytes":
+        store.delete(key=artifact["object_key"])  # Only this generated test run's original object.
+    stored = store_preview(db, principal=principal, binding_id=binding_id, run_id=ref.run_id)
+    preview_id = stored["previewId"]
+    expected = stored["preview"]["previewDigest"]
+    body = stored["preview"]["request"]["body"]
+    assert body["status"] == "completed" and body["conclusion"] == "action_required"
+    approval_id = approve_preview(
+        db, principal=principal, preview_id=preview_id, expected_digest=expected
+    )
+    calls: list[tuple[str, str]] = []
+    permissions = {"metadata": "read", "contents": "read", "checks": "write"}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        path = request.url.path
+        status, value = 200, {}
+        if path == "/app/installations/42":
+            value = {
+                "id": 42,
+                "app_id": 7,
+                "account": {"id": 3},
+                "suspended_at": None,
+                "permissions": permissions,
+            }
+        elif path.endswith("/access_tokens"):
+            status = 201
+            value = {
+                "token": "ghs_7_fixture.header.signature-with-dashes",
+                "permissions": permissions,
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=59))
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+        elif path == "/installation/token":
+            status = 204
+        elif path.endswith("/check-runs"):
+            assert case == "retained" and json.loads(request.content) == body
+            status = 201
+            value = {
+                **body,
+                "id": 101,
+                "app": {"id": 7},
+                "output": {**body["output"], "annotations_count": 0},
+            }
+        elif "/git/commits/" in path:
+            value = {"sha": body["head_sha"]}
+        else:
+            value = {"id": 13, "full_name": "fixture-owner/fixture-repository", "owner": {"id": 3}}
+        return httpx.Response(status, stream=httpx.ByteStream(json.dumps(value).encode()))
+
+    args = dict(
+        principal=principal,
+        preview_id=preview_id,
+        approval_id=approval_id,
+        expected_digest=expected,
+        app_jwt="a.b.c",
+        store=store,
+        allow_temporary_token_issuance=True,
+        _transport=httpx.MockTransport(handle),
+    )
+    if case == "retained":
+        receipt = publish_preview(db, **args)
+        assert receipt.check_run_id == 101 and receipt.payload_digest == digest(body)
+    else:
+        with pytest.raises(PublicationUnconfirmed):
+            publish_preview(db, **args)
+    assert sum(path.endswith("/check-runs") for _, path in calls) == int(case == "retained")
+    assert calls[-1] == ("DELETE", "/installation/token")
+    recovery = read_publication_state(db, principal=principal, preview_id=preview_id)
+    assert (recovery.intent_id is not None) is (case == "retained")
+    assert (recovery.original_creation is not None) is (case == "retained")
 
 
 def _check_diagnosis_occurrence(
