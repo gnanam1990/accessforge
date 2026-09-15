@@ -248,6 +248,7 @@ test('host probes use real command results and preserve unknowns', () => {
   const env = createHostEnvironment({
     run,
     pathExists: () => true,
+    preferencePathState: () => 'PRESENT',
   });
 
   assert.equal(env.readPreference('/System/Library/CoreServices/SystemVersion', 'ProductVersion'), '26.6');
