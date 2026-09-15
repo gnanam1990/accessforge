@@ -31,9 +31,16 @@ from accessforge_persistence.supervisor_dispatch import DispatchTicket
         "cancel",
     ],
 )
-def test_one_shot_handoff(mode):
-    async def run():
-        reference = DispatchReference(*(str(uuid4()) for _ in range(5)), epoch=1)
+def test_one_shot_handoff(mode: str) -> None:
+    async def run() -> None:
+        reference = DispatchReference(
+            workspace_id=str(uuid4()),
+            run_id=str(uuid4()),
+            attempt_id=str(uuid4()),
+            runner_id=str(uuid4()),
+            lease_id=str(uuid4()),
+            epoch=1,
+        )
         wire = dict(
             zip(
                 ("workspaceId", "runId", "attemptId", "runnerId", "leaseId", "epoch"),
@@ -54,7 +61,7 @@ def test_one_shot_handoff(mode):
         release = asyncio.Event()
         finished = asyncio.Event()
 
-        async def peer(reader, writer):
+        async def peer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             try:
                 received.append(json.loads(await reader.readline()))
                 delivered.set()
