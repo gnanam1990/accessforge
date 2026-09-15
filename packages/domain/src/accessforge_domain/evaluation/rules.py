@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from accessforge_domain.effect_monitor import EffectCoverage, EffectWindow, assess_effect_absence
 from accessforge_domain.functional_validation import ValidationObservation
 from accessforge_domain.journeys.assertions import (
     KEYBOARD_FOCUS_ROLES,
@@ -203,6 +204,43 @@ def observer_count_assertions(
                 **(
                     {"unknownReason": "measurement or matching frozen effect predicate unavailable"}
                     if not known
+                    else {}
+                ),
+            }
+        )
+    return result
+
+
+def effect_monitor_assertions(
+    assertions: AssertionSet, *, expected: EffectWindow, measured: EffectCoverage | None
+) -> list[dict[str, Any]]:
+    """Independent collector-side conditions; caller must authenticate original coverage.
+
+    Expected interval/attempt come from trusted execution authority, not measurement JSON.
+    This function grants no effects and mints no event references or run verdict. The finalizer
+    must not call it on supervisor/navigator-supplied measurements as observer evidence.
+    """
+    result: list[dict[str, Any]] = []
+    for assertion in assertions.assertions:
+        if assertion.kind is not AssertionKind.FORBIDDEN_EFFECT:
+            continue
+        rule = assertion.evaluation_rule
+        matches = (
+            rule is not None
+            and rule.rule_type == "CONTINUOUS_EFFECT_ABSENCE"
+            and rule.effect == expected.effect
+            and rule.scope_digest == expected.scope_digest
+        )
+        condition = assess_effect_absence(expected, measured) if matches else Condition.UNKNOWN
+        result.append(
+            {
+                "assertionId": assertion.assertion_id,
+                "kind": assertion.kind.value,
+                "condition": condition.value,
+                "provenance": "OBSERVER_AUTHORED",
+                **(
+                    {"unknownReason": "frozen scope or complete independent coverage unavailable"}
+                    if condition is Condition.UNKNOWN
                     else {}
                 ),
             }

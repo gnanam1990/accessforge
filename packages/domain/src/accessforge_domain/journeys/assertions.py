@@ -18,6 +18,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
+from accessforge_domain.effect_monitor import EFFECTS
 from accessforge_domain.functional_validation import VALIDATION_SUITE_DIGEST
 
 
@@ -198,15 +199,31 @@ class EvaluationRule:
     suite_digest: str | None = None
     role: str | None = None
     identifier_digest: str | None = None
+    scope_digest: str | None = None
 
     def __post_init__(self) -> None:
+        if self.rule_type != "CONTINUOUS_EFFECT_ABSENCE" and self.scope_digest is not None:
+            raise ValueError("effect coverage scope cannot be attached to a different rule")
         if self.rule_type != "EXACT_NATIVE_KEYBOARD_FOCUS" and (
             self.role is not None or self.identifier_digest is not None
         ):
             raise ValueError("native focus identity cannot be attached to a different rule")
         if self.rule_type != "PROTECTED_REFERENCE_VALIDATION" and self.suite_digest is not None:
             raise ValueError("validation suite cannot be attached to a different rule")
-        if self.rule_type == "EXACT_NATIVE_KEYBOARD_FOCUS":
+        if self.rule_type == "CONTINUOUS_EFFECT_ABSENCE":
+            if (
+                not isinstance(self.effect, str)
+                or self.effect not in EFFECTS
+                or not isinstance(self.scope_digest, str)
+                or len(self.scope_digest) != 64
+                or any(c not in "0123456789abcdef" for c in self.scope_digest)
+                or self.steps != ()
+                or any(v is not None for v in (self.action_sequence, self.phrase, self.count))
+            ):
+                raise ValueError(
+                    "absence rule requires an exact supported effect and protected scope"
+                )
+        elif self.rule_type == "EXACT_NATIVE_KEYBOARD_FOCUS":
             if (
                 type(self.action_sequence) is not int
                 or not 1 <= self.action_sequence <= MAX_RULE_ACTION_SEQUENCE
@@ -277,6 +294,8 @@ class EvaluationRule:
     def parse(cls, value: Any) -> EvaluationRule:
         if not isinstance(value, dict):
             raise ValueError("evaluationRule must be an object")
+        if set(value) == {"type", "effect", "scopeDigest"}:
+            return cls(value["type"], effect=value["effect"], scope_digest=value["scopeDigest"])
         if set(value) == {"type", "actionSequence", "role", "identifierDigest"}:
             return cls(
                 value["type"],
@@ -308,6 +327,8 @@ class EvaluationRule:
         raise ValueError("evaluationRule fields are incomplete or unsupported")
 
     def canonical_form(self) -> dict[str, Any]:
+        if self.rule_type == "CONTINUOUS_EFFECT_ABSENCE":
+            return {"type": self.rule_type, "effect": self.effect, "scopeDigest": self.scope_digest}
         if self.rule_type == "EXACT_NATIVE_KEYBOARD_FOCUS":
             return {
                 "type": self.rule_type,
@@ -360,6 +381,7 @@ class Assertion:
                 (AssertionKind.READING_ORDER, "READER_NEXT_SEQUENCE"),
                 (AssertionKind.FOCUS_BEHAVIOUR, "EXACT_NATIVE_KEYBOARD_FOCUS"),
                 (AssertionKind.FUNCTIONAL_VALIDATION, "PROTECTED_REFERENCE_VALIDATION"),
+                (AssertionKind.FORBIDDEN_EFFECT, "CONTINUOUS_EFFECT_ABSENCE"),
             }
         ):
             raise ValueError("evaluation rule is not supported by this assertion's observer")
