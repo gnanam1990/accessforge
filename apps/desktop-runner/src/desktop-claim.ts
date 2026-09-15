@@ -26,7 +26,7 @@ function sameFile(left: Stats, right: Stats): boolean {
 }
 
 /** No stale-age/PID expiry: unknown state requires independent operator reconciliation. */
-function claimDesktop(options: DesktopClaimOptions): { assertHeld(): void; release(): void } {
+export function claimDesktop(options: DesktopClaimOptions): { assertHeld(): void; release(): void } {
   const { directory, desktopSessionId } = options;
   if (typeof desktopSessionId !== 'string' || !/^[1-9][0-9]*$/.test(desktopSessionId) ||
       Number(desktopSessionId) >= 4294967295) throw new Error('assigned desktop session unavailable');

@@ -41,7 +41,7 @@ function readyPreflight(env = readyEnvironment()) {
   }));
 }
 
-function harness(preflight = readyPreflight(), onRetain, authorizeReaderStartup = async () => {}) {
+function harness(preflight = readyPreflight(), onRetain, authorizeReaderStartup = async () => {}, authorizePhysicalAction) {
   const calls = [];
   const observations = [];
   const adapter = {
@@ -78,6 +78,7 @@ function harness(preflight = readyPreflight(), onRetain, authorizeReaderStartup 
     adapter,
     preflight: typeof preflight === 'function' ? preflight : async () => preflight,
     authorizeReaderStartup, // Synthetic operator/configuration authority only.
+    authorizePhysicalAction,
     trace,
     journal: new MemoryJournal(),
     clock: {
@@ -182,6 +183,16 @@ test('a timed-out physical probe cannot dispatch after cleanup', async () => {
     if (++probes === 3) await new Promise(resolve => { release = resolve; });
     return readyPreflight();
   });
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['start', 'stop']);
+});
+
+test('late operator action authorization cannot dispatch after candidate cleanup', async () => {
+  let release;
+  const { runner, calls } = harness(readyPreflight(), undefined, async () => {},
+    async () => new Promise(resolve => { release = resolve; }));
   assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
   release();
   await new Promise(resolve => setImmediate(resolve));

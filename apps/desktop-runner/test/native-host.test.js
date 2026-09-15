@@ -39,3 +39,28 @@ test('unqualified native host refuses before operator code import or publishing 
 test('malformed native host command refuses without importing configuration', async () => {
   assert.equal(await cli(['--native-host', '/missing/operator.mjs'], () => {}), 64);
 });
+
+test('candidate command requires explicit reader-startup option before importing operator code', async t => {
+  const root = directory(t), modulePath = join(root, 'candidate.mjs');
+  writeFileSync(modulePath, 'globalThis.__afCandidateImported = true;', {mode: 0o600});
+  t.after(() => { delete globalThis.__afCandidateImported; });
+  assert.equal(await cli(['--candidate-proof', modulePath, '--output-dir', join(root, 'proof')], () => {}), 64);
+  assert.equal(globalThis.__afCandidateImported, undefined);
+  assert.deepEqual(readdirSync(root), ['candidate.mjs']);
+});
+
+test('candidate provisioner failure is sanitized and never creates proof output', async t => {
+  const root = directory(t), modulePath = join(root, 'candidate.mjs');
+  writeFileSync(modulePath, 'export async function provisionCandidateProof() { throw new Error("private-candidate-marker"); }', {mode: 0o600});
+  const lines = [];
+  assert.equal(await cli(['--candidate-proof', modulePath, '--output-dir', join(root, 'proof'), '--allow-reader-startup'], v => lines.push(v)), 78);
+  assert.ok(lines.every(line => !line.includes('private-candidate-marker')));
+  assert.deepEqual(readdirSync(root), ['candidate.mjs']);
+});
+
+test('incomplete candidate configuration is refused before trace, claim or adapter creation', async t => {
+  const root = directory(t), modulePath = join(root, 'candidate.mjs');
+  writeFileSync(modulePath, 'export async function provisionCandidateProof() { return {}; }', {mode: 0o600});
+  assert.equal(await cli(['--candidate-proof', modulePath, '--output-dir', join(root, 'proof'), '--allow-reader-startup'], () => {}), 78);
+  assert.deepEqual(readdirSync(root), ['candidate.mjs']);
+});

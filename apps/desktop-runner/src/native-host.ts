@@ -54,16 +54,8 @@ export function publishNativeHandoff(path: string, reference: Readonly<Record<st
 export async function runNativeHost(modulePath: string, handoffPath: string, signal: AbortSignal): Promise<void> {
   assertRealReaderProven();
   if (signal.aborted) throw new Error('cancelled');
-  privateParent(modulePath);
   privateParent(handoffPath);
-  if (!modulePath.endsWith('.mjs') || realpathSync(modulePath) !== resolve(modulePath)) throw new Error('host module path');
-  const fd = openSync(modulePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const info = fstatSync(fd);
-    if (!info.isFile() || info.uid !== process.getuid?.() || info.nlink !== 1 ||
-        (info.mode & 0o077) !== 0 || info.size > 65536) throw new Error('host module unavailable');
-  } finally { closeSync(fd); }
-  const module: unknown = await import(pathToFileURL(modulePath).href);
+  const module = await loadPrivateOperatorModule(modulePath);
   if (signal.aborted || module === null || typeof module !== 'object' ||
       !('provisionNativeHost' in module) || typeof module.provisionNativeHost !== 'function') throw new Error('host provisioner unavailable');
   const config = await module.provisionNativeHost(signal) as NativeHostConfiguration;
@@ -77,4 +69,17 @@ export async function runNativeHost(modulePath: string, handoffPath: string, sig
     host.close();
     // Retain the handoff and native claims for reconciliation. No auto replay or cleanup.
   }
+}
+
+/** Trusted executable operator configuration, not a sandbox or navigator import port. */
+export async function loadPrivateOperatorModule(modulePath: string): Promise<unknown> {
+  privateParent(modulePath);
+  if (!modulePath.endsWith('.mjs') || realpathSync(modulePath) !== resolve(modulePath)) throw new Error('host module path');
+  const fd = openSync(modulePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.uid !== process.getuid?.() || info.nlink !== 1 ||
+        (info.mode & 0o077) !== 0 || info.size > 65536) throw new Error('host module unavailable');
+  } finally { closeSync(fd); }
+  return await import(pathToFileURL(modulePath).href) as unknown;
 }
