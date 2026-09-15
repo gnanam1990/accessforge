@@ -163,6 +163,11 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm --filter @accessforge/contracts build
 
+      - name: Build native listener for cross-language handoff checks
+        run: |
+          pnpm --filter @accessforge/at-voiceover build
+          pnpm --filter @accessforge/desktop-runner build
+
       - name: Formatter check
         run: uv run ruff format --check .
 
