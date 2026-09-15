@@ -76,6 +76,27 @@ def test_receipt_replay_and_header_aliases_commit_without_dispatch(config: Recei
         assert conn.execute("SELECT id FROM run").fetchall() == []
 
 
+def test_single_url_receives_then_revokes_without_header_authority(config: ReceiverConfig) -> None:
+    removed = json.dumps(
+        {
+            "action": "removed",
+            "installation": {"id": 42, "app_id": 7},
+            "repositories_removed": [{"id": 13}],
+        }
+    ).encode()
+    with TestClient(create_receiver(config)) as client:
+        assert client.post("/events", content=BODY, headers=headers()).status_code == 202
+        response = client.post(
+            "/events", content=removed, headers={**headers(removed, 2), "x-github-event": "push"}
+        )
+        assert response.status_code == 202
+        assert response.json() == {"status": "ACCEPTED_LOCAL_EVENT"}
+        assert client.post("/events", content=BODY, headers=headers(delivery=3)).status_code == 403
+    with workspace_connection(config.database_url, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM github_webhook_body").fetchone() == {"n": 2}
+        assert conn.execute("SELECT id FROM run").fetchall() == []
+
+
 @pytest.mark.parametrize(
     "body",
     [
