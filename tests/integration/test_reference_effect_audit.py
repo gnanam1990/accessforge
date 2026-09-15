@@ -13,12 +13,15 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
+from accessforge_domain.effect_monitor import assess_effect_absence
+from accessforge_domain.states import Condition
 from accessforge_persistence.evidence import effect_audit
 from accessforge_persistence.evidence.effect_audit import (
     AuditUnavailable,
     install_reference_effect_audit,
     read_creation_history,
 )
+from accessforge_persistence.evidence.effect_collector import ReferenceEffectCollector
 from reference_app.db import SCHEMA
 
 pytestmark = pytest.mark.integration
@@ -88,6 +91,201 @@ def insert(conn: psycopg.Connection[Any]) -> None:
         "VALUES(%s,%s,'Synthetic Person','synthetic@example.test','access','test')",
         (str(uuid4()), NONCE),
     )
+
+
+def collector(
+    conn: psycopg.Connection[Any], audit_db: tuple[str, str, str, str]
+) -> ReferenceEffectCollector:
+    _, app, _, installation = audit_db
+    return ReferenceEffectCollector(
+        conn,
+        application_role=app,
+        installation_id=installation,
+        fixture_nonce=NONCE,
+        run_id=str(uuid4()),
+        attempt_id=str(uuid4()),
+        clock_epoch=str(uuid4()),
+    )
+
+
+@pytest.mark.parametrize("effect", ["absent", "create-delete", "rollback"])
+def test_collector_covers_committed_transient_effects_not_final_rows(
+    audit_db: tuple[str, str, str, str],
+    effect: str,
+) -> None:
+    url, app, observer, _ = audit_db
+    with connection(url, observer) as conn:
+        source = collector(conn, audit_db)
+        start = source.begin()
+        with connection(url, app) as writer:
+            if effect != "absent":
+                insert(writer)
+                writer.execute("DELETE FROM public.fixture_instance WHERE nonce=%s", (NONCE,))
+                if effect == "rollback":
+                    writer.rollback()
+        coverage = source.finish()
+        assert conn.closed
+        assert coverage.window.start_ns == start
+        assert coverage.window.end_ns > start
+        assert coverage.intervals[0].occurrences == (1 if effect == "create-delete" else 0)
+        assert assess_effect_absence(coverage.window, coverage) == (
+            Condition.FALSE if effect == "create-delete" else Condition.TRUE
+        )
+        with pytest.raises(AuditUnavailable):
+            source.finish()
+
+
+def test_collector_final_barrier_waits_for_an_inflight_commit(
+    audit_db: tuple[str, str, str, str],
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from time import monotonic, sleep
+
+    url, app, observer, _ = audit_db
+    with connection(url, observer) as conn, connection(url, app) as writer:
+        source = collector(conn, audit_db)
+        source.begin()
+        pid = conn.info.backend_pid
+        insert(writer)  # Shared transaction barrier remains held until this commit.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            closing = executor.submit(source.finish)
+            try:
+                with connection(url) as inspect:
+                    deadline = monotonic() + 3
+                    while True:
+                        blocked = inspect.execute(
+                            "SELECT 1 FROM pg_locks WHERE pid=%s AND locktype='advisory' "
+                            "AND mode='ExclusiveLock' AND NOT granted",
+                            (pid,),
+                        ).fetchone()
+                        inspect.commit()
+                        if blocked is not None:
+                            break
+                        assert monotonic() < deadline, "collector did not reach the real barrier"
+                        sleep(0.01)
+                assert not closing.done()
+            finally:
+                writer.commit()
+            assert closing.result(timeout=3).intervals[0].occurrences == 1
+
+
+def test_collector_refuses_prior_effects_instead_of_subtracting_or_resetting(
+    audit_db: tuple[str, str, str, str],
+) -> None:
+    url, app, observer, _ = audit_db
+    with connection(url, app) as writer:
+        insert(writer)
+    with connection(url, observer) as conn:
+        source = collector(conn, audit_db)
+        with pytest.raises(AuditUnavailable):
+            source.begin()
+        assert conn.closed
+    assert history(audit_db) == 1
+
+
+def test_end_barrier_excludes_a_commit_started_after_the_window(
+    audit_db: tuple[str, str, str, str],
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from time import monotonic, monotonic_ns, sleep
+
+    url, app, observer, installation = audit_db
+    with connection(url, observer) as conn, connection(url, app) as writer:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = []
+            calls = 0
+
+            def now() -> int:
+                nonlocal calls
+                calls += 1
+                tick = monotonic_ns()
+                if calls == 2:  # finish() owns the exclusive barrier at this clock sample.
+
+                    def write_later() -> None:
+                        insert(writer)
+                        writer.commit()
+
+                    pending.append(executor.submit(write_later))
+                    with connection(url) as inspect:
+                        deadline = monotonic() + 3
+                        while True:
+                            blocked = inspect.execute(
+                                "SELECT 1 FROM pg_locks WHERE pid=%s AND locktype='advisory' "
+                                "AND mode='ShareLock' AND NOT granted",
+                                (writer.info.backend_pid,),
+                            ).fetchone()
+                            inspect.commit()
+                            if blocked is not None:
+                                break
+                            assert monotonic() < deadline, "late writer did not reach the barrier"
+                            sleep(0.01)
+                return tick
+
+            source = ReferenceEffectCollector(
+                conn,
+                application_role=app,
+                installation_id=installation,
+                fixture_nonce=NONCE,
+                run_id=str(uuid4()),
+                attempt_id=str(uuid4()),
+                clock_epoch=str(uuid4()),
+                clock=now,
+            )
+            try:
+                source.begin()
+                coverage = source.finish()
+                assert coverage.intervals[0].occurrences == 0
+                pending[0].result(timeout=3)
+            finally:
+                source.abort()
+    assert history(audit_db) == 1  # This commit is outside the completed window.
+
+
+@pytest.mark.parametrize("end", [0, 10, 1800 * 1_000_000_000 + 11])
+def test_collector_refuses_bad_or_expired_clock_windows(
+    audit_db: tuple[str, str, str, str],
+    end: int,
+) -> None:
+    url, app, observer, installation = audit_db
+    ticks = iter([10, end])
+    with connection(url, observer) as conn:
+        source = ReferenceEffectCollector(
+            conn,
+            application_role=app,
+            installation_id=installation,
+            fixture_nonce=NONCE,
+            run_id=str(uuid4()),
+            attempt_id=str(uuid4()),
+            clock_epoch=str(uuid4()),
+            clock=lambda: next(ticks),
+        )
+        source.begin()
+        with pytest.raises(AuditUnavailable):
+            source.finish()
+        assert conn.closed
+
+
+@pytest.mark.parametrize("interruption", ["abort", "disconnect", "trigger"])
+def test_collector_missing_or_weakened_closure_never_returns_coverage(
+    audit_db: tuple[str, str, str, str],
+    interruption: str,
+) -> None:
+    url, _, observer, _ = audit_db
+    with connection(url, observer) as conn:
+        source = collector(conn, audit_db)
+        source.begin()
+        if interruption == "abort":
+            source.abort()
+        elif interruption == "disconnect":
+            conn.close()
+        else:
+            with connection(url) as admin:
+                admin.execute(
+                    "ALTER TABLE public.service_request DISABLE TRIGGER accessforge_record_creation"
+                )
+        with pytest.raises(AuditUnavailable):
+            source.finish()
+        assert conn.closed
 
 
 def test_committed_history_survives_deletion_but_not_transaction_rollback(

@@ -23,8 +23,13 @@ class AuditUnavailable(Exception):
     """History cannot be trusted or provisioned; never equivalent to zero effects."""
 
 
+# Database-local barrier. The trigger holds a shared transaction lock through COMMIT;
+# an independent collector holds the exclusive session lock only at its two boundaries.
+CREATION_BARRIER_KEY = 4703804837898241
+
 _BODY = """
 BEGIN
+  PERFORM pg_advisory_xact_lock_shared(4703804837898241::bigint);
   INSERT INTO accessforge_effect_audit.creation(request_id, fixture_nonce)
     VALUES (NEW.id, NEW.fixture_nonce);
   RETURN NEW;
