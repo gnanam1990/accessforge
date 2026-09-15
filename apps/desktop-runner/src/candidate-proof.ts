@@ -73,13 +73,16 @@ export class CandidateProofRunner {
   constructor(private readonly options: CandidateProofOptions) {}
 
   async run(actions: readonly ActionRequest[]): Promise<CandidateProofResult> {
-    if (actions.length === 0) {
+    // One private input snapshot across async retention/startup. Readonly types do not stop a
+    // caller from mutating the original array or text after validation but before dispatch.
+    const approvedActions = structuredClone(actions);
+    if (approvedActions.length === 0) {
       throw new Error('candidate proof requires at least one action');
     }
 
     // Reject unbound typing before VoiceOver starts. The allowlist constrains commands, but the
     // fixture binding constrains what those commands are permitted to type.
-    for (const action of actions) {
+    for (const action of approvedActions) {
       assertActionPermitted(action);
       if (
         action.action === 'TYPE_TEXT' &&
@@ -130,7 +133,7 @@ export class CandidateProofRunner {
       });
       supervisor.adoptLease(this.options.lease);
 
-      for (const request of actions) {
+      for (const request of approvedActions) {
         const outcome = await supervisor.performAction(request.action as AllowedAction, {
           ...(request.keyChord !== undefined ? { keyChord: request.keyChord } : {}),
           ...(request.text !== undefined ? { text: request.text } : {}),
