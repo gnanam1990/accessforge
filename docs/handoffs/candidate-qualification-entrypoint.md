@@ -31,8 +31,9 @@ A blocked-before-start or candidate-complete result may release the claim after 
 SIGINT/SIGTERM fence later input; they are not physical STOP proof. Startup/cleanup still depend
 on the SDK calls settling, so a stalled SDK operation remains unconfirmed, not completed.
 
-Validation: TypeScript compilation and 39 focused candidate trace/proof, native-host/CLI and desktop
+Validation: TypeScript compilation and 40 focused candidate trace/proof, native-host/CLI and desktop
 claim checks pass. New cases prove explicit-option refusal before import, private error sanitization,
-incomplete-config refusal, and a late action-authorization result fenced after timeout/cleanup.
+incomplete-config refusal, assembled-host claim retention on unavailable runtime evidence without
+reader startup or replay, and a late action-authorization result fenced after timeout/cleanup.
 These are synthetic/local-file checks only; no reader was started. An actual private provisioner,
 dedicated session, permissions, physical qualification trace and end-to-end acceptance remain open.
