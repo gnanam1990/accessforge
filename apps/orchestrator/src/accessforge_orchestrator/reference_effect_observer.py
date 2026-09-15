@@ -54,10 +54,14 @@ class ReferenceEffectObserver:
         credential_ref: str,
         application_role: str,
         installation_id: str,
+        expected_attempt_id: str | None = None,
     ) -> None:
         self._workspace = str(UUID(workspace_id))
         self._run = str(UUID(run_id))
         self._installation = str(UUID(installation_id))
+        self._expected_attempt = (
+            None if expected_attempt_id is None else str(UUID(expected_attempt_id))
+        )
         if not credential_ref or len(credential_ref) > 256 or not application_role:
             raise Refused("independent collector configuration unavailable")
         self._database = make_conninfo(database_url, connect_timeout=5)
@@ -75,13 +79,16 @@ class ReferenceEffectObserver:
     def _context(self, conn: psycopg.Connection[Any], *, startup: bool) -> dict[str, Any]:
         conn.execute("SET LOCAL statement_timeout='5s'")
         conn.execute("SET LOCAL lock_timeout='1s'")
-        return _context(
+        context = _context(
             conn,
             self._workspace,
             self._run,
             self._credential,
             before_dispatch=startup,
         )
+        if self._expected_attempt is not None and context["attempt"] != self._expected_attempt:
+            raise Refused("observer process belongs to a different original attempt")
+        return context
 
     @staticmethod
     def _identity(context: dict[str, Any]) -> dict[str, Any]:

@@ -276,3 +276,17 @@ Ruff and strict mypy pass. The latter uses synthetic collector values/STOP, not 
 acceptance. No live migration, OS setting or provider call. See `reference-effect-observer-records.md`
 under `docs/handoffs/`. Independent-process/native startup wiring, original artifact retention proof
 and finalizer consumption are still pending; C2 and the full project are not complete.
+
+## Independent collector process entrypoint — 2026-09-15
+
+Building on #180 head `9295944674c96309d2094b21a285ebf1062d223f` (CI still running),
+the new explicit private-pipe worker owns observer begin/finish and emits only committed event-ID
+receipts. It requires the original attempt, bounded closed input, matching READY for FINISH and
+the service's independent STOP check. Signal/deadline failure aborts rather than claiming closure;
+the future host must require a matching CLOSED receipt plus clean exit and own hard termination.
+
+Twenty-seven focused worker/service checks passed, including real pipe child processes with a
+synthetic observer under timeout and SIGTERM; Ruff and strict mypy pass. No live database, model,
+reader or permission action. See `reference-effect-worker-process.md` under `docs/handoffs/`.
+Native-process startup/liveness/closure wiring, original artifact proof and finalizer consumption
+remain the next boundaries; the entrypoint alone does not complete C2 or the full project.

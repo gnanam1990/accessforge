@@ -134,6 +134,7 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> Any:
         credential_ref="observer-profile",
         application_role="app",
         installation_id=INSTALLATION,
+        expected_attempt_id=ATTEMPT,
     )
     return SimpleNamespace(
         observer=observer, calls=calls, admitted=admitted, context=context, collector=Collector
@@ -176,6 +177,13 @@ def test_changed_identity_refuses_closure(wired: Any) -> None:
     with pytest.raises(Refused):
         wired.observer.finish()
     assert "collector-finish" not in wired.calls
+
+
+def test_wrong_original_attempt_is_refused_before_collector_start(wired: Any) -> None:
+    wired.context["attempt"] = WORKSPACE
+    with pytest.raises(Refused):
+        wired.observer.begin()
+    assert wired.calls == ["startup-context"]
 
 
 def test_unmatched_frozen_policy_does_not_open_the_collector(wired: Any) -> None:
