@@ -33,6 +33,29 @@ with wall-time expiry and SIGTERM. Those child tests use a synthetic observer an
 database authentication, physical STOP or actual reader behavior. Source measurement and real
 control-plane admission have their separate tests; they are not an end-to-end acceptance run.
 
-Still pending: native launcher integration before physical actions, independent child liveness
-fencing, closure before the ordinary final observer sample, original artifact verification, and
-finalizer consumption. No real worker/reader was launched against a live application.
+## Native host integration
+
+The private native operator configuration can now opt into `navigator.independentEffectObserver`
+alongside its mandatory `independentObserver`. It supplies the independent Python executable,
+credential reference, application role, installation ID and explicit observer-only environment.
+The effect and completion observer credential references and product/source database URLs must
+match; missing/contradictory configuration never selects a fallback source. No observer environment
+is added to navigator input or inherited from the host process.
+
+The bootstrap starts one worker after machine-session opening, waits for committed READY, and
+retains separate fresh reader-startup authorization. Repeated startup-authority checks reuse that
+same worker. Physical-action authorization checks liveness before and after its existing callback.
+Worker/receipt-pipe failure aborts the composed execution and fences later navigator/native input.
+After original STOP, the host requires matching CLOSED, complete pipe framing and clean worker
+exit before starting the ordinary final completion observer. The process owner enforces startup,
+closure and whole-run deadlines and escalates termination of its own child after two seconds.
+
+Twenty focused native process/observer checks pass with real child processes and synthetic
+receipts, including wrong identities, duplicate READY, early exit/closed pipe, oversized output,
+missing CLOSED, reused event ID, nonzero exit, trailing output, expiry, cancellation and preservation
+of navigator launch consent. TypeScript compilation passes. This is process wiring evidence, not
+actual database/reader/model/end-to-end acceptance. The verified reader matrix remains unchanged.
+
+Still pending: actual configured execution, original artifact verification and finalizer
+consumption. No real worker/reader was launched against a live application. The option is not
+enabled automatically, and its presence is not a completed forbidden-effect assertion.

@@ -279,8 +279,9 @@ and finalizer consumption are still pending; C2 and the full project are not com
 
 ## Independent collector process entrypoint — 2026-09-15
 
-Building on #180 head `9295944674c96309d2094b21a285ebf1062d223f` (CI still running),
-the new explicit private-pipe worker owns observer begin/finish and emits only committed event-ID
+PR #180 passed exact-head CI and merged as `e8f346065b1560c5c9a38b27176d369c540821d3`;
+local main was synchronized. The new explicit private-pipe worker owns observer begin/finish and
+emits only committed event-ID
 receipts. It requires the original attempt, bounded closed input, matching READY for FINISH and
 the service's independent STOP check. Signal/deadline failure aborts rather than claiming closure;
 the future host must require a matching CLOSED receipt plus clean exit and own hard termination.
@@ -290,3 +291,12 @@ synthetic observer under timeout and SIGTERM; Ruff and strict mypy pass. No live
 reader or permission action. See `reference-effect-worker-process.md` under `docs/handoffs/`.
 Native-process startup/liveness/closure wiring, original artifact proof and finalizer consumption
 remain the next boundaries; the entrypoint alone does not complete C2 or the full project.
+
+Native wiring follow-up: the private host now accepts an explicit independent effect observer
+matching its ordinary observer's source/credential configuration. It starts exactly once after
+machine-session opening, awaits READY before reader flow, fences the composed execution on worker
+or receipt-pipe failure, and requires CLOSED plus clean exit before the ordinary final sample.
+Existing consent, physical authorization, profile eligibility and model-call gates remain intact.
+Twenty native process/observer checks pass with real children and synthetic receipts; TypeScript
+compiles. No actual reader/source execution. Original artifact proof and finalizer interpretation
+of the ordered lifecycle records remain pending; no C2 or project-complete claim.
