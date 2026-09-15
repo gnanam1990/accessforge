@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -101,12 +102,95 @@ def test_disconnect_refuses_previously_accepted_bytes(config: ReceiverConfig) ->
         }
 
 
+def test_explicit_repository_removal_revokes_and_replays_atomically(config: ReceiverConfig) -> None:
+    body = json.dumps(
+        {
+            "installation": {"id": 42, "app_id": 7},
+            "action": "removed",
+            "repositories_removed": [{"id": 13}],
+        }
+    ).encode()
+    with TestClient(create_receiver(config)) as client:
+        for delivery in (10, 10, 11):
+            response = client.post(
+                "/repository-removal",
+                content=body,
+                headers={**headers(body, delivery), "x-github-event": "push"},
+            )
+            assert response.status_code == 202
+            assert response.json() == {"status": "LOCAL_BINDING_REVOKED"}
+        assert client.post("/webhook", content=BODY, headers=headers()).status_code == 403
+    with workspace_connection(config.database_url, WS) as conn:
+        row = conn.execute(
+            "SELECT revoked_at FROM github_repository_binding WHERE id=%s", (config.binding_id,)
+        ).fetchone()
+        assert row is not None and row["revoked_at"] is not None
+        assert conn.execute("SELECT count(*) AS n FROM github_webhook_body").fetchone() == {"n": 1}
+        assert conn.execute("SELECT count(*) AS n FROM github_webhook_delivery").fetchone() == {
+            "n": 2
+        }
+
+
+@pytest.mark.parametrize(
+    "action,app_id,installation_id,removed",
+    [
+        ("added", 7, 42, [{"id": 13}]),
+        ("removed", 8, 42, [{"id": 13}]),
+        ("removed", 7, 43, [{"id": 13}]),
+        ("removed", 7, 42, [{"id": 14}]),
+        ("removed", 7, 42, []),
+        ("removed", 7, 42, [{"id": True}]),
+    ],
+)
+def test_wrong_removal_does_not_revoke(
+    config: ReceiverConfig,
+    action: str,
+    app_id: int,
+    installation_id: int,
+    removed: list[dict[str, int]],
+) -> None:
+    body = json.dumps(
+        {
+            "action": action,
+            "installation": {"id": installation_id, "app_id": app_id},
+            "repositories_removed": removed,
+        }
+    ).encode()
+    with TestClient(create_receiver(config)) as client:
+        assert (
+            client.post("/repository-removal", content=body, headers=headers(body)).status_code
+            == 403
+        )
+    with workspace_connection(config.database_url, WS) as conn:
+        assert github_bindings.require_live(conn, workspace_id=WS, binding_id=config.binding_id)
+        assert conn.execute("SELECT id FROM github_webhook_body").fetchall() == []
+
+
 def test_reused_header_with_different_authenticated_bytes_refuses(config: ReceiverConfig) -> None:
     changed = BODY + b" "
     with TestClient(create_receiver(config)) as client:
         assert client.post("/webhook", content=BODY, headers=headers()).status_code == 202
         assert client.post("/webhook", content=changed, headers=headers(changed)).status_code == 403
     with workspace_connection(config.database_url, WS) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM github_webhook_body").fetchone() == {"n": 1}
+
+
+def test_conflicting_removal_delivery_rolls_back_without_revocation(config: ReceiverConfig) -> None:
+    body = json.dumps(
+        {
+            "action": "removed",
+            "installation": {"id": 42, "app_id": 7},
+            "repositories_removed": [{"id": 13}],
+        }
+    ).encode()
+    with TestClient(create_receiver(config)) as client:
+        assert client.post("/webhook", content=BODY, headers=headers()).status_code == 202
+        assert (
+            client.post("/repository-removal", content=body, headers=headers(body)).status_code
+            == 403
+        )
+    with workspace_connection(config.database_url, WS) as conn:
+        assert github_bindings.require_live(conn, workspace_id=WS, binding_id=config.binding_id)
         assert conn.execute("SELECT count(*) AS n FROM github_webhook_body").fetchone() == {"n": 1}
 
 
