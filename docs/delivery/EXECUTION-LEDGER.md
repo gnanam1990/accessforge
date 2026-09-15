@@ -7,16 +7,20 @@ before changing a row. No overall completion percentage has been established.
 
 ## Verified checkpoint
 
-- Local main: `725be5a661f53831fd3493998152060465c7ec12`, PR #155 merged after #152/#153.
+- Local main: `2355e16f4b0a007ab1529d86415fa513aef029eb`, PRs #156–160 merged after #155.
   Exact PR heads passed applicable CI before merge; main CI is separate.
 - PR #155 delivered concrete independent observer process closure. Its exact checked head was
   `6dc22e297d9256146c8bc8dcbca95c1f68c1aa4b`.
-- PR #156: private one-shot Python-to-native handoff, head `568868c`, now based on main.
-  Eight synthetic-peer Unix socket tests and one unavailable-profile refusal test pass;
-  these do not establish actual reader or model execution. Refresh CI before merge.
-- PR #157: actual journal preflight, head `a3ea5ad`, stacked on #156. The bootstrap replaces
-  supplied journal health with real file/directory fsync; 32 focused Node checks passed.
-  Both #156/#157 include the strict test-annotation CI fix; fresh CI remains pending.
+- PR #156 added the private one-shot Python-to-native handoff, including an actual cross-language
+  socket check with test-only execution/profile substitution. #157 added real journal fsync probes;
+  #158 shipped the trusted private native-host entrypoint. #159/#160 fixed cached speech and
+  READ_CURRENT command handling. These merged after exact-head CI; no physical acceptance claimed.
+- PR #161 (`2d4b8f1`): native PID-addressed VoiceOver last-phrase channel probe, pending Python CI.
+- PR #162 (`15eeb03`): candidate cleanup before final trace closure, nine focused synthetic checks;
+  pending Python CI. Partial startup now attempts cleanup; cleanup uncertainty interrupts the run.
+- PR #163: C2 independent effect coverage contract, fifteen focused synthetic checks, Ruff/mypy pass.
+  No collector, authenticated retention or finalizer connection yet; see
+  `docs/handoffs/forbidden-effect-coverage.md`. Refresh remote heads/checks before any merge.
 - PRs #147–151 delivered baseline dispatch/completion composition, loopback-only development
   login, submission drafts, webhook body deadline and explicit repository-removal denial.
   They did not establish actual-reader/model/end-to-end acceptance.
@@ -44,8 +48,8 @@ its real execution is not yet proven.
 
 Start **C1**, not another unrelated webhook enhancement. Trace each required callback from
 `runProvisionedNavigatorExecution` through physical preflight and the bounded child process.
-Observer closure is merged in #155; private dispatch transport and journal probing are implemented
-in pending #156/#157. Finish the operator-owned runtime/action configuration and shipped entrypoint,
+Observer closure, private dispatch transport, journal probing and the native-host entrypoint are
+merged in #155–158. Finish the operator-owned runtime/action configuration,
 retaining
 one-shot session ownership, original journal identity and independent observer closure. Do not
 replace a missing callback with an always-allow stub or populate VERIFIED_MATRICES from versions.
@@ -61,7 +65,7 @@ that no transient or external forbidden effect occurred. Missing coverage remain
 2. Complete one coherent code slice from C1/C2 before optional polish. Waiting CI is not a reason
    to stop independent work. Do not repeatedly restart CI or run local full suites.
 3. Use normal source review and focused checks. Merge only the exact checked head with applicable
-   CI passing and repository requirements satisfied. Merge #156 before retargeting #157 to main;
+   CI passing and repository requirements satisfied. Merge #161 before retargeting #162 to main;
    verify its current checks before merging. Synchronize local main after confirmed remote merge.
 4. Update this file on material progress: code/commit, evidence class, precise blocker and next
    operation. A status-only cycle is not implementation progress. If all safe work is exhausted,
@@ -71,8 +75,12 @@ that no transient or external forbidden effect occurred. Missing coverage remain
    evidence are complete; retain full R1 tasks rather than quietly dropping them.
 
 Previously authorized isolated local Docker/Colima, PostgreSQL and MinIO work does not need the
-same permission again. It does not authorize paid models, real AT startup, OS permission changes,
-deployment, live migrations, license selection or public submission. No Claude app, subagents or
+same permission again. The owner subsequently authorized reader startup/settings work. The specific
+AppleScript-control security change is awaiting its action-time confirmation; it remains OFF.
+Live preflight found Accessibility available, Automation UNKNOWN and no dedicated desktop binding.
+Provider credentials were absent from the inspected process environment and project `.env` keys;
+no paid call was made and no concrete provider/spend cap has been supplied. Do not infer deployment,
+live migration, license selection or public submission authority. No Claude app, subagents or
 specialized PR-review skills; preserve the user's focused-validation preference.
 
 ## Continuity repair checkpoint
