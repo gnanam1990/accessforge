@@ -158,3 +158,25 @@ budget are still unspecified. Next C1 work remains concrete trusted runtime/rese
 action authorization provisioning, then actual reader qualification when its prerequisites exist.
 C2 still needs independently bound execution-window collection and authenticated finalization;
 the existing R1–R4, E2/E3 and D1 queue is unchanged. Do not substitute helper PRs for those outcomes.
+
+## Local operator recovery — 2026-09-15
+
+PR #174 merged as `df3c89e5117bbc62f42b49f707f33a784f747b86` after exact-head CI. The owner
+subsequently declined AWS use and confirmed the pending local-login/VoiceOver-control changes.
+AWS profiles are no longer a prerequisite for the requested local workflow; no paid provider was
+selected or invoked. Production identity/deployment remains separate, not waived as complete.
+
+VoiceOver Utility now visibly shows AppleScript control enabled. Local-development login is
+restricted to loopback in the ignored local configuration; browser sign-in and the existing owner
+workspace dashboard were exercised successfully. No runner is enrolled in that workspace. These
+facts supersede the earlier permission-pending and sign-in-unavailable checkpoints.
+
+Live qualification exposed a real preflight defect: unreadable preferences were described as OFF,
+and a static blocked reason claimed this host had never configured VoiceOver. The preference probe
+now selects the current group-container location before legacy, never falls back from an unreadable
+current source to a stale legacy value, and reports unavailable/malformed observations as UNKNOWN.
+Only observed zero reports disabled. Static profile text now describes missing qualification proof.
+The controlling process still cannot read the preference on this host; this remains UNKNOWN and
+does not unlock startup. The next operation is to establish supported runner preference access,
+then perform actual qualification; no actual speech capture, journey, matrix enrollment or canonical
+reader evidence has been produced by this correction. C1/C2 and remaining acceptance work remain open.

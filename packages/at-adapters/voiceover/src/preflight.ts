@@ -232,30 +232,28 @@ export function probeReaderControlConfigured(env: ProbeEnvironment): ProbeResult
   const paths = voiceOverPreferencePaths();
   const configured = paths.some((p) => env.pathExists(p));
   if (!configured) {
-    return no(
-      'VoiceOver has no preferences file at either the Group Containers path or the legacy path, ' +
-        'which means it has never been run on this machine. Launch VoiceOver once, then enable ' +
-        '"Allow VoiceOver to be controlled with AppleScript" in VoiceOver Utility > General.',
-      true,
+    return unknown(
+      'VoiceOver preferences are not observable at the Group Containers or legacy path. ' +
+        'They may be absent or inaccessible to this process; this does not prove that VoiceOver ' +
+        'has never been configured. Check preference access from the runner process.',
     );
   }
 
   const appleScript = env.readPreference('com.apple.VoiceOver4/default', 'SCREnableAppleScript');
   if (appleScript === undefined) {
-    return no(
-      'VoiceOver is configured but AppleScript control is not enabled. Enable "Allow VoiceOver to ' +
-        'be controlled with AppleScript" in VoiceOver Utility > General. Without it the adapter ' +
-        'cannot read a single announcement.',
-      true,
+    return unknown(
+      'VoiceOver AppleScript control could not be read by this process. A missing or inaccessible ' +
+        'preference is not evidence that the setting is OFF; verify runner preference access.',
     );
   }
-  if (appleScript !== '1') {
+  if (appleScript === '0') {
     return no(
       `VoiceOver AppleScript control is set to "${appleScript}", not enabled. Enable it in ` +
         'VoiceOver Utility > General.',
       true,
     );
   }
+  if (appleScript !== '1') return unknown('VoiceOver AppleScript control preference is not a recognized boolean');
   return ok;
 }
 
@@ -507,7 +505,12 @@ export function createHostEnvironment(options: HostEnvironmentOptions = {}): Pro
     },
     pathExists,
     readPreference: (domain, key) => {
-      const result = run('/usr/bin/defaults', ['read', domain, key]);
+      // Match the configured file, preferring the current group container. Never fall back
+      // to a stale legacy TRUE if the current preference is disabled or unreadable.
+      const source = domain === 'com.apple.VoiceOver4/default'
+        ? voiceOverPreferencePaths().find(pathExists)?.replace(/\.plist$/, '') : domain;
+      if (source === undefined) return undefined;
+      const result = run('/usr/bin/defaults', ['read', source, key]);
       return result.status === 0 ? result.stdout.trim() : undefined;
     },
     processRunning: (name) => {
