@@ -10,6 +10,11 @@ Validation: desktop-runner TypeScript build and nine focused synthetic candidate
 passed locally. No physical reader action, acoustic capture or profile qualification is claimed.
 This does not add a startup timeout or a complete physical candidate provisioner.
 
+Follow-up: the runner snapshots the input action array and nested text before validation and async
+retention. Caller mutation during retention/startup cannot substitute unapproved text or append an
+extra action. Ten focused synthetic candidate checks and TypeScript compilation pass; no real
+reader execution is claimed by this follow-up.
+
 Read-only host preflight on 2026-09-15 found matching macOS/Safari 26.6, an unlocked console and
 Accessibility permission. VoiceOver Utility showed AppleScript control OFF; Automation remained
 UNKNOWN. No dedicated desktop binding was supplied. These observations do not establish a ready

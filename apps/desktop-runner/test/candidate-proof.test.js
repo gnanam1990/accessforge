@@ -205,3 +205,21 @@ test('successful implicit cleanup precedes the completed trace', async () => {
   assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'CANDIDATE_COMPLETE');
   assert.deepEqual(calls, ['start', 'NEXT', 'stop']);
 });
+
+test('async retention cannot replace validated text or append unapproved actions', async () => {
+  const actions = [{ action: 'TYPE_TEXT', text: 'Test Person' }];
+  const { runner, adapter, calls } = harness(readyPreflight(), line => {
+    if (line.sourceRecord?.type === 'PREFLIGHT_RESULT') {
+      actions[0].text = 'unapproved replacement';
+      actions.push({ action: 'ACTIVATE' });
+    }
+  });
+  const original = adapter.perform;
+  adapter.perform = async (request, context) => {
+    assert.equal(request.action, 'TYPE_TEXT');
+    assert.equal(request.text, 'Test Person');
+    return original(request, context);
+  };
+  assert.equal((await runner.run(actions)).status, 'CANDIDATE_COMPLETE');
+  assert.deepEqual(calls, ['start', 'TYPE_TEXT', 'stop']);
+});
