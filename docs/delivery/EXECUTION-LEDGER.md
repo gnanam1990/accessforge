@@ -15,12 +15,15 @@ before changing a row. No overall completion percentage has been established.
   socket check with test-only execution/profile substitution. #157 added real journal fsync probes;
   #158 shipped the trusted private native-host entrypoint. #159/#160 fixed cached speech and
   READ_CURRENT command handling. These merged after exact-head CI; no physical acceptance claimed.
-- PR #161 (`2d4b8f1`): native PID-addressed VoiceOver last-phrase channel probe, pending Python CI.
+- PR #161 (`2d4b8f1`): native PID-addressed VoiceOver last-phrase channel probe, merged after green CI.
 - PR #162 (`15eeb03`): candidate cleanup before final trace closure, nine focused synthetic checks;
   pending Python CI. Partial startup now attempts cleanup; cleanup uncertainty interrupts the run.
 - PR #163: C2 independent effect coverage contract, fifteen focused synthetic checks, Ruff/mypy pass.
   No collector, authenticated retention or finalizer connection yet; see
   `docs/handoffs/forbidden-effect-coverage.md`. Refresh remote heads/checks before any merge.
+- Next C2 slice: frozen continuous-effect absence predicate and collector-side rule composition;
+  51 focused synthetic checks, Ruff/mypy pass. Source admission, actual collector and finalizer
+  remain pending; see `docs/handoffs/frozen-effect-absence.md`.
 - PRs #147–151 delivered baseline dispatch/completion composition, loopback-only development
   login, submission drafts, webhook body deadline and explicit repository-removal denial.
   They did not establish actual-reader/model/end-to-end acceptance.
