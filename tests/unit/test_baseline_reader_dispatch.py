@@ -162,7 +162,7 @@ async def test_dispatch_ack_waits_for_original_stop_without_replay(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("timeout", [0, True, float("nan"), float("inf"), 61])
+@pytest.mark.parametrize("timeout", [0, True, float("nan"), float("inf"), 1801])
 async def test_stop_wait_rejects_invalid_bounds_before_admission(timeout: float) -> None:
     with pytest.raises(ValueError):
         await dispatch.admit_dispatch_and_wait_reader(
@@ -171,6 +171,41 @@ async def test_stop_wait_rejects_invalid_bounds_before_admission(timeout: float)
             attempt_id="attempt",
             timeout_seconds=timeout,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [61, 1800, None])
+async def test_execution_wait_is_not_the_short_delivery_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch, timeout: float | None
+) -> None:
+    reference = manual_dispatch.DispatchReference(
+        "workspace", "run", "attempt", "runner", "lease", 1
+    )
+    bounds: list[float] = []
+    original_timeout = asyncio.timeout
+
+    def bounded(delay: float) -> Any:
+        bounds.append(delay)
+        return original_timeout(delay)
+
+    async def deliver(*args: Any, **kwargs: Any) -> Any:
+        assert kwargs["acknowledgement_timeout_seconds"] == 10
+        return reference
+
+    async def stopped(*args: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(asyncio, "timeout", bounded)
+    monkeypatch.setattr(dispatch, "admit_and_dispatch_reader", deliver)
+    monkeypatch.setattr(dispatch, "_reader_stopped", stopped)
+    kwargs: dict[str, Any] = {} if timeout is None else {"timeout_seconds": timeout}
+    assert (
+        await dispatch.admit_dispatch_and_wait_reader(
+            cast(BaselineSession, None), runner_id="runner", attempt_id="attempt", **kwargs
+        )
+        == reference
+    )
+    assert bounds == [1800 if timeout is None else timeout]
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,6 @@ use complete_execution.complete to reconcile evidence without replaying the desk
 """
 
 import asyncio
-import math
 from collections.abc import Callable
 from typing import Any
 
@@ -15,7 +14,11 @@ from accessforge_build_worker.baseline_session import BaselineSession
 from accessforge_build_worker.reference_regressions import ReferenceRegressions
 from accessforge_persistence import baseline_builds
 
-from .baseline_reader_dispatch import admit_dispatch_and_wait_reader
+from .baseline_reader_dispatch import (
+    MAX_READER_WAIT_SECONDS,
+    admit_dispatch_and_wait_reader,
+    validate_reader_wait_timeout,
+)
 from .baseline_session_runtime import execute_baseline_session
 from .complete_execution import complete
 from .execution_artifacts import ExecutionArtifactStore
@@ -38,7 +41,7 @@ def dispatch_and_complete(
     runner_id: str,
     attempt_id: str,
     transport: StartTransport | None = None,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = MAX_READER_WAIT_SECONDS,
     cancelled: Callable[[], bool] = lambda: False,
 ) -> dict[str, Any]:
     """Synchronous operator boundary: provision, dispatch once, await STOP, retain/finalize.
@@ -48,12 +51,7 @@ def dispatch_and_complete(
     Call outside an event loop. A failed/uncertain invocation must not be replayed: reconcile
     its original attempt and use complete() after independently confirmed runtime closure.
     """
-    if (
-        isinstance(timeout_seconds, bool)
-        or not math.isfinite(timeout_seconds)
-        or not 0 < timeout_seconds <= 60
-    ):
-        raise ValueError("baseline reader wait must be within (0, 60] seconds")
+    validate_reader_wait_timeout(timeout_seconds)
     try:
         asyncio.get_running_loop()
     except RuntimeError:
