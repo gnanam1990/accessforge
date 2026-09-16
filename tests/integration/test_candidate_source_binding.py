@@ -632,8 +632,8 @@ def test_actual_reference_app_wheel_is_built_retained_and_imported_in_isolation(
     # Synthetic approved changes exercise packaging and backend regression, not actual AT proof.
     content = original.decode() + "\n# Owned candidate packaging probe.\n" + sabotage
     if presentation_repair:
-        assert 'accessible = variant == "accessible"' in content
-        content = content.replace('accessible = variant == "accessible"', "accessible = True")
+        assert 'accessible = variant != "inaccessible"' in content
+        content = content.replace('accessible = variant != "inaccessible"', "accessible = True")
     claimed, sandbox, command = _prepare_owned_build(
         binding,
         image=image,
