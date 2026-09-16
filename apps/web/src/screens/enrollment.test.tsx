@@ -66,6 +66,7 @@ describe('reviewed runner enrollment', () => {
     expect(writes[1]?.body).toEqual({ token: secret, name: 'Dedicated desk', session: observation.session, profile })
     expect(writes[1]?.key).toBeTruthy()
     expect(screen.getByLabelText(/Desktop enrollment observation JSON/)).toHaveValue('')
+    expect(screen.getByLabelText(/Runner name/)).toHaveValue('')
   })
   it('keeps enrollment payload and key on a lost response', async () => {
     const writes = setup('enroll-unknown')

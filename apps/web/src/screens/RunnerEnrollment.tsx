@@ -83,7 +83,7 @@ const EnrollmentForm = ({ workspaceId, onEnrolled }: {
           if (result.kind === 'ok' && result.value !== null && typeof result.value === 'object' &&
             typeof result.value.runnerId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(result.value.runnerId) &&
             result.value.profileDigest === reviewed.profileDigest && result.value.status === 'PREFLIGHT_REQUIRED') {
-            setRunnerId(result.value.runnerId); setToken(null); setPending(null); setRaw(''); setReviewed(null); onEnrolled()
+            setRunnerId(result.value.runnerId); setToken(null); setPending(null); setRaw(''); setName(''); setReviewed(null); onEnrolled()
           } else {
             setMessage('Enrollment was not confirmed. Inputs and key remain locked. Retry sends the exact original request; do not create a new token or runner. Reconcile with the operator if retry is refused.')
           }

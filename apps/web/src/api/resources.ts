@@ -532,6 +532,22 @@ export const listMembers = (
 ): Promise<ApiOutcome<{ readonly items: readonly Member[] }>> =>
   client.request(`${base(workspaceId)}/members`, { signal });
 
+export interface ManagedMember {
+  readonly userId: string;
+  readonly role: "OWNER" | "MAINTAINER" | "REVIEWER" | "VIEWER";
+  readonly revoked: boolean;
+  readonly revision: number;
+}
+export const readManagedMember = (client: ApiClient, workspaceId: string, userId: string,
+  signal: AbortSignal): Promise<ApiOutcome<ManagedMember>> =>
+  client.request(`${base(workspaceId)}/members/${encodeURIComponent(userId)}`, { signal });
+
+export const changeManagedMember = (client: ApiClient, workspaceId: string, userId: string,
+  body: { role: ManagedMember["role"] | null; reason: string }, revision: number,
+): Promise<ApiOutcome<ManagedMember>> =>
+  client.request(`${base(workspaceId)}/members/${encodeURIComponent(userId)}`,
+    { method: "PUT", body, ifMatch: revision });
+
 export const getProject = (
   client: ApiClient,
   workspaceId: string,

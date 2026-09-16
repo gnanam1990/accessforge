@@ -958,3 +958,14 @@ checks pass; two real-PostgreSQL lifecycle/concurrency cases are committed for C
 HTTP/session/CSRF/denial handling, identity-confirmed invitations and owner UI are still required.
 See [membership handoff](../handoffs/membership-lifecycle.md). This is build work, not a live access
 grant or permission to migrate the hosted database. Do not deploy schema-0073 code before approval.
+
+## Existing membership administration API — 2026-09-16
+
+OWNER readback and revision-checked mutation endpoints now connect the membership service for
+existing relationships. Authentication, CSRF and live role checks remain server-side; arbitrary
+account grants are not exposed. Null role explicitly revokes; positive If-Match is required.
+Nested savepoint rollback preserves atomic failure while allowing business/role/revision denial
+audit to commit. Readback provides revision/ETag and no-store, including revoked relationships.
+Thirteen focused parser checks, Python lint/mypy and regenerated OpenAPI/clients passed; a real
+HTTP/database regression is committed for CI, not locally run. Invitation identity and owner UI
+remain unfinished. Schema0073 still has no live migration/deployment authorization.
