@@ -798,3 +798,23 @@ Frontend build and eight focused canonical screen checks passed, including exist
 unavailable/mismatched record refusal and lost-response reconciliation. HTTP is synthetic; no actual
 reader, model or production run was started. The full baseline/repair/rerun acceptance remains open.
 This code slice requires normal source review, required exact-head CI and deployment.
+
+## Offline build observation and source provenance correction — 2026-09-16
+
+Preparing an automatic registration payload exposed two source identity defects: a requested
+non-checked-out revision could be paired with current working-tree bytes, and ignored bytes were
+hashed while status could still claim a clean commit. Source observation now refuses a revision/HEAD
+mismatch, includes ignored paths in dirty status, preserves NUL-delimited rename and unusual paths,
+and refuses observed HEAD/status changes across hashing. Repository fsmonitor hooks are explicitly
+disabled; a real Git fixture proves the observation does not execute one.
+
+The offline `accessforge_persistence.build_observation` module measures a stable dedicated checkout
+and a supplied regular artifact outside it, producing the existing registration body without
+network/DB/session access. Artifact reads are no-follow/nonblocking and checked across observation.
+Identity observability remains false. It does not establish a source-to-artifact causal relationship,
+atomic snapshot, retained bytes or actual deployment identity. See the build-observation handoff.
+No actual source/build identity from the user's production target was registered or fabricated.
+
+Sixteen focused source/observation checks passed against temporary real Git/filesystem fixtures;
+Ruff and strict mypy passed. No database fixture was selected, no full local suite ran, and no
+reader/provider call, deployment or production mutation occurred. Exact-head CI/merge remains due.
