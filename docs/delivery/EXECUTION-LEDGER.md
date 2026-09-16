@@ -20,7 +20,7 @@ remain unfinished; do not substitute setup history for fresh negative/unknown ru
 
 ## Current continuation queue — refreshed 2026-09-16
 
-Current build slice (`feat/same-origin-web`): optional `ACCESSFORGE_WEB_DIST_DIRECTORY` serves a
+Merged #199 (`feat/same-origin-web`): optional `ACCESSFORGE_WEB_DIST_DIRECTORY` serves a
 bounded immutable trusted web snapshot through the API origin. SPA deep links and public assets
 work without a Vite development server; API/health handlers and OpenAPI remain unchanged. Private
 files, source maps, missing assets and build symlinks are not served. Eleven focused in-process
@@ -28,7 +28,7 @@ checks pass; no service process, live database, model or reader is started by th
 closes a built-UI serving gap, not production identity, deployment or physical acceptance. The
 owner's instruction remains build-only, with actual VoiceOver runtime tests paused.
 
-Release packaging slice (`feat/release-bundle`): the trusted release workflow now builds web assets
+Merged #198 (`feat/release-bundle`): the trusted release workflow now builds web assets
 after required CI and uploads a downloadable source/web ZIP with checksum, exact source commit,
 per-file inventory and explicit limitations. The packager refuses dirty tracked inputs, symlinks
 and overwrite, and excludes untracked source secrets. This is build output, not deployment or
@@ -67,7 +67,7 @@ of unapproved typing before setup authorization. These are synthetic orchestrati
 not actual qualification. Concrete private provisioning, stale-input measurement, actual reader
 qualification and the full repair/rerun/review/release acceptance remain open.
 
-Verified remote/local main is `b98137a9957cf6e7ed343911ce33263ea9fc96b6`: #186–197
+Verified remote/local main is `bac2b501efffff9078bc7ef9856fcb87473880a1`: #186–199
 are merged after exact-head CI and normal review. This includes Codex diagnosis/repair,
 Bedrock retirement, navigator/runtime/consent composition, provider-independent packaging,
 consent UI and retained finalization/export integration. Do not rebuild those slices or
@@ -76,11 +76,28 @@ CLI/desktop observations and remains INCONCLUSIVE, not actual-reader acceptance.
 
 Also merged: #192 native OAuth environment forwarding, #193 profile validation before startup,
 #194 non-AWS operator documentation, #195–196 reference preparation integration, and #197 bounded
-approval cancellation. Do not repeat these as pending work. #198 release packaging and #199
-same-origin web serving are the current PRs; both still require their applicable exact-head CI.
+approval cancellation. Do not repeat these as pending work. #198 merged as
+`8e60b886545510cf168351feb6e59c0e35cee9a4` and #199 as
+`bac2b501efffff9078bc7ef9856fcb87473880a1` after exact-head CI and normal source review.
+
+Current open implementation PRs, not yet merged at this checkpoint:
+- #200 head `e2d55ad3b5d31f8b8e1d2c859c003cbd5b356a69`: narrow NVDA driver,
+  closed command mappings and guarded lifecycle; 27 synthetic checks pass. Native Windows
+  host composition and qualification remain pending.
+- #201 head `ffdd4cc36ffcff3458bb2d3730c36394b718b8d5`: prevent late reader-startup
+  approval from starting the independent effect collector after cancellation; 17 focused
+  synthetic authority/process checks pass. No actual reader or model run.
+
+Fresh main release rehearsal at `bac2b501efffff9078bc7ef9856fcb87473880a1`:
+web compilation/build succeeded; the ZIP's 941 inventory members matched their size/hash.
+Archive SHA-256: `2a4fd1f604c99231d8d7564122604a9d20b89d7d5dc8c187a1ee3c5b5c3714e7`.
+The separately extracted frozen non-dev install imported four API/operator modules,
+loaded six schemas and seventy migration files. No migration ran or service started.
+The ZIP excludes #200/#201 because they are not on this source commit. It is a
+source/web release candidate, not a full runtime or deployment acceptance artifact.
 
 Next implementation/acceptance sequence:
-- Finish exact-head CI/review/ordered merges for #198–199 and synchronize local main.
+- Finish exact-head CI/review/merges for #200–201 and synchronize local main.
 - Trace C1 from `apps/desktop-runner/src/execution-bootstrap.ts` and
   `native-start-listener.ts` through the actual private host/runtime callbacks. Do not add more
   provider adapters or re-ask the resolved provider selection.
@@ -88,7 +105,8 @@ Next implementation/acceptance sequence:
   exists outside tests. Live build and speech probes exist, but stale previous-automation input
   measurement still depends on a trusted boolean callback. Do not hard-code that observation
   from a desktop lock, a keyboard-layout reading or a missing process: none proves the contract.
-- Qualify the explicitly authorized dedicated VoiceOver host (E1), then execute the original
+- Keep physical acceptance paused under the latest owner instruction. After a future explicit
+  request to resume actual tests, qualify the dedicated VoiceOver host (E1), then execute the original
   baseline → Codex diagnosis → constrained repair → independent rerun → human review/export
   path (E2/E3). No synthetic trace or CLI smoke may populate VERIFIED_MATRICES.
 - Preserve R1 real GitHub App delivery, R2 non-AWS deployment/identity/recovery, R3 real Windows/NVDA,
@@ -116,8 +134,9 @@ The VoiceOver switch briefly became ON, then reverted OFF. Native logs show Voic
 starting and entering its exit handler at 12:31:32 local time; a subsequent process probe found
 no running VoiceOver. The reason for exit is not established. Capture responsiveness was false;
 no reader action, speech trace, model call or qualified matrix resulted. VoiceOver is confirmed
-OFF after this attempt. Next: diagnose the startup exit and complete concrete private host
-provisioning; do not bypass UNKNOWN preflight checks or enroll the matrix from this host check.
+OFF after this attempt. This is historical, not permission to retry. Continue concrete private
+host provisioning as build work only; startup diagnosis/runtime testing is paused by the latest
+owner instruction. Do not bypass UNKNOWN checks or enroll the matrix from this host check.
 
 ## Verified checkpoint
 
