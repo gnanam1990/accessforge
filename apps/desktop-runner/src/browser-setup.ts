@@ -3,7 +3,7 @@
 import type { RuntimeProbeEvidence } from '@accessforge/at-voiceover';
 import { REFERENCE_FIXTURE_DIGEST, REFERENCE_FIXTURE_VERSION } from '@accessforge/contracts';
 
-export type ReferenceVariant = 'accessible' | 'inaccessible' | 'missing-label-v1' | 'broken-focus-v1';
+export type ReferenceVariant = 'accessible' | 'inaccessible' | 'missing-label-v1' | 'broken-focus-v1' | 'keyboard-trap-v1';
 
 interface FetchResponse {
   readonly ok: boolean;

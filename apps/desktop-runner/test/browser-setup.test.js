@@ -34,7 +34,7 @@ test('reconciles the reserved nonce without a global reset and projects no crede
   assert.equal(JSON.stringify(projectSetupForNavigator(result)).includes(options.setupToken), false);
 });
 
-for (const variant of ['missing-label-v1', 'broken-focus-v1']) {
+for (const variant of ['missing-label-v1', 'broken-focus-v1', 'keyboard-trap-v1']) {
   test(`${variant} reconciles only its approved variant and reveals no oracle metadata`, async () => {
     const result = await prepareReferenceApp({ ...options, variant, launch,
       fetch: async (url) => {

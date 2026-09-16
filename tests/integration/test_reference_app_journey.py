@@ -138,7 +138,7 @@ def test_full_journey_creates_exactly_one_request(client: TestClient) -> None:
     assert receipt["requests"][0]["email"] == VALID_SUBMISSION["email"]
 
 
-@pytest.mark.parametrize("variant", ["missing-label-v1", "broken-focus-v1"])
+@pytest.mark.parametrize("variant", ["missing-label-v1", "broken-focus-v1", "keyboard-trap-v1"])
 def test_isolated_scenario_keeps_real_validation_and_one_receipt(
     client: TestClient, variant: str
 ) -> None:

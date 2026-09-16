@@ -1,7 +1,7 @@
 """Form markup with explicitly labelled presentational defect variants.
 
 All variants post to the same endpoint and are validated identically by the server. They differ
-only in how a validation error is exposed to assistive technology:
+only in presentation and interaction affordances:
 
   accessible    errors land in a role="alert" live region, each field carries aria-invalid and
                 aria-describedby pointing at its own message, and focus moves to the first
@@ -17,6 +17,9 @@ only in how a validation error is exposed to assistive technology:
 
   broken-focus-v1   retains labels and error announcements/associations, but omits the
                     first-invalid-field focus recovery after rejected submission.
+
+  keyboard-trap-v1  cancels Tab/Shift+Tab only within the description control, preserving
+                    other keys, OS/reader modifiers, labels and accessible error recovery.
 
 Defect variants are labelled seeded defects, not discovered customer incidents.
 """
@@ -167,12 +170,20 @@ def render_form(
         if by_field and accessible and variant != "broken-focus-v1":
             first = next(iter(by_field))
             focus_script = f"<script>document.getElementById({first!r}).focus();</script>"
+        trap_script = ""
+        if variant == "keyboard-trap-v1":
+            trap_script = (
+                '<script id="seeded-keyboard-trap">'
+                'document.getElementById("description").addEventListener("keydown", event => {'
+                'if (event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey) {'
+                "event.preventDefault();}});</script>"
+            )
         body = (
             f"{summary}"
             f'<form method="post" action="/form/{html.escape(nonce)}" novalidate>'
             f"{fields}"
             f'<button type="submit">Submit request</button>'
-            f"</form>{focus_script}"
+            f"</form>{focus_script}{trap_script}"
         )
 
     defect_note = (
@@ -194,6 +205,13 @@ def render_form(
             "<!-- SEEDED DEFECT broken-focus-v1 (not a customer incident): rejected submission "
             "does not restore focus to the first invalid field. Labels, live-region errors, "
             "field associations and server-side validation are unchanged. -->"
+        )
+
+    if variant == "keyboard-trap-v1":
+        defect_note = (
+            "<!-- SEEDED DEFECT keyboard-trap-v1 (not a customer incident): description "
+            "cancels Tab and Shift+Tab. Other keys/modifiers and server validation are unchanged. "
+            "This does not claim to trap VoiceOver cursor navigation or operating-system focus. -->"
         )
 
     return (
