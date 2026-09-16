@@ -40,7 +40,9 @@ def _is_placeholder(value: str) -> bool:
 
 
 class ApiSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="ACCESSFORGE_", env_file=".env", extra="forbid")
+    model_config = SettingsConfigDict(
+        env_prefix="ACCESSFORGE_", env_file=".env", extra="forbid", hide_input_in_errors=True
+    )
 
     database_url: str = Field(min_length=1)
 

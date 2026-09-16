@@ -65,6 +65,21 @@ def test_valid_configuration_is_accepted() -> None:
     assert _api_settings().environment == "local"
 
 
+def test_api_startup_validation_text_does_not_dump_configuration_inputs() -> None:
+    # Unhandled startup ValidationErrors reach deployment logs. Keep the useful
+    # field/reason without printing even a truncated credential-bearing input.
+    invalid_url = "invalid://user:private-credential@database.example/app"
+    with pytest.raises(ValidationError) as field_error:
+        _api_settings(database_url=invalid_url)
+    message = str(field_error.value)
+    assert "database_url must be a PostgreSQL URL" in message
+    assert "input_value" not in message
+    assert "private-credential" not in message
+    with pytest.raises(ValidationError) as model_error:
+        _api_settings(environment="production")
+    assert "input_value" not in str(model_error.value)
+
+
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "example.com", ""])  # noqa: S104
 def test_development_login_refuses_network_exposure(host: str) -> None:
     with pytest.raises(ValidationError, match="loopback"):
