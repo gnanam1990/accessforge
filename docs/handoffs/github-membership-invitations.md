@@ -48,3 +48,23 @@ or expose acceptance before trusted identity integration is ready.
 Fourteen focused parser tests and changed Python static checks pass. A PostgreSQL-backed HTTP test
 covers CSRF, owner enforcement, create/readback, duplicate refusal, pagination, revoke and committed
 denial audits; it is committed for CI, not locally executed. OpenAPI/client contracts regenerated.
+
+## Owner Settings integration
+
+Settings now offers an OWNER-only invitation form, paginated history, selected record readback
+and explicitly confirmed revocation. GitHub numeric identity remains a string, validated against
+the BIGINT bound without floating-point conversion. Role, lifetime, reason and confirmation are
+reviewed together; edits invalidate confirmation. Field-linked error summaries complement inline
+feedback. One visible status region announces creation, without a duplicate live announcement.
+
+Unknown or malformed save receipts lock the draft and preserve its exact generated invitation ID.
+An explicit GET reconciles the outcome without another PUT; confirmed absence requires another
+explicit confirmation before a new attempt. Revoke responses likewise require exact record/revision
+and state, or an explicit current-state read. History page changes do not discard selected detail.
+Malformed records never provide row actions. The UI states that no email/account/access is created
+and that verified recipient acceptance is not yet available in this interface.
+
+The frontend production build and focused synthetic UI checks cover confirmation, exact large
+identity, lost/malformed save response, lost revoke response, history pagination, malformed history
+and non-owner restrictions. No live invitation or reader operation was performed. Recipient-side
+identity provisioning/discovery/acceptance remains the next incomplete integration.
