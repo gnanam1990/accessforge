@@ -20,7 +20,7 @@ revoked provider binding, issuer demotion and prior membership revocation. Forwa
 proof is extended through 0074, including unchanged existing membership and initially empty
 invitation storage. These database cases are committed for required CI, not executed locally.
 
-This is not a complete onboarding flow. Still needed: owner API/UI create/list/revoke, explicit
+This is not a complete onboarding flow. Still needed: owner UI create/list/revoke, explicit
 authenticated invitation acceptance API/UI, bounded discovery of invitations for the verified
 subject, and trusted creation of a new local account from fresh OAuth identity without matching
 email or taking over existing bindings. Public callers must never supply their own authentication
@@ -29,3 +29,22 @@ endpoint or call `accept_invitation` before authentication merely because its ar
 
 No production access, credentials, account provisioning, migration or deployment occurred.
 Do not deploy code expecting 0073/0074 until live migration authority is obtained and applied.
+
+## Owner API integration
+
+Owner-only GET collection (bounded UUID-keyset pagination), GET item, PUT create and DELETE revoke
+now live under `/v1/workspaces/{workspace_id}/membership-invitations`. PUT accepts exactly
+`githubSubject` (decimal string, preserving full BIGINT precision), `role`, `ttlSeconds`, `reason`.
+It requires If-Match zero and a new client-chosen UUID. An existing ID is not replayed or refreshed;
+unknown outcomes require explicit GET. Revocation requires the current pending revision and keeps
+the history. Readbacks include server-derived PENDING/EXPIRED/REVOKED/ACCEPTED state, revision and
+no-store; single records include ETag. Accepted status is not current membership authority.
+
+Authentication/CSRF precede owner checks and target lookup. Business denials roll back a savepoint
+before their DENIED audit commits in the outer transaction. Live owner checks also remain in the
+persistence layer. The API does not provision accounts, send email, create bearer invitation links
+or expose acceptance before trusted identity integration is ready.
+
+Fourteen focused parser tests and changed Python static checks pass. A PostgreSQL-backed HTTP test
+covers CSRF, owner enforcement, create/readback, duplicate refusal, pagination, revoke and committed
+denial audits; it is committed for CI, not locally executed. OpenAPI/client contracts regenerated.

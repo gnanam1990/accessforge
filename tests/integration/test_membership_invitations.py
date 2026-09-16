@@ -18,6 +18,80 @@ from accessforge_persistence.memberships import MembershipChangeError
 pytestmark = pytest.mark.integration
 
 
+def test_owner_invitation_http_readback_and_denials(
+    test_database_url: str, invited: tuple[str, str, str, int, str]
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from accessforge_api.app import create_app
+    from accessforge_api.auth.sessions import CSRF_HEADER, SESSION_COOKIE, issue_session
+    from accessforge_api.config import ApiSettings
+
+    workspace, owner, target, subject, _ = invited
+    with workspace_connection(test_database_url, workspace) as conn:
+        owner_session = issue_session(conn, user_id=owner)
+        conn.execute(
+            "INSERT INTO workspace_membership(workspace_id,user_id,role) VALUES (%s,%s,'VIEWER')",
+            (workspace, target),
+        )
+        viewer_session = issue_session(conn, user_id=target)
+    settings = ApiSettings(
+        database_url=test_database_url,
+        evidence_endpoint_url="http://127.0.0.1:9000",
+        evidence_bucket="unused",
+        evidence_access_key="unused",
+        evidence_secret_key="unused",
+        environment="test",
+    )
+    base = f"/v1/workspaces/{workspace}/membership-invitations"
+    path = f"{base}/{uuid4()}"
+    offer = {
+        "githubSubject": str(subject),
+        "role": "REVIEWER",
+        "ttlSeconds": 600,
+        "reason": "Explicit test offer",
+    }
+    with TestClient(create_app(settings)) as client:
+        client.cookies.set(SESSION_COOKIE, owner_session.session_token)
+        assert client.put(path, json=offer, headers={"If-Match": '"0"'}).status_code == 403
+        headers = {CSRF_HEADER: owner_session.csrf_token}
+        assert client.put(path, json=offer, headers=headers).json()["code"] == "IF_MATCH_REQUIRED"
+        headers["If-Match"] = '"0"'
+        created = client.put(path, json=offer, headers=headers)
+        assert created.status_code == 201, created.text
+        assert created.json()["githubSubject"] == str(subject)
+        assert created.json()["state"] == "PENDING"
+        assert created.headers["etag"] == '"1"'
+        assert created.headers["cache-control"] == "no-store"
+        assert client.put(path, json=offer, headers=headers).json()["code"] == "STALE_REVISION"
+        assert client.get(path).json() == created.json()
+        page = client.get(base, params={"limit": 1}).json()
+        assert len(page["items"]) == 1 and page["nextCursor"] is not None
+        following = client.get(base, params={"limit": 1, "after": page["nextCursor"]}).json()
+        assert len(following["items"]) == 1
+        assert following["items"][0]["invitationId"] != page["items"][0]["invitationId"]
+        headers["If-Match"] = '"1"'
+        revoked = client.delete(path, headers=headers)
+        assert revoked.status_code == 200 and revoked.json()["state"] == "REVOKED"
+        assert client.get(path).json()["revision"] == 2
+        client.cookies.set(SESSION_COOKIE, viewer_session.session_token)
+        assert client.get(base).status_code == 403
+        assert client.get(path).status_code == 403
+        assert (
+            client.delete(
+                path, headers={CSRF_HEADER: viewer_session.csrf_token, "If-Match": '"2"'}
+            ).status_code
+            == 403
+        )
+    with workspace_connection(test_database_url, workspace) as conn:
+        row = conn.execute(
+            "SELECT count(*) AS n FROM audit_event WHERE workspace_id=%s "
+            "AND action='MEMBERSHIP_INVITATION_ADMINISTER' AND outcome='DENIED'",
+            (workspace,),
+        ).fetchone()
+        assert row and row["n"] == 3
+
+
 @pytest.fixture
 def invited(test_database_url: str) -> tuple[str, str, str, int, str]:
     migrate(test_database_url)
