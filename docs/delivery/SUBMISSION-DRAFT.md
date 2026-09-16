@@ -20,7 +20,7 @@ working together on explicitly authorized applications.
 
 The repository contains a web console and API for projects, authorized environments, versioned
 journeys, runner enrollment, execution records, findings, patch review, comparisons and exports.
-The backend implements bounded Strands navigation, diagnosis and repair paths, source/build
+The backend implements bounded Codex-backed navigation, diagnosis and repair paths, source/build
 identity binding, protected reference-app execution, candidate builds, durable recovery and
 deterministic evidence evaluation. These are implemented components, not a claim that the
 entire real-reader journey has already passed acceptance.
@@ -42,18 +42,36 @@ to replay a potentially consequential action. A human reviews the repair and evi
 ## Current limitations
 
 Actual VoiceOver qualification and a successful connected baseline-to-repair-to-rerun
-acceptance recording are still outstanding. NVDA support is contract-only. Production
-authentication, complete outbound GitHub App publishing and deployed operational acceptance
-are not complete. The included reference application is an authorized development fixture;
+acceptance recording are still outstanding. NVDA has a narrow command driver and synthetic
+checks; Windows host integration and physical qualification remain unproven. GitHub browser
+OAuth and owner-workspace access have been exercised on the hosted Railway control plane,
+but that does not establish broad production isolation, recovery or capacity acceptance.
+GitHub App publication code is separate from browser login; actual scoped installation,
+publication and uncertain-outcome rehearsal remain outstanding.
+The included reference application is an authorized development fixture;
 its injected defects are not discovered customer incidents. Synthetic checks are not actual
 assistive-technology results. This project does not certify legal accessibility compliance.
 
 ## Technical foundation
 
 Python API/orchestration/build services, PostgreSQL persistence, React/TypeScript web console,
-private S3-compatible evidence storage, Strands agent paths, native runner infrastructure and
+private S3-compatible evidence storage, Codex-backed agent paths, native runner infrastructure and
 isolated candidate builds. The [architecture diagram](../../README.md#architecture) describes
 the connected design and explicitly distinguishes it from proven runtime acceptance.
+
+## Hosted implementation checkpoint — 2026-09-16
+
+The [hosted console](https://accessforge-web-production.up.railway.app/) was deployed from merged
+source `3fe4bb6a37201cba8bcca6a079bb98a5bf1228ee` (through PR #234). Railway deployment
+`0a3073ca-beaa-44e8-a8c1-c1794783cddf` reported SUCCESS. Readiness, root and the new JavaScript
+asset returned HTTP 200, including the explicit runner-profile selection control. This establishes
+only a control-plane/static deployment checkpoint, not working desktop execution or a completed
+customer journey. Refresh the live revision before using this dated evidence in a submission.
+
+Owner browser enrollment, the retention editor and candidate qualification provisioning are
+separate open PRs #235–237 at this checkpoint; they are not included in that deployed revision.
+Do not present an empty workspace, prepared configuration, CI report or synthetic trace as a
+completed accessibility run. No submission or public demonstration video has been produced.
 
 ## Before publishing
 
