@@ -10,6 +10,10 @@ function fixture(overrides = {}) {
     variant: 'accessible', expectedBuildDigest: hash, expectedFixtureDigest: 'b'.repeat(64) },
     async authorize() { calls.push('authorize'); } };
   const safari = {expectedUrl: `${origin}/form/${nonce}`, expectedBrowserVersion: '26.6'};
+  const desktop = {expectedSessionId: '100025', environment: {
+    auditSessionId: () => '100025', processAuditSessionId: () => '100025',
+    screenLocked: () => false, hasPermission: () => true,
+  }};
   const ports = {
     async measure() { calls.push('measure'); return {expectedBuildDigest: hash, observedBuildDigest: hash}; },
     async prepare(setup, host) {
@@ -21,8 +25,8 @@ function fixture(overrides = {}) {
         evidence: {permittedOrigin: origin, environmentResetSucceeded: true}};
     }, ...overrides,
   };
-  return {calls, controller, options, safari, ports, hash,
-    make() { return createReferencePreparation(options, safari, {expectedBuildDigest: hash, reference: {}}, ports); }};
+  return {calls, controller, options, safari, ports, hash, desktop,
+    make() { return createReferencePreparation(options, safari, {expectedBuildDigest: hash, reference: {}}, desktop, ports); }};
 }
 
 test('measure and reauthorize before preparation using the original startup guard', async () => {
@@ -60,9 +64,27 @@ test('lost ownership, failed reauthorization and mismatched build prevent prepar
 
 test('missing live probe or a different sealed target is refused at construction', () => {
   const f = fixture();
-  assert.throws(() => createReferencePreparation(f.options, f.safari, undefined, f.ports));
+  assert.throws(() => createReferencePreparation(f.options, f.safari, undefined, f.desktop, f.ports));
   assert.throws(() => createReferencePreparation(f.options, {...f.safari, expectedUrl: f.safari.expectedUrl + 'other'},
-    {expectedBuildDigest: f.hash, reference: {}}, f.ports));
+    {expectedBuildDigest: f.hash, reference: {}}, f.desktop, f.ports));
+});
+
+test('unknown or changed interactive host cannot prepare even while the claim remains held', async () => {
+  for (const mode of ['console', 'process', 'locked', 'lock-unknown', 'permission', 'permission-unknown']) {
+    const f = fixture();
+    f.ports.measure = async () => {
+      const env = f.desktop.environment;
+      if (mode === 'console') env.auditSessionId = () => '100026';
+      if (mode === 'process') env.processAuditSessionId = () => undefined;
+      if (mode === 'locked') env.screenLocked = () => true;
+      if (mode === 'lock-unknown') env.screenLocked = () => undefined;
+      if (mode === 'permission') env.hasPermission = () => false;
+      if (mode === 'permission-unknown') env.hasPermission = () => undefined;
+      return {expectedBuildDigest: f.hash, observedBuildDigest: f.hash};
+    };
+    await assert.rejects(f.make()(() => {}, f.controller.signal), /host unavailable/);
+    assert.equal(f.calls.includes('prepare'), false);
+  }
 });
 
 test('a concurrent second call fences the original pending preparation', async () => {

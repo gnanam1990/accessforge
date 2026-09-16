@@ -1,5 +1,5 @@
 /** One-shot reference preparation inside the runner's already-owned startup lifetime. */
-import type { RuntimeProbeEvidence } from '@accessforge/at-voiceover';
+import type { ProbeEnvironment, RuntimeProbeEvidence } from '@accessforge/at-voiceover';
 import { createArtifactProbe, type ArtifactProbeOptions } from './artifact-probe.js';
 import type { ReferenceAppSetupOptions } from './browser-setup.js';
 import { prepareSafariReferenceApp } from './safari-launcher.js';
@@ -18,11 +18,15 @@ interface Ports {
 }
 
 export function createReferencePreparation(options: ReferencePreparationOptions,
-  safari: SafariOriginOptions, artifact: ArtifactProbeOptions | undefined, ports: Ports = {}) {
+  safari: SafariOriginOptions, artifact: ArtifactProbeOptions | undefined,
+  desktop: { readonly expectedSessionId: string; readonly environment: Pick<ProbeEnvironment,
+    'auditSessionId' | 'processAuditSessionId' | 'screenLocked' | 'hasPermission'> }, ports: Ports = {}) {
   const fixture = Object.freeze({ ...options.fixture });
   const target = Object.freeze({ ...safari });
   const authorize = options.authorize;
+  const assigned = desktop.expectedSessionId, environment = desktop.environment;
   if (artifact === undefined || artifact.expectedBuildDigest !== fixture.expectedBuildDigest ||
+      !/^[1-9][0-9]*$/.test(assigned) || Number(assigned) >= 4294967295 ||
       new URL(`/form/${encodeURIComponent(fixture.reservedNonce)}`, fixture.permittedOrigin).href !== target.expectedUrl ||
       typeof authorize !== 'function') throw new Error('reference preparation must match the sealed native target and live build probe');
   const measure = ports.measure ?? createArtifactProbe(artifact);
@@ -35,6 +39,12 @@ export function createReferencePreparation(options: ReferencePreparationOptions,
     const guard = () => {
       if (signal.aborted || fenced) throw new Error('reference preparation cancelled');
       assertHeld();
+      // A cooperative claim is not evidence that this is still the assigned interactive desktop.
+      if (environment.auditSessionId() !== assigned || environment.processAuditSessionId?.() !== assigned ||
+          environment.screenLocked() !== false || environment.hasPermission('Accessibility') !== true ||
+          environment.hasPermission('Automation') !== true || environment.auditSessionId() !== assigned ||
+          environment.processAuditSessionId?.() !== assigned) throw new Error('reference preparation host unavailable');
+      assertHeld(); // Include the synchronous native probes in the original clock/claim deadline.
       if (signal.aborted || fenced) throw new Error('reference preparation cancelled');
     };
     guard();

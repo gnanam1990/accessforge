@@ -35,6 +35,10 @@ reauthorizes, reconciles the reserved fixture and opens/verifies Safari within i
 startup desktop claim and deadline, before the ordinary reader preflight. The approval callback
 is specifically for fixture reconciliation/browser setup, not a substitute for reader consent.
 There is no second desktop claim, automatic reset or retry. Setup history fills missing evidence
+only. Each preparation guard also observes the assigned console and process session, unlocked
+screen, Accessibility and Automation grants before allowing the next step; a claim file alone
+cannot authorize effects on a different active desktop. The original clock/claim guard runs again
+after these synchronous probes. Unknown observations refuse preparation. Setup history fills gaps
 only; fresh runtime negatives/unknowns and the current artifact measurement take precedence.
 Stale-input measurement is still required, and the qualified-reader gate is unchanged.
 The focused checks use synthetic host/measurement ports; no actual browser or reader was run.

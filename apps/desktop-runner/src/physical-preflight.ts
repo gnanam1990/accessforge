@@ -112,7 +112,8 @@ export function createPhysicalSafariRunner(options:
   const { physicalPreflight, desktopClaimDirectory, readerStartup, referencePreparation, ...runtime } = options;
   const environment = createHostEnvironment();
   const prepareReference = referencePreparation === undefined ? undefined
-    : createReferencePreparation(referencePreparation, runtime.safari, physicalPreflight.artifactProbe);
+    : createReferencePreparation(referencePreparation, runtime.safari, physicalPreflight.artifactProbe,
+      { expectedSessionId: physicalPreflight.expectedDesktopSessionId, environment });
   let prepared: RuntimeProbeEvidence = {};
   const preflight = createPhysicalPreflight({ ...physicalPreflight, clock: runtime.clock, environment,
     async observeRuntimeEvidence(signal) {
