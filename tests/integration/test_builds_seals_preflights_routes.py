@@ -165,8 +165,7 @@ def test_navigation_profile_preview_before_any_run(client: TestClient, db: str) 
     assert response.json()["profile"] == default_profile()
     assert response.json()["modelConfigDigest"] == digest(default_profile())
     assert (
-        response.json()["meaning"]
-        == "CONFIGURATION_PREVIEW_NOT_RUNTIME_EVIDENCE_OR_MODEL_CONSENT"
+        response.json()["meaning"] == "CONFIGURATION_PREVIEW_NOT_RUNTIME_EVIDENCE_OR_MODEL_CONSENT"
     )
     with workspace_connection(db, WS) as conn:
         assert conn.execute("SELECT id FROM run").fetchone() is None
