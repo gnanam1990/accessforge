@@ -56,6 +56,9 @@ missing CLOSED, reused event ID, nonzero exit, trailing output, expiry, cancella
 of navigator launch consent. TypeScript compilation passes. This is process wiring evidence, not
 actual database/reader/model/end-to-end acceptance. The verified reader matrix remains unchanged.
 
-Still pending: actual configured execution, original artifact verification and finalizer
-consumption. No real worker/reader was launched against a live application. The option is not
-enabled automatically, and its presence is not a completed forbidden-effect assertion.
+Retained artifact verification and finalizer consumption are now connected; see
+`reference-effect-observer-records.md` and the current `finalize_execution.py` /
+`reference_effect_evidence.py` join. This supersedes the earlier process-only pending list.
+Still pending: actual configured native/reader/model execution and its original artifact proof.
+The option is not enabled automatically, and its presence is not a completed physical
+forbidden-effect assertion or coverage of effects outside the protected reference database.

@@ -2,6 +2,22 @@
 
 ## Current checkpoint — 2026-09-16
 
+Latest verified source is clean remote/local main
+`a3004d622925e721a3ff45d2e2587d7f1a65beef` (through #207).
+The first checkpoint in [EXECUTION-LEDGER.md](EXECUTION-LEDGER.md) supersedes the
+older snapshots below. #200–207 are merged after required exact-head CI and
+normal review. Native-host factory wiring, benchmark accounting/retained-byte
+inspection and signed/readable outcome consistency are implemented.
+
+Still incomplete: real stale-input and focus/effect authority integration for
+the operator host; actual reader/model baseline → repair → rerun → human review;
+production identity/deployment, real GitHub App delivery, Windows qualification,
+full held-out benchmarks/pilot and final submission. C2 backend collector and
+finalizer integration are built, but do not prove physical execution or arbitrary
+external-effect coverage. Actual VoiceOver runtime testing stays paused.
+
+## Earlier 2026-09-16 checkpoint — historical
+
 Authoritative task selection lives in [EXECUTION-LEDGER.md](EXECUTION-LEDGER.md).
 Everything after the historical-checkpoint heading below is an older record, not
 a current missing-module list or authorization to start a reader.
