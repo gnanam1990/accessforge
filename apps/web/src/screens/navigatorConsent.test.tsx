@@ -27,6 +27,11 @@ const scope = (): NavigatorModelScope => ({ revision: 2, manifestDigest: run.man
 const consent = (reviewed = scope()): NavigatorConsent => ({ ...reviewed, runId: run.runId,
   consentId: id(5), actorId: id(3), maxCalls: 3, expiresAt: reviewed.maximumExpiresAt,
   revokedAt: null, invocations: [], meaning: 'STORED_MODEL_CONSENT_NOT_INVOCATION_OR_FINANCIAL_CAP' })
+const codexScope = (): NavigatorModelScope => ({ ...scope(), tokensPerCall: 12000, modelProfile: {
+  provider: 'codex-chatgpt', sdk_version: '0.154.0', model_id: 'gpt-6-astra',
+  budget_semantics: 'RESULT_ADMISSION_NOT_SPEND_CAP', invocation_output_tokens: 1024,
+  invocation_total_tokens: 12000, max_context_characters: 24000, call_timeout_seconds: 30,
+} })
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 const problem = (status: number, code: string) => json({ status, code, title: 'Refused', detail: 'Fixture refusal', requestId: 'fixture' }, status)
 const Address = () => <output aria-label="Current address">{useLocation().search}</output>
@@ -71,6 +76,31 @@ async function submit(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('checkbox'))
   await user.click(screen.getByRole('button', { name: 'Store navigator model consent' }))
 }
+
+it('reviews and stores Codex OAuth consent with quota semantics and no invented AWS region', async () => {
+  const f = fixture({ reviewed: codexScope() }), user = await review()
+  expect(screen.getByText('Codex CLI — ChatGPT OAuth')).toBeVisible()
+  expect(screen.queryByText('Region')).not.toBeInTheDocument()
+  expect(screen.getByRole('checkbox')).not.toBeChecked()
+  expect(screen.getByRole('checkbox')).toHaveAccessibleName(/consumes account usage/)
+  expect(screen.getByText(/CLI-internal retries are not measured/)).toBeVisible()
+  await submit(user)
+  await screen.findByRole('heading', { name: 'Stored model consent' })
+  expect(f.writes).toHaveLength(1)
+  expect(f.writes[0]?.body.modelProfile).toEqual(f.reviewed.modelProfile)
+})
+
+it('refuses mixed, unknown and inconsistent Codex profiles before rendering consent', () => {
+  const original = codexScope()
+  expect(parseNavigatorScope(original)).toEqual(original)
+  expect(parseNavigatorConsent(consent(original), run.runId)).not.toBeNull()
+  for (const fields of [{ region_name: 'us-east-1' }, { model_attempts: 2 }, { apiKey: 'hidden' },
+    { budget_semantics: 'HARD_SPEND_CAP' }, { invocation_total_tokens: 1000, invocation_output_tokens: 2000 },
+    { call_timeout_seconds: 0.5 }, { invocation_output_tokens: true }]) {
+    expect(parseNavigatorScope({ ...original, modelProfile: { ...original.modelProfile, ...fields } })).toBeNull()
+  }
+  expect(parseNavigatorScope({ ...original, tokensPerCall: 24000 })).toBeNull()
+})
 
 it('reviews an unchecked exact profile and stores only the acknowledged, bounded grant as a maintainer', async () => {
   const f = fixture({ role: 'MAINTAINER' }), user = await review()

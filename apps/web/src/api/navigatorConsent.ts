@@ -49,17 +49,29 @@ const bounds: Readonly<Record<string, readonly [number, number]>> = {
   max_context_characters: [1000, 100000], call_timeout_seconds: [1, 120], model_attempts: [1, 3],
   retry_initial_delay_seconds: [1, 5], retry_max_delay_seconds: [1, 10],
 }
+const codexIdentity = { provider: 'codex-chatgpt', sdk_version: '0.154.0', model_id: 'gpt-6-astra',
+  budget_semantics: 'RESULT_ADMISSION_NOT_SPEND_CAP' }
+const codexBounds: Readonly<Record<string, readonly [number, number]>> = {
+  invocation_output_tokens: [256, 4096], invocation_total_tokens: [1000, 50000],
+  max_context_characters: [1000, 100000], call_timeout_seconds: [1, 120],
+}
+const codexProfile = (value: Record<string, unknown>): boolean =>
+  Object.keys(value).length === Object.keys(codexIdentity).length + Object.keys(codexBounds).length &&
+  Object.entries(codexIdentity).every(([key, expected]) => value[key] === expected) &&
+  Object.entries(codexBounds).every(([key, [low, high]]) => integer(value[key], low, high)) &&
+  Number(value.invocation_output_tokens) <= Number(value.invocation_total_tokens)
 // Display validation only: canonical digest and current authorization are independently enforced
 // by the API. Unknown provider fields are never rendered or copied into a consent mutation.
-const profile = (value: unknown): value is NavigatorModelProfile => object(value) &&
+const profile = (value: unknown): value is NavigatorModelProfile => object(value) && (
+  value.provider === 'codex-chatgpt' ? codexProfile(value) :
   Object.keys(value).length === Object.keys(identity).length + Object.keys(bounds).length &&
   Object.entries(identity).every(([key, expected]) => value[key] === expected) &&
   Object.entries(bounds).every(([key, [low, high]]) => integer(value[key], low, high)) &&
-  Number(value.retry_max_delay_seconds) >= Number(value.retry_initial_delay_seconds)
+  Number(value.retry_max_delay_seconds) >= Number(value.retry_initial_delay_seconds))
 const shared = (value: unknown): value is Record<string, unknown> => object(value) &&
   hash(value.manifestDigest) && hash(value.modelConfigDigest) && profile(value.modelProfile) &&
   integer(value.tokensPerCall, 1, 150000) && value.tokensPerCall ===
-  Number(value.modelProfile.invocation_total_tokens) * Number(value.modelProfile.model_attempts) &&
+  Number(value.modelProfile.invocation_total_tokens) * (value.modelProfile.provider === 'codex-chatgpt' ? 1 : Number(value.modelProfile.model_attempts)) &&
   typeof value.disclosure === 'string' && value.disclosure.length > 0 && value.disclosure.length <= 2000
 
 export function parseNavigatorScope(value: unknown): NavigatorModelScope | null {

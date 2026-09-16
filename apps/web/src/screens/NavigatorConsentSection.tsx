@@ -148,7 +148,7 @@ const ConsentPanel = ({ workspaceId, run, canApprove, onClose }: {
           <ErrorSummary errors={errors} submissionId={submission} headingLevel={4} />
           <p>{scope.disclosure}</p>
           <ProfileDetails value={scope} />
-          <FormField id={callsId} label="Maximum model calls" required hint={`From 1 to ${scope.maximumCalls}; each call reserves ${scope.tokensPerCall} tokens including configured attempts.`}
+          <FormField id={callsId} label="Maximum model calls" required hint={`From 1 to ${scope.maximumCalls}; each call reserves ${scope.tokensPerCall} tokens ${scope.modelProfile.provider === 'codex-chatgpt' ? 'as a quota admission hold, not a provider spending cap' : 'including configured attempts'}.`}
             {...(errors.find(error => error.fieldId === callsId) ? { error: errors.find(error => error.fieldId === callsId)!.message } : {})}>
             {({ id, describedBy, invalid }) => <input id={id} type="number" inputMode="numeric" min={1} max={scope.maximumCalls} step={1}
               value={maxCalls} required disabled={busy} aria-describedby={describedBy} aria-invalid={invalid || undefined}
@@ -160,7 +160,9 @@ const ConsentPanel = ({ workspaceId, run, canApprove, onClose }: {
               onChange={event => { setExpires(event.target.value); setAcknowledged(false) }} />}
           </FormField>
           <label className="af-consent-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={busy}
-            onChange={event => setAcknowledged(event.target.checked)} />{' '}I explicitly permit disclosure of the listed task, safe fixture values and retained reader announcements to this provider, including billable calls and configured retries, within these limits.</label>
+            onChange={event => setAcknowledged(event.target.checked)} />{' '}{scope.modelProfile.provider === 'codex-chatgpt'
+              ? 'I explicitly permit disclosure of the listed task, safe fixture values and retained reader announcements through Codex ChatGPT OAuth. This consumes account usage; these result-admission limits do not cap spending or CLI-internal retries.'
+              : 'I explicitly permit disclosure of the listed task, safe fixture values and retained reader announcements to this provider, including billable calls and configured retries, within these limits.'}</label>
           <p>This one-time per-run grant cannot be edited or reissued after revocation. Token holds are not measured usage or a currency spending cap. Execution and reader-startup approvals remain separate.</p>
           <Button type="submit" variant="primary" busy={busy} disabled={!acknowledged}>Store navigator model consent</Button>
         </form>}
@@ -191,7 +193,10 @@ const ConsentPanel = ({ workspaceId, run, canApprove, onClose }: {
 const ProfileDetails = ({ value }: { readonly value: NavigatorModelScope | NavigatorConsent }): JSX.Element => <>
   <dl><dt>Provider</dt><dd>{value.modelProfile.provider}</dd>
     <dt>Model</dt><dd><code>{value.modelProfile.model_id}</code></dd>
-    <dt>Region</dt><dd>{value.modelProfile.region_name}</dd>
+    {value.modelProfile.provider === 'codex-chatgpt' ? <>
+      <dt>Authentication</dt><dd>Codex CLI — ChatGPT OAuth</dd>
+      <dt>Usage limits</dt><dd>Result-admission limits only; not a spending cap. CLI-internal retries are not measured or capped here.</dd>
+    </> : <><dt>Region</dt><dd>{value.modelProfile.region_name}</dd></>}
     <dt>Reserved tokens per call</dt><dd>{value.tokensPerCall} — not measured usage or money</dd></dl>
   <details><summary>Exact sealed profile and identities</summary>
     <dl><dt>Manifest digest</dt><dd><code>{value.manifestDigest}</code></dd>
