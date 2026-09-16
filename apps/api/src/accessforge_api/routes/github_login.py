@@ -170,7 +170,10 @@ async def github_login_callback(request: Request) -> Response:
             raise GitHubIdentityError("GitHub login refused")
         query = dict(pairs)
         if (
-            set(query) - {"state", "code", "error", "error_description", "error_uri"}
+            set(query) - {"state", "code", "error", "error_description", "error_uri", "iss"}
+            # GitHub emits RFC 9207 issuer identification. Accept its exact
+            # documented issuer, never arbitrary callback-supplied providers.
+            or ("iss" in query and query["iss"] != "https://github.com/login/oauth")
             or "state" not in query
             or ("code" in query) == ("error" in query)
         ):

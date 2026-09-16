@@ -35,6 +35,24 @@ Configure the real callback domain and verify proxy-header trust and callback-lo
 redaction before enabling OAuth. Account binding and workspace membership are
 separate operator tasks; possession of a GitHub account is not workspace access.
 
+Uvicorn trusts forwarded headers only from loopback by default. Railway terminates
+TLS at its edge, so a correct HTTPS callback can otherwise be refused as HTTP.
+Inspect the actual ingress peers and configure `FORWARDED_ALLOW_IPS` for the
+verified proxy network; do not set a global `*` or remove the callback origin check.
+The September 16 deployment observed `100.64.0.9`, `.13` and `.15`, and used
+`100.64.0.0/16` for that Railway proxy network. This is deployment-specific, not a
+promise that all future Railway regions use the same range; revalidate on changes.
+Railway documents HTTPS forwarding in its
+[network specifications](https://docs.railway.com/networking/public-networking/specs-and-limits).
+
+GitHub may include RFC 9207 `iss` in its authorization response. The callback
+accepts only the exact documented `https://github.com/login/oauth` issuer when
+present, and rejects foreign, empty and duplicate issuer values before consuming
+state or calling the provider. See
+[GitHub discovery metadata](https://docs.github.com/en/apps/github-authentication-discovery-endpoints).
+Test browser login on the production origin: a localhost UI proxy cannot carry
+the production host-bound OAuth cookie through the callback.
+
 A healthy hosted web service is not actual VoiceOver/NVDA or repair/rerun/human
 review acceptance. Those remain attached to separately qualified desktop runners.
 

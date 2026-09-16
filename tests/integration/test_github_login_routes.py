@@ -77,9 +77,15 @@ def _start(client: TestClient) -> tuple[str, str]:
     return parse_qs(location.query)["state"][0], cookie
 
 
-def test_callback_commits_state_then_identity_then_audited_session(client: TestClient) -> None:
+@pytest.mark.parametrize("issuer", [None, "https://github.com/login/oauth"])
+def test_callback_commits_state_then_identity_then_audited_session(
+    client: TestClient, issuer: str | None
+) -> None:
     state, cookie = _start(client)
-    result = client.get("/v1/auth/github/callback", params={"state": state, "code": "valid-code"})
+    params = {"state": state, "code": "valid-code"}
+    if issuer is not None:
+        params["iss"] = issuer
+    result = client.get("/v1/auth/github/callback", params=params)
     assert result.status_code == 303 and result.headers["location"] == "/"
     assert result.headers["cache-control"] == "no-store"
     assert result.headers["referrer-policy"] == "no-referrer"
@@ -89,7 +95,7 @@ def test_callback_commits_state_then_identity_then_audited_session(client: TestC
     # Restore the exact original browser cookie, not the already-cleared jar.
     replay = client.get(
         "/v1/auth/github/callback",
-        params={"state": state, "code": "valid-code"},
+        params=params,
         headers={"cookie": f"{LOGIN_COOKIE}={cookie}"},
     )
     assert replay.status_code == 401
@@ -97,7 +103,19 @@ def test_callback_commits_state_then_identity_then_audited_session(client: TestC
 
 
 @pytest.mark.parametrize(
-    "failure", ["state", "cookie", "duplicate", "query-verifier", "host", "http"]
+    "failure",
+    [
+        "state",
+        "cookie",
+        "duplicate",
+        "query-verifier",
+        "host",
+        "http",
+        "issuer",
+        "empty-issuer",
+        "duplicate-issuer",
+        "issuer-slash",
+    ],
 )
 def test_callback_refuses_before_provider_on_browser_binding_failure(
     client: TestClient,
@@ -117,6 +135,14 @@ def test_callback_refuses_before_provider_on_browser_binding_failure(
         params.append(("code_verifier", cookie.split(".")[1]))
     elif failure == "host":
         url = "https://wrong.example.test/v1/auth/github/callback"
+    elif failure == "issuer":
+        params.append(("iss", "https://attacker.example/login/oauth"))
+    elif failure == "empty-issuer":
+        params.append(("iss", ""))
+    elif failure == "issuer-slash":
+        params.append(("iss", "https://github.com/login/oauth/"))
+    elif failure == "duplicate-issuer":
+        params.extend([("iss", "https://github.com/login/oauth")] * 2)
     else:
         url = "http://app.example.test/v1/auth/github/callback"
     result = client.get(url, params=urlencode(params), headers=headers)
