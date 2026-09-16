@@ -76,3 +76,55 @@ Still required: an actual provisioner integrating live speech capture, stale inp
 action authority with owned browser/fixture setup; qualification and model approval; complete
 independent forbidden-effect coverage and final G2 evidence. An arbitrary host module is not
 evidence those production integrations exist. No actual AT startup or billable call was made.
+
+## Reference-host provisioning factory
+
+`createReferenceNativeProvisioner` in
+`apps/desktop-runner/src/reference-native-provisioner.ts` now supplies the concrete
+reference-host assembly. A reviewed private operator module exports the returned
+one-shot function as `provisionNativeHost`. This is executable trusted operator
+configuration, not a JSON route, navigator tool or source of permissions.
+
+The factory accepts `ReferenceNativeProvisioningOptions`:
+
+- `privateDirectory`: canonical private operator-owned parent.
+- `maxActions` and `maxWallTimeSeconds`: bounded local limits, never a replacement
+  for the sealed controller/session limits.
+- `bootstrap`: existing receiver, Safari target, startup consent reference,
+  desktop claim root, action/startup authority and observation-retention ports.
+  `referencePreparation` is required, with a separately authorized reserved fixture.
+- `physicalPreflight`: assigned desktop and required live artifact-probe reference.
+- `navigator`: explicit provider and independent observer configurations, without
+  duplicate reference or deadline fields.
+- `observeStaleInputSource(signal)`: required independent runtime measurement,
+  returning true, false or undefined. Undefined remains UNKNOWN; no default false
+  is inferred from a claim, process absence or keyboard layout.
+
+Construction validates and snapshots the configuration without opening an artifact
+socket or running a callback. One invocation allocates a private per-attempt
+directory and a `FileJournal` there, derives lease ID/epoch and navigator reference
+from the receiver reference, and uses one monotonic clock/deadline for both sides.
+The bridge shares this private attempt directory. Duplicate invocation, cancelled
+provisioning, invalid bounds, missing authority and mismatched fixture/build
+bindings are refused. A stale-input callback is checked before and after awaiting
+it using both its operation signal and the provisioning lifetime.
+
+The existing runtime performs actual build measurement, reference reconciliation,
+origin checks, speech capture and journal durability checks. Factory construction
+or directory allocation does not establish any of them. It neither starts a reader
+nor mints consent/leases, imports Guidepup, calls a model, enrolls a matrix or
+publishes a handoff. The normal host launcher and execution gates still run.
+Attempt files are retained for reconciliation; do not retry a consumed function
+or delete a retained execution claim to bypass an uncertain prior attempt.
+
+Nine focused synthetic factory checks and two existing bootstrap checks pass with
+TypeScript compilation. They exercise private directory allocation, actual local
+journal durability, snapshot binding, absent/invalid stale-input evidence and
+cancellation. No actual VoiceOver, NVDA, browser, model or service was started.
+
+C1 remains incomplete: a deployment-specific operator module must still supply
+real stale-input observation, live focus/effect authorization and controller-issued
+credentials/consent. In particular, keyboard focus alone cannot authorize a
+VoiceOver-cursor activation target. The factory removes repeated wiring; it does
+not establish those missing authorities or physical/human acceptance. Actual
+VoiceOver startup/runtime tests remain paused at the owner's request.
