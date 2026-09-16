@@ -585,6 +585,113 @@
         "x-accessforge-browser-navigation": true
       }
     },
+    "/v1/auth/options": {
+      "get": {
+        "description": "Public provider discovery only: no credentials, URLs, account or workspace details.",
+        "operationId": "sign_in_options",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Sign In Options",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [],
+        "summary": "Sign In Options",
+        "tags": [
+          "session"
+        ]
+      }
+    },
     "/v1/session": {
       "delete": {
         "description": "End this session.\n\nCSRF-protected like any other mutation. A forced sign-out is a small attack, but it is still an\nattack a cross-site request could mount, and exempting it would make the rule conditional.\n\nSigning out with no session succeeds and clears the cookies. Reporting 401 would leave a browser\nholding a cookie it cannot use and no way to discard it.\n\nThe cookies are cleared by writing to the **injected** response rather than by constructing a\nnew one. An earlier version built a fresh `Response(headers=dict(response.headers))`, and\n`dict()` over a header collection keeps one value per name \u2014 so of the two `Set-Cookie`\ndeletions, one silently vanished and the browser kept a cookie the server believed it had\ncleared. A real browser found that; nothing in a status-code assertion would have.",

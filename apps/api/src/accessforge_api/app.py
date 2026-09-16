@@ -94,7 +94,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 #: Paths that legitimately answer without a session. Everything else requires one, and the contract
 #: says so rather than leaving a consumer to infer it from a 401 in production.
 _UNAUTHENTICATED = (
-    frozenset({"/health/live", "/health/ready", "/diagnostics", "/v1/sessions"}) | LOGIN_PATHS
+    frozenset({"/health/live", "/health/ready", "/diagnostics", "/v1/sessions"})
+    | LOGIN_PATHS
+    | {"/v1/auth/options"}
 )
 
 #: FastAPI attaches this to every operation with a body or a path parameter, describing a 422 that

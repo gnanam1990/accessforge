@@ -102,6 +102,13 @@ def _clear_session_cookies(response: Response, *, secure: bool) -> None:
         response.delete_cookie(name, path="/", httponly=name == SESSION_COOKIE, secure=secure)
 
 
+@router.get("/auth/options")
+def sign_in_options(request: Request, response: Response) -> dict[str, str]:
+    """Public provider discovery only: no credentials, URLs, account or workspace details."""
+    response.headers["Cache-Control"] = "no-store"
+    return {"provider": _config(request).identity_provider}
+
+
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 def sign_in(request: Request, response: Response, payload: dict[str, Any]) -> dict[str, Any]:
     """Exchange an identity-provider assertion for a browser session.

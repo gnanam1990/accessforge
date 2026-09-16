@@ -3,6 +3,7 @@
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from accessforge_api import __main__ as entrypoint
@@ -86,3 +87,23 @@ def test_server_entrypoint_disables_raw_query_access_logging(
     monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: calls.append(kwargs))
     entrypoint.main()
     assert calls[0]["access_log"] is False
+
+
+@pytest.mark.parametrize("provider", ["none", "local-development", "github"])
+def test_public_provider_discovery_contains_no_redirect_credentials_or_identity(
+    provider: str,
+) -> None:
+    changes: dict[str, Any] = {"identity_provider": provider}
+    if provider != "github":
+        changes.update(
+            github_oauth_client_id=None,
+            github_oauth_client_secret=None,
+            github_oauth_redirect_uri=None,
+        )
+    app = create_app(_settings(**changes))
+    # No lifespan/database is needed: discovery reads only validated configuration.
+    client = TestClient(app)
+    response = client.get("/v1/auth/options")
+    assert response.status_code == 200 and response.json() == {"provider": provider}
+    assert response.headers["cache-control"] == "no-store"
+    assert app.openapi()["paths"]["/v1/auth/options"]["get"]["security"] == []
