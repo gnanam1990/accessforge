@@ -19,7 +19,9 @@ Select the operator's existing Codex login store; never copy authentication toke
 this module. The parent environment is not inherited. AWS credentials, API keys and other
 environment entries are rejected before physical bootstrap. The Python proposal adapter
 passes only its narrower OAuth/path allowlist to Codex, not the database credential.
-Legacy profile environment compatibility does not reactivate the retired Bedrock provider.
+The native process entrypoint accepts only the complete, bounded Codex profile. Retired Bedrock,
+partial/unknown profiles and mixed provider fields are refused before reader bootstrap, not
+deferred until the Python child starts. Historical evidence readers remain compatible.
 
 The focused process test exercises explicit path forwarding through a real child process
 and refusal of missing/relative paths or foreign credentials before bootstrap. It uses a

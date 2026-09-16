@@ -8,10 +8,26 @@ import type { startNavigatorActionBridge } from './navigator-action-bridge.js';
 
 type Bridge = Awaited<ReturnType<typeof startNavigatorActionBridge>>;
 const owned = new WeakSet<Bridge>();
-const environmentKeys = new Set(['ACCESSFORGE_DATABASE_URL', 'AWS_ACCESS_KEY_ID',
-  'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE',
-  'AWS_CONFIG_FILE', 'SSL_CERT_FILE']);
 const codexEnvironmentKeys = new Set(['ACCESSFORGE_DATABASE_URL', 'HOME', 'PATH', 'CODEX_HOME', 'TMPDIR']);
+const modelIdentity = { provider: 'codex-chatgpt', sdk_version: '0.154.0', model_id: 'gpt-6-astra',
+  budget_semantics: 'RESULT_ADMISSION_NOT_SPEND_CAP' };
+const modelBounds: Readonly<Record<string, readonly [number, number]>> = {
+  invocation_output_tokens: [256, 4096], invocation_total_tokens: [1000, 50000],
+  max_context_characters: [1000, 100000], call_timeout_seconds: [1, 120],
+};
+
+/** Mirror the sealed domain contract before reader startup, not only inside the Python child. */
+function validateModelProfile(value: unknown): void {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Codex profile required');
+  const profile = value as Record<string, unknown>;
+  if (Object.keys(profile).length !== Object.keys(modelIdentity).length + Object.keys(modelBounds).length ||
+      Object.entries(modelIdentity).some(([key, expected]) => profile[key] !== expected) ||
+      Object.entries(modelBounds).some(([key, [low, high]]) => typeof profile[key] !== 'number' ||
+        !Number.isSafeInteger(profile[key]) || profile[key] < low || profile[key] > high) ||
+      Number(profile.invocation_output_tokens) > Number(profile.invocation_total_tokens)) {
+    throw new Error('complete bounded Codex profile required before native startup');
+  }
+}
 
 export interface NavigatorProcessOptions {
   readonly pythonExecutable: string;
@@ -28,8 +44,7 @@ export interface NavigatorProcessOptions {
 }
 
 function validate(options: NavigatorProcessOptions): void {
-  const codex = options.modelProfile.provider === 'codex-chatgpt';
-  const allowedEnvironment = codex ? codexEnvironmentKeys : environmentKeys;
+  validateModelProfile(options.modelProfile);
   if (process.platform === 'win32' || options.allowBillableModelCalls !== true || options.signal.aborted ||
       !isAbsolute(options.pythonExecutable) || resolve(options.pythonExecutable) !== options.pythonExecutable ||
       realpathSync(dirname(options.pythonExecutable)) !== dirname(options.pythonExecutable) ||
@@ -38,14 +53,14 @@ function validate(options: NavigatorProcessOptions): void {
       options.deadlineMonotonic - performance.now() > 1800000 ||
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(options.consentId) ||
       !options.environment.ACCESSFORGE_DATABASE_URL ||
-      Object.entries(options.environment).some(([key, value]) => !allowedEnvironment.has(key) ||
+      Object.entries(options.environment).some(([key, value]) => !codexEnvironmentKeys.has(key) ||
         typeof value !== 'string' || !value || value.includes('\0'))) {
     throw new Error('navigator process requires explicit private provider configuration and live consent');
   }
-  if (codex && (!isAbsolute(options.environment.HOME ?? '') ||
+  if (!isAbsolute(options.environment.HOME ?? '') ||
       !options.environment.PATH || options.environment.PATH.split(':').some(path => !isAbsolute(path)) ||
       ['CODEX_HOME', 'TMPDIR'].some(key => options.environment[key] !== undefined &&
-        !isAbsolute(options.environment[key]!)))) {
+        !isAbsolute(options.environment[key]!))) {
     throw new Error('Codex requires explicit absolute home and executable search paths');
   }
   parseReference(options.reference);
@@ -89,7 +104,7 @@ export async function runNavigatorProcess(bridge: Bridge, options: NavigatorProc
     expiry = setTimeout(cancel, Math.max(1, options.deadlineMonotonic - performance.now()));
     child = spawn(options.pythonExecutable, ['-m', 'accessforge_orchestrator.navigator.operator',
       '--allow-billable-model-call'], { shell: false, env: { ...options.environment,
-      AWS_EC2_METADATA_DISABLED: 'true', PYTHONUNBUFFERED: '1' },
+      PYTHONUNBUFFERED: '1' },
       stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
     const process = child;
     const receipt: Buffer[] = [];
