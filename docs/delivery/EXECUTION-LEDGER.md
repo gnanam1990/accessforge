@@ -960,6 +960,13 @@ Frontend production build and 21 focused synthetic Settings checks passed. This 
 change based on main, independent of the pending membership migration stack. No production
 allowance was changed, no migration was run, and actual reader acceptance remains unproven.
 
+Follow-up review found recovery reads unmounted the draft before success. The workspace-keyed
+allowance section now keeps the editor outside the loading/error resource view, retaining its
+locked snapshot during pending/failed reads. Only successful current data (or confirmed initial
+setup) replaces the snapshot. Twenty-three focused Settings checks pass, including held reads,
+failed reads and explicit successful recovery for both first setup and existing allowances;
+the seven membership checks and frontend production build also passed during integration.
+
 ## Membership lifecycle persistence — 2026-09-16
 
 Source inspection found only GET /members; the owner membership permission had no mutation path.
