@@ -77,13 +77,22 @@ def _git(repo: Path, *args: str) -> str:
     "run git with whatever" helper is how a config-specified hook or pager gets invoked.
     """
     result = subprocess.run(  # noqa: S603
-        ["git", "-C", str(repo), *args],  # noqa: S607
+        [  # noqa: S607
+            "git",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "-C",
+            str(repo),
+            *args,
+        ],
         capture_output=True,
         text=True,
         timeout=60,
         check=False,
-        # -c core.hooksPath=/dev/null is not enough on its own; these are read-only commands that do
-        # not run hooks, which is why the allowlist matters more than the flags.
+        # Status can execute a repository-configured fsmonitor hook despite being read-only.
+        # Disable that integration and its cache explicitly; no repository hook may observe us.
         env={"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "HOME": str(repo)},
     )
     if result.returncode != 0:
@@ -130,6 +139,28 @@ def _hash_tree(root: Path) -> tuple[str, int]:
     return digest({"entries": entries}), len(entries)
 
 
+def _observed_paths(repo: Path) -> tuple[str, ...]:
+    # Hashing covers ignored bytes too, so they must prevent a clean-commit claim. NUL records
+    # preserve newlines, quotes and non-ASCII names; rename records carry destination then source.
+    records = _git(
+        repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"
+    ).split("\0")
+    paths: set[str] = set()
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
+            continue
+        paths.add(record[3:])
+        if "R" in record[:2] or "C" in record[:2]:
+            if index >= len(records) or not records[index]:
+                raise SourceIntakeError("incomplete source status rename record")
+            paths.add(records[index])
+            index += 1
+    return tuple(sorted(paths))
+
+
 def resolve_source(repo: Path, *, revision: str = "HEAD") -> SourceIdentity:
     """Resolve a repository revision to an immutable identity.
 
@@ -143,15 +174,24 @@ def resolve_source(repo: Path, *, revision: str = "HEAD") -> SourceIdentity:
     commit_sha = _git(repo, "rev-parse", "--verify", f"{revision}^{{commit}}").strip()
     if len(commit_sha) != 40:
         raise SourceIntakeError(f"unexpected commit identity {commit_sha!r}")
+    if _git(repo, "rev-parse", "--verify", "HEAD^{commit}").strip() != commit_sha:
+        raise ReproducibilityRefused(
+            "requested revision is not the checked-out commit; use a dedicated checkout of that "
+            "revision before observing its source bytes"
+        )
 
     # Porcelain v1: two status columns, a space, then the path. Parsed positionally rather than by
     # splitting on whitespace, because a path may legitimately contain spaces.
-    status = _git(repo, "status", "--porcelain=v1", "--untracked-files=all")
-    dirty_paths = tuple(
-        sorted(line[3:] for line in status.splitlines() if len(line) > 3 and line.strip())
-    )
+    dirty_paths = _observed_paths(repo)
 
     tree_digest, _ = _hash_tree(repo)
+    if (
+        _git(repo, "rev-parse", "--verify", "HEAD^{commit}").strip() != commit_sha
+        or _observed_paths(repo) != dirty_paths
+    ):
+        raise ReproducibilityRefused(
+            "source status changed during observation; retry on stable input"
+        )
 
     return SourceIdentity(
         commit_sha=commit_sha,
