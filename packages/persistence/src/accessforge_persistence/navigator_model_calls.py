@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 
 from accessforge_domain.authorization.roles import Permission, Role, permissions_for
 from accessforge_domain.canonical import digest
+from accessforge_domain.codex_navigation import default_profile as codex_profile
 from accessforge_domain.navigator_model import default_profile, reserved_tokens, validate_profile
 from accessforge_domain.timestamps import parse_rfc3339_utc, to_rfc3339_utc
 
@@ -56,8 +57,9 @@ def review_scope(
     manifest = execution_approvals.assert_authorized(
         conn, sealed_manifest_id=sealed.sealed_manifest_id, run_id=run_id, workspace_id=workspace_id
     )
-    profile = default_profile()
-    if digest(profile) != manifest["modelConfigDigest"]:
+    profiles = (codex_profile(), default_profile())
+    profile = next((p for p in profiles if digest(p) == manifest["modelConfigDigest"]), None)
+    if profile is None:
         raise Refused(
             "seal does not match the default profile; review its exact configured profile"
         )

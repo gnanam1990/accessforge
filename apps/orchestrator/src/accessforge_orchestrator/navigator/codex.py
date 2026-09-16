@@ -13,6 +13,7 @@ from threading import Event
 
 from pydantic import Field
 
+from accessforge_domain import codex_navigation
 from accessforge_navigation_tools import NavigationGateway, NavigatorProjection, ProposedAction
 from accessforge_orchestrator.codex_agent import CodexStructuredAgent
 from accessforge_orchestrator.diagnosis.agent import DiagnosisAgentProfile
@@ -71,6 +72,7 @@ class CodexNavigator:
         fence = cancel_signal if cancel_signal is not None else Event()
         payload = json.dumps(projection.model_payload(), sort_keys=True, ensure_ascii=True)
         reason = NavigatorStopReason.PROVIDER_ERROR
+        runtime_observation = None
         started = False
         try:
             if fence.is_set():
@@ -103,6 +105,13 @@ class CodexNavigator:
                 )
                 if proposal.run_ref != projection.run_ref:
                     raise RuntimeError("proposal belongs to another run")
+                runtime_observation = codex_navigation.validate_observation(
+                    {
+                        "meaning": codex_navigation.MEANING,
+                        "profile": self.profile.model_dump(mode="json"),
+                        "cli": result.cli_observation,
+                    }
+                )
                 # No model is running at this point. The existing gateway still rechecks current
                 # action/session authority; model output is not the authority to execute.
                 tool = NavigationActionTool(
@@ -133,9 +142,7 @@ class CodexNavigator:
         )
         return NavigatorInvocationResult(
             stop_reason=reason,
-            # A settled CLI JSON response is not the legacy HTTP-request receipt. Until the
-            # Codex-native observed-runtime contract is composed, no receipt is substituted.
-            runtime_observation=None,
+            runtime_observation=runtime_observation,
         )
 
     async def _checkpoint(
