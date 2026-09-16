@@ -1,6 +1,49 @@
 # AccessForge execution ledger
 
-## Verified continuation checkpoint — main through PR #216
+## Verified continuation checkpoint — 2026-09-17, main through #246
+
+Source main: `ea4c298482b03cddcd914dfdc087b3f98218b32e`, checked against local main and GitHub.
+This checkpoint supersedes all earlier next-work and pending-PR lists below. It does not waive
+the original PRD or redefine full acceptance around recently implemented administration features.
+
+### Current source and open work
+
+| Slice | Evidence at this checkpoint |
+| --- | --- |
+| Owner invitation API #244 | Merged `58154c238933d7c981daf73b8bb7dd5fc22b8647` |
+| Owner invitation UI #245 | Merged `0ad24824d0707a625bdf5832258d7d4b217a85de` |
+| Allowance recovery #242 | Merged `f7bca6f310eed204290b87b2b23bb2fc0772acc9`; exact-head CI `35131416881` passed |
+| Recipient acceptance API #246 | Merged current main; exact-head CI `35132378245` passed, including principal-only durable admission and session rotation |
+| Recipient UI #247 | Open, head `83d7d8c464acee8051674af5e04b2d9027fc11ff`; CI passed; role correction is in #249 |
+| Login continuation #248 | Open, head `b9a3564675badfd0b1d3f2b89bec2a0818d293f3`; required Python CI still running at observation |
+| Owner sharing/role fix #249 | Open, head `2310ff2ffecd92506764c1cbcd156adf4e32d010`; required Python CI still running at observation |
+| Validation draft recovery #250 | Open, head `c84b308c351429981e5f67aefb1251593c6ca5ce`; 27 focused Settings checks/typecheck passed locally, required CI separate |
+
+These are point-in-time observations. Refresh checks, comments and exact head before each normal
+merge; retarget stacked children after parent merges. Do not restart a live job because observing
+it timed out. Known MAINTAINER/ENGINEER mismatch in #247 must be corrected by #249 before rollout.
+
+### Hosted and acceptance boundaries
+
+Hosted source remains `1da7351d567eb59650ad4e44c2275e75ef123958`, deployment
+`66438ef8-431e-4045-ba0d-6e4a267d523f`. New membership/invitation code requires schema 0073/0074,
+while the retained hosted checkpoint is 0072. No new migration or deployment was performed.
+Approval requested for 0073 alone, if later granted, would not cover 0074 or current-main rollout.
+Do not recreate OAuth secrets, operator identity bindings, SSH keys or public database proxies.
+
+New-user signup is not implemented. Existing GitHub login uses immutable pre-provisioned bindings.
+Invitation acceptance requires a live verified subject, not a caller-supplied email/user identity.
+The pending continuation transports references only; it cannot authenticate, provision or grant.
+FR-019's fresh-user workflow without hidden DB edits remains a concrete implementation gap.
+
+Native/candidate provisioning factories, model preview, build observation import, enrollment and
+retention UI already exist. Do not rebuild these from old missing-module paragraphs. Independent
+actual host authority and the complete reader/model baseline/repair/rerun/review/export sequence
+still need real evidence. VoiceOver remains build-only, with actual testing paused. FR-004,
+FR-019 and FR-022–024 also retain Windows/NVDA, clean recovery, held-out evaluation and real release
+artifact requirements. No synthetic test result or merged PR satisfies those physical requirements.
+
+## Earlier continuation checkpoint — main through PR #216 (historical)
 
 Refreshed 2026-09-16 after both login PRs merged. Verified clean local/remote main:
 `704563f2942e0140c38f76656908e87c7013f378`. No PR remained open at this checkpoint.

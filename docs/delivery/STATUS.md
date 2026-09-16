@@ -1,6 +1,29 @@
 # Delivery status
 
-## Current checkpoint — 2026-09-16
+## Current checkpoint — 2026-09-17
+
+Verified source main is `ea4c298482b03cddcd914dfdc087b3f98218b32e`, through #246.
+The [current execution checkpoint](EXECUTION-LEDGER.md) separates merged source, open work,
+hosted source and unproven acceptance. Older checkpoints below are historical, not a work queue.
+
+- Merged: membership lifecycle/API/owner controls; owner invitation offers; verified-recipient
+  acceptance API with atomic membership, audit and session rotation; owner runner enrollment,
+  retention editing and allowance recovery. Their CI does not prove native-reader acceptance.
+- Open at this checkpoint: #247 recipient UI, #248 invitation-aware GitHub login continuation,
+  #249 owner sharing plus MAINTAINER role correction, #250 editable validation-refused drafts.
+  Refresh exact heads and checks before merging. Do not ship #247 without #249's role correction.
+- Hosted source remains `1da7351d567eb59650ad4e44c2275e75ef123958` through #237. Main requires
+  migrations 0073 and 0074; the hosted database checkpoint is 0072. No live migration or rollout
+  of these newer commits has occurred. Static readiness is not feature acceptance.
+- New-account onboarding remains incomplete: existing verified GitHub account bindings work,
+  but invitation references and login continuation neither create accounts nor grant membership.
+  PRD FR-019 requires a fresh-user E0 workflow without hidden database edits; it is not met by
+  presenting operator-only provisioning as public signup.
+- Full actual baseline → diagnosis → constrained repair → independent rerun → human review/export,
+  NVDA qualification, held-out/pilot proof and release artifacts remain unproven. Actual VoiceOver
+  testing is paused by the owner. No completion percentage or full-release claim is supported.
+
+## Earlier checkpoint — 2026-09-16, main through #216 (historical)
 
 Verified clean main is `704563f2942e0140c38f76656908e87c7013f378` through #216.
 #215 GitHub browser login and #216 provider-aware sign-in UI are merged after
