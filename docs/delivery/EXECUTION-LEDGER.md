@@ -1,6 +1,59 @@
 # AccessForge execution ledger
 
-## Verified continuation checkpoint — main through PR #214
+## Verified continuation checkpoint — main through PR #216
+
+Refreshed 2026-09-16 after both login PRs merged. Verified clean local/remote main:
+`704563f2942e0140c38f76656908e87c7013f378`. No PR remained open at this checkpoint.
+This supersedes earlier pending-head lists below; refresh GitHub before new work.
+
+- #215 merged as `4cbde098257effcba47fc3784a3ac0c0865f0322` after exact head
+  `eb790bc37d01dddccbc4ca95d102cdb1ca36116d` passed CI run `35089591966`.
+- #216 merged as `704563f2942e0140c38f76656908e87c7013f378` after exact head
+  `45939574e277e147d5682cc26a37eba183a2a0c4` passed CI run `35089599794`.
+  It was retargeted from the merged parent to main. Both prospective merge trees
+  differed from tested source only by #217's two delivery checkpoint documents.
+  Normal source review is recorded on both PRs. No post-merge CI result is implied.
+- The prior strict test-typing failures and exact Retry-After route-contract
+  failure were corrected before these successful runs. OAuth start really has
+  a global database admission limit; ordinary GETs and callback do not acquire
+  a Retry-After promise. No runtime guard was weakened to pass the contract test.
+
+### Retained source/web release candidate
+
+`accessforge-704563f.zip`, source commit above, SHA-256:
+`24661c82278131065b6a1b1c64c21c8afc60a5d9f2cf84d7b5cd6b45d99ff61e`.
+Fresh main TypeScript/Vite build passed. The 3,529,955-byte ZIP's CRC, exact member
+set, all 972 inventoried file sizes/hashes and all four fresh web files matched.
+An independent extracted `uv sync --frozen --no-dev` installation passed the
+isolated import check: four modules, six schemas, seventy-two migration files.
+No migrations were executed. This is installed-source/import evidence, not service,
+OAuth, reader/model, human review or deployment acceptance. The bundle does not
+contain native reader binaries, credentials, dependencies or this later checkpoint.
+
+### Next work and unchanged acceptance boundaries
+
+Hosted-user login routes, configuration and provider-aware UI are now **built and
+merged**. Do not rebuild them or confuse GitHub user identity with Codex model OAuth.
+Dedicated OAuth app configuration, trusted account binding, TLS/proxy/logging and
+actual browser round-trip acceptance remain separate operator work.
+
+C1 still needs a concrete independently observed stale-input source and live
+focus/effect authority with controller credentials/consent. The provisioner's
+UNKNOWN must stay UNKNOWN; a PID list or keyboard focus is not proof of safe
+VoiceOver cursor activation. C2 reference-effect collector/finalizer wiring is
+already built and must not be recreated from historical missing-module notes.
+
+The owner explicitly requires **VoiceOver build/compile only, no startup/runtime
+tests**. Actual baseline → diagnosis → constrained repair → independent rerun →
+human review/export remains unproven, not waived or replaced by this release ZIP.
+Windows qualification, real GitHub App publication/recovery, non-AWS deployment
+and capacity acceptance, independent held-out corpus/oracle/pilot, and final
+license/demo/submission decisions remain open. No percentage or full-completion
+claim follows from the merged code. Continue safe implementation where concrete
+gaps exist; do not manufacture passing host authorities or repeat full local
+suites merely to keep working.
+
+## Earlier verified checkpoint — main through PR #214 (historical)
 
 Refreshed against source/GitHub on 2026-09-16. Remote/local main is
 `ff8ac6c838ba5c19022708839ef82353c3329fc3`. This snapshot supersedes the older

@@ -2,6 +2,26 @@
 
 ## Current checkpoint — 2026-09-16
 
+Verified clean main is `704563f2942e0140c38f76656908e87c7013f378` through #216.
+#215 GitHub browser login and #216 provider-aware sign-in UI are merged after
+their exact heads passed required CI and normal source review. The current
+[execution ledger](EXECUTION-LEDGER.md) records heads, runs and merge provenance.
+No open PR remained at this checkpoint; older pending-head lists below are history.
+
+Fresh source/web candidate: `accessforge-704563f.zip`, SHA-256
+`24661c82278131065b6a1b1c64c21c8afc60a5d9f2cf84d7b5cd6b45d99ff61e`.
+All 972 inventoried files and fresh web assets matched. Frozen non-dev extracted
+installation imported four modules and loaded six schemas and seventy-two
+migration files, without starting services or running migrations.
+
+This is **not full project acceptance**. C1 independent native-host authority,
+actual reader/model repair/rerun/human review, real hosted OAuth and deployment,
+GitHub App delivery, Windows qualification, held-out benchmarks/pilot and final
+license/demo/submission remain open. C2 reference-effect integration is already
+built. VoiceOver remains **build/compile only; no startup/runtime tests**.
+
+## Earlier checkpoint — main through #214 (historical)
+
 Latest verified remote/local main is
 `ff8ac6c838ba5c19022708839ef82353c3329fc3` (through #214).
 The first checkpoint in [EXECUTION-LEDGER.md](EXECUTION-LEDGER.md) supersedes the
