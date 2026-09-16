@@ -127,9 +127,11 @@ export function createPhysicalSafariRunner(options:
     reference: parseReference(runtime.session.receipt.reference),
   }, (assertHeld) => createSafariAuthenticatedRunner({ ...runtime,
     preflight,
-    authorizePhysicalAction: async (command) => {
+    authorizePhysicalAction: async (command, signal) => {
+      signal.throwIfAborted();
       assertHeld();
-      await runtime.authorizePhysicalAction(command);
+      await runtime.authorizePhysicalAction(command, signal);
+      signal.throwIfAborted();
       assertHeld();
     },
     adapter: { perform(request, context) {
