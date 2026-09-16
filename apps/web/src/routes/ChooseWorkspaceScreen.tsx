@@ -19,6 +19,7 @@ import { RouteHeading } from '../a11y/RouteHeading'
 import { EmptyState } from '../components/states'
 import { workspacePath } from './routeMap'
 import { useSession } from '../session/SessionProvider'
+import { AcceptInvitation } from './AcceptInvitation'
 
 export const ChooseWorkspaceScreen = (): JSX.Element => {
   const { state } = useSession()
@@ -48,6 +49,7 @@ export const ChooseWorkspaceScreen = (): JSX.Element => {
           </ul>
         </nav>
       )}
+      {state.status === 'authenticated' && <AcceptInvitation key={state.userId} />}
     </>
   )
 }
