@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from threading import Event
 from typing import Any, cast
@@ -111,6 +112,80 @@ def build_strands_agent(
 
 NOW = "2026-09-12T12:00:00Z"
 RUN_REF = "run-1:attempt-1:epoch-4"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["success", "wrong-run", "cancel", "revoked", "timeout", "error"])
+async def test_codex_proposal_settles_before_original_gateway_dispatch(case: str) -> None:
+    from pydantic import BaseModel
+
+    from accessforge_navigation_tools import ProposedAction
+    from accessforge_orchestrator.codex_agent import CodexStructuredAgent, StructuredResult
+    from accessforge_orchestrator.navigator.codex import CodexNavigationProfile, CodexNavigator
+
+    order: list[str] = []
+    dispatched: list[Any] = []
+    fence, sink = Event(), RecordingSink()
+
+    class Model(CodexStructuredAgent):
+        async def invoke_async(
+            self,
+            prompt: str,
+            *,
+            structured_output_model: type[BaseModel],
+            limits: Limits,
+            cancel_signal: Event,
+        ) -> StructuredResult:
+            assert structured_output_model is ProposedAction and limits["turns"] == 1
+            assert not dispatched
+            assert json.loads(prompt.split("\n", 1)[1]) == projection().model_payload()
+            order.append("model")
+            if case == "timeout":
+                await asyncio.sleep(1)
+            if case == "error":
+                raise RuntimeError("synthetic provider error")
+            if case == "cancel":
+                cancel_signal.set()
+            return StructuredResult(
+                ProposedAction.model_validate(
+                    {
+                        "runRef": "wrong" if case == "wrong-run" else RUN_REF,
+                        "action": "NEXT",
+                    }
+                )
+            )
+
+    def authorize() -> None:
+        order.append("authorized")
+        if case == "revoked":
+            raise RuntimeError("consent revoked")
+
+    planner = CodexNavigator(
+        profile=CodexNavigationProfile(call_timeout_seconds=0.02),
+        gateway=gateway(dispatched),
+        checkpoints=sink,
+        utc_now=lambda: NOW,
+        authorize_invocation=authorize,
+        agent=Model(system_prompt="synthetic test"),
+    )
+    result = await planner.run_turn(projection(), cancel_signal=fence)
+    assert result.runtime_observation is None
+    assert order == (["authorized"] if case == "revoked" else ["authorized", "model"])
+    if case == "success":
+        assert result.stop_reason is NavigatorStopReason.COMPLETED
+        assert len(dispatched) == 1
+        assert [item.kind for item in sink.items] == [
+            CheckpointKind.MODEL_CALL_STARTED,
+            CheckpointKind.ACTION_PROPOSED,
+            CheckpointKind.ACTION_RESOLVED,
+            CheckpointKind.MODEL_CALL_STOPPED,
+        ]
+        assert sink.items[0].provider == "codex-chatgpt"
+    else:
+        assert not dispatched and fence.is_set()
+        assert result.stop_reason is not NavigatorStopReason.COMPLETED
+    with pytest.raises(RuntimeError, match="cannot be retried"):
+        await planner.run_turn(projection())
 
 
 def policy() -> dict[str, object]:
