@@ -61,6 +61,16 @@ probes found and fixed a reserved-provider override and an experimental-feature 
 neither was ignored as successful evidence. This is connectivity proof only, not a real diagnosis,
 repair, isolation audit, VoiceOver journey or release acceptance. Exact-head CI is still required.
 
+Review follow-up: the first CI run failed on four missing test type annotations, now corrected.
+The real diagnosis/repair schemas also contained defaulted optional properties: the wire-schema
+normalizer now requires every property explicitly, preserving nullable types and original domain
+constraints. Two focused schema regressions cover nested real models and property-name handling.
+A real OAuth call through `RepairWorker.propose` with the synthetic complete-source fixture returned
+`PROPOSAL_READY` with one change after existing repair validation. Its explicit meaning remains
+`MODEL_DRAFT_NOT_PERSISTED_APPROVED_APPLIED_OR_VERIFIED`; no target file was changed. The 34 focused
+Codex/diagnosis/repair tests and strict checks of both modified test modules pass. New-head CI and
+the independent navigator migration remain required.
+
 Official references: [Codex authentication](https://developers.openai.com/codex/auth),
 [SDK integration](https://developers.openai.com/codex/sdk), and
 [app-server protocol](https://learn.chatgpt.com/docs/app-server).

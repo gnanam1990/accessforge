@@ -5,10 +5,10 @@ import json
 import sys
 from threading import Event
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import accessforge_orchestrator.codex_agent as module
 from accessforge_orchestrator.codex_agent import (
@@ -16,10 +16,11 @@ from accessforge_orchestrator.codex_agent import (
     CodexUnavailable,
     _command,
     _environment,
+    structured_schema,
 )
 
 
-def events() -> list[dict]:
+def events() -> list[dict[str, Any]]:
     return [
         {"type": "thread.started", "thread_id": "thread-1"},
         {"type": "turn.started"},
@@ -28,7 +29,7 @@ def events() -> list[dict]:
     ]
 
 
-async def read(items: list[dict], fence: Event | None = None) -> str:
+async def read(items: list[dict[str, Any]], fence: Event | None = None) -> str:
     stream = asyncio.StreamReader()
     for item in items:
         stream.feed_data(json.dumps(item).encode() + b"\n")
@@ -95,12 +96,13 @@ def test_no_ambient_service_credentials(monkeypatch: pytest.MonkeyPatch) -> None
 @pytest.mark.asyncio
 async def test_timeout_reaps_original_child(monkeypatch: pytest.MonkeyPatch) -> None:
     class Draft(BaseModel):
+        model_config = ConfigDict(extra="forbid")
         answer: str
 
     children: list[asyncio.subprocess.Process] = []
     original_spawn = asyncio.create_subprocess_exec
 
-    async def spawn(*args, **kwargs):
+    async def spawn(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
         proc = await original_spawn(*args, **kwargs)
         children.append(proc)
         return proc
@@ -121,3 +123,32 @@ async def test_timeout_reaps_original_child(monkeypatch: pytest.MonkeyPatch) -> 
             timeout=0.3,
         )
     assert len(children) == 1 and children[0].returncode is not None
+
+
+def test_real_proposal_schemas_require_explicit_defaulted_fields() -> None:
+    from accessforge_orchestrator.diagnosis.models import DiagnosisDraft
+    from accessforge_orchestrator.repair.worker import RepairDraft
+
+    for model in (DiagnosisDraft, RepairDraft):
+        original = model.model_json_schema()
+        schema = structured_schema(model)
+        for node in [schema, *schema["$defs"].values()]:
+            assert node["additionalProperties"] is False
+            assert set(node["required"]) == set(node["properties"])
+        assert model.model_json_schema() == original
+    change = structured_schema(RepairDraft)["$defs"]["DraftChange"]
+    assert {"type": "null"} in change["properties"]["mode"]["anyOf"]
+    assert "default" not in change["properties"]["mode"]
+
+
+def test_schema_preserves_property_named_default_and_rejects_open_objects() -> None:
+    class Closed(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        default: str = "value"
+
+    class Open(BaseModel):
+        value: str
+
+    assert structured_schema(Closed)["required"] == ["default"]
+    with pytest.raises(ValueError, match="closed object"):
+        structured_schema(Open)

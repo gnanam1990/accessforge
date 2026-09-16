@@ -41,6 +41,35 @@ class StructuredResult:
     structured_output: BaseModel
 
 
+def structured_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """Require explicit values in the wire schema without weakening domain validation.
+
+    Nullable fields remain nullable; defaulted non-null fields must be returned explicitly.
+    Pydantic still validates the final response with its original constraints and validators.
+    """
+    schema = model.model_json_schema()
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+        elif isinstance(node, dict):
+            node.pop("default", None)
+            if node.get("type") == "object":
+                if node.get("additionalProperties") is not False:
+                    raise ValueError("Codex proposals require closed object schemas")
+                node["required"] = list(node.get("properties", {}))
+            for key in ("properties", "$defs", "definitions", "patternProperties"):
+                for child in node.get(key, {}).values():
+                    visit(child)
+            for key in ("items", "anyOf", "allOf", "oneOf", "prefixItems"):
+                if key in node:
+                    visit(node[key])
+
+    visit(schema)
+    return schema
+
+
 def _environment() -> dict[str, str]:
     # Keep the user's existing OAuth store; do not propagate API keys, database/object-store
     # credentials, proxy settings, NODE_OPTIONS, PYTHONPATH or AWS credential chains.
@@ -143,7 +172,7 @@ class CodexStructuredAgent:
             raise CodexUnavailable("Cancelled before Codex invocation")
         with TemporaryDirectory(prefix="accessforge-codex-") as root:
             Path(root, "output.schema.json").write_text(
-                json.dumps(structured_output_model.model_json_schema()), encoding="utf-8"
+                json.dumps(structured_schema(structured_output_model)), encoding="utf-8"
             )
             spawning = asyncio.create_task(
                 asyncio.create_subprocess_exec(

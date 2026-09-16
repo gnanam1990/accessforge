@@ -203,7 +203,7 @@ def test_production_bedrock_factory_is_retired_before_client_creation(
 ) -> None:
     import accessforge_orchestrator.navigator.agent as module
 
-    def forbidden(*args, **kwargs):
+    def forbidden(*args: Any, **kwargs: Any) -> None:
         pytest.fail("retired factory must not create an AWS client")
 
     monkeypatch.setattr(module, "ObservedBedrockModel", forbidden)
