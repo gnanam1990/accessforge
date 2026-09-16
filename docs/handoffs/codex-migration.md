@@ -174,3 +174,13 @@ version upgrades. A fresh frozen no-dev environment installed 51 packages withou
 successfully imported the Codex planner, diagnosis, repair, coordinator and operator. A regression
 checks both project declarations and locked runtime requirements. boto3/botocore remain for
 S3-compatible evidence storage (including local MinIO); this does not enable Bedrock inference.
+
+## Codex consent UI
+
+The browser consent decoder now accepts the exact closed Codex profile and its single quota hold,
+while preserving legacy receipt display. Mixed AWS fields, unknown fields, non-integer limits,
+inconsistent token envelopes and incorrect holds are rejected. Codex review displays ChatGPT OAuth
+and account-usage/result-admission semantics instead of an invented AWS region or bounded retry
+claim. Explicit unchecked acknowledgement, linked errors, duplicate-write prevention and unknown
+request reconciliation are unchanged. All 13 consent component tests and web TypeScript checking
+pass. This uses synthetic API responses; no live consent, model call or reader startup occurred.
