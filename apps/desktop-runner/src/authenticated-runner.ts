@@ -33,7 +33,7 @@ export interface AuthenticatedRunnerOptions {
   /** Opt-in private post-action measurement. Failure fences, never borrows reader text. */
   readonly observeKeyboardFocus?: () => Promise<KeyboardFocusRecord>;
   /** Fresh focus/effect authorization against the sealed environment; throws on unknown/refused. */
-  readonly authorizePhysicalAction: (command: ActionCommand) => Promise<void>;
+  readonly authorizePhysicalAction: (command: ActionCommand, signal: AbortSignal) => Promise<void>;
   /** Explicit trusted candidate setup only; permission does not itself perform a POST. */
   readonly candidateFormEffects?: boolean;
   readonly recordObservation: (value: RawObservation | UnknownObservation) => Promise<void>;
@@ -66,6 +66,7 @@ export class AuthenticatedRunner {
   #stopSucceeded = false;
   #commands: ActionCommand[] = [];
   #serverCommand: ActionCommand | undefined;
+  #authorityAbort: AbortController | undefined;
   #origin = '';
 
   constructor(private readonly options: AuthenticatedRunnerOptions) {
@@ -106,9 +107,13 @@ export class AuthenticatedRunner {
       dispatch: async () => {
         const command = this.#serverCommand;
         const before = options.clock.monotonic();
-        if (command === undefined) throw new Error('physical action identity unavailable');
+        const authority = this.#authorityAbort;
+        if (command === undefined || authority === undefined) throw new Error('physical action identity unavailable');
         await this.#checkPhysical(command);
-        await bounded(options.authorizePhysicalAction(command), this.#remaining());
+        authority.signal.throwIfAborted();
+        if (!this.#executing || this.#stopping || this.#fenced) throw new Error('action authority fenced');
+        await bounded(options.authorizePhysicalAction(command, authority.signal), this.#remaining());
+        authority.signal.throwIfAborted();
         if (options.candidateFormEffects === true && (command.action === 'ACTIVATE' ||
             (command.action === 'KEY_CHORD' && ['ENTER', 'SPACE'].includes(command.keyChord ?? '')))) {
           await bounded(options.session.authorizeCandidateFormEffect(command), this.#remaining());
@@ -148,6 +153,7 @@ export class AuthenticatedRunner {
   requestCancellation(): void {
     this.#stopping = true;
     this.#executing = false;
+    this.#authorityAbort?.abort();
     this.#supervisor.requestCancellation();
   }
 
@@ -155,6 +161,7 @@ export class AuthenticatedRunner {
     if (this.#busy || this.#fenced || this.#stopping) return { status: 'REFUSED', detail: 'runner fenced or busy' };
     this.#busy = true;
     let actionId: string | undefined;
+    let authorityTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (!this.#started) {
         if ((await this.options.journal.read()).length !== 0) throw new Error('a prior journal cannot be resumed');
@@ -173,10 +180,14 @@ export class AuthenticatedRunner {
       this.#serverCommand = command;
       this.#commands.push(command);
       this.#executing = true;
+      const authority = new AbortController();
+      this.#authorityAbort = authority;
+      authorityTimer = setTimeout(() => authority.abort(), Math.max(1, Math.ceil(this.#remaining())));
       const outcome = await this.#supervisor.performAction(command.action, {
         ...(command.keyChord === undefined ? {} : { keyChord: command.keyChord }),
         ...(command.text === undefined ? {} : { text: command.text }),
       });
+      authority.abort(); // Close approval scope before potentially slow server acknowledgement.
       this.#executing = false;
       const status = outcome.status === 'REFUSED' ? 'AMBIGUOUS' : outcome.status;
       if (status === 'AMBIGUOUS') this.#fenced = true;
@@ -191,13 +202,20 @@ export class AuthenticatedRunner {
     } catch {
       this.#executing = false;
       this.#fenced = true;
+      this.#authorityAbort?.abort(); // Failure closes authority before recovery acknowledgement too.
       if (actionId !== undefined) {
         try { await this.options.session.completeAction(actionId, 'AMBIGUOUS'); } catch { /* Retain local fencing; recovery owns the unresolved server state. */ }
       }
       return { status: actionId === undefined ? 'REFUSED' : 'AMBIGUOUS',
         ...(actionId === undefined ? {} : { serverActionId: actionId }),
         detail: 'execution fenced; no retry or automatic reset' };
-    } finally { this.#executing = false; this.#busy = false; }
+    } finally {
+      if (authorityTimer !== undefined) clearTimeout(authorityTimer);
+      this.#authorityAbort?.abort();
+      this.#authorityAbort = undefined;
+      this.#executing = false;
+      this.#busy = false;
+    }
   }
 
   /** Call after the independent observer has retained and closed its final sample. */

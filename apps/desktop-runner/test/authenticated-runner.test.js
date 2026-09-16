@@ -191,13 +191,66 @@ test('cancellation during local flush cannot cause late physical input', async (
 });
 
 test('a timed-out physical check cannot dispatch when its promise resolves later', async () => {
-  let release;
+  let release, authority;
   const held = new Promise((resolve) => { release = resolve; });
-  const h = harness({ actionTimeoutMs: 20, authorizePhysicalAction: () => held });
+  const h = harness({ actionTimeoutMs: 20, authorizePhysicalAction: (_command, signal) => {
+    authority = signal; return held;
+  } });
   assert.equal((await h.runner.perform({ action: 'READ_CURRENT' })).status, 'AMBIGUOUS');
+  assert.equal(authority.aborted, true);
   release();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(h.calls.includes('adapter'), false);
+});
+
+test('each successful baseline action closes its own fresh approval signal', async () => {
+  const signals = [];
+  const h = harness({ authorizePhysicalAction: async (_command, signal) => {
+    assert.equal(signal.aborted, false); signals.push(signal);
+  } });
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'SUCCEEDED');
+  assert.equal(signals[0].aborted, true);
+  assert.equal((await h.runner.perform({ action: 'PREVIOUS' })).status, 'SUCCEEDED');
+  assert.equal(signals[1].aborted, true);
+  assert.notEqual(signals[0], signals[1]);
+});
+
+test('late retained preflight never opens a stale approval callback', async () => {
+  const h = harness({ actionTimeoutMs: 20 });
+  let release;
+  h.session.retainRuntimePreflight = () => new Promise(resolve => { release = resolve; });
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'AMBIGUOUS');
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.calls.includes('effect-check'), false);
+  assert.equal(h.calls.includes('adapter'), false);
+});
+
+test('explicit cancellation reaches the in-flight baseline approval', async () => {
+  let authority;
+  const h = harness({ authorizePhysicalAction: async (_command, signal) => {
+    authority = signal; h.runner.requestCancellation();
+    signal.throwIfAborted();
+  } });
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'AMBIGUOUS');
+  assert.equal(authority.aborted, true);
+  assert.equal(h.calls.includes('adapter'), false);
+});
+
+test('journal result failure closes approval before recovery acknowledgement', async () => {
+  let authority;
+  const h = harness({ authorizePhysicalAction: async (_command, signal) => { authority = signal; } });
+  const append = h.options.journal.appendAndFlush;
+  h.options.journal.appendAndFlush = async entry => {
+    if (entry.result) throw new Error('result fsync failed');
+    await append(entry);
+  };
+  let closedBeforeAcknowledgement = false;
+  h.session.completeAction = async () => {
+    closedBeforeAcknowledgement = authority.aborted;
+  };
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'AMBIGUOUS');
+  assert.equal(closedBeforeAcknowledgement, true);
 });
 
 test('lost server result acknowledgement cannot permit another local action', async () => {
