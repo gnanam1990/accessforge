@@ -393,6 +393,17 @@ export const createExecutionSeal = (client: ApiClient, workspaceId: string, proj
   client.request(`${base(workspaceId)}/projects/${encodeURIComponent(projectId)}/seals`,
     { method: 'POST', body, idempotencyKey });
 
+export interface NavigationProfilePreview {
+  readonly profile: Record<string, unknown>;
+  readonly modelConfigDigest: string;
+  readonly meaning: string;
+  readonly disclosure: string;
+}
+
+export const getNavigationProfile = (client: ApiClient, workspaceId: string, signal: AbortSignal):
+  Promise<ApiOutcome<NavigationProfilePreview>> =>
+  client.request(`${base(workspaceId)}/navigation-profile`, { signal });
+
 export interface ExecutionApproval {
   readonly approvalId: string;
   readonly targetId: string;

@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import type { JSX } from 'react'
 import type { ApiOutcome } from '../api/client'
-import { createExecutionSeal, listEnvironments, registerBuild } from '../api/resources'
+import { createExecutionSeal, getNavigationProfile, listEnvironments, registerBuild } from '../api/resources'
 import type { Environment, JourneyVersion } from '../api/resources'
 import { useResource } from '../api/useResource'
 import { Button } from '../components/Button'
@@ -221,6 +221,10 @@ const SealForm = ({ workspaceId, projectId, journey, environments, registeredBui
         {environment.permittedEffects.map((effect) => <label key={effect}><input type="checkbox"
           checked={effects.includes(effect)} onChange={(event) => setEffects((old) => event.target.checked
             ? [...old, effect] : old.filter((value) => value !== effect))} />{effect}</label>)}</>}
+      <details><summary>Choose the default navigation model configuration</summary>
+        <NavigationProfileChoice workspaceId={workspaceId} locked={operation.locked}
+          onChoose={(modelConfigDigest) => setValues((old) => ({ ...old, modelConfigDigest }))} />
+      </details>
       {([['runnerProfileDigest', 'Runner profile SHA-256'], ['modelConfigDigest', 'Model configuration SHA-256'],
         ['evaluatorVersion', 'Evaluator version'], ['expiresAt', 'Manifest expires at'],
         ['actionBudget', 'Execution action limit'], ['wallTimeBudgetSeconds', 'Execution seconds limit']] as const)
@@ -236,4 +240,26 @@ const SealForm = ({ workspaceId, projectId, journey, environments, registeredBui
       <p>Select this manifest under Run this version to review its exact scope and separately approve it.</p>
     </Notice>}
   </form>
+}
+
+const NavigationProfileChoice = ({ workspaceId, locked, onChoose }: {
+  readonly workspaceId: string; readonly locked: boolean; readonly onChoose: (digest: string) => void
+}): JSX.Element => {
+  const { client } = useSession()
+  const profile = useResource((signal) => getNavigationProfile(client, workspaceId, signal), [client, workspaceId])
+  return <ResourceView resource={profile} what="the default navigation configuration">{(preview) => {
+    const valid = preview !== null && typeof preview === 'object' &&
+      preview.meaning === 'CONFIGURATION_PREVIEW_NOT_RUNTIME_EVIDENCE_OR_MODEL_CONSENT' &&
+      typeof preview.modelConfigDigest === 'string' && /^[a-f0-9]{64}$/.test(preview.modelConfigDigest) &&
+      preview.profile !== null && typeof preview.profile === 'object' && !Array.isArray(preview.profile) &&
+      preview.profile['provider'] === 'codex-chatgpt' && typeof preview.disclosure === 'string'
+    if (!valid) return <p role="alert">The server did not return a supported configuration preview. No digest was selected.</p>
+    return <>
+      <p>{preview.disclosure}</p>
+      <pre>{JSON.stringify(preview.profile, null, 2)}</pre>
+      <p>Configuration SHA-256: <code>{preview.modelConfigDigest}</code></p>
+      <p>Choosing this copies its digest into the draft. It does not verify runtime readiness, approve disclosure, or call a model.</p>
+      <Button disabled={locked} onClick={() => { if (!locked) onChoose(preview.modelConfigDigest) }}>Use this configuration digest</Button>
+    </>
+  }}</ResourceView>
 }

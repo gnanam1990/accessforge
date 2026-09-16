@@ -831,3 +831,19 @@ as a JSON array rather than trimmed lines, preserving spaces and newlines in fil
 Frontend production build and 20 focused parser/preparation tests passed. This is synthetic HTTP
 UI evidence, not a production registration or actual reader/model run. Required CI, merge and
 deployment remain separate. The full baseline/repair/rerun acceptance remains open.
+
+## Pre-seal navigation configuration preview — 2026-09-16
+
+The model-consent scope previously exposed the default navigation profile only after a run existed,
+while creating that run's seal already required the profile digest. A workspace-authorized read-only
+navigation-profile route now exposes the repository's existing Codex default profile and canonical
+digest before any run exists. The seal form previews its complete configuration and usage disclaimer;
+only an explicit choice copies the digest into the draft. No invocation, disclosure consent or
+runtime qualification is inferred. Manual exact custom digests remain possible. Malformed previews
+are refused, and the existing fieldset lock protects unknown seal outcomes.
+
+Production frontend build, focused UI/contract checks, Ruff and API mypy passed. The new real-HTTP
+authorization/tenant/configuration regression is committed for required CI, not claimed locally run.
+Generated OpenAPI and both operation clients were refreshed. No actual provider or reader call,
+production configuration write or deployment occurred. PR227 passed required CI and merged at
+9719e6f; local main was synchronized. Subsequent stacked work still awaits its gates.

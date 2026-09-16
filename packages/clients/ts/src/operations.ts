@@ -304,6 +304,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: false,
     authenticated: true,
   },
+  'navigation_profile': {
+    operationId: 'navigation_profile',
+    method: 'GET',
+    path: '/v1/workspaces/{workspace_id}/navigation-profile',
+    parameters: ['workspace_id'],
+    mutating: false,
+    authenticated: true,
+  },
   'get_patch': {
     operationId: 'get_patch',
     method: 'GET',
@@ -894,6 +902,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/journeys/{journey_version_id}',
   '/v1/workspaces/{workspace_id}/journeys/{journey_version_id}/policy',
   '/v1/workspaces/{workspace_id}/members',
+  '/v1/workspaces/{workspace_id}/navigation-profile',
   '/v1/workspaces/{workspace_id}/patches/{patch_id}',
   '/v1/workspaces/{workspace_id}/patches/{patch_id}/approval',
   '/v1/workspaces/{workspace_id}/patches/{patch_id}/rejection',
