@@ -619,7 +619,7 @@ def list_runners(
     size = clamp_page_size(limit)
     rows = conn.execute(
         """
-        SELECT r.id, r.name, r.status, r.platform, r.profile, r.lease_epoch,
+        SELECT r.id, r.name, r.status, r.platform, r.profile, r.profile_digest, r.lease_epoch,
                r.quarantine_reason, r.revoked_at, r.created_at,
                (SELECT max(p.recorded_at) FROM runner_preflight p
                  WHERE p.runner_id = r.id AND p.successful) AS preflight_passed_at,
@@ -644,6 +644,7 @@ def list_runners(
             # else enrollment captured. Reported verbatim rather than summarised, because a version
             # difference is the whole reason a matched runner may still be the wrong one.
             "profile": dict(r["profile"]),
+            "profileDigest": str(r["profile_digest"]),
             "leaseEpoch": int(r["lease_epoch"]),
             "quarantineReason": r["quarantine_reason"],
             "revoked": r["revoked_at"] is not None,

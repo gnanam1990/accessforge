@@ -84,6 +84,8 @@ export interface Runner {
   readonly status: string;
   readonly platform: string;
   readonly profile: RunnerProfile;
+  /** Older servers may omit this; never invent a digest from a displayed partial profile. */
+  readonly profileDigest?: string;
   readonly leaseEpoch: number;
   readonly quarantineReason: string | null;
   readonly revoked: boolean;

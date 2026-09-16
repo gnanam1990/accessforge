@@ -256,6 +256,31 @@ describe('build and manifest preparation', () => {
     expect(writes).toEqual([])
     expect(server.bodies.filter((entry) => /\/(runs|approval|navigator-model-consent)$/.test(entry.url))).toEqual([])
   })
+  it('selects a recorded runner digest without treating an offline profile as readiness', async () => {
+    const { writes, server } = setup()
+    server.data.runners.push({ ...RUNNER, profileDigest: '7'.repeat(64) })
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Choose an enrolled runner profile'))
+    await user.selectOptions(await screen.findByLabelText('Enrolled runner profile'), RUNNER.runnerId)
+    expect(screen.getByText(/Preflight last passed: Never/)).toHaveTextContent('OFFLINE')
+    expect(screen.getByText(/not a specific desktop assignment/)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Use this runner profile digest' }))
+    expect(screen.getByLabelText(/Runner profile SHA-256/)).toHaveValue('7'.repeat(64))
+    expect(writes).toEqual([])
+  })
+  it('does not offer revoked, quarantined, wrong-platform or missing-digest runner profiles', async () => {
+    const { writes, server } = setup()
+    server.data.runners.push(RUNNER,
+      { ...RUNNER, runnerId: 'r-2', profileDigest: '7'.repeat(64), revoked: true },
+      { ...RUNNER, runnerId: 'r-3', profileDigest: '7'.repeat(64), status: 'QUARANTINED' },
+      { ...RUNNER, runnerId: 'r-4', profileDigest: '7'.repeat(64), platform: 'win32' })
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Choose an enrolled runner profile'))
+    expect(await screen.findByText(/No non-revoked, non-quarantined/)).toBeVisible()
+    expect(screen.queryByLabelText('Enrolled runner profile')).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/Runner profile SHA-256/)).toHaveValue('')
+    expect(writes).toEqual([])
+  })
   it('refuses a malformed configuration preview without selecting a digest', async () => {
     const { writes } = setup(false, null)
     const user = userEvent.setup()
