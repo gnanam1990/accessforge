@@ -75,6 +75,7 @@ export interface FakeServer {
   setSession: (response: SessionResponse | null) => void
   /** Make every request fail at the network level. */
   setOffline: (offline: boolean) => void
+  setIdentityOptions: (value: unknown) => void
   /** Hold `GET /v1/session` open until `releaseSession` is called. */
   holdSession: () => void
   releaseSession: () => void
@@ -118,6 +119,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
   let configured = initial
   let session = initial
   let offline = false
+  let identityOptions: unknown = { provider: 'local-development' }
   let signInOutcome: 'succeeds' | 'refused' | 'no-provider' = 'succeeds'
   let signOutFails = false
   let runnerPaging: 'single' | 'paged' | 'endless' = 'single'
@@ -244,6 +246,7 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
     setOffline: (value) => {
       offline = value
     },
+    setIdentityOptions: (value) => { identityOptions = value },
     holdSession: () => {
       gate = new Promise<void>((resolve) => {
         open = resolve
@@ -290,6 +293,12 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
         return new Response(JSON.stringify(session), {
           status: 200,
           headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (url.endsWith('/v1/auth/options') && method === 'GET') {
+        return new Response(JSON.stringify(identityOptions), {
+          status: 200, headers: { 'content-type': 'application/json' },
         })
       }
 

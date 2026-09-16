@@ -1,6 +1,6 @@
 # Optional GitHub user login — browser-route checkpoint
 
-Status: **HTTP flow implemented, disabled by default; UI and actual OAuth acceptance pending**.
+Status: **HTTP flow and provider-aware UI implemented, disabled by default; actual OAuth acceptance pending**.
 This is app-user identity, not Codex model OAuth, GitHub App publication, or AWS.
 `ApiSettings.identity_provider` accepts none/local-development/github. No live
 configuration, credential, account, deployment or migration was changed. The
@@ -51,8 +51,6 @@ integration below now composes these helpers; real provider acceptance is separa
 
 - Use the explicit operator binding and fresh-subject issuance described below;
   never pass a callback/body-supplied subject directly to the issuer.
-- Add UI discovery and a top-level browser sign-in link; do not call redirect
-  routes with the JSON client. Preserve the local-only login restrictions.
 - Verify trusted TLS/proxy forwarding, per-source edge admission controls, and
   query/cookie log redaction before any exposed deployment. Global admission
   limits are resource bounds, not per-client fairness or complete DoS prevention.
@@ -103,6 +101,29 @@ issuance/rotation races with revocation, provider provenance after rotation,
 disabled/revoked resolution, audit failure rollback and previous-schema session
 preservation. CLI unit checks cover invalid subjects/arguments and error redaction.
 These are implementation checks, not actual GitHub login or reader acceptance.
+
+## Built provider-aware sign-in UI
+
+`GET /v1/auth/options` returns only the configured provider enum with no-store;
+it contains no callback URL, account, membership or credential data and does not
+need a session or database query. The web sign-in screen waits for this discovery
+before rendering a credential form. `local-development` retains its existing
+labelled email form and focusable error summary; `none` offers no form. GitHub
+offers a native keyboard-focusable link to the hardcoded same-origin
+`/v1/auth/github/start`, with text explaining the GitHub round trip and required
+operator binding. It never accepts a redirect target from the discovery payload.
+
+Unknown/malformed responses and network failures display an explicit retry notice,
+not an inferred provider or a transient email form. Unmount cancels discovery and
+late replies are ignored. Existing sign-out-unconfirmed warnings remain outside
+the provider gate. This UI requires the matching API version; a missing discovery
+endpoint is an unavailable state, not permission to fall back to passwordless login.
+
+Thirty-seven focused shell checks and fifteen configuration/discovery/contract
+checks passed, plus a fresh TypeScript check and Vite production build. The new
+shell cases cover GitHub link keyboard focus, absent/malformed providers, explicit
+retry and loading without a form flash. These use jsdom and synthetic API replies;
+they are not real-browser, GitHub account, or actual screen-reader acceptance.
 
 ## Built browser HTTP flow
 

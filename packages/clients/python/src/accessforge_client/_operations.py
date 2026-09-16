@@ -66,6 +66,14 @@ OPERATIONS: dict[str, Operation] = {
         mutating=False,
         authenticated=False,
     ),
+    "sign_in_options": Operation(
+        operation_id="sign_in_options",
+        method="GET",
+        path="/v1/auth/options",
+        parameters=(),
+        mutating=False,
+        authenticated=False,
+    ),
     "sign_out": Operation(
         operation_id="sign_out",
         method="DELETE",
@@ -884,6 +892,7 @@ PATHS: frozenset[str] = frozenset(
         "/health/ready",
         "/v1/auth/github/callback",
         "/v1/auth/github/start",
+        "/v1/auth/options",
         "/v1/session",
         "/v1/sessions",
         "/v1/workspaces/{workspace_id}/diagnosis-profile",

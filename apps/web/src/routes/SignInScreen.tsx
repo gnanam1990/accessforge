@@ -3,10 +3,12 @@
  *
  * Two distinct screens behind one route:
  *
- * **A deployment with an identity provider** shows a form with one field. The field has a real
+ * **A local-development deployment** shows a form with one field. The field has a real
  * label, not a placeholder, and the submit path uses the error-summary pattern from UI-UX section 4:
  * on failure, focus moves once to a focusable summary that links to the field, the specific inline
  * error stays connected by `aria-describedby`, and the entered value is preserved.
+ * GitHub mode instead offers a fixed same-origin top-level navigation link. No credentials are
+ * rendered until public provider discovery succeeds; unknown/malformed replies fail closed.
  *
  * **A deployment without one** shows a dependency-unavailable notice and no form at all. This is the
  * default. Presenting a login form that could never succeed would be a placeholder route dressed as
@@ -28,6 +30,7 @@ import { Notice } from '../components/Notice'
 import { RouteHeading } from '../a11y/RouteHeading'
 import { DependencyUnavailableState } from '../components/states'
 import { useSession } from '../session/SessionProvider'
+import { SignInProviderGate } from '../session/SignInProviderGate'
 import type { SignInFailure } from '../session/SessionProvider'
 
 export const SignInScreen = (): JSX.Element => {
@@ -81,6 +84,7 @@ export const SignInScreen = (): JSX.Element => {
     <main className="af-stack" style={{ padding: 'var(--af-space-8)', maxWidth: '40rem' }}>
       <RouteHeading>Sign in to AccessForge</RouteHeading>
 
+      <SignInProviderGate>
       <ErrorSummary
         submissionId={submissionId}
         errors={error === null ? [] : [{ fieldId, message: error }]}
@@ -114,6 +118,7 @@ export const SignInScreen = (): JSX.Element => {
           Sign in
         </Button>
       </form>
+      </SignInProviderGate>
 
       {state.status === 'anonymous' && state.signOutUnconfirmed && (
         <Notice tone="warning" heading="Your sign-out was not confirmed" headingLevel={2} live>

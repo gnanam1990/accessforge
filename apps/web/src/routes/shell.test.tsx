@@ -95,6 +95,61 @@ describe('the authenticated gate', () => {
 })
 
 describe('sign-in', () => {
+  it('offers a keyboard-accessible fixed browser link for GitHub, never an email form', async () => {
+    const user = userEvent.setup()
+    const server = createFakeServer(null)
+    server.setIdentityOptions({ provider: 'github' })
+    renderApp(server)
+    const link = await screen.findByRole('link', { name: 'Continue with GitHub' })
+    expect(link).toHaveAttribute('href', '/v1/auth/github/start')
+    expect(link).toHaveAccessibleDescription(/must already be linked by an operator/)
+    expect(screen.queryByLabelText(/Email address/)).not.toBeInTheDocument()
+    await user.tab()
+    expect(link).toHaveFocus()
+    expect(server.bodies).toEqual([])
+  })
+
+  it('does not offer credentials when discovery says no provider is configured', async () => {
+    const server = createFakeServer(null)
+    server.setIdentityOptions({ provider: 'none' })
+    renderApp(server)
+    await screen.findByRole('heading', { name: 'Sign-in is not configured' })
+    expect(screen.queryByLabelText(/Email address/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Continue with GitHub' })).not.toBeInTheDocument()
+    expect(server.bodies).toEqual([])
+  })
+
+  it.each([null, { provider: 'unknown' }, { provider: 'github', url: 'https://untrusted.test' }])(
+    'refuses malformed discovery and recovers through an explicit retry: %j', async (value) => {
+      const user = userEvent.setup()
+      const server = createFakeServer(null)
+      server.setIdentityOptions(value)
+      renderApp(server)
+      await screen.findByRole('heading', { name: 'Sign-in options are unavailable' })
+      expect(screen.queryByLabelText(/Email address/)).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: 'Continue with GitHub' })).not.toBeInTheDocument()
+      server.setIdentityOptions({ provider: 'github' })
+      await user.click(screen.getByRole('button', { name: 'Retry sign-in options' }))
+      await screen.findByRole('link', { name: 'Continue with GitHub' })
+    },
+  )
+
+  it('shows loading without a transient credential form before provider discovery', async () => {
+    const server = createFakeServer(null)
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const delayed: typeof fetch = async (input, init) => {
+      if (String(input).endsWith('/v1/auth/options')) await held
+      return server.fetch(input, init)
+    }
+    server.setIdentityOptions({ provider: 'github' })
+    renderApp({ ...server, fetch: delayed })
+    expect(await screen.findByText('Loading sign-in options…')).toHaveAttribute('role', 'status')
+    expect(screen.queryByLabelText(/Email address/)).not.toBeInTheDocument()
+    release()
+    await screen.findByRole('link', { name: 'Continue with GitHub' })
+  })
+
   it('moves focus once to the error summary after a failed submission, and keeps the value', async () => {
     const user = userEvent.setup()
     const server = createFakeServer(null)

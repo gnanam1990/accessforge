@@ -40,6 +40,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: false,
     authenticated: false,
   },
+  'sign_in_options': {
+    operationId: 'sign_in_options',
+    method: 'GET',
+    path: '/v1/auth/options',
+    parameters: [],
+    mutating: false,
+    authenticated: false,
+  },
   'sign_out': {
     operationId: 'sign_out',
     method: 'DELETE',
@@ -856,6 +864,7 @@ export const PATHS: readonly string[] = [
   '/health/ready',
   '/v1/auth/github/callback',
   '/v1/auth/github/start',
+  '/v1/auth/options',
   '/v1/session',
   '/v1/sessions',
   '/v1/workspaces/{workspace_id}/diagnosis-profile',
