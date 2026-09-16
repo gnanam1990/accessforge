@@ -68,6 +68,7 @@ import { useWorkspaceId } from './useWorkspaceId'
 import { useJourneyId } from './useJourneyId'
 import { useProjectId } from './useProjectId'
 import { CanonicalExecution } from './CanonicalExecution'
+import { ManifestPreparation } from './ManifestPreparation'
 
 const Digest = ({ label, value }: { readonly label: string; readonly value: string }): JSX.Element => (
   <>
@@ -242,6 +243,8 @@ export const JourneyScreen = (): JSX.Element => {
             </ResourceView>
           </section>
 
+          <ManifestPreparation workspaceId={workspaceId} projectId={projectId} journey={journey}
+            onSealed={manifests.reload} />
           <section className="af-stack">
             <h2>Run this version</h2>
             <p className="af-secondary">
@@ -288,9 +291,8 @@ export const JourneyScreen = (): JSX.Element => {
                     </p>
                     <p className="af-secondary">
                       Sealing needs a recorded source snapshot and a build artifact for this
-                      project, and a matched runner profile. Nothing in this interface can create
-                      one, and requesting a run against the journey digest instead would queue a run
-                      whose identity matches nothing.
+                      project, and a matched runner profile. Use Prepare this journey for execution
+                      above once those observed inputs are available. A journey digest alone cannot identify a run.
                     </p>
                   </Notice>
                 ) : (

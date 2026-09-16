@@ -763,3 +763,23 @@ selection/approval, unknown-response retry, role and mismatched-target regressio
 synthetic HTTP checks, not actual execution. Source/build registration and canonical manifest
 creation still need their operator/API workflow; this browser slice does not fabricate provenance.
 This continuation requires normal review, exact-head CI/merge and deployment verification.
+
+## Journey build/manifest preparation — 2026-09-16
+
+The next browser slice connects observed source/build registration to canonical execution sealing
+on the existing journey page. OWNER and MAINTAINER can record a source/build identity or supply
+an existing build ID, select a server-returned usable environment, choose only its permitted effects,
+and provide exact runner/model profile digests, evaluator version, expiry and explicit budgets.
+Frozen journey/assertion/fixture/policy digests are reused from the read version, never retyped.
+The creation receipt refreshes the manifest selector for the separate review/approval/request flow.
+
+This records operator observations; it does not run a build, upload retained artifact bytes, verify
+provenance, deploy a target, start a reader or invoke a model. Identity observability defaults false.
+Unknown write outcomes lock their payload and retain the same idempotency key. Environment refresh
+is offered only before a usable sealing form exists, so it cannot discard an unresolved seal key.
+No production build identity, seal, allowance or execution approval was created in this slice.
+
+Production frontend build and 46 focused screen/contract checks passed. Three new preparation
+regressions cover source/build-to-seal composition without approval/run side effects, unknown
+registration retry and invalid-input refusal; the final field-label/UUID tightening was rechecked
+with those three tests. HTTP is synthetic. Required CI, normal review and deploy remain separate.

@@ -368,6 +368,31 @@ export interface ExecutionSeal {
   readonly revision: number;
 }
 
+export interface RegisteredBuild {
+  readonly buildId: string;
+  readonly sourceSnapshotId: string;
+  readonly identityObservable: boolean;
+  readonly meaning: string;
+}
+
+export interface CreatedSeal {
+  readonly sealedManifestId: string;
+  readonly manifestDigest: string;
+  readonly manifestKind: string;
+  readonly canonicalManifest: Record<string, unknown> | null;
+  readonly meaning: string;
+}
+
+export const registerBuild = (client: ApiClient, workspaceId: string, projectId: string,
+  body: Record<string, unknown>, idempotencyKey: string): Promise<ApiOutcome<RegisteredBuild>> =>
+  client.request(`${base(workspaceId)}/projects/${encodeURIComponent(projectId)}/builds`,
+    { method: 'POST', body, idempotencyKey });
+
+export const createExecutionSeal = (client: ApiClient, workspaceId: string, projectId: string,
+  body: Record<string, unknown>, idempotencyKey: string): Promise<ApiOutcome<CreatedSeal>> =>
+  client.request(`${base(workspaceId)}/projects/${encodeURIComponent(projectId)}/seals`,
+    { method: 'POST', body, idempotencyKey });
+
 export interface ExecutionApproval {
   readonly approvalId: string;
   readonly targetId: string;
