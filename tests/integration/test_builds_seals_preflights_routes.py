@@ -165,8 +165,7 @@ def test_navigation_profile_preview_before_any_run(client: TestClient, db: str) 
     assert response.json()["profile"] == default_profile()
     assert response.json()["modelConfigDigest"] == digest(default_profile())
     assert (
-        response.json()["meaning"]
-        == "CONFIGURATION_PREVIEW_NOT_RUNTIME_EVIDENCE_OR_MODEL_CONSENT"
+        response.json()["meaning"] == "CONFIGURATION_PREVIEW_NOT_RUNTIME_EVIDENCE_OR_MODEL_CONSENT"
     )
     with workspace_connection(db, WS) as conn:
         assert conn.execute("SELECT id FROM run").fetchone() is None
@@ -7678,6 +7677,29 @@ def runner(client: TestClient, csrf: str) -> dict[str, Any]:
     assert enrolled.status_code == 201, enrolled.text
     assert enrolled.json()["status"] == "PREFLIGHT_REQUIRED"
     return dict(enrolled.json())
+
+
+def test_enrollment_refuses_coercion_before_consuming_token(client: TestClient, csrf: str) -> None:
+    headers = {CSRF_HEADER: csrf}
+    url = f"/v1/workspaces/{WS}/runners/enrollment-tokens"
+    invalid_ttls: list[Any] = ["600", None, True, 1.5, [], {}]
+    for ttl in invalid_ttls:
+        assert client.post(url, json={"ttlSeconds": ttl}, headers=headers).status_code == 400
+    issued = client.post(url, json={"ttlSeconds": 600}, headers=headers)
+    assert issued.status_code == 201
+    assert issued.headers["Cache-Control"] == "no-store"
+    body = {
+        "token": issued.json()["token"],
+        "name": "typed-desk",
+        "session": {**SESSION, "console": "false"},
+        "profile": PROFILE,
+    }
+    enroll_url = f"/v1/workspaces/{WS}/runners"
+    assert client.post(enroll_url, json=body, headers=headers).status_code == 400
+    body["session"] = {**SESSION, "console": False}
+    result = client.post(enroll_url, json=body, headers=headers)
+    assert result.status_code == 201, result.text
+    assert result.json()["status"] == "PREFLIGHT_REQUIRED"
 
 
 def _preflight_body(runner: dict[str, Any], **overrides: Any) -> dict[str, Any]:

@@ -847,3 +847,17 @@ authorization/tenant/configuration regression is committed for required CI, not 
 Generated OpenAPI and both operation clients were refreshed. No actual provider or reader call,
 production configuration write or deployment occurred. PR227 passed required CI and merged at
 9719e6f; local main was synchronized. Subsequent stacked work still awaits its gates.
+
+## Typed runner enrollment declarations — 2026-09-16
+
+Runner enrollment coerced the string `"false"` to boolean true, changing the physical desktop
+identity, and converted null/numeric profile values into strings. The HTTP boundary now validates
+closed, complete session/profile objects before token redemption, preserves actual booleans and
+refuses non-string identifiers. Token lifetime requires an integer instead of coercion that could
+accept booleans/fractions or throw an unhandled conversion error. Credential responses explicitly
+use no-store. This does not qualify a desktop or turn declarations into trusted runtime evidence.
+
+Nine focused parser checks, Ruff formatting/lint and strict mypy of changed Python files passed.
+A real-HTTP regression for invalid TTLs and non-consuming invalid enrollment is committed for CI;
+it has not been run locally. No real enrollment token was issued or reader started. The parent
+profile-preview PR's observed formatter-only CI failure was fixed on its own branch.
