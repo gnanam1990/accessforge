@@ -783,3 +783,18 @@ Production frontend build and 46 focused screen/contract checks passed. Three ne
 regressions cover source/build-to-seal composition without approval/run side effects, unknown
 registration retry and invalid-input refusal; the final field-label/UUID tightening was rechecked
 with those three tests. HTTP is synthetic. Required CI, normal review and deploy remain separate.
+
+## Canonical run lifecycle recovery — 2026-09-16
+
+The journey execution panel now reads the actual reserved run record. Only a confirmed 404 permits
+a new request; loading, unavailable and mismatched records do not become absence. Matching admitted
+runs expose their recorded status/outcome and an existing-run link instead of another request.
+After an unknown request response, the panel reads the same reserved identity and links to the
+admitted run when present, without another POST. If still absent, retry keeps the original key.
+Approval and run refresh retain component state and pending identities. A reconciled record replaces
+the obsolete unknown-response notice; it does not claim actual execution passed.
+
+Frontend build and eight focused canonical screen checks passed, including existing-run navigation,
+unavailable/mismatched record refusal and lost-response reconciliation. HTTP is synthetic; no actual
+reader, model or production run was started. The full baseline/repair/rerun acceptance remains open.
+This code slice requires normal source review, required exact-head CI and deployment.
