@@ -88,6 +88,8 @@ class ApiSettings(BaseSettings):
 
     host: str = "127.0.0.1"
     port: int = Field(default=8080, ge=1024, le=65535)
+    # Optional trusted built web directory, not a source/candidate root or a public file browser.
+    web_dist_directory: str | None = Field(default=None, min_length=1)
 
     @field_validator("database_url")
     @classmethod

@@ -20,6 +20,14 @@ remain unfinished; do not substitute setup history for fresh negative/unknown ru
 
 ## Current continuation queue — refreshed 2026-09-16
 
+Current build slice (`feat/same-origin-web`): optional `ACCESSFORGE_WEB_DIST_DIRECTORY` serves a
+bounded immutable trusted web snapshot through the API origin. SPA deep links and public assets
+work without a Vite development server; API/health handlers and OpenAPI remain unchanged. Private
+files, source maps, missing assets and build symlinks are not served. Eleven focused in-process
+checks pass; no service process, live database, model or reader is started by those checks. This
+closes a built-UI serving gap, not production identity, deployment or physical acceptance. The
+owner's instruction remains build-only, with actual VoiceOver runtime tests paused.
+
 Release packaging slice (`feat/release-bundle`): the trusted release workflow now builds web assets
 after required CI and uploads a downloadable source/web ZIP with checksum, exact source commit,
 per-file inventory and explicit limitations. The packager refuses dirty tracked inputs, symlinks

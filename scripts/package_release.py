@@ -85,6 +85,7 @@ def package(root: Path, web: Path, output: Path) -> str:
             "Install from source/ using uv sync --frozen and the operator documentation.\n"
             "See source/docs/operations/DEPLOYMENT.md for configuration and explicit migrations.\n"
             "Serve web/ static assets with SPA fallback and same-origin /v1 API routing.\n"
+            "Set ACCESSFORGE_WEB_DIST_DIRECTORY to the absolute web/ path for API UI serving.\n"
             "Do not use the Vite development server as production hosting.\n\n"
             "No credentials, dependencies, database, reader binaries or Codex login are bundled.\n"
             "AWS/Bedrock is retired. Codex OAuth is model integration, not a hosting provider.\n"
