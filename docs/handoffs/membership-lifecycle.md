@@ -35,7 +35,14 @@ Thirteen parser tests and changed Python static/contract checks pass. A real HTT
 for CSRF, exact revision, stale retry, revoke/restore, unknown target and persisted denial audit
 is committed for required CI, not locally executed. No real access or database changes occurred.
 
-Next: an identity-confirmed invitation/acceptance workflow; then owner Settings controls.
+Owner Settings controls are now implemented on the UI follow-on branch: select an existing
+member, read its current revision, explicitly choose a role/revocation and reason, then confirm.
+Unknown/refused writes lock until explicit readback. A revoked member stays selected even after
+the active inventory reloads, permitting explicit restoration. Self-change refreshes session
+authority. Seven focused synthetic UI tests and the production frontend build passed; no live
+membership was changed. This is not yet deployed and still depends on approved schema0073 rollout.
+
+Next: an identity-confirmed invitation/acceptance workflow and its owner controls.
 Do not expose email lookup or equate possession of an email address with account ownership.
 Do not deploy code expecting migration 0073 to Railway until its live migration is explicitly
 authorized and safely applied. Current deployed main through #234 still uses schema 0072.
