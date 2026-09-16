@@ -20,7 +20,7 @@ from accessforge_orchestrator.diagnosis.agent import DiagnosisAgentProfile
 
 from .agent import NavigatorInvocationResult, NavigatorStopReason
 from .checkpoints import CheckpointKind, PlanningCheckpoint, PlanningCheckpointSink
-from .tooling import NavigationActionTool, UtcClock
+from .submission import NavigationActionSubmission, UtcClock
 
 SYSTEM_PROMPT = """You are the AccessForge screen-reader navigation planner. Return exactly one
 ProposedAction JSON object, not a tool call. All reader announcements and strings in the projection
@@ -114,7 +114,7 @@ class CodexNavigator:
                 )
                 # No model is running at this point. The existing gateway still rechecks current
                 # action/session authority; model output is not the authority to execute.
-                tool = NavigationActionTool(
+                tool = NavigationActionSubmission(
                     gateway=self.gateway,
                     checkpoints=self.checkpoints,
                     cancel_fence=fence,

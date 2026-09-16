@@ -558,10 +558,16 @@ async def test_checkpoint_contract_refuses_reader_or_observer_payload_and_wrong_
 
 
 @pytest.mark.asyncio
-async def test_tool_checkpoints_metadata_but_never_reader_text_or_resolved_fixture_value() -> None:
+@pytest.mark.parametrize("core", [False, True])
+async def test_tool_checkpoints_metadata_but_never_reader_text_or_resolved_fixture_value(
+    core: bool,
+) -> None:
+    from accessforge_orchestrator.navigator.submission import NavigationActionSubmission
+
+    factory = NavigationActionSubmission if core else make_navigation_tool
     sink = RecordingSink()
     dispatched: list[Any] = []
-    navigation_tool = make_navigation_tool(
+    navigation_tool = factory(
         gateway=gateway(dispatched),
         checkpoints=sink,
         cancel_fence=Event(),
@@ -584,11 +590,15 @@ async def test_tool_checkpoints_metadata_but_never_reader_text_or_resolved_fixtu
 
 
 @pytest.mark.asyncio
-async def test_closed_invocation_fence_denies_a_late_tool_call() -> None:
+@pytest.mark.parametrize("core", [False, True])
+async def test_closed_invocation_fence_denies_a_late_tool_call(core: bool) -> None:
+    from accessforge_orchestrator.navigator.submission import NavigationActionSubmission
+
+    factory = NavigationActionSubmission if core else make_navigation_tool
     fence = Event()
     fence.set()
     dispatched: list[Any] = []
-    navigation_tool = make_navigation_tool(
+    navigation_tool = factory(
         gateway=gateway(dispatched),
         checkpoints=RecordingSink(),
         cancel_fence=fence,
@@ -607,10 +617,14 @@ class FailResolvedCheckpointSink(RecordingSink):
 
 
 @pytest.mark.asyncio
-async def test_post_dispatch_checkpoint_failure_is_ambiguous_and_fences_a_retry() -> None:
+@pytest.mark.parametrize("core", [False, True])
+async def test_post_dispatch_checkpoint_failure_is_ambiguous_and_fences_a_retry(core: bool) -> None:
+    from accessforge_orchestrator.navigator.submission import NavigationActionSubmission
+
+    factory = NavigationActionSubmission if core else make_navigation_tool
     fence = Event()
     dispatched: list[Any] = []
-    navigation_tool = make_navigation_tool(
+    navigation_tool = factory(
         gateway=gateway(dispatched),
         checkpoints=FailResolvedCheckpointSink(),
         cancel_fence=fence,
@@ -627,9 +641,15 @@ async def test_post_dispatch_checkpoint_failure_is_ambiguous_and_fences_a_retry(
 
 
 @pytest.mark.asyncio
-async def test_one_model_response_cannot_dispatch_two_actions_without_a_fresh_observation() -> None:
+@pytest.mark.parametrize("core", [False, True])
+async def test_one_model_response_cannot_dispatch_two_actions_without_a_fresh_observation(
+    core: bool,
+) -> None:
+    from accessforge_orchestrator.navigator.submission import NavigationActionSubmission
+
+    factory = NavigationActionSubmission if core else make_navigation_tool
     dispatched: list[Any] = []
-    navigation_tool = make_navigation_tool(
+    navigation_tool = factory(
         gateway=gateway(dispatched),
         checkpoints=RecordingSink(),
         cancel_fence=Event(),

@@ -143,3 +143,14 @@ The new duplicate-completion regression failed before the guard and passes after
 Codex completions are accepted, and historical Bedrock interpretation is unchanged. The two
 runtime-evidence test modules pass all 59 cases; Ruff and strict mypy pass. This is retained
 artifact interpretation coverage, not S3/export or physical reader acceptance.
+
+### Provider-independent action submission
+
+Codex now calls `NavigationActionSubmission`, a plain Python guarded gateway with no Strands
+base class, schema registry or streaming adapter. Existing claim-before-validation, cancellation,
+durable proposal/result checkpoints and ambiguous-effect fencing are preserved. The historical
+Strands tool is an adapter over that same implementation rather than a duplicate authority path.
+Four gateway boundary tests run against both implementations. All 58 focused navigator/contract/
+coordinator cases pass, as does strict mypy on the navigator package and modified test module.
+Legacy coordinator/type imports still load Strands elsewhere; complete dependency removal remains
+pending. No provider call, actual reader execution or operating-system change was performed.
