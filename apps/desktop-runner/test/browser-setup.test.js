@@ -34,6 +34,19 @@ test('reconciles the reserved nonce without a global reset and projects no crede
   assert.equal(JSON.stringify(projectSetupForNavigator(result)).includes(options.setupToken), false);
 });
 
+test('missing-label scenario reconciles only its approved variant and reveals no oracle metadata', async () => {
+  const variant = 'missing-label-v1';
+  const result = await prepareReferenceApp({ ...options, variant, launch,
+    fetch: async (url) => {
+      assert.equal(new URL(url).searchParams.get('variant'), variant);
+      return reply(200, { ...fixture, variant });
+    } });
+  assert.equal(result.fixture.variant, variant);
+  assert.deepEqual(projectSetupForNavigator(result), { startUrl: options.permittedOrigin + '/form/' + fixture.nonce });
+  await assert.rejects(prepareReferenceApp({ ...options, variant, launch: neverLaunch,
+    fetch: async () => reply(200, fixture) }), /fixture response does not match/);
+});
+
 test('caller cancellation aborts a pending HTTP response without launching or retrying', async (t) => {
   const controller = new AbortController(); let requests = 0, received;
   const ready = new Promise(resolve => { received = resolve; });

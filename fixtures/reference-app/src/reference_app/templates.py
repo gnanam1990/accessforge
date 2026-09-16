@@ -1,4 +1,4 @@
-"""Form markup in two variants.
+"""Form markup with explicitly labelled presentational defect variants.
 
 Both variants post to the same endpoint and are validated identically by the server. They differ
 only in how a validation error is exposed to assistive technology:
@@ -12,8 +12,10 @@ only in how a validation error is exposed to assistive technology:
                 the errors immediately; a screen-reader user is given no announcement and no way
                 to reach them other than re-reading the whole form.
 
-The inaccessible variant is a *labelled seeded defect*, not a discovered customer incident, and
-documents itself as such in the page source.
+  missing-label-v1  retains the accessible error behavior but removes the full-name input's
+                    programmatic label association, preserving its visible label text.
+
+Defect variants are labelled seeded defects, not discovered customer incidents.
 """
 
 from __future__ import annotations
@@ -21,13 +23,14 @@ from __future__ import annotations
 import hashlib
 import html
 
+from .fixture_definition import PRESENTATION_VARIANTS
 from .fixture_definition import template_digest as template_digest
 from .validation import ALLOWED_CATEGORIES, FieldError
 
 _BASE_STYLE = """
   :root { color-scheme: light dark; }
   body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 2rem; max-width: 40rem; }
-  label { display: block; font-weight: 600; margin-top: 1.25rem; }
+  label, .label-text { display: block; font-weight: 600; margin-top: 1.25rem; }
   input, select, textarea { width: 100%; padding: .5rem; margin-top: .25rem;
                             font: inherit; box-sizing: border-box; }
   button { margin-top: 1.5rem; padding: .6rem 1.2rem; font: inherit; }
@@ -45,6 +48,7 @@ def _field(
     value: str,
     error: str | None,
     accessible: bool,
+    missing_label: bool = False,
 ) -> str:
     described_by = ""
     invalid = ""
@@ -77,7 +81,12 @@ def _field(
         ident = f' id="{name}-error"' if accessible else ""
         message = f'<p class="error"{ident}>{html.escape(error)}</p>'
 
-    return f'<label for="{name}">{html.escape(label)}</label>{control}{message}'
+    label_markup = (
+        f'<span class="label-text">{html.escape(label)}</span>'
+        if missing_label
+        else f'<label for="{name}">{html.escape(label)}</label>'
+    )
+    return f"{label_markup}{control}{message}"
 
 
 def render_form(
@@ -88,7 +97,9 @@ def render_form(
     errors: list[FieldError] | None = None,
     receipt_id: str | None = None,
 ) -> str:
-    accessible = variant == "accessible"
+    if variant not in PRESENTATION_VARIANTS:
+        raise ValueError("unknown reference presentation variant")
+    accessible = variant != "inaccessible"
     values = values or {}
     by_field = {e.field: e.message for e in (errors or [])}
 
@@ -121,6 +132,7 @@ def render_form(
                     value=values.get("full_name", ""),
                     error=by_field.get("full_name"),
                     accessible=accessible,
+                    missing_label=variant == "missing-label-v1",
                 ),
                 _field(
                     name="email",
@@ -168,6 +180,12 @@ def render_form(
         else "<!-- Reference accessible behaviour: live-region announcement, programmatic "
         "error association, focus moved to the first invalid field. -->"
     )
+    if variant == "missing-label-v1":
+        defect_note = (
+            "<!-- SEEDED DEFECT missing-label-v1 (not a customer incident): visible full-name "
+            "text has no programmatic association with its input. Error announcements, "
+            "error recovery and server-side validation are unchanged. -->"
+        )
 
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -179,7 +197,7 @@ def render_form(
 
 def presentation_digest(variant: str) -> str:
     """Diagnostic HTML digest, not the frozen logical fixture identity."""
-    if variant not in ("accessible", "inaccessible"):
+    if variant not in PRESENTATION_VARIANTS:
         raise ValueError("unknown reference presentation variant")
     rendered = render_form(nonce="DIGEST", variant=variant)
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()

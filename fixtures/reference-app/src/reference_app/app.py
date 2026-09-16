@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from . import db, templates
 from .config import ReferenceAppSettings
 from .fixture_contract import REFERENCE_FIXTURE_VERSION
-from .fixture_definition import template_digest
+from .fixture_definition import PRESENTATION_VARIANTS, template_digest
 from .validation import validate_service_request
 
 
@@ -78,7 +78,7 @@ def create_app(settings: ReferenceAppSettings | None = None) -> FastAPI:
             str | None, Query(min_length=16, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
         ] = None,
     ) -> dict[str, str]:
-        if variant not in ("accessible", "inaccessible"):
+        if variant not in PRESENTATION_VARIANTS:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown variant")
         # The trusted controller may persist this identity before its HTTP call. An uncertain
         # response can then be reconciled without creating another instance or clearing any run.
