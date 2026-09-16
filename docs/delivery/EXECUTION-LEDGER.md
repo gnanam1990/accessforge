@@ -20,6 +20,14 @@ remain unfinished; do not substitute setup history for fresh negative/unknown ru
 
 ## Current continuation queue — refreshed 2026-09-16
 
+Release packaging slice (`feat/release-bundle`): the trusted release workflow now builds web assets
+after required CI and uploads a downloadable source/web ZIP with checksum, exact source commit,
+per-file inventory and explicit limitations. The packager refuses dirty tracked inputs, symlinks
+and overwrite, and excludes untracked source secrets. This is build output, not deployment or
+reader/model acceptance. The owner requested build-only work; actual VoiceOver tests remain paused.
+Private operator provisioning and stale-input measurement are still open; packaging does not close
+those runtime integration gaps. #197 cancellation changes remain a separate PR pending exact-head CI.
+
 Qualification setup follow-on (`feat/qualification-reference-preparation`): after #195 merged
 as `583bc1b6c222bf98cae77c47a68b380ace47c643`, the labelled candidate host now composes the
 same optional reference preparation before its first preflight, after action validation. It
