@@ -84,6 +84,88 @@ const JOURNEY = {
   createdAt: '2026-09-10T00:00:00Z',
 }
 
+describe('canonical execution decisions', () => {
+  const setupCanonical = (role = 'MAINTAINER', unknownOnce = false, mismatched = false) => {
+    const server = createFakeServer({ ...MEMBER, workspaces: [{ workspaceId: 'ws-1', name: 'Alder', role }] })
+    server.data.journeyVersions.push(JOURNEY)
+    server.data.sealedManifests.push({ ...MANIFEST, manifestKind: 'CANONICAL_EXECUTION', runId: 'reserved-1' })
+    let approval: Record<string, unknown> | null = null
+    const writes: { path: string; body: Record<string, unknown>; headers: Headers }[] = []
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value),
+      { status, headers: { 'content-type': 'application/json' } })
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const path = String(input)
+      if (path.endsWith('/seals/m-1')) return json({ sealedManifestId: 'm-1',
+        manifestDigest: mismatched ? 'wrong' : MANIFEST.manifestDigest, manifestKind: 'CANONICAL_EXECUTION', revision: 2,
+        canonicalManifest: { runId: 'reserved-1', authorizationId: 'approval-1', expiresAt: '2099-12-31T00:00:00Z',
+          permittedEffects: ['NAVIGATE'], actionBudget: 10, wallTimeBudgetSeconds: 60 } })
+      if (path.endsWith('/seals/m-1/approval')) {
+        if (init?.method === 'POST') {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>
+          writes.push({ path, body, headers: new Headers(init.headers) })
+          if (unknownOnce && writes.length === 1) throw new TypeError('response lost')
+          approval = { approvalId: 'approval-1', targetId: 'm-1', targetDigest: body['manifestDigest'],
+            expectedRevision: 2, scope: 'RUN_EFFECTS', expiresAt: body['expiresAt'], revokedAt: null,
+            meaning: 'Stored decision; not live dispatch readiness.' }
+        }
+        return approval === null ? json({ code: 'RESOURCE_NOT_FOUND', detail: 'No approval', title: 'Absent' }, 404) : json(approval)
+      }
+      return server.fetch(input, init)
+    }
+    renderAt({ ...server, fetch: fetchImpl }, '/w/ws-1/projects/p-1/journeys/j-1')
+    return { server, writes }
+  }
+  const selectCanonical = async () => {
+    const user = userEvent.setup()
+    await user.selectOptions(await screen.findByLabelText('Execution manifest'), 'm-1')
+    await screen.findByRole('heading', { name: 'Review exact execution scope' })
+    return user
+  }
+  it('offers reserved canonical identities, reviews scope, approves and queues as separate actions', async () => {
+    const { server, writes } = setupCanonical()
+    const user = await selectCanonical()
+    expect(screen.getByText(/"actionBudget": 10/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Request this approved run' })).not.toBeInTheDocument()
+    await user.type(await screen.findByLabelText(/Approval expires at/), '2099-01-01T00:00:00Z')
+    await user.click(screen.getByLabelText(/I reviewed the complete manifest/))
+    await user.click(screen.getByRole('button', { name: 'Approve exact execution' }))
+    const runButton = await screen.findByRole('button', { name: 'Request this approved run' })
+    expect(server.bodies.filter((entry) => entry.url.endsWith('/runs'))).toEqual([])
+    expect(writes[0]?.headers.get('if-match')?.replaceAll('"', '')).toBe('2')
+    expect(writes[0]?.body).toEqual({ manifestDigest: MANIFEST.manifestDigest, expiresAt: '2099-01-01T00:00:00.000Z' })
+    await user.click(runButton)
+    expect(await screen.findByRole('link', { name: 'Open requested run' })).toBeVisible()
+    expect(server.bodies.find((entry) => entry.url.endsWith('/runs'))?.body)
+      .toEqual({ manifestDigest: MANIFEST.manifestDigest })
+  })
+  it('keeps the same approval identity and locked payload after an unknown response', async () => {
+    const { writes } = setupCanonical('OWNER', true)
+    const user = await selectCanonical()
+    await user.type(await screen.findByLabelText(/Approval expires at/), '2099-01-01T00:00:00Z')
+    await user.click(screen.getByLabelText(/I reviewed the complete manifest/))
+    await user.click(screen.getByRole('button', { name: 'Approve exact execution' }))
+    expect(await screen.findByText(/Approval outcome is unknown/)).toBeVisible()
+    expect(screen.getByLabelText(/Approval expires at/)).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Retry same approval' }))
+    await screen.findByRole('button', { name: 'Request this approved run' })
+    expect(writes[0]?.headers.get('idempotency-key')).toBe(writes[1]?.headers.get('idempotency-key'))
+    expect(writes[0]?.body).toEqual(writes[1]?.body)
+  })
+  it('leaves reviewers read-only', async () => {
+    setupCanonical('REVIEWER')
+    await selectCanonical()
+    expect(await screen.findByText(/Only a workspace owner or maintainer/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Approve exact execution' })).not.toBeInTheDocument()
+  })
+  it('refuses controls when seal inspection does not match the selected digest', async () => {
+    setupCanonical('OWNER', false, true)
+    const user = userEvent.setup()
+    await user.selectOptions(await screen.findByLabelText('Execution manifest'), 'm-1')
+    expect(await screen.findByRole('heading', { name: 'Execution scope could not be matched' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Approve exact execution' })).not.toBeInTheDocument()
+  })
+})
+
 describe('projects', () => {
   it('refuses a repository without the person who authorized it, and says why', async () => {
     const user = userEvent.setup()

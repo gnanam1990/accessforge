@@ -67,6 +67,7 @@ import { useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
 import { useJourneyId } from './useJourneyId'
 import { useProjectId } from './useProjectId'
+import { CanonicalExecution } from './CanonicalExecution'
 
 const Digest = ({ label, value }: { readonly label: string; readonly value: string }): JSX.Element => (
   <>
@@ -104,6 +105,7 @@ export const JourneyScreen = (): JSX.Element => {
   const [requested, setRequested] = useState<RunRequested | null>(null)
   const [refusal, setRefusal] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [selectedSealId, setSelectedSealId] = useState('')
 
   /** The confirmation ended, one way or another: the key belongs to that one confirmation. */
   const finishConfirmation = (): void => {
@@ -248,6 +250,25 @@ export const JourneyScreen = (): JSX.Element => {
             </p>
             <ResourceView resource={manifests} what="this project's sealed manifests">
               {(page) => {
+                const canonical = page.items.filter((manifest) =>
+                  manifest.journeyDigest === journey.journeyDigest &&
+                  manifest.manifestKind === 'CANONICAL_EXECUTION')
+                if (canonical.length > 0) {
+                  const selected = canonical.find((manifest) => manifest.sealedManifestId === selectedSealId)
+                  return <div className="af-stack">
+                    {!page.complete && <p>Only part of the manifest inventory was loaded. An omitted seal is not evidence of absence.</p>}
+                    <label>Execution manifest
+                      <select value={selectedSealId} onChange={(event) => setSelectedSealId(event.target.value)}>
+                        <option value="">Choose a manifest to review</option>
+                        {canonical.map((manifest) => <option key={manifest.sealedManifestId} value={manifest.sealedManifestId}>
+                          {manifest.environmentName ?? 'Environment not recorded'} — {manifest.manifestDigest}
+                        </option>)}
+                      </select>
+                    </label>
+                    {selected !== undefined && <CanonicalExecution key={selected.sealedManifestId}
+                      workspaceId={workspaceId} projectId={projectId} manifest={selected} />}
+                  </div>
+                }
                 const usable = page.items.filter(
                   (manifest) =>
                     manifest.journeyDigest === journey.journeyDigest && manifest.runId === null,

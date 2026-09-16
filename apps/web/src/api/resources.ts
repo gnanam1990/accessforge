@@ -341,6 +341,7 @@ export interface CancellationRequested {
 }
 
 export interface SealedManifest {
+  readonly manifestKind?: 'INPUT_FINGERPRINT' | 'CANONICAL_EXECUTION';
   readonly sealedManifestId: string;
   readonly manifestDigest: string;
   readonly journeyDigest: string;
@@ -358,6 +359,43 @@ export interface SealedManifest {
   readonly runId: string | null;
   readonly createdAt: string;
 }
+
+export interface ExecutionSeal {
+  readonly sealedManifestId: string;
+  readonly manifestDigest: string;
+  readonly manifestKind: 'INPUT_FINGERPRINT' | 'CANONICAL_EXECUTION';
+  readonly canonicalManifest: Record<string, unknown> | null;
+  readonly revision: number;
+}
+
+export interface ExecutionApproval {
+  readonly approvalId: string;
+  readonly targetId: string;
+  readonly targetDigest: string;
+  readonly expectedRevision: number;
+  readonly scope: string;
+  readonly expiresAt: string;
+  readonly revokedAt: string | null;
+  readonly meaning: string;
+}
+
+const sealPath = (workspaceId: string, projectId: string, sealId: string): string =>
+  `/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/seals/${encodeURIComponent(sealId)}`;
+
+export const readExecutionSeal = (client: ApiClient, workspaceId: string, projectId: string,
+  sealId: string, signal: AbortSignal): Promise<ApiOutcome<ExecutionSeal>> =>
+  client.request(sealPath(workspaceId, projectId, sealId), { signal });
+
+export const readExecutionApproval = (client: ApiClient, workspaceId: string, projectId: string,
+  sealId: string, signal: AbortSignal): Promise<ApiOutcome<ExecutionApproval>> =>
+  client.request(`${sealPath(workspaceId, projectId, sealId)}/approval`, { signal });
+
+export const approveExecutionSeal = (client: ApiClient, workspaceId: string, projectId: string,
+  seal: ExecutionSeal, expiresAt: string, idempotencyKey: string): Promise<ApiOutcome<ExecutionApproval>> =>
+  client.request(`${sealPath(workspaceId, projectId, seal.sealedManifestId)}/approval`, {
+    method: 'POST', body: { manifestDigest: seal.manifestDigest, expiresAt },
+    ifMatch: seal.revision, idempotencyKey,
+  });
 
 const base = (workspaceId: string): string =>
   `/v1/workspaces/${encodeURIComponent(workspaceId)}`;

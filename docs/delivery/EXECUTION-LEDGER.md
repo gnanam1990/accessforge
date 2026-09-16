@@ -742,3 +742,24 @@ diagnosis and constrained repair → independent rerun → human review/export. 
 membership mutations and retention edits still lack complete browser authoring surfaces.
 The current user instruction excludes actual VoiceOver/AT testing; do not claim those results
 or replace them with synthetic evidence. No public submission has been performed.
+
+## Canonical execution browser continuation — 2026-09-16
+
+First-workspace setup PR #224, head `4a2c174fd9c65c3b09c9456f779c45236713e717`, is deployed
+as `c927004b-224c-4f99-973e-a96350c297cc` (SUCCESS). The authenticated production OWNER Settings
+page visibly presents the first allowance form, with all unsaved limits zero. No allowance was
+submitted. Required Python CI remains pending at this checkpoint; other applicable checks passed.
+
+A separate frontend continuation repairs another genuine flow break: canonical seals reserve a
+run ID before admission, but the legacy journey UI hid every manifest with a non-null run ID.
+Canonical seals now have an explicit selector and exact immutable scope inspection. OWNER and
+MAINTAINER can separately record bounded RUN_EFFECTS approval using the reviewed revision and
+then request the approved run. Existing server authority/admission gates remain unchanged.
+Unknown approval responses retain a locked payload and idempotency key; run retries also retain
+their key. Other roles stay read-only. Neither receipt is presented as execution or a passing result.
+
+Frontend production build and 40 focused screen checks passed, including four new canonical
+selection/approval, unknown-response retry, role and mismatched-target regressions. These are
+synthetic HTTP checks, not actual execution. Source/build registration and canonical manifest
+creation still need their operator/API workflow; this browser slice does not fabricate provenance.
+This continuation requires normal review, exact-head CI/merge and deployment verification.
