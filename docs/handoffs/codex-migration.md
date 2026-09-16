@@ -123,3 +123,14 @@ remain to verify. No live migration, deployment or OS permission change occurred
 Official references: [Codex authentication](https://developers.openai.com/codex/auth),
 [SDK integration](https://developers.openai.com/codex/sdk), and
 [app-server protocol](https://learn.chatgpt.com/docs/app-server).
+
+### PostgreSQL admission correction
+
+The real database check exposed a legacy-only runtime receipt trigger. Forward migration 0070
+adds the exact Codex provider/CLI-meaning pair while retaining the legacy provider/HTTP-meaning
+pair, immutable receipts, workspace isolation and the original open invocation/profile binding.
+No historical migration, consent or receipt is rewritten. The real API/session/reservation and
+receipt-retention test now covers both providers: 2 cases pass under a disposable non-superuser
+database role. All 39 forward-migration/interruption checks pass in their disposable databases.
+The temporary databases and role were removed. These are synthetic receipt integration checks,
+not actual reader or live-provider acceptance; no live database migration was performed.
