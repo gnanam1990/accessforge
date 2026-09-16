@@ -7714,6 +7714,39 @@ def test_enrollment_refuses_coercion_before_consuming_token(client: TestClient, 
     assert result.json()["status"] == "PREFLIGHT_REQUIRED"
 
 
+def test_enrollment_key_replays_receipt_without_redeeming_token_again(
+    client: TestClient, csrf: str, db: str
+) -> None:
+    headers = {CSRF_HEADER: csrf, "Idempotency-Key": str(uuid.uuid4())}
+    token = client.post(
+        f"/v1/workspaces/{WS}/runners/enrollment-tokens", json={}, headers={CSRF_HEADER: csrf}
+    )
+    assert token.status_code == 201
+    body = {
+        "token": token.json()["token"],
+        "name": "recoverable",
+        "session": SESSION,
+        "profile": PROFILE,
+    }
+    url = f"/v1/workspaces/{WS}/runners"
+    first = client.post(url, json=body, headers=headers)
+    assert first.status_code == 201, first.text
+    retry = client.post(url, json=body, headers=headers)
+    assert retry.status_code == 201 and retry.json() == first.json()
+    assert retry.headers["Idempotent-Replay"] == "true"
+    assert retry.headers["Cache-Control"] == "no-store"
+    assert client.post(url, json={**body, "name": "different"}, headers=headers).status_code == 409
+    with workspace_connection(db, WS) as conn:
+        assert len(conn.execute("SELECT id FROM runner").fetchall()) == 1
+        operation = conn.execute(
+            "SELECT result FROM operation WHERE route='POST /runners' AND idempotency_key=%s",
+            (headers["Idempotency-Key"],),
+        ).fetchone()
+        assert operation is not None and body["token"] not in json.dumps(operation)
+        conn.execute("UPDATE workspace_membership SET role='VIEWER' WHERE user_id=%s", (OWNER,))
+    assert client.post(url, json=body, headers=headers).status_code == 403
+
+
 def _preflight_body(runner: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
 

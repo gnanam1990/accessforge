@@ -25,6 +25,15 @@ Enrollment still produces `PREFLIGHT_REQUIRED`, and the result's stored profile 
 the reviewed profile. Reader qualification, explicit consent, run admission and runtime evidence
 remain separate. A changed console/session requires fresh observation, not editing an old JSON.
 
+Supply one bounded `Idempotency-Key` (1–200 characters) on the enrollment POST and retain that key
+with the reviewed request until the result is known. If a response is lost, retry only the exact
+same key and body while current workspace authority remains valid. The server replays the original
+receipt with `Idempotent-Replay: true`, without consuming the token a second time. A changed body
+with the same key conflicts. The receipt describes enrollment, not current runner readiness: read
+the inventory for current status. The existing idempotency retention window applies; do not assume
+indefinite replay. Without a key, legacy callers remain single-use and cannot recover by retry.
+Token issuance itself is not replayed; never create another token automatically after uncertainty.
+
 Local development checks use injected observations only. They do not establish actual host support
 or authorize startup. A native observation on the user's machine has not been performed for this
 change.
