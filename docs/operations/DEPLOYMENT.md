@@ -141,6 +141,13 @@ are not bundled: installation remains the locked source workflow above. Static w
 provide SPA fallback and same-origin `/v1` API routing. Actual reader, model, repair/rerun/review,
 fresh-install and hosted acceptance remain separate requirements.
 
+Before upload, the workflow extracts that same ZIP into a new directory, runs
+`uv sync --frozen --no-dev` there, then executes `scripts/check_release_install.py` with the
+extracted environment's isolated Python. It checks API/worker imports resolve inside the extracted
+source and loads the packaged schema/migration series. This catches missing runtime dependencies
+and source assets; it does not start services, connect to a database, migrate or prove a complete
+fresh product deployment.
+
 ### Service upgrade order
 
 1. **Take a backup.** A migration is the change a restore exists for.

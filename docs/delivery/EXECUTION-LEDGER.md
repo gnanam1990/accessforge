@@ -27,6 +27,12 @@ and overwrite, and excludes untracked source secrets. This is build output, not 
 reader/model acceptance. The owner requested build-only work; actual VoiceOver tests remain paused.
 Private operator provisioning and stale-input measurement are still open; packaging does not close
 those runtime integration gaps. #197 cancellation changes remain a separate PR pending exact-head CI.
+Local release rehearsal: the bundle at source commit `6165368241ca5e9df3508033d5b4ffd82900acb5`
+was extracted into a new directory and installed with frozen, non-dev dependencies. All four
+API/navigator/diagnosis/repair modules imported; six schemas and seventy migration files loaded.
+No services were started and no migrations executed. The workflow now performs an isolated-Python
+extracted-source import check before upload. This establishes install/import behavior, not the
+complete fresh-install product path or actual reader/model execution.
 
 Qualification setup follow-on (`feat/qualification-reference-preparation`): after #195 merged
 as `583bc1b6c222bf98cae77c47a68b380ace47c643`, the labelled candidate host now composes the

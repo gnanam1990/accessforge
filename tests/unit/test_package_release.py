@@ -103,6 +103,17 @@ def test_release_workflow_builds_after_ci_without_deployment() -> None:
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     assert "--frozen-lockfile --ignore-scripts" in commands
     assert commands.index("@accessforge/web build") < commands.index("package_release.py")
+    assert "uv sync --frozen --no-dev --project rehearsal/source" in commands
+    assert "python -I rehearsal/source/scripts/check_release_install.py" in commands
+    install_index = next(
+        i
+        for i, step in enumerate(job["steps"])
+        if "check_release_install.py" in step.get("run", "")
+    )
+    upload_index = next(
+        i for i, step in enumerate(job["steps"]) if step.get("uses") == "actions/upload-artifact@v4"
+    )
+    assert install_index < upload_index
     upload = next(step for step in job["steps"] if step.get("uses") == "actions/upload-artifact@v4")
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["path"].split() == [

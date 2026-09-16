@@ -141,6 +141,14 @@ jobs:
       - name: Package committed source and web bytes
         run: |
           python scripts/package_release.py --output accessforge-release.zip > accessforge-release.sha256
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.28"
+      - name: Verify clean extracted source installation without services
+        run: |
+          python -m zipfile -e accessforge-release.zip rehearsal
+          uv sync --frozen --no-dev --project rehearsal/source
+          rehearsal/source/.venv/bin/python -I rehearsal/source/scripts/check_release_install.py
       - uses: actions/upload-artifact@v4
         with:
           name: accessforge-release-${{ github.sha }}
