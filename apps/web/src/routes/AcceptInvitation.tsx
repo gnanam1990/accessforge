@@ -5,7 +5,7 @@ import { useSession } from '../session/SessionProvider'
 import type { InvitationReference } from './invitationReference'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const ROLES = ['OWNER', 'ENGINEER', 'REVIEWER', 'VIEWER']
+const ROLES = ['OWNER', 'MAINTAINER', 'REVIEWER', 'VIEWER']
 type Offer = {
   workspaceId: string; invitationId: string; workspaceName: string; role: string
   reason: string; expiresAt: string; state: string; revision: number

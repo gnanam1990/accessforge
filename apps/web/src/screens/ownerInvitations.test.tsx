@@ -7,9 +7,9 @@ import { ApiClient } from '../api/client'
 import type { MembershipInvitation } from '../api/resources'
 import { createFakeServer } from '../test/fakeServer'
 
-const setup = (mode = 'normal', role = 'OWNER') => {
+const setup = (mode = 'normal', role = 'OWNER', workspaceId = 'ws-1') => {
   const server = createFakeServer({ userId: 'u-owner', email: 'owner@example.test',
-    workspaces: [{ workspaceId: 'ws-1', name: 'Alder', role }] })
+    workspaces: [{ workspaceId, name: 'Alder', role }] })
   const records = new Map<string, MembershipInvitation>()
   if (mode === 'pages') {
     for (const suffix of ['1', '2']) {
@@ -57,7 +57,7 @@ const setup = (mode = 'normal', role = 'OWNER') => {
     }
     return server.fetch(input, init)
   }
-  render(<MemoryRouter initialEntries={['/w/ws-1/settings']}>
+  render(<MemoryRouter initialEntries={[`/w/${workspaceId}/settings`]}>
     <App client={new ApiClient({ fetchImpl, cookieSource: () => '' })} />
   </MemoryRouter>)
   return writes
@@ -73,6 +73,26 @@ const fill = async () => {
 }
 
 describe('owner invitation offers', () => {
+  it('offers a same-origin reference link only while the selected invitation is pending', async () => {
+    const workspace = '11111111-1111-4111-8111-111111111111'
+    const writes = setup('normal', 'OWNER', workspace)
+    const user = await fill()
+    await user.click(screen.getByRole('button', { name: 'Create invitation offer' }))
+    const link = await screen.findByLabelText('Invitation link')
+    expect(link).toHaveAttribute('readonly')
+    const address = new URL((link as HTMLInputElement).value)
+    expect(address.origin).toBe(window.location.origin)
+    expect(address.pathname).toBe('/workspaces')
+    expect(address.searchParams.get('invitationWorkspace')).toBe(workspace)
+    expect(address.searchParams.get('invitationId')).toMatch(/^[0-9a-f-]{36}$/)
+    expect([...address.searchParams.keys()]).toEqual(['invitationWorkspace', 'invitationId'])
+    expect(writes).toHaveLength(1)
+    await user.click(screen.getByLabelText('Confirm invitation revocation'))
+    await user.click(screen.getByRole('button', { name: 'Revoke invitation offer' }))
+    await screen.findByText(/state REVOKED; revision 2/)
+    expect(screen.queryByLabelText('Invitation link')).not.toBeInTheDocument()
+  })
+
   it('pages history explicitly and keeps a selected offer available across pages', async () => {
     setup('pages')
     const user = userEvent.setup()
