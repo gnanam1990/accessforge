@@ -932,3 +932,18 @@ performed. Exported copies and backup limitations remain visible.
 
 The production frontend build and 23 focused synthetic Settings/retention checks passed. These
 checks do not constitute live retention processing, native reader qualification or full acceptance.
+
+## Reference candidate provisioning assembly — 2026-09-16
+
+The shipped `createReferenceCandidateProvisioner` now assembles the private
+`provisionCandidateProof` export consumed by the existing candidate host. It snapshots and checks
+original desktop/session, fixture/build/browser bindings, bounded actions and exact approved
+typing before any execution. Preparation/startup/action authorities remain explicit. Live
+stale-input observation preserves unavailable evidence and rejects malformed/late results.
+Provisioning is one-shot and inert; the existing host retains output/journal/claim ownership and
+all physical gates. See [operator handoff](../handoffs/reference-candidate-provisioning.md).
+
+Desktop build and seven focused synthetic checks passed. No real host/reader/model operation.
+This supersedes the older missing-candidate-factory statement, not the outstanding real private
+provisioning, independent stale-input measurement or physical acceptance requirements. Production
+factory `reference-native-provisioner.ts` already existed and was not reimplemented.
