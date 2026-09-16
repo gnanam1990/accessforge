@@ -7,7 +7,8 @@
  *
  * The module prompt's stop condition is explicit about what to do in that case: "If Windows access or
  * setup authority is unavailable, finish only independent adapter/contract work and mark real
- * integration BLOCKED." So this file is the contract work and nothing more.
+ * integration BLOCKED." This file retains that contract; runtime.ts adds an independently
+ * buildable narrow driver without claiming a qualified Windows session or runner integration.
  *
  * ## What this package deliberately does not do
  *
@@ -30,6 +31,8 @@
  */
 
 export type ProfileStatus = 'BLOCKED' | 'VERIFIED';
+export { NvdaAdapter, createGuidepupNvdaAdapter } from './runtime.js';
+export type { NvdaClient, NvdaCapture, NvdaContext } from './runtime.js';
 
 export interface WindowsMatrix {
   readonly windows: string;
