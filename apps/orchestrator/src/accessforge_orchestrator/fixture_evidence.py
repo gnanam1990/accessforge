@@ -46,7 +46,14 @@ def observed_fixture(
         or application["templateDigest"] != REFERENCE_FIXTURE_DIGEST
         or fixture["template_digest"] != REFERENCE_FIXTURE_DIGEST
         or fixture["template_id"] != "service-request"
-        or application["variant"] not in {"accessible", "inaccessible", "missing-label-v1"}
+        or application["variant"]
+        not in {
+            "accessible",
+            "inaccessible",
+            "missing-label-v1",
+            "broken-focus-v1",
+            "keyboard-trap-v1",
+        }
         or type(application["effectCount"]) is not int
         or application["effectCount"] != 0
         or final_source["fixtureIdentityDigest"]

@@ -9,6 +9,8 @@ fixing something that was never the defect.
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -135,7 +137,9 @@ def test_missing_label_variant_is_isolated_from_error_recovery() -> None:
 
 def test_missing_label_preserves_backend_identity_and_success_receipt() -> None:
     assert template_digest("missing-label-v1") == template_digest("accessible")
-    assert len({presentation_digest(variant) for variant in PRESENTATION_VARIANTS}) == 3
+    assert len({presentation_digest(variant) for variant in PRESENTATION_VARIANTS}) == len(
+        PRESENTATION_VARIANTS
+    )
     actual = _COMMENT.sub("", render_form(nonce="n1", variant="missing-label-v1", receipt_id="r1"))
     control = _COMMENT.sub("", render_form(nonce="n1", variant="accessible", receipt_id="r1"))
     assert actual == control
@@ -144,3 +148,79 @@ def test_missing_label_preserves_backend_identity_and_success_receipt() -> None:
 def test_unknown_presentation_is_not_silently_rendered_as_a_seeded_defect() -> None:
     with pytest.raises(ValueError):
         render_form(nonce="n1", variant="missing-label-v2")
+
+
+def test_broken_focus_is_exactly_the_missing_recovery_script() -> None:
+    control = _markup("accessible")
+    script = "<script>document.getElementById('email').focus();</script>"
+    assert script in control
+    assert _markup("broken-focus-v1") == control.replace(script, "")
+    assert "SEEDED DEFECT broken-focus-v1" in _render("broken-focus-v1")
+    assert template_digest("broken-focus-v1") == template_digest("accessible")
+
+
+@pytest.mark.parametrize("receipt", [None, "r1"])
+def test_focus_defect_does_not_change_initial_or_success_markup(receipt: str | None) -> None:
+    control = render_form(nonce="n1", variant="accessible", receipt_id=receipt)
+    broken = render_form(nonce="n1", variant="broken-focus-v1", receipt_id=receipt)
+    assert _COMMENT.sub("", broken) == _COMMENT.sub("", control)
+
+
+@pytest.mark.parametrize("phase", ["initial", "invalid", "receipt"])
+def test_keyboard_trap_changes_only_its_isolated_listener(phase: str) -> None:
+    def page(variant: str) -> str:
+        return _COMMENT.sub(
+            "",
+            render_form(
+                nonce="n1",
+                variant=variant,
+                values=VALUES,
+                errors=ERRORS if phase == "invalid" else None,
+                receipt_id="r1" if phase == "receipt" else None,
+            ),
+        )
+
+    control, trapped = page("accessible"), page("keyboard-trap-v1")
+    listener = re.compile(r'<script id="seeded-keyboard-trap">.*?</script>', re.S)
+    assert len(listener.findall(trapped)) == (0 if phase == "receipt" else 1)
+    assert listener.sub("", trapped) == control
+    assert template_digest("keyboard-trap-v1") == template_digest("accessible")
+
+
+def test_keyboard_trap_listener_cancels_only_plain_tab_in_both_directions() -> None:
+    """Execute emitted JS against synthetic event targets, not a browser/AT qualification."""
+    markup = _render("keyboard-trap-v1")
+    match = re.search(r'<script id="seeded-keyboard-trap">(.*?)</script>', markup, re.S)
+    assert match is not None
+    node = shutil.which("node")
+    assert node is not None, "the pinned Node toolchain is required"
+    harness = r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+let listener, registrations = 0;
+const document = {getElementById(id) {
+  assert.equal(id, 'description');
+  return {addEventListener(type, callback) {
+    assert.equal(type, 'keydown'); registrations++; listener = callback;
+  }};
+}};
+vm.runInNewContext(require('node:fs').readFileSync(0, 'utf8'), {document}, {timeout: 1000});
+assert.equal(registrations, 1);
+for (const key of ['Tab', 'Escape', 'Enter', 'ArrowRight', 'a']) {
+  for (let mask = 0; mask < 16; mask++) {
+    let prevented = 0;
+    listener({key, shiftKey: !!(mask & 1), altKey: !!(mask & 2),
+      ctrlKey: !!(mask & 4), metaKey: !!(mask & 8),
+      preventDefault() {prevented++;}});
+    assert.equal(prevented, key === 'Tab' && (mask & 14) === 0 ? 1 : 0);
+  }
+}
+"""
+    subprocess.run(  # noqa: S603 - fixed Node harness and owned emitted fixture script.
+        [node, "-e", harness],
+        input=match[1],
+        text=True,
+        check=True,
+        capture_output=True,
+        timeout=5,
+    )
