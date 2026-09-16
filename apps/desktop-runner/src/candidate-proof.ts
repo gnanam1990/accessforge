@@ -43,9 +43,9 @@ export interface CandidateProofOptions {
   /** Fresh physical measurements, not a saved setup report. Never starts/enables the reader. */
   readonly preflight: () => Promise<PreflightReport>;
   /** Trusted operator consent and reader-control configuration check; no default authorization. */
-  readonly authorizeReaderStartup: () => Promise<void>;
+  readonly authorizeReaderStartup: (signal: AbortSignal) => Promise<void>;
   /** Trusted host focus/effect gate; resolved before the same late-dispatch fence as preflight. */
-  readonly authorizePhysicalAction?: (request: ActionRequest) => Promise<void>;
+  readonly authorizePhysicalAction?: (request: ActionRequest, signal: AbortSignal) => Promise<void>;
   readonly trace: CandidateTraceWriter;
   readonly journal: Journal;
   readonly clock: Clock;
@@ -105,14 +105,16 @@ export class CandidateProofRunner {
     if (!Number.isFinite(lifecycleTimeout) || lifecycleTimeout <= 0 || lifecycleTimeout > 30000) {
       throw new Error('candidate reader lifecycle deadline must be bounded');
     }
-    const bounded = async (operation: Promise<void>): Promise<void> => {
+    const bounded = async (operation: (signal: AbortSignal) => Promise<void>): Promise<void> => {
+      const authority = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([operation, new Promise<never>((_resolve, reject) => {
+        await Promise.race([Promise.resolve().then(() => operation(authority.signal)), new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(new Error('reader lifecycle outcome unconfirmed')), lifecycleTimeout);
         })]);
       } finally {
         if (timer !== undefined) clearTimeout(timer);
+        authority.abort(); // End pending operator work, including after timeout or refusal.
       }
     };
     // One private input snapshot across async retention/startup. Readonly types do not stop a
@@ -150,6 +152,7 @@ export class CandidateProofRunner {
 
     const outcomes: DispatchOutcome[] = [];
     let activeDispatch: symbol | undefined;
+    let actionAuthority: AbortController | undefined;
     let startupAttempted = false;
     let startupSettled = false;
     let readerStoppedByAction = false;
@@ -160,10 +163,10 @@ export class CandidateProofRunner {
     try {
       // Consent observation is bounded too. A late result cannot resume this abandoned startup
       // path, and no SDK cleanup is attempted when startup was never dispatched.
-      await bounded(Promise.resolve().then(() => this.options.authorizeReaderStartup()));
+      await bounded(signal => this.options.authorizeReaderStartup(signal));
       // Startup can change reader state before rejecting. Its cleanup is still owned here.
       startupAttempted = true;
-      await bounded(Promise.resolve().then(() => this.options.adapter.start()).finally(() => {
+      await bounded(() => Promise.resolve().then(() => this.options.adapter.start()).finally(() => {
         startupSettled = true;
       }));
       if ((await this.checkPhysical('AFTER_STARTUP')).length > 0) {
@@ -182,13 +185,18 @@ export class CandidateProofRunner {
         journal,
         dispatch: async (command) => {
           const token = activeDispatch;
+          const authority = actionAuthority;
           // Measure after the durable intent, immediately before physical dispatch. A lock,
           // origin/build change or lost permission between actions must not reuse initial TRUE.
           if ((await this.checkPhysical('BEFORE_ACTION')).length > 0) {
             throw new Error('action-time physical readiness unavailable');
           }
-          await this.options.authorizePhysicalAction?.(structuredClone(command) as ActionRequest);
-          if (token === undefined || activeDispatch !== token) {
+          // A late preflight must not even open a stale operator prompt after timeout/cleanup.
+          if (token === undefined || activeDispatch !== token || authority === undefined || authority.signal.aborted) {
+            throw new Error('late physical preflight fenced');
+          }
+          await this.options.authorizePhysicalAction?.(structuredClone(command) as ActionRequest, authority.signal);
+          if (activeDispatch !== token || authority.signal.aborted) {
             throw new Error('late physical preflight fenced');
           }
           return readerDispatch(command);
@@ -200,12 +208,17 @@ export class CandidateProofRunner {
       for (const request of approvedActions) {
         let outcome: DispatchOutcome;
         activeDispatch = Symbol();
+        actionAuthority = new AbortController();
         try {
           outcome = await supervisor.performAction(request.action as AllowedAction, {
             ...(request.keyChord !== undefined ? { keyChord: request.keyChord } : {}),
             ...(request.text !== undefined ? { text: request.text } : {}),
           });
-        } finally { activeDispatch = undefined; }
+        } finally {
+          activeDispatch = undefined;
+          actionAuthority.abort();
+          actionAuthority = undefined;
+        }
         outcomes.push(outcome);
         if (request.action === 'STOP' && outcome.status === 'SUCCEEDED') {
           readerStoppedByAction = true;
@@ -230,7 +243,7 @@ export class CandidateProofRunner {
           detail: 'reader startup remains unresolved; retain desktop exclusion and reconcile before any retry' };
       } else if (startupAttempted && !readerStoppedByAction) {
         try {
-          await bounded(Promise.resolve().then(() => this.options.adapter.stop()));
+          await bounded(() => this.options.adapter.stop());
         } catch {
           result = {
             status: 'INTERRUPTED', actions: outcomes,

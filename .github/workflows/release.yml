@@ -109,9 +109,51 @@ jobs:
             echo "### NOT verified by this pipeline"
             echo
             echo "- Any behaviour of a real screen reader. VoiceOver and NVDA are BLOCKED."
-            echo "- Any model invocation. Bedrock access is BLOCKED."
-            echo "- Any hosted deployment. The AWS configuration is PREPARED and unapplied."
+            echo "- Actual Codex OAuth model execution or the complete repair/rerun/review journey."
+            echo "- Any hosted deployment. Non-AWS hosting remains unproven; AWS/Bedrock is retired."
             echo
             echo "A claim about any of the second list requires evidence from somewhere other than"
             echo "this pipeline. See docs/operations/DEPLOYMENT.md."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  package:
+    name: Downloadable source and web release candidate
+    needs: verified
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Build web from this exact checkout
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm --filter @accessforge/web build
+      - name: Package committed source and web bytes
+        run: |
+          python scripts/package_release.py --output accessforge-release.zip > accessforge-release.sha256
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.28"
+      - name: Verify clean extracted source installation without services
+        run: |
+          python -m zipfile -e accessforge-release.zip rehearsal
+          uv sync --frozen --no-dev --project rehearsal/source
+          rehearsal/source/.venv/bin/python -I rehearsal/source/scripts/check_release_install.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: accessforge-release-${{ github.sha }}
+          path: |
+            accessforge-release.zip
+            accessforge-release.sha256
+          if-no-files-found: error
+          retention-days: 30
