@@ -959,3 +959,25 @@ while the save is in flight. The first-allowance synthetic fixture now returns r
 Frontend production build and 21 focused synthetic Settings checks passed. This is a frontend-only
 change based on main, independent of the pending membership migration stack. No production
 allowance was changed, no migration was run, and actual reader acceptance remains unproven.
+
+## Membership lifecycle persistence — 2026-09-16
+
+Source inspection found only GET /members; the owner membership permission had no mutation path.
+The new persistence service implements revisioned exact-account grant/re-role/revoke/restore,
+workspace-serialized fresh owner checks, last-enabled-owner protection and atomic success audit.
+Migration 0073 adds membership revisions but has not been applied live. Changed Python static
+checks pass; two real-PostgreSQL lifecycle/concurrency cases are committed for CI, not locally run.
+HTTP/session/CSRF/denial handling, identity-confirmed invitations and owner UI are still required.
+See [membership handoff](../handoffs/membership-lifecycle.md). This is build work, not a live access
+grant or permission to migrate the hosted database. Do not deploy schema-0073 code before approval.
+
+## Existing membership administration API — 2026-09-16
+
+OWNER readback and revision-checked mutation endpoints now connect the membership service for
+existing relationships. Authentication, CSRF and live role checks remain server-side; arbitrary
+account grants are not exposed. Null role explicitly revokes; positive If-Match is required.
+Nested savepoint rollback preserves atomic failure while allowing business/role/revision denial
+audit to commit. Readback provides revision/ETag and no-store, including revoked relationships.
+Thirteen focused parser checks, Python lint/mypy and regenerated OpenAPI/clients passed; a real
+HTTP/database regression is committed for CI, not locally run. Invitation identity and owner UI
+remain unfinished. Schema0073 still has no live migration/deployment authorization.

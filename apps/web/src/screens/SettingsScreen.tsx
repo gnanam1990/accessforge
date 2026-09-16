@@ -48,6 +48,7 @@ import {
 import type { Member, RetentionClass, UsageRow } from '../api/resources'
 import { SchedulesSection } from './SchedulesSection'
 import { RetentionPolicyForm } from './RetentionPolicyForm'
+import { MemberManagement } from './MemberManagement'
 import { useResource } from '../api/useResource'
 import { useSession, membershipFor } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
@@ -247,6 +248,7 @@ export const SettingsScreen = (): JSX.Element => {
   const workspaceId = useWorkspaceId()
   const { client, state } = useSession()
   const [saved, setSaved] = useState(0)
+  const [selectedMember, setSelectedMember] = useState<Member | null>(null)
 
   const membership = membershipFor(state, workspaceId)
   const mayConfigure = membership !== null && MAY_CONFIGURE.has(membership.role)
@@ -288,10 +290,15 @@ export const SettingsScreen = (): JSX.Element => {
               columns={[
                 { key: 'email', header: 'Person', isRowHeader: true, cell: (m) => m.email },
                 { key: 'role', header: 'Role', cell: (m) => m.role },
+                ...(mayConfigure ? [{ key: 'manage', header: 'Access', cell: (m: Member) =>
+                  <Button onClick={() => setSelectedMember(m)}>Manage {m.email}</Button> }] : []),
               ]}
             />
           )}
         </ResourceView>
+        {mayConfigure && selectedMember !== null && <MemberManagement
+          key={`${workspaceId}-${selectedMember.userId}`} workspaceId={workspaceId}
+          member={selectedMember} onSaved={members.reload} />}
         <p className="af-secondary">
           Membership is granted and revoked by an owner. Revocation takes effect on the next
           request, not on the next sign-in.
