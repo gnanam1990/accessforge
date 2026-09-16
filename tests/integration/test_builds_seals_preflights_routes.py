@@ -248,6 +248,7 @@ def execution_body(
         "stop-policy",
         "model-policy",
         "codex-model-policy",
+        "codex-stop-policy",
         "navigator-policy",
         "fresh-stop-policy",
         "collector-policy",
@@ -263,7 +264,7 @@ def execution_body(
             from accessforge_domain.navigator_model import default_profile
 
             body["modelConfigDigest"] = digest(default_profile())
-        if request.param == "codex-model-policy":
+        if request.param in {"codex-model-policy", "codex-stop-policy"}:
             from accessforge_domain.codex_navigation import default_profile as codex_profile
 
             body["modelConfigDigest"] = digest(codex_profile())
@@ -284,7 +285,12 @@ def execution_body(
             )
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
-        if request.param in {"stop-policy", "fresh-stop-policy", "collector-policy"}:
+        if request.param in {
+            "stop-policy",
+            "fresh-stop-policy",
+            "collector-policy",
+            "codex-stop-policy",
+        }:
             policy["allowedActions"].append("STOP")
             body["navigatorPolicyDigest"] = str(digest(policy))
             from accessforge_domain.journeys.assertions import (
@@ -4727,6 +4733,7 @@ def test_authenticated_execution_finish(
     focus_mode: str | None = None,
     effect_source: dict[str, str] | None = None,
     publication_case: str | None = None,
+    codex_runtime: bool = False,
 ) -> None:
     import secrets
 
@@ -4754,6 +4761,25 @@ def test_authenticated_execution_finish(
     )
     headers = {"Authorization": f"Bearer {secret}"}
     base = f"/v1/workspaces/{WS}/supervisor-sessions/{ticket.ticket_id}"
+    model_consent = None
+    if codex_runtime:
+        from accessforge_persistence import navigator_model_calls
+
+        with workspace_connection(db, WS) as conn:
+            reviewed = navigator_model_calls.review_scope(conn, workspace_id=WS, run_id=ref.run_id)
+            model_consent = navigator_model_calls.issue_consent(
+                conn,
+                workspace_id=WS,
+                run_id=ref.run_id,
+                consent_id=str(uuid.uuid4()),
+                actor_id=OWNER,
+                expected_revision=reviewed["revision"],
+                manifest_digest=reviewed["manifestDigest"],
+                model_profile=reviewed["modelProfile"],
+                max_calls=2,
+                expires_at=reviewed["maximumExpiresAt"],
+                billable_call_acknowledged=True,
+            )["consentId"]
     with workspace_connection(db, WS) as conn:
         assert conn.execute(
             "SELECT admitted_through,closed_at_sequence FROM producer_stream "
@@ -4826,6 +4852,11 @@ def test_authenticated_execution_finish(
         else ["READ_CURRENT", "STOP"],
         start=1,
     ):
+        model_turn = (
+            _synthetic_codex_turn(db, ref, ticket, model_consent, sequence - 1, action)
+            if model_consent is not None
+            else None
+        )
         intent = client.post(
             base + "/action-intents",
             headers=headers,
@@ -4890,6 +4921,47 @@ def test_authenticated_execution_finish(
                 ).status_code
                 == 200
             )
+        if model_turn is not None:
+            operation_id, request_digest, sink = model_turn
+            from accessforge_orchestrator.navigator.checkpoints import PlanningCheckpoint
+            from accessforge_persistence import navigator_model_calls
+
+            for kind in ("ACTION_RESOLVED", "MODEL_CALL_STOPPED"):
+                asyncio.run(
+                    sink.retain(
+                        PlanningCheckpoint.model_validate(
+                            {
+                                "run_ref": sink.expected_run_ref,
+                                "kind": kind,
+                                "recorded_at_utc": datetime.now(UTC)
+                                .isoformat()
+                                .replace("+00:00", "Z"),
+                                **(
+                                    {
+                                        "action": action,
+                                        "dispatch_status": "SUCCEEDED",
+                                        "action_id": stop_id,
+                                    }
+                                    if kind == "ACTION_RESOLVED"
+                                    else {
+                                        "stop_reason": "COMPLETED",
+                                        "provider": "codex-chatgpt",
+                                        "model_id": "gpt-6-astra",
+                                        "sdk_version": "0.154.0",
+                                    }
+                                ),
+                            }
+                        )
+                    )
+                )
+            with workspace_connection(db, WS) as conn:
+                navigator_model_calls.finish_turn(
+                    conn,
+                    workspace_id=WS,
+                    operation_id=operation_id,
+                    request_digest=request_digest,
+                    status="RECORDED",
+                )
     if case == "observer-recreated":
         assert existing is not None
         with psycopg.connect(owned_observer_database) as application:
@@ -5052,7 +5124,9 @@ def test_authenticated_execution_finish(
         if closes:
             assert response.json()["status"] == "FINALIZING"
             assert response.json()["outcome"] == "NOT_EVALUATED"
-            assert response.json()["missingArtifactCount"] == (6 if existing is not None else 5)
+            assert response.json()["missingArtifactCount"] == (
+                6 if existing is not None else 5
+            ) + int(codex_runtime)
             assert (
                 client.post(
                     base + "/action-intents",
@@ -5100,7 +5174,7 @@ def test_authenticated_execution_finish(
             assert lease["stop_acknowledged_epoch"] == ref.epoch
         assert len(
             missing_required_artifacts(conn, run_id=ref.run_id, attempt_id=ref.attempt_id)
-        ) == (6 if existing is not None else 5)
+        ) == (6 if existing is not None else 5) + int(codex_runtime)
         finished = conn.execute(
             "SELECT 1 FROM canonical_event WHERE event_type='RUN_FINISHED'"
         ).fetchall()
@@ -5123,6 +5197,7 @@ def test_authenticated_execution_finish(
                 else "TRUE"
             ),
             publication_case=publication_case,
+            codex_runtime=codex_runtime,
         )
 
 
@@ -5431,6 +5506,116 @@ def test_retained_evaluation_drives_github_check_preview(
     assert preview["identity"]["manifestDigest"] == original["snapshot"]["manifestDigest"]
 
 
+def _synthetic_codex_turn(
+    db: str,
+    ref: DispatchReference,
+    ticket: DispatchTicket,
+    consent_id: str,
+    sequence: int,
+    action: str,
+) -> tuple[str, str, Any]:
+    """Original DB lifecycle with a labelled synthetic CLI completion, never a provider call."""
+    from accessforge_domain.codex_navigation import MEANING, default_profile
+    from accessforge_orchestrator.navigator.checkpoints import PlanningCheckpoint
+    from accessforge_orchestrator.navigator.postgres import PostgresPlanningCheckpointSink
+    from accessforge_persistence import navigator_model_calls, navigator_runtime
+
+    profile = default_profile()
+    operation = str(uuid.uuid4())
+    with workspace_connection(db, WS) as conn:
+        records = conn.execute(
+            "SELECT e.event_id,e.payload_digest FROM producer_source_record p "
+            "JOIN canonical_event e ON e.event_id=p.event_id AND e.workspace_id=p.workspace_id "
+            "WHERE p.run_id=%s AND p.attempt_id=%s AND p.producer_id=%s "
+            "ORDER BY p.producer_sequence",
+            (ref.run_id, ref.attempt_id, f"supervisor:{ticket.ticket_id}:reader"),
+        ).fetchall()
+        request = navigator_model_calls.reserve_turn(
+            conn,
+            **asdict(ref),
+            consent_id=consent_id,
+            operation_id=operation,
+            model_config_digest=digest(profile),
+            projection_digest=digest({"synthetic": sequence}),
+            action_sequence=sequence,
+            reader_records=tuple((str(r["event_id"]), r["payload_digest"]) for r in records),
+        )
+    sink = PostgresPlanningCheckpointSink(
+        database_url=db,
+        workspace_id=WS,
+        run_id=ref.run_id,
+        attempt_id=ref.attempt_id,
+        expected_run_ref="navigator:" + digest(asdict(ref)),
+        operation_id=operation,
+    )
+    for kind in ("MODEL_CALL_STARTED", "ACTION_PROPOSED"):
+        asyncio.run(
+            sink.retain(
+                PlanningCheckpoint.model_validate(
+                    {
+                        "run_ref": sink.expected_run_ref,
+                        "kind": kind,
+                        "recorded_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        **(
+                            {
+                                "provider": profile["provider"],
+                                "model_id": profile["model_id"],
+                                "sdk_version": profile["sdk_version"],
+                            }
+                            if kind == "MODEL_CALL_STARTED"
+                            else {"action": action}
+                        ),
+                    }
+                )
+            )
+        )
+    with workspace_connection(db, WS) as conn:
+        navigator_runtime.retain(
+            conn,
+            workspace_id=WS,
+            operation_id=operation,
+            observation={
+                "meaning": MEANING,
+                "profile": profile,
+                "cli": {
+                    "threadId": str(uuid.uuid4()),
+                    "version": profile["sdk_version"],
+                    "requestedModel": profile["model_id"],
+                    "authMode": "chatgpt",
+                    "exitCode": 0,
+                    "turnCompleted": True,
+                    "inputTokens": 10,
+                    "outputTokens": 5,
+                },
+            },
+        )
+    return operation, request, sink
+
+
+@pytest.mark.parametrize("execution_body", ["codex-stop-policy"], indirect=True)
+def test_codex_runtime_survives_retention_finalization_and_export(
+    db: str,
+    client: TestClient,
+    supervisor_ticket: DispatchTicket,
+    manual_dispatch_reference: DispatchReference,
+    owned_observer_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Real DB/S3/finalizer/export boundaries; CLI and desktop observations are synthetic."""
+    test_authenticated_execution_finish(
+        db,
+        client,
+        supervisor_ticket,
+        manual_dispatch_reference,
+        owned_observer_database,
+        monkeypatch,
+        "artifact-finalize",
+        tmp_path,
+        codex_runtime=True,
+    )
+
+
 def _retain_stopped_artifact_case(
     db: str,
     ref: DispatchReference,
@@ -5443,10 +5628,11 @@ def _retain_stopped_artifact_case(
     focus_mode: str | None = None,
     expected_effect: str | None = None,
     publication_case: str | None = None,
+    codex_runtime: bool = False,
 ) -> None:
     from accessforge_orchestrator.execution_artifacts import Refused, retain_bundle
     from accessforge_persistence import evidence
-    from accessforge_persistence.evidence.session import requirements
+    from accessforge_persistence.evidence.session import requirements, stream_requirements
 
     store = evidence.S3ArtifactStore(
         evidence.S3Settings(
@@ -5466,6 +5652,7 @@ def _retain_stopped_artifact_case(
             is not None
         )
         expected_count = 6 if fresh else 5
+        expected_count += int(codex_runtime)
         actions = conn.execute(
             "SELECT * FROM runner_action WHERE run_id=%s ORDER BY action_sequence", (ref.run_id,)
         ).fetchall()
@@ -5595,9 +5782,7 @@ def _retain_stopped_artifact_case(
                 store,
                 run_id=ref.run_id,
                 attempt_id=ref.attempt_id,
-                required_producers=frozenset(
-                    p for k, p in required.items() if k not in {"RUNNER_JOURNAL", "FIXTURE_SETUP"}
-                ),
+                required_producers=frozenset(stream_requirements(required).values()),
             )
             assert complete.complete and complete.artifacts_present and complete.producers_closed
             state = run_store.load_run(conn, run_id=ref.run_id).state
@@ -5714,7 +5899,15 @@ def _retain_stopped_artifact_case(
                 assert set(result["snapshot"]["observedIdentities"]) == {
                     "EVALUATOR",
                     "ASSERTION_SET",
-                } | ({"FIXTURE_INSTANCE", "ENVIRONMENT"} if fresh else set())
+                } | ({"FIXTURE_INSTANCE", "ENVIRONMENT"} if fresh else set()) | (
+                    {"MODEL"} if codex_runtime else set()
+                )
+                if codex_runtime:
+                    from accessforge_domain.codex_navigation import default_profile
+
+                    assert result["snapshot"]["observedIdentities"]["MODEL"] == digest(
+                        default_profile()
+                    )
                 if fresh:
                     assert (
                         result["snapshot"]["observedIdentities"]["ENVIRONMENT"]
@@ -6237,7 +6430,10 @@ def _check_diagnosis_request(
     with workspace_connection(db, WS) as conn:
         active = diagnosis_requests.require_active(conn, workspace_id=WS, request_id=request_id)
         assert active["scope"] == body and active["requestedBy"] == OWNER
-        assert conn.execute("SELECT * FROM diagnosis_invocation").fetchall() == []
+        assert (
+            conn.execute("SELECT * FROM diagnosis_invocation WHERE purpose='DIAGNOSIS'").fetchall()
+            == []
+        )
     with pytest.raises(LookupError), workspace_connection(db, str(uuid.uuid4())) as conn:
         diagnosis_requests.inspect(conn, request_id=request_id)
     revoked = client.post(read_url + "/revocation", headers={CSRF_HEADER: owner.csrf_token})

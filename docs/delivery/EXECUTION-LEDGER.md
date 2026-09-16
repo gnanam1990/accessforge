@@ -10,23 +10,40 @@ a provider again, or treat original AWS/Strands implementation instructions as t
 Full actual-reader/repair/rerun/review/release scope remains. Host permissions are a separate
 acceptance prerequisite, not a reason to stop this independently authorized migration.
 
-Codex migration continuation: PR #186 contains diagnosis/repair plus production Bedrock retirement;
-its current exact-head CI is still running. The next stacked slice adds `navigator/codex.py` and
-proves a real Codex proposal through a synthetic one-action gateway. Production coordinator
-selection remains pending Codex-native consent/profile and runtime-receipt composition. No reader
-or live database operation occurred. See the migration handoff for evidence boundaries.
+## Current continuation queue — refreshed 2026-09-16
 
-Next runtime slice: the Codex operator/coordinator path now composes exact profile comparison,
-one-shot reservation, fresh invocation and action authority, and content-free original CLI
-completion retention. 72 focused checks and a real Codex/synthetic-gateway run pass. Remaining
-immediate work is Codex-specific database/finalization/export acceptance, current operator/UI
-defaults and residual Strands wrapper removal, then actual host qualification. #186 is still in
-its original real-PostgreSQL CI job; no retry/restart or merge has been performed.
+Verified remote/local main is `eac7d55c852bab7eb94794eeea8cc9be9188606a`: #186
+(Codex diagnosis/repair and Bedrock retirement), #187 (one-action Codex planner), and #188
+(Codex consent/runtime observation, database admission and finalizer binding) are merged after
+exact-head CI and normal review. Do not rebuild those slices or treat their historical pending
+notes as current.
 
-Current planning checkpoint: 2026-09-15. This is the single continuation queue, not a release
-certificate. Original requirements remain in `specs/accessforge/`. Earlier PLAN/REMAINING tables
-and handoffs are historical evidence, not current task selectors. Refresh source and GitHub state
-before changing a row. No overall completion percentage has been established.
+Work in flight, not yet merged at this checkpoint:
+1. #189 head `27d165c4798030b77279320ce3f6e5de7189648f`: provider-independent
+   submission/results/limits, lazy historical adapter imports, Strands development-only packaging,
+   updated Codex version matrix and platform CI reporting. Latest Python integration CI is running.
+2. #190 head `68b4549969b271c1909c0fe5dc688d056935fa24`: closed Codex consent UI
+   validation and matching API disclosure; 13 component checks and focused backend checks pass.
+3. #191 head `f52e4233d7cbdd2e2e389f57ec47ce513af9e04d`: real disposable PostgreSQL
+   and local S3 retention → finalizer → export integration passes with two synthetic CLI/desktop
+   turns. Exact MODEL identity is retained but overall outcome remains INCONCLUSIVE. This closes
+   that backend proof gap, not physical qualification. Temporary DBs/roles and empty buckets removed.
+
+Next implementation/acceptance sequence:
+- Finish exact-head CI/review/ordered merges for #189–191 and synchronize local main.
+- Trace C1 from `apps/desktop-runner/src/execution-bootstrap.ts` and
+  `native-start-listener.ts` through the actual private host/runtime callbacks. Do not add more
+  provider adapters or re-ask the resolved provider selection.
+- Qualify the explicitly authorized dedicated VoiceOver host (E1), then execute the original
+  baseline → Codex diagnosis → constrained repair → independent rerun → human review/export
+  path (E2/E3). No synthetic trace or CLI smoke may populate VERIFIED_MATRICES.
+- Preserve R1 real GitHub App delivery, R2 non-AWS deployment/identity/recovery, R3 real Windows/NVDA,
+  R4 fault/quality/pilot evidence and D1 release/demo/license/submission as outstanding full scope.
+  Host permissions, live migrations and deployments still need their specific acceptance authority.
+
+This is the single continuation queue, not a release certificate. Earlier snapshots below and
+other PLAN/REMAINING handoffs are historical, not current task selectors. Refresh GitHub heads
+before acting. No overall completion percentage has been established.
 
 Latest operator state: local sign-in works, VoiceOver AppleScript control is ON, AWS is declined.
 Runner preference reads still return EPERM. System Settings confirms the exact runner Node's Full
