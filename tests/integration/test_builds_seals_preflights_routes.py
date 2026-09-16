@@ -7679,6 +7679,29 @@ def runner(client: TestClient, csrf: str) -> dict[str, Any]:
     return dict(enrolled.json())
 
 
+def test_enrollment_refuses_coercion_before_consuming_token(client: TestClient, csrf: str) -> None:
+    headers = {CSRF_HEADER: csrf}
+    url = f"/v1/workspaces/{WS}/runners/enrollment-tokens"
+    invalid_ttls: list[Any] = ["600", None, True, 1.5, [], {}]
+    for ttl in invalid_ttls:
+        assert client.post(url, json={"ttlSeconds": ttl}, headers=headers).status_code == 400
+    issued = client.post(url, json={"ttlSeconds": 600}, headers=headers)
+    assert issued.status_code == 201
+    assert issued.headers["Cache-Control"] == "no-store"
+    body = {
+        "token": issued.json()["token"],
+        "name": "typed-desk",
+        "session": {**SESSION, "console": "false"},
+        "profile": PROFILE,
+    }
+    enroll_url = f"/v1/workspaces/{WS}/runners"
+    assert client.post(enroll_url, json=body, headers=headers).status_code == 400
+    body["session"] = {**SESSION, "console": False}
+    result = client.post(enroll_url, json=body, headers=headers)
+    assert result.status_code == 201, result.text
+    assert result.json()["status"] == "PREFLIGHT_REQUIRED"
+
+
 def _preflight_body(runner: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
 

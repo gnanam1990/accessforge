@@ -466,7 +466,7 @@ def finish_supervisor_session(
 
 @router.post("/runners/enrollment-tokens", status_code=status.HTTP_201_CREATED)
 def issue_enrollment_token(
-    workspace_id: str, request: Request, conn: Conn, payload: dict[str, Any]
+    workspace_id: str, request: Request, response: Response, conn: Conn, payload: dict[str, Any]
 ) -> dict[str, Any]:
     """Issue a short-lived single-use enrollment credential.
 
@@ -483,18 +483,72 @@ def issue_enrollment_token(
         body,
         frozenset({"ttlSeconds"}),
     )
+    ttl_seconds = body.get("ttlSeconds", runners.DEFAULT_ENROLLMENT_TOKEN_SECONDS)
+    if type(ttl_seconds) is not int:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "ttlSeconds must be a whole number")
     try:
         token = runners.issue_enrollment_token(
             conn,
             workspace_id=workspace_id,
             created_by=context.principal.user_id,
-            ttl_seconds=int(body.get("ttlSeconds", runners.DEFAULT_ENROLLMENT_TOKEN_SECONDS)),
+            ttl_seconds=ttl_seconds,
         )
     except runners.RunnerError as exc:
         raise ProblemDetail(
             ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
         ) from exc
+    response.headers["Cache-Control"] = "no-store"
     return {"tokenId": token.token_id, "token": token.token, "expiresAt": token.expires_at}
+
+
+def _enrollment_identity(body: dict[str, Any]) -> tuple[PhysicalSession, RunnerProfile]:
+    """Parse declarations without coercing a different physical identity into existence."""
+    session = body.get("session")
+    profile = body.get("profile")
+    session_fields = {"deviceId", "platform", "interactiveSessionId", "console"}
+    profile_fields = {
+        "platform",
+        "readerName",
+        "readerVersion",
+        "browserName",
+        "browserVersion",
+        "locale",
+        "keyboardLayout",
+    }
+    if (
+        set(body) != {"token", "name", "session", "profile"}
+        or not isinstance(session, dict)
+        or set(session) != session_fields
+        or not isinstance(profile, dict)
+        or set(profile) != profile_fields
+        or type(session["console"]) is not bool
+        or any(not isinstance(body[key], str) or not body[key].strip() for key in ("token", "name"))
+        or any(not isinstance(session[key], str) for key in session_fields - {"console"})
+        or any(
+            not isinstance(profile[key], str) or not profile[key].strip() for key in profile_fields
+        )
+    ):
+        raise EnrollmentError(
+            "complete typed enrollment required: console must be boolean "
+            "and identity fields nonempty strings"
+        )
+    return (
+        PhysicalSession(
+            device_id=session["deviceId"],
+            platform=session["platform"],
+            interactive_session_id=session["interactiveSessionId"],
+            console=session["console"],
+        ),
+        RunnerProfile(
+            platform=profile["platform"],
+            reader_name=profile["readerName"],
+            reader_version=profile["readerVersion"],
+            browser_name=profile["browserName"],
+            browser_version=profile["browserVersion"],
+            locale=profile["locale"],
+            keyboard_layout=profile["keyboardLayout"],
+        ),
+    )
 
 
 @router.post("/runners", status_code=status.HTTP_201_CREATED)
@@ -511,28 +565,14 @@ def enroll_runner(
         frozenset({"token", "name", "session", "profile"}),
     )
     try:
-        session_body = body["session"]
-        profile_body = body["profile"]
+        session, profile = _enrollment_identity(body)
         enrolled = runners.enroll_runner(
             conn,
             workspace_id=workspace_id,
-            token=str(body["token"]),
-            name=str(body["name"]),
-            session=PhysicalSession(
-                device_id=str(session_body["deviceId"]),
-                platform=str(session_body["platform"]),
-                interactive_session_id=str(session_body["interactiveSessionId"]),
-                console=bool(session_body["console"]),
-            ),
-            profile=RunnerProfile(
-                platform=str(profile_body["platform"]),
-                reader_name=str(profile_body["readerName"]),
-                reader_version=str(profile_body["readerVersion"]),
-                browser_name=str(profile_body["browserName"]),
-                browser_version=str(profile_body["browserVersion"]),
-                locale=str(profile_body["locale"]),
-                keyboard_layout=str(profile_body["keyboardLayout"]),
-            ),
+            token=body["token"],
+            name=body["name"],
+            session=session,
+            profile=profile,
         )
     except (KeyError, TypeError) as exc:
         raise ProblemDetail(
