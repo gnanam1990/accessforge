@@ -538,6 +538,39 @@ export interface ManagedMember {
   readonly revoked: boolean;
   readonly revision: number;
 }
+
+export interface MembershipInvitation {
+  readonly invitationId: string;
+  readonly githubSubject: string;
+  readonly role: ManagedMember["role"];
+  readonly reason: string;
+  readonly createdBy: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly revision: number;
+  readonly state: "PENDING" | "EXPIRED" | "REVOKED" | "ACCEPTED";
+}
+export interface InvitationOffer {
+  readonly githubSubject: string;
+  readonly role: ManagedMember["role"];
+  readonly ttlSeconds: number;
+  readonly reason: string;
+}
+const invitationPath = (workspaceId: string, id: string): string =>
+  `${base(workspaceId)}/membership-invitations/${encodeURIComponent(id)}`;
+export const listInvitations = (client: ApiClient, workspaceId: string, after: string | null,
+  signal: AbortSignal): Promise<ApiOutcome<Page<MembershipInvitation>>> => client.request(
+    `${base(workspaceId)}/membership-invitations?limit=20${after === null ? '' : `&after=${encodeURIComponent(after)}`}`,
+    { signal });
+export const readInvitation = (client: ApiClient, workspaceId: string, id: string,
+  signal?: AbortSignal): Promise<ApiOutcome<MembershipInvitation>> =>
+  client.request(invitationPath(workspaceId, id), signal === undefined ? {} : { signal });
+export const createInvitation = (client: ApiClient, workspaceId: string, id: string,
+  body: InvitationOffer): Promise<ApiOutcome<MembershipInvitation>> =>
+  client.request(invitationPath(workspaceId, id), { method: 'PUT', body, ifMatch: 0 });
+export const revokeInvitation = (client: ApiClient, workspaceId: string, id: string,
+  revision: number): Promise<ApiOutcome<MembershipInvitation>> =>
+  client.request(invitationPath(workspaceId, id), { method: 'DELETE', ifMatch: revision });
 export const readManagedMember = (client: ApiClient, workspaceId: string, userId: string,
   signal: AbortSignal): Promise<ApiOutcome<ManagedMember>> =>
   client.request(`${base(workspaceId)}/members/${encodeURIComponent(userId)}`, { signal });
