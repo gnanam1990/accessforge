@@ -10,6 +10,12 @@ a provider again, or treat original AWS/Strands implementation instructions as t
 Full actual-reader/repair/rerun/review/release scope remains. Host permissions are a separate
 acceptance prerequisite, not a reason to stop this independently authorized migration.
 
+Codex migration continuation: PR #186 contains diagnosis/repair plus production Bedrock retirement;
+its current exact-head CI is still running. The next stacked slice adds `navigator/codex.py` and
+proves a real Codex proposal through a synthetic one-action gateway. Production coordinator
+selection remains pending Codex-native consent/profile and runtime-receipt composition. No reader
+or live database operation occurred. See the migration handoff for evidence boundaries.
+
 Current planning checkpoint: 2026-09-15. This is the single continuation queue, not a release
 certificate. Original requirements remain in `specs/accessforge/`. Earlier PLAN/REMAINING tables
 and handoffs are historical evidence, not current task selectors. Refresh source and GitHub state
