@@ -166,6 +166,84 @@ describe('canonical execution decisions', () => {
   })
 })
 
+describe('build and manifest preparation', () => {
+  const buildId = '11111111-1111-4111-8111-111111111111'
+  const setup = (unknownOnce = false) => {
+    const server = createFakeServer(MEMBER)
+    server.data.journeyVersions.push(JOURNEY)
+    server.data.environments.push({ environmentId: 'env-1', name: 'Authorized target',
+      allowedOrigins: ['https://example.test'], permittedEffects: ['NAVIGATE'], fixtureResetStrategy: 'reset',
+      configDigest: 'a'.repeat(64), expiresAt: null, revoked: false, supersededBy: null, expired: false, usable: true })
+    const writes: { path: string; body: Record<string, unknown>; headers: Headers }[] = []
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const path = String(input)
+      if (init?.method === 'POST' && (path.endsWith('/builds') || path.endsWith('/seals'))) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        writes.push({ path, body, headers: new Headers(init.headers) })
+        if (unknownOnce && writes.length === 1) throw new TypeError('response lost')
+        return new Response(JSON.stringify(path.endsWith('/builds') ?
+          { buildId, sourceSnapshotId: 'source-1', identityObservable: body['identityObservable'], meaning: 'Observed identity recorded.' } :
+          { sealedManifestId: 'seal-1', manifestDigest: '9'.repeat(64), manifestKind: 'CANONICAL_EXECUTION',
+            canonicalManifest: { runId: 'reserved-1' }, meaning: 'Identity reserved. No execution approved.' }),
+        { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      return server.fetch(input, init)
+    }
+    renderAt({ ...server, fetch: fetchImpl }, '/w/ws-1/projects/p-1/journeys/j-1')
+    return { writes, server }
+  }
+  const fill = (label: string, value: string) => fireEvent.change(screen.getByLabelText(new RegExp(label)), { target: { value } })
+  const fillBuild = async () => {
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('1. Register source and build identity'))
+    fill('Source commit SHA', 'a'.repeat(40)); fill('Source tree SHA-256', 'b'.repeat(64))
+    fill('Requested source revision', 'main'); fill('Build artifact SHA-256', 'c'.repeat(64))
+    return user
+  }
+  it('records observed source and seals exact frozen inputs without issuing approval or requesting a run', async () => {
+    const { writes, server } = setup()
+    const user = await fillBuild()
+    expect(screen.getByLabelText(/target deployment exposes/)).not.toBeChecked()
+    await user.click(screen.getByLabelText(/target deployment exposes/))
+    fill('Changed source paths', 'src/form.tsx')
+    await user.click(screen.getByRole('button', { name: 'Record observed build' }))
+    await screen.findByRole('heading', { name: 'Build identity recorded' })
+    expect(writes[0]?.body).toMatchObject({ dirty: true, dirtyPaths: ['src/form.tsx'], identityObservable: true })
+    await user.selectOptions(screen.getByLabelText('Authorized execution environment'), 'env-1')
+    expect(screen.getByLabelText('NAVIGATE')).not.toBeChecked()
+    await user.click(screen.getByLabelText('NAVIGATE'))
+    fill('Runner profile SHA-256', 'd'.repeat(64)); fill('Model configuration SHA-256', 'e'.repeat(64))
+    fill('Evaluator version', 'evaluator-1'); fill('Manifest expires at', '2099-01-01T00:00:00Z')
+    fill('Execution action limit', '10'); fill('Execution seconds limit', '60')
+    await user.click(screen.getByRole('button', { name: 'Seal execution manifest' }))
+    await screen.findByRole('heading', { name: 'Execution manifest created' })
+    expect(writes[1]?.body).toMatchObject({ buildId, environmentId: 'env-1', journeyDigest: JOURNEY.journeyDigest,
+      assertionSetDigest: JOURNEY.assertionSetDigest, fixtureDigest: JOURNEY.fixtureDigest,
+      navigatorPolicyDigest: JOURNEY.navigatorPolicyDigest,
+      execution: { journeyVersionId: 'j-1', permittedEffects: ['NAVIGATE'], actionBudget: 10,
+        wallTimeBudgetSeconds: 60, expiresAt: '2099-01-01T00:00:00.000Z' } })
+    expect(server.bodies.filter((entry) => /\/(runs|approval)$/.test(entry.url))).toEqual([])
+  })
+  it('locks observed inputs and reuses identity after an unknown registration response', async () => {
+    const { writes } = setup(true)
+    const user = await fillBuild()
+    await user.click(screen.getByRole('button', { name: 'Record observed build' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('outcome is unknown')
+    expect(screen.getByLabelText(/Source commit SHA/)).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Retry same build registration' }))
+    await screen.findByRole('heading', { name: 'Build identity recorded' })
+    expect(writes[0]?.body).toEqual(writes[1]?.body)
+    expect(writes[0]?.headers.get('idempotency-key')).toBe(writes[1]?.headers.get('idempotency-key'))
+  })
+  it('refuses incomplete seal inputs without making any write', async () => {
+    const { writes } = setup()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Seal execution manifest' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Choose a build and usable environment')
+    expect(writes).toEqual([])
+  })
+})
+
 describe('projects', () => {
   it('refuses a repository without the person who authorized it, and says why', async () => {
     const user = userEvent.setup()
