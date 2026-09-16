@@ -12,6 +12,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from accessforge_domain.canonical import digest
+from accessforge_domain.codex_navigation import MEANING as CODEX_MEANING
 from accessforge_domain.evaluation.rules import ReaderSample
 from accessforge_domain.navigator_runtime import validate_observation
 from accessforge_domain.runners.preflight import REQUIRED_PREFLIGHT_CHECKS
@@ -30,7 +31,7 @@ class RuntimeEvidence:
 
 
 def observed_model(snapshots: dict[str, Any], context: dict[str, Any]) -> str | None:
-    """Use original retained SDK observations only when every action has an admitted model turn.
+    """Use original retained runtime observations when every action has an admitted model turn.
 
     This observes requested model configuration, not provider-internal weights or physical AT.
     Reservation/STARTED/checkpoint model names alone never establish a model identity.
@@ -58,6 +59,7 @@ def observed_model(snapshots: dict[str, Any], context: dict[str, Any]) -> str | 
         return None
     identities: set[str] = set()
     operations: set[str] = set()
+    codex_threads: set[str] = set()
     for sequence, (turn, action) in enumerate(zip(turns, actions, strict=True)):
         if (
             turn.get("status") != "RECORDED"
@@ -78,6 +80,11 @@ def observed_model(snapshots: dict[str, Any], context: dict[str, Any]) -> str | 
         ):
             raise Refused("model runtime observation digest or operation differs")
         operations.add(turn["operationId"])
+        if observation["meaning"] == CODEX_MEANING:
+            thread_id = observation["cli"]["threadId"]
+            if thread_id in codex_threads:
+                raise Refused("Codex completion reused across independent action invocations")
+            codex_threads.add(thread_id)
         identities.add(digest(observation["profile"]))
     if len(identities) != 1:
         raise Refused("runtime model identity changed between actions")

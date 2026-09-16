@@ -134,3 +134,12 @@ receipt-retention test now covers both providers: 2 cases pass under a disposabl
 database role. All 39 forward-migration/interruption checks pass in their disposable databases.
 The temporary databases and role were removed. These are synthetic receipt integration checks,
 not actual reader or live-provider acceptance; no live database migration was performed.
+
+### Finalizer completion uniqueness
+
+Finalization now refuses reuse of one Codex CLI thread completion across independent action
+invocations, even when operation IDs and canonical observation digests differ appropriately.
+The new duplicate-completion regression failed before the guard and passes afterward. Distinct
+Codex completions are accepted, and historical Bedrock interpretation is unchanged. The two
+runtime-evidence test modules pass all 59 cases; Ruff and strict mypy pass. This is retained
+artifact interpretation coverage, not S3/export or physical reader acceptance.
