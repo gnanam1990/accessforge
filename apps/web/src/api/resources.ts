@@ -998,6 +998,16 @@ export const readRetention = (
     signal,
   });
 
+export const configureRetention = (
+  client: ApiClient,
+  workspaceId: string,
+  classes: readonly Pick<RetentionClass, "evidenceClass" | "retainDays" | "consentRequired">[],
+  revision: number,
+): Promise<ApiOutcome<{ readonly revision: number }>> =>
+  client.request(`${base(workspaceId)}/settings/retention`, {
+    method: "PUT", body: { classes }, ifMatch: revision,
+  });
+
 export const requestCancellation = (
   client: ApiClient,
   workspaceId: string,

@@ -919,3 +919,16 @@ Frontend production build and focused synthetic UI/contract checks passed; real 
 desktop enrollment has not been performed. This completes a user-facing enrollment path, not
 desktop qualification, source/build setup or baseline/repair/rerun acceptance. CI/merge/deployment
 remain separate from this code change.
+
+## Owner retention policy editor — 2026-09-16
+
+Workspace Settings now offers an OWNER-only retention editor using the existing revision-checked
+API. Every displayed class is submitted together; completeness consequences remain read-only.
+Whole-day periods (0–36500 in this form), consent requirement controls, explicit consequence
+confirmation and focused inline/error-summary feedback are included. Editing invalidates the
+confirmation. Unknown responses and revision conflicts lock writes until an explicit current-policy
+read discards the draft. No automatic write retry, retention sweep or production policy change is
+performed. Exported copies and backup limitations remain visible.
+
+The production frontend build and 23 focused synthetic Settings/retention checks passed. These
+checks do not constitute live retention processing, native reader qualification or full acceptance.
