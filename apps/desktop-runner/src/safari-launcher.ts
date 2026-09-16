@@ -41,7 +41,7 @@ export async function prepareSafariReferenceApp(
   } catch {
     throw new Error('reference setup authority unavailable; reconciliation was not dispatched');
   }
-  return prepareReferenceApp({ ...privateSetup, launch });
+  return prepareReferenceApp({ ...privateSetup, signal: host.signal, launch });
 }
 
 async function openSafari(url: string, signal: AbortSignal): Promise<void> {

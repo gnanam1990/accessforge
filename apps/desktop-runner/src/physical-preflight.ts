@@ -8,6 +8,7 @@ import { createExclusiveDesktopRunner, type ExclusiveDesktopRunner } from './des
 import { parseReference } from './dispatch-receiver.js';
 import { createArtifactProbe, type ArtifactProbeOptions } from './artifact-probe.js';
 import { createVoiceOverCaptureProbe } from './capture-probe.js';
+import { createReferencePreparation, type ReferencePreparationOptions } from './reference-preparation.js';
 
 export interface PhysicalPreflightOptions {
   /** The assigned dedicated audit session, provisioned independently of observed current state. */
@@ -95,6 +96,8 @@ export function createPhysicalSafariRunner(options:
     readonly physicalPreflight: Omit<PhysicalPreflightOptions, 'clock' | 'environment'>;
     /** One shared private host root across ALL runner registrations, not a per-run directory. */
     readonly desktopClaimDirectory: string;
+    /** Optional already-reserved reference fixture; prepared under this same startup claim. */
+    readonly referencePreparation?: ReferencePreparationOptions;
     readonly adapter: Parameters<typeof createSafariAuthenticatedRunner>[0]['adapter'] & { start(): Promise<void> };
     readonly readerStartup: {
       /** Fresh trusted controller authorization for SDK stop/restart and preference mounting. */
@@ -106,9 +109,18 @@ export function createPhysicalSafariRunner(options:
   // Known unsupported configuration is refused before reserving a desktop or loading the SDK.
   // First-profile proof remains a separate explicitly authorized candidate workflow.
   assertRealReaderProven();
-  const { physicalPreflight, desktopClaimDirectory, readerStartup, ...runtime } = options;
+  const { physicalPreflight, desktopClaimDirectory, readerStartup, referencePreparation, ...runtime } = options;
   const environment = createHostEnvironment();
-  const preflight = createPhysicalPreflight({ ...physicalPreflight, clock: runtime.clock, environment });
+  const prepareReference = referencePreparation === undefined ? undefined
+    : createReferencePreparation(referencePreparation, runtime.safari, physicalPreflight.artifactProbe,
+      { expectedSessionId: physicalPreflight.expectedDesktopSessionId, environment });
+  let prepared: RuntimeProbeEvidence = {};
+  const preflight = createPhysicalPreflight({ ...physicalPreflight, clock: runtime.clock, environment,
+    async observeRuntimeEvidence(signal) {
+      // A fresh negative/unknown runtime observation must never be overwritten by setup history.
+      return { ...prepared, ...await physicalPreflight.observeRuntimeEvidence(signal) };
+    },
+  });
   const startupOrigin = createSafariOriginProbe(runtime.safari);
   return createExclusiveDesktopRunner({ directory: desktopClaimDirectory,
     desktopSessionId: physicalPreflight.expectedDesktopSessionId,
@@ -130,6 +142,10 @@ export function createPhysicalSafariRunner(options:
     await readerStartup.authorize(signal);
     guard();
     if (probeReaderControlConfigured(environment).condition !== 'TRUE') throw new Error('reader control not configured');
+    if (prepareReference !== undefined) {
+      prepared = await prepareReference(guard, signal);
+      guard();
+    }
     const before = await preflight();
     // Only activation and speech capture may be unavailable before starting the reader. Every
     // ownership, permission, build, reset, journal and input-source gate is still required.

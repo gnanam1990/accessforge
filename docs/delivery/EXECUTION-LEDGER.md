@@ -10,6 +10,14 @@ a provider again, or treat original AWS/Strands implementation instructions as t
 Full actual-reader/repair/rerun/review/release scope remains. Host permissions are a separate
 acceptance prerequisite, not a reason to stop this independently authorized migration.
 
+Current C1 implementation slice (`feat/native-reference-preparation`): optional concrete baseline
+fixture/browser preparation is composed inside the original reader-startup desktop claim. It
+requires a fresh live build measurement and separate setup authorization; all physical preflight
+gates remain. Preparation rechecks actual console/process session, screen lock and permissions,
+not only the cooperative claim. TypeScript and 25 focused synthetic orchestration checks pass. This is not an actual
+host run. The private operator provisioner, stale-input-source measurement and physical acceptance
+remain unfinished; do not substitute setup history for fresh negative/unknown runtime evidence.
+
 ## Current continuation queue — refreshed 2026-09-16
 
 Verified remote/local main is `6667abf8ad074694e6978090a376a89a5f24b5a5`: #186–191

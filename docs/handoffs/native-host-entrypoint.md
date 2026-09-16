@@ -28,6 +28,21 @@ and refusal of missing/relative paths or foreign credentials before bootstrap. I
 synthetic child, not a model, and is not native reader or authenticated Codex acceptance.
 
 This .mjs module is trusted operator code, **not untrusted configuration or a sandbox**.
+For an already-reserved baseline reference fixture, bootstrap can now supply
+`referencePreparation: { fixture, authorize }`. It requires the existing live artifact probe
+and an exact match to the sealed Safari URL/build. The runner measures the deployed build,
+reauthorizes, reconciles the reserved fixture and opens/verifies Safari within its original
+startup desktop claim and deadline, before the ordinary reader preflight. The approval callback
+is specifically for fixture reconciliation/browser setup, not a substitute for reader consent.
+There is no second desktop claim, automatic reset or retry. Setup history fills missing evidence
+only. Each preparation guard also observes the assigned console and process session, unlocked
+screen, Accessibility and Automation grants before allowing the next step; a claim file alone
+cannot authorize effects on a different active desktop. The original clock/claim guard runs again
+after these synchronous probes. Unknown observations refuse preparation. Setup history fills gaps
+only; fresh runtime negatives/unknowns and the current artifact measurement take precedence.
+Stale-input measurement is still required, and the qualified-reader gate is unchanged.
+The focused checks use synthetic host/measurement ports; no actual browser or reader was run.
+
 It executes with the user's host privileges, including its imports. Only load independently
 reviewed operator code, never files returned by the navigator, a candidate build or a browser.
 The launcher checks a canonical, private, owned regular module and parent directory; those
