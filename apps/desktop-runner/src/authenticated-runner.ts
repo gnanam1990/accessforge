@@ -202,6 +202,7 @@ export class AuthenticatedRunner {
     } catch {
       this.#executing = false;
       this.#fenced = true;
+      this.#authorityAbort?.abort(); // Failure closes authority before recovery acknowledgement too.
       if (actionId !== undefined) {
         try { await this.options.session.completeAction(actionId, 'AMBIGUOUS'); } catch { /* Retain local fencing; recovery owns the unresolved server state. */ }
       }

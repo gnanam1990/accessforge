@@ -237,6 +237,22 @@ test('explicit cancellation reaches the in-flight baseline approval', async () =
   assert.equal(h.calls.includes('adapter'), false);
 });
 
+test('journal result failure closes approval before recovery acknowledgement', async () => {
+  let authority;
+  const h = harness({ authorizePhysicalAction: async (_command, signal) => { authority = signal; } });
+  const append = h.options.journal.appendAndFlush;
+  h.options.journal.appendAndFlush = async entry => {
+    if (entry.result) throw new Error('result fsync failed');
+    await append(entry);
+  };
+  let closedBeforeAcknowledgement = false;
+  h.session.completeAction = async () => {
+    closedBeforeAcknowledgement = authority.aborted;
+  };
+  assert.equal((await h.runner.perform({ action: 'NEXT' })).status, 'AMBIGUOUS');
+  assert.equal(closedBeforeAcknowledgement, true);
+});
+
 test('lost server result acknowledgement cannot permit another local action', async () => {
   const h = harness();
   h.session.completeAction = async () => { throw new Error('reply lost'); };
