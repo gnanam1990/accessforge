@@ -20,6 +20,16 @@ remain unfinished; do not substitute setup history for fresh negative/unknown ru
 
 ## Current continuation queue — refreshed 2026-09-16
 
+Qualification setup follow-on (`feat/qualification-reference-preparation`): after #195 merged
+as `583bc1b6c222bf98cae77c47a68b380ace47c643`, the labelled candidate host now composes the
+same optional reference preparation before its first preflight, after action validation. It
+uses the original candidate claim/deadline, aborts setup on caller/deadline cancellation, and
+does not repeat setup during action-time probes. Fresh runtime evidence wins over setup history.
+TypeScript compilation and 37 focused candidate/host/preparation checks pass, including refusal
+of unapproved typing before setup authorization. These are synthetic orchestration/refusal checks,
+not actual qualification. Concrete private provisioning, stale-input measurement, actual reader
+qualification and the full repair/rerun/review/release acceptance remain open.
+
 Verified remote/local main is `6667abf8ad074694e6978090a376a89a5f24b5a5`: #186–191
 are merged after exact-head CI and normal review. This includes Codex diagnosis/repair,
 Bedrock retirement, navigator/runtime/consent composition, provider-independent packaging,

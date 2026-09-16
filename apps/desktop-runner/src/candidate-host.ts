@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createGuidepupVoiceOverAdapter, createHostEnvironment, probeReaderControlConfigured,
-  type ActionRequest, type VoiceOverAdapter } from '@accessforge/at-voiceover';
+  type ActionRequest, type RuntimeProbeEvidence, type VoiceOverAdapter } from '@accessforge/at-voiceover';
 import { CandidateProofRunner, type CandidateProofResult } from './candidate-proof.js';
 import { CandidateTraceWriter, FileCandidateTraceSink } from './candidate-trace.js';
 import { claimDesktop, type DesktopClaimOptions } from './desktop-claim.js';
@@ -12,11 +12,14 @@ import { loadPrivateOperatorModule } from './native-host.js';
 import { createPhysicalPreflight, type PhysicalPreflightOptions } from './physical-preflight.js';
 import { createSafariOriginProbe, type SafariOriginOptions } from './safari-origin.js';
 import { createVoiceOverCaptureProbe } from './capture-probe.js';
+import { createReferencePreparation, type ReferencePreparationOptions } from './reference-preparation.js';
 
 export interface CandidateHostConfiguration {
   readonly desktop: DesktopClaimOptions;
   readonly physicalPreflight: Omit<PhysicalPreflightOptions, 'clock' | 'environment'>;
   readonly safari: SafariOriginOptions;
+  /** Already-reserved fixture setup with separate approval, inside the qualification claim. */
+  readonly referencePreparation?: ReferencePreparationOptions;
   readonly actions: readonly ActionRequest[];
   readonly approvedTextValues: readonly string[];
   readonly maxDurationSeconds: number;
@@ -59,13 +62,18 @@ export async function runCandidateHost(modulePath: string, outputDirectory: stri
     sourceRecordId: randomUUID, utc: clock.utc,
     sink: new FileCandidateTraceSink(join(outputDirectory, 'candidate.jsonl')) });
   const environment = createHostEnvironment();
+  const prepare = config.referencePreparation === undefined ? undefined : createReferencePreparation(
+    config.referencePreparation, config.safari, config.physicalPreflight.artifactProbe,
+    { expectedSessionId: config.desktop.desktopSessionId, environment });
+  let preparationStarted = false;
+  let prepared: RuntimeProbeEvidence = {};
   const origin = createSafariOriginProbe(config.safari);
   const capture = createVoiceOverCaptureProbe();
   const preflight = createPhysicalPreflight({ ...config.physicalPreflight, clock, environment,
     async observeRuntimeEvidence(probeSignal) {
       const evidence = await config.physicalPreflight.observeRuntimeEvidence(probeSignal);
       const observedOrigin = await origin();
-      return { ...evidence, observedOrigin, originReachable: true,
+      return { ...prepared, ...evidence, observedOrigin, originReachable: true,
         speechCaptureWorking: await capture(probeSignal), journalWritable: await journal.probeWritable() };
     },
   });
@@ -79,7 +87,20 @@ export async function runCandidateHost(modulePath: string, outputDirectory: stri
     lease: { leaseId: config.desktop.reference.leaseId, epoch: config.desktop.reference.epoch,
       maxActions: actions.length, maxWallTimeSeconds: config.maxDurationSeconds, deadlineMonotonic: deadline },
     actionTimeoutMs: config.actionTimeoutMs,
-    preflight: async () => { guard(); const report = await preflight(); guard(); return report; },
+    preflight: async () => {
+      guard();
+      // CandidateProofRunner validates the complete action list before its first preflight.
+      // Setup is one-shot under this same claim, never repeated for action-time probes.
+      if (prepare !== undefined && !preparationStarted) {
+        preparationStarted = true;
+        const remaining = Math.ceil(deadline - clock.monotonic());
+        if (remaining <= 0) throw new Error('candidate preparation expired');
+        const preparationSignal = AbortSignal.any([signal, AbortSignal.timeout(remaining)]);
+        prepared = await prepare(guard, preparationSignal);
+        guard();
+      }
+      const report = await preflight(); guard(); return report;
+    },
     authorizeReaderStartup: async () => {
       guard(); await config.authorizeStartup(signal); guard();
       if (probeReaderControlConfigured(environment).condition !== 'TRUE') throw new Error('reader control unavailable');

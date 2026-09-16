@@ -43,6 +43,17 @@ only; fresh runtime negatives/unknowns and the current artifact measurement take
 Stale-input measurement is still required, and the qualified-reader gate is unchanged.
 The focused checks use synthetic host/measurement ports; no actual browser or reader was run.
 
+The explicitly labelled `--candidate-proof` host also accepts `referencePreparation` for its
+already-reserved qualification fixture. It runs once before the first physical preflight, after
+the complete action list is validated, under the original candidate desktop claim and deadline.
+The setup signal combines caller cancellation with the remaining candidate lifetime. Subsequent
+action preflights never repeat setup; fresh runtime values and live artifact measurements take
+precedence over the setup receipt. The same real console/process/lock/permission guards and
+separate fixture authorization apply. Reader startup still needs its own fresh authorization.
+This connects qualification setup but supplies neither a private operator provisioner nor
+stale-input evidence and does not enroll a matrix. Focused checks cover synthetic orchestration
+and refusal of invalid typing before setup approval; they are not a positive physical host run.
+
 It executes with the user's host privileges, including its imports. Only load independently
 reviewed operator code, never files returned by the navigator, a candidate build or a browser.
 The launcher checks a canonical, private, owned regular module and parent directory; those
