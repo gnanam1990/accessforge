@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -42,6 +43,7 @@ from .routes import (
     settings_router,
     stream_router,
 )
+from .static_web import StaticWeb
 from .telemetry import (
     SCOPE_CORRELATION_ID,
     SCOPE_PROBLEM_CODE,
@@ -462,6 +464,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     # partial catalog: a later route colliding with one of these would have passed the guard and
     # then quietly shadowed the other in every generated client.
     _assert_operation_ids_are_unique(app)
+    if config.web_dist_directory is not None:
+        # Last, outside OpenAPI: real API/health routes retain their handlers and contracts.
+        web = StaticWeb(Path(config.web_dist_directory))
+        app.add_route(
+            "/{path:path}", web.__call__, methods=["GET", "HEAD"], include_in_schema=False
+        )
     return app
 
 

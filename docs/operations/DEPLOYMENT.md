@@ -88,6 +88,19 @@ uv run python -m accessforge_api          # control plane
 pnpm --filter @accessforge/web dev        # web UI
 ```
 
+For built UI serving without the development proxy, build the web and configure the API with
+`ACCESSFORGE_WEB_DIST_DIRECTORY` set to the absolute canonical `apps/web/dist` directory (or the
+trusted `web/` directory from a release bundle). Run the same API command above; `/`, `/workspaces`
+and `/w/...` then serve the SPA, while `/v1` and health routes retain their API handlers on the same
+origin. Leave the setting unset for API-only mode.
+
+The API snapshots `index.html` and supported files below `assets/` at startup with bounded size.
+It does not serve the source checkout, `.env`, source maps or arbitrary files, and refuses build
+symlinks. Deploy trusted assets only, never point this setting at a candidate workspace. Restart
+the API deliberately after a build update; running processes keep their original snapshot. This
+does not supply production identity/TLS, start a reader, migrate a database or establish readiness.
+The existing loopback-only restriction on passwordless local-development login is unchanged.
+
 ### 1.6 Recover abandoned manual handoffs
 
 Run a separate supervised process for the explicitly configured workspace(s):
