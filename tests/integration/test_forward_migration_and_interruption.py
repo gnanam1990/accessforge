@@ -41,7 +41,7 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0070_codex_runtime_observation.sql"
+NEWEST = "0071_github_login_challenge.sql"
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -120,6 +120,30 @@ def test_a_database_at_the_previous_schema_migrates_forward(disposable: str) -> 
     assert after.latest == NEWEST
 
 
+def test_login_challenge_upgrade_preserves_users_without_creating_login_authority(
+    disposable: str,
+) -> None:
+    _apply_through(disposable, "0070_codex_runtime_observation.sql")
+    user_id = str(uuid.uuid4())
+    with connect(disposable) as conn:
+        conn.execute(
+            "INSERT INTO app_user(id,email) VALUES(%s,'existing@example.test')", (user_id,)
+        )
+        before = conn.execute("SELECT * FROM app_user").fetchall()
+    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == []
+    with connect(disposable) as conn:
+        assert conn.execute("SELECT * FROM app_user").fetchall() == before
+        assert conn.execute("SELECT * FROM github_login_challenge").fetchall() == []
+        assert conn.execute("SELECT * FROM user_session").fetchall() == []
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
+            conn.execute(
+                "INSERT INTO github_login_challenge(state_hash,browser_hash,verifier_hash,"
+                "configuration_hash,created_at,expires_at) VALUES(repeat('a',64),repeat('b',64),"
+                "repeat('c',64),repeat('d',64),now(),now()+interval '11 minutes')"
+            )
+
+
 def test_github_preview_upgrade_does_not_invent_publication_intent(disposable: str) -> None:
     _apply_through(disposable, "0066_github_repository_binding.sql")
     migrate(disposable)
@@ -137,6 +161,7 @@ def test_publication_intent_upgrade_does_not_consume_consent(disposable: str) ->
     assert migrate(disposable) == [
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -160,7 +185,11 @@ def test_publication_receipt_upgrade_does_not_invent_creation_confirmation(dispo
             (intent_id, WS, str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())),
         )
         before = conn.execute("SELECT * FROM github_publication_intent").fetchall()
-    assert migrate(disposable) == ["0069_github_publication_receipt.sql", NEWEST]
+    assert migrate(disposable) == [
+        "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
+        NEWEST,
+    ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM github_publication_intent").fetchall() == before
         assert conn.execute("SELECT intent_id FROM github_publication_receipt").fetchall() == []
@@ -336,6 +365,7 @@ def test_dispatch_migration_does_not_invent_historical_machine_credentials(dispo
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -385,6 +415,7 @@ def test_session_migration_does_not_mint_historical_execution_authority(disposab
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -457,6 +488,7 @@ def test_manual_approval_migration_preserves_old_decisions_without_creating_cons
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -521,6 +553,7 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -581,6 +614,7 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -672,6 +706,7 @@ def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authori
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -736,6 +771,7 @@ def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) ->
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -814,6 +850,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -879,6 +916,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -961,6 +999,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -1060,6 +1099,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
@@ -1143,6 +1183,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0067_github_publication_preview.sql",
         "0068_github_publication_intent.sql",
         "0069_github_publication_receipt.sql",
+        "0070_codex_runtime_observation.sql",
         NEWEST,
     ]
     with connect(disposable) as conn:
