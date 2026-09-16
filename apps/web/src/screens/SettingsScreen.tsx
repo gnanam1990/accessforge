@@ -47,6 +47,7 @@ import {
 } from '../api/resources'
 import type { Member, RetentionClass, UsageRow } from '../api/resources'
 import { SchedulesSection } from './SchedulesSection'
+import { RetentionPolicyForm } from './RetentionPolicyForm'
 import { useResource } from '../api/useResource'
 import { useSession, membershipFor } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
@@ -453,6 +454,8 @@ export const SettingsScreen = (): JSX.Element => {
                   { key: 'meaning', header: 'What it holds', cell: (entry) => entry.meaning },
                 ]}
               />
+              {mayConfigure && <RetentionPolicyForm key={`${workspaceId}-${policy.revision}`}
+                workspaceId={workspaceId} policy={policy} onReload={retention.reload} />}
             </>
           )}
         </ResourceView>
