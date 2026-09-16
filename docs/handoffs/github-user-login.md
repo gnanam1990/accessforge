@@ -1,10 +1,10 @@
-# Optional GitHub user login — transport checkpoint
+# Optional GitHub user login — browser-route checkpoint
 
-Status: **PARTIAL, not enabled and not an implemented browser sign-in flow**.
+Status: **HTTP flow implemented, disabled by default; UI and actual OAuth acceptance pending**.
 This is app-user identity, not Codex model OAuth, GitHub App publication, or AWS.
-The current `ApiSettings.identity_provider` and session routes are unchanged:
-only none/local-development are available. No new route, credential, account,
-session, deployment or live migration is created by this checkpoint.
+`ApiSettings.identity_provider` accepts none/local-development/github. No live
+configuration, credential, account, deployment or migration was changed. The
+GitHub option is separate from the owner's chosen Codex model provider.
 
 ## Built transport
 
@@ -44,23 +44,18 @@ Database/commit errors fail closed; do not retry an ambiguous operation.
 Nine focused tests exercise this boundary against disposable real PostgreSQL,
 including concurrent consumers, caller rollback, configuration drift and a
 confirmed row-lock wait across expiry. They make no provider/browser/reader calls.
-The migration is supplied, not applied to a live deployment. Browser cookie and
-route wiring remain absent: these helpers alone are not a sign-in flow.
+The migration is supplied, not applied to a live deployment. The browser-route
+integration below now composes these helpers; real provider acceptance is separate.
 
 ## Required next integration — do not bypass
 
-- Wire the durable challenges to a separate Secure/HttpOnly/SameSite=Lax browser
-  cookie carrying the original verifier and browser secret. Consume before token
-  exchange; never accept those secrets from callback query parameters. Add bounded
-  challenge creation/rate limiting and expired-row cleanup before enabling routes.
 - Use the explicit operator binding and fresh-subject issuance described below;
   never pass a callback/body-supplied subject directly to the issuer.
-- Add disabled-by-default validated provider configuration, start/callback routes,
-  secure cookie handling, refusal/audit paths, existing-account disable checks,
-  session issuance and UI discovery. Preserve local-only login restrictions.
-- Update the live OpenAPI contract/generated clients and verify state theft,
-  callback replay/races, expiry, provider/config drift, session/account revocation,
-  transaction failure and token/error redaction at the real database boundary.
+- Add UI discovery and a top-level browser sign-in link; do not call redirect
+  routes with the JSON client. Preserve the local-only login restrictions.
+- Verify trusted TLS/proxy forwarding, per-source edge admission controls, and
+  query/cookie log redaction before any exposed deployment. Global admission
+  limits are resource bounds, not per-client fairness or complete DoS prevention.
 - Register/configure the dedicated OAuth application and test an actual authorized
   browser flow separately. No such registration or provider call was performed.
 
@@ -100,11 +95,57 @@ revoker revokes associated sessions atomically; it does not revoke independent
 local sessions or change memberships. Binding/user/session lock ordering also
 covers resolve-then-rotate, which already updates the old session's last-seen time.
 Audit write failure rolls back binding, issuance and revocation rather than
-leaving unaudited authority. Refusal auditing at the future HTTP boundary remains
-part of route integration.
+leaving unaudited authority. The HTTP boundary adds generic refusal auditing
+without provider/query/cookie data.
 
 Focused real PostgreSQL coverage includes concurrent conflicting bindings,
 issuance/rotation races with revocation, provider provenance after rotation,
 disabled/revoked resolution, audit failure rollback and previous-schema session
 preservation. CLI unit checks cover invalid subjects/arguments and error redaction.
 These are implementation checks, not actual GitHub login or reader acceptance.
+
+## Built browser HTTP flow
+
+`ACCESSFORGE_IDENTITY_PROVIDER=github` requires all three dedicated values:
+`ACCESSFORGE_GITHUB_OAUTH_CLIENT_ID`, `ACCESSFORGE_GITHUB_OAUTH_CLIENT_SECRET`, and
+`ACCESSFORGE_GITHUB_OAUTH_REDIRECT_URI`. Partial or inactive-provider credentials
+are refused at configuration construction. The secret is excluded from repr and
+diagnostics. No values were installed in this development machine's configuration.
+
+- `GET /v1/auth/github/start` requires the configured HTTPS origin and refuses
+  cross-site starts/unexpected query parameters. It creates the committed challenge
+  and returns a 303 GitHub authorization redirect plus a short-lived
+  `__Host-accessforge_github_login` cookie (Secure, HttpOnly, SameSite=Lax, Path=/,
+  no Domain) containing the independent browser secret and original verifier.
+- `GET /v1/auth/github/callback` rejects duplicate/oversized/unknown query fields,
+  duplicate/malformed binding cookies and origin mismatch. It commits state
+  consumption before contacting the provider, handles provider denial without an
+  exchange, obtains fresh numeric identity and issues the bound audited session.
+  No callback-supplied verifier, subject, return URL or account ID is accepted.
+  Success redirects only to `/`; tokens do not appear in the response body.
+- Success and handled failures carry no-store/no-referrer. Every handled callback
+  response clears the transient cookie. Refusal audit metadata is fixed and errors
+  are generic; database failures never print a DSN or raw database diagnostics.
+- The existing POST email login refuses in GitHub mode, preserving the local-only
+  passwordless bypass rather than accidentally widening it to hosted identity.
+
+Admission is serialized across replicas with a nonblocking database advisory
+lock. At most 120 challenges are created per rolling minute and at most 1000
+records retained before admitting another. Each attempt removes up to 1000 expired
+records; cleanup commits even on a capacity refusal. Contention/capacity returns
+429 with Retry-After. This global cap is not a per-source edge/WAF policy and does
+not bound all malformed-request audit traffic. Without traffic, expired rows can
+remain until the next creation attempt; they are never valid for authentication.
+
+The OpenAPI contract marks both 303 routes as browser navigation and unauthenticated.
+Generated Python/TypeScript JSON clients retain the paths but deliberately omit
+the operations. A browser must navigate rather than fetch and follow a cross-origin
+provider redirect as JSON. The Python server entrypoint disables raw access logs
+because query strings contain OAuth code/state; route-template telemetry remains.
+Any alternate ASGI launcher and every proxy must also suppress/redact query strings,
+cookies and authorization headers. Trust forwarded scheme/host only from the
+explicitly controlled TLS proxy, never from arbitrary client-supplied headers.
+
+Focused ASGI tests use real disposable PostgreSQL with a synthetic provider result.
+They prove database/cookie/route composition, not actual GitHub authorization,
+cross-browser cookie behavior, deployment readiness, or VoiceOver/NVDA execution.

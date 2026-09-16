@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+if TYPE_CHECKING:
+    from .auth.github_identity import GitHubOAuthConfiguration
 
 _PLACEHOLDER_TOKENS = ("changeme", "placeholder", "replace_me", "replaceme", "your_", "xxxx")
 
@@ -60,7 +63,10 @@ class ApiSettings(BaseSettings):
     # than inventing a credential store. "local-development" accepts an email with no secret, which
     # is an authentication bypass by construction -- see the validator below and the docstring of
     # `routes/session.py`.
-    identity_provider: Literal["none", "local-development"] = "none"
+    identity_provider: Literal["none", "local-development", "github"] = "none"
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: SecretStr | None = Field(default=None, repr=False)
+    github_oauth_redirect_uri: str | None = None
     # Write-rate limits, one bucket per principal and one per workspace, both enforced. Environment
     # configuration rather than a request field or a per-workspace row: the value has to be trusted,
     # and the two things a caller controls are exactly the two that must not set it.
@@ -141,6 +147,18 @@ class ApiSettings(BaseSettings):
                     "passwordless development login must not bind to a network interface"
                 )
 
+        if self.identity_provider == "github":
+            self.github_identity_configuration()
+        elif any(
+            value is not None
+            for value in (
+                self.github_oauth_client_id,
+                self.github_oauth_client_secret,
+                self.github_oauth_redirect_uri,
+            )
+        ):
+            raise ValueError("GitHub identity credentials require identity_provider 'github'")
+
         if self.environment == "production" and _is_loopback(self.database_url):
             raise ValueError(
                 "refusing a loopback database in production; a production deployment pointing at "
@@ -148,6 +166,22 @@ class ApiSettings(BaseSettings):
             )
 
         return self
+
+    def github_identity_configuration(self) -> GitHubOAuthConfiguration:
+        from .auth.github_identity import GitHubOAuthConfiguration
+
+        if (
+            self.identity_provider != "github"
+            or not self.github_oauth_client_id
+            or self.github_oauth_client_secret is None
+            or not self.github_oauth_redirect_uri
+        ):
+            raise ValueError("complete dedicated GitHub identity configuration is required")
+        return GitHubOAuthConfiguration(
+            self.github_oauth_client_id,
+            self.github_oauth_client_secret.get_secret_value(),
+            self.github_oauth_redirect_uri,
+        )
 
     def redacted(self) -> dict[str, str | int]:
         """Diagnostics view. Credentials are never included, in any environment."""

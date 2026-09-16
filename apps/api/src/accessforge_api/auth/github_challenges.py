@@ -1,6 +1,6 @@
 """Durable pre-authentication state; no routes, provider calls or account issuance.
 
-The future route must set browser_secret and code_verifier in an HttpOnly, Secure,
+The browser route must set browser_secret and code_verifier in an HttpOnly, Secure,
 SameSite=Lax cookie. Only state goes in the authorization query. Never accept a
 verifier or browser secret from callback query parameters. Each helper owns its
 connection: successful consumption is committed before control returns, so a
@@ -21,6 +21,10 @@ from accessforge_persistence import unscoped_connection
 from .github_identity import GitHubIdentityError, GitHubOAuthConfiguration
 
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+
+
+class GitHubChallengeRateLimited(GitHubIdentityError):
+    """Global admission capacity is exhausted; no provider request is authorized."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,22 +57,44 @@ def _configuration(config: GitHubOAuthConfiguration) -> str:
 def create_challenge(database_url: str, config: GitHubOAuthConfiguration) -> BrowserChallenge:
     """Commit a five-minute challenge before returning its transient credentials."""
     challenge = BrowserChallenge(*(secrets.token_urlsafe(32) for _ in range(3)))
+    limited = False
     with unscoped_connection(database_url) as conn:
+        conn.execute("SET LOCAL statement_timeout = '5s'")
+        # One database-wide admission lock across replicas. Nonblocking: never
+        # accumulate waiting login creation transactions. Not an IP fairness policy.
+        lock = conn.execute("SELECT pg_try_advisory_xact_lock(713021, 1) AS acquired").fetchone()
+        if lock is None or not lock["acquired"]:
+            raise GitHubChallengeRateLimited("GitHub login admission limited")
         conn.execute(
-            """
+            "DELETE FROM github_login_challenge WHERE state_hash IN "
+            "(SELECT state_hash FROM github_login_challenge WHERE expires_at <= clock_timestamp() "
+            "ORDER BY expires_at LIMIT 1000)"
+        )
+        counts = conn.execute(
+            "SELECT count(*) AS retained, count(*) FILTER "
+            "(WHERE created_at > clock_timestamp() - interval '1 minute') AS recent "
+            "FROM github_login_challenge"
+        ).fetchone()
+        limited = counts is None or counts["retained"] >= 1000 or counts["recent"] >= 120
+        if not limited:
+            conn.execute(
+                """
             WITH moment AS MATERIALIZED (SELECT clock_timestamp() AS at)
             INSERT INTO github_login_challenge
                 (state_hash, browser_hash, verifier_hash, configuration_hash,
                  created_at, expires_at)
             SELECT %s, %s, %s, %s, at, at + interval '5 minutes' FROM moment
             """,
-            (
-                _hash(challenge.state),
-                _hash(challenge.browser_secret),
-                _hash(challenge.code_verifier),
-                _configuration(config),
-            ),
-        )
+                (
+                    _hash(challenge.state),
+                    _hash(challenge.browser_secret),
+                    _hash(challenge.code_verifier),
+                    _configuration(config),
+                ),
+            )
+    # Commit expired-row cleanup even when creation is refused.
+    if limited:
+        raise GitHubChallengeRateLimited("GitHub login admission limited")
     return challenge
 
 

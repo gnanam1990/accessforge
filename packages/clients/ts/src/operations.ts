@@ -854,6 +854,8 @@ export const PATHS: readonly string[] = [
   '/diagnostics',
   '/health/live',
   '/health/ready',
+  '/v1/auth/github/callback',
+  '/v1/auth/github/start',
   '/v1/session',
   '/v1/sessions',
   '/v1/workspaces/{workspace_id}/diagnosis-profile',

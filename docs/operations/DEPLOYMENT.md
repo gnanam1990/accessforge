@@ -101,6 +101,15 @@ the API deliberately after a build update; running processes keep their original
 does not supply production identity/TLS, start a reader, migrate a database or establish readiness.
 The existing loopback-only restriction on passwordless local-development login is unchanged.
 
+Optional GitHub app-user identity now has a disabled-by-default HTTP flow; see
+[the identity handoff](../handoffs/github-user-login.md) for operator bindings,
+dedicated OAuth configuration and outstanding browser/UI acceptance. It is not
+Codex model OAuth or repository-publication credentials. Do not expose it until
+TLS/forwarded-header trust and edge admission controls are verified. The standard
+API entrypoint disables raw access logs; alternate launchers and proxies must also
+omit OAuth callback query strings and secret headers/cookies from logs. No hosted
+identity/deployment acceptance is implied by the local implementation tests.
+
 ### 1.6 Recover abandoned manual handoffs
 
 Run a separate supervised process for the explicitly configured workspace(s):

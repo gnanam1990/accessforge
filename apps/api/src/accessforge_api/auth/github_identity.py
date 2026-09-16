@@ -46,6 +46,7 @@ class GitHubOAuthConfiguration:
             or "\\" in self.redirect_uri
             or uri.scheme != "https"
             or not uri.hostname
+            or (uri.port is not None and not 1 <= uri.port <= 65535)
             or uri.username is not None
             or uri.password is not None
             or uri.query

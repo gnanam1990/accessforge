@@ -11,6 +11,8 @@ Generated: the human-client operation table, with each public/cookie route's met
 parameters and mutation flag. Supervisor bearer routes are excluded from this surface: the native
 machine protocol owns their separate credentials and one-shot semantics. PATHS still lists every
 server route so independent clients can check their URLs against the complete contract.
+Browser-navigation OAuth redirects are also omitted from JSON operations: they
+must be opened as top-level browser navigation, not fetched as a JSON API.
 
 Not generated: the transport. Cookies, CSRF, `If-Match`, `Idempotency-Key`, retry semantics and the
 handling of a problem document are decisions about how to talk to this API safely, and generating
@@ -67,6 +69,7 @@ def _operations() -> list[dict[str, Any]]:
                     "mutating": method in MUTATING,
                     "authenticated": bool(operation.get("security")),
                     "machine_only": operation.get("security") == [{"supervisorBearer": []}],
+                    "browser_only": operation.get("x-accessforge-browser-navigation") is True,
                     "summary": (operation.get("summary") or "").strip(),
                 }
             )
@@ -123,7 +126,7 @@ def _python(operations: list[dict[str, Any]]) -> str:
         "OPERATIONS: dict[str, Operation] = {",
     ]
     for op in operations:
-        if op["machine_only"]:
+        if op["machine_only"] or op["browser_only"]:
             continue
         params = ", ".join(f'"{p}"' for p in op["parameters"])
         params = f"({params},)" if len(op["parameters"]) == 1 else f"({params})"
@@ -172,7 +175,7 @@ def _typescript(operations: list[dict[str, Any]]) -> str:
         "export const OPERATIONS: Readonly<Record<string, Operation>> = {",
     ]
     for op in operations:
-        if op["machine_only"]:
+        if op["machine_only"] or op["browser_only"]:
             continue
         params = ", ".join(f"'{p}'" for p in op["parameters"])
         lines.append(f"  '{op['operation_id']}': {{")

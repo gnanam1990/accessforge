@@ -261,7 +261,8 @@ class AccessForgeClient:
             raise KeyError(
                 f"no human-client operation {operation_id!r} in this contract. "
                 "Supervisor bearer operations use the separate NativeExecutionSession protocol, "
-                "not this cookie/CSRF client. This build does not serve other absent operations."
+                "not this cookie/CSRF client. OAuth navigation uses a top-level browser redirect, "
+                "not this JSON client. This build does not serve other absent operations."
             ) from None
 
     def _body(self, response: httpx.Response) -> Any:
