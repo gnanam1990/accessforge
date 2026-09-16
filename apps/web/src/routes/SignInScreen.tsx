@@ -27,7 +27,7 @@ import { Button } from '../components/Button'
 import { ErrorSummary } from '../components/ErrorSummary'
 import { FormField } from '../components/FormField'
 import { Notice } from '../components/Notice'
-import { RouteHeading } from '../a11y/RouteHeading'
+import { WelcomeLayout } from '../session/WelcomeLayout'
 import { DependencyUnavailableState } from '../components/states'
 import { useSession } from '../session/SessionProvider'
 import { SignInProviderGate } from '../session/SignInProviderGate'
@@ -47,14 +47,13 @@ export const SignInScreen = (): JSX.Element => {
 
   if (state.status === 'signInUnavailable') {
     return (
-      <main className="af-stack" style={{ padding: 'var(--af-space-8)' }}>
-        <RouteHeading>Sign in to AccessForge</RouteHeading>
+      <WelcomeLayout>
         <DependencyUnavailableState problem={state.problem} />
         <p className="af-secondary">
           Authentication is delegated to an identity provider, and this deployment has not been given
           one. No credential would work here, so no sign-in form is offered.
         </p>
-      </main>
+      </WelcomeLayout>
     )
   }
 
@@ -81,8 +80,7 @@ export const SignInScreen = (): JSX.Element => {
   }
 
   return (
-    <main className="af-stack" style={{ padding: 'var(--af-space-8)', maxWidth: '40rem' }}>
-      <RouteHeading>Sign in to AccessForge</RouteHeading>
+    <WelcomeLayout>
 
       <SignInProviderGate>
       <ErrorSummary
@@ -133,6 +131,6 @@ export const SignInScreen = (): JSX.Element => {
           </p>
         </Notice>
       )}
-    </main>
+    </WelcomeLayout>
   )
 }

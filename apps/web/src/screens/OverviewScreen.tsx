@@ -16,6 +16,7 @@ import type { JSX } from 'react'
 
 import { RouteHeading } from '../a11y/RouteHeading'
 import { DataTable } from '../components/DataTable'
+import { SectionIcon } from '../components/Brand'
 import { Notice } from '../components/Notice'
 import { ResourceView } from '../components/ResourceView'
 import { RunOutcomeBadge, RunStatusBadge } from '../components/StatusBadge'
@@ -54,7 +55,22 @@ export const OverviewScreen = (): JSX.Element => {
 
   return (
     <>
-      <RouteHeading>Overview</RouteHeading>
+      <header className="af-overview-heading">
+        <div><p className="af-eyebrow">YOUR WORKSPACE</p><RouteHeading>Overview</RouteHeading>
+          <p className="af-secondary">Your accessibility work, connected from first observation to final review.</p></div>
+        <Link className="af-button af-button--primary" to={workspacePath(workspaceId, 'projects')}>Open projects</Link>
+      </header>
+      <nav className="af-quick-actions" aria-label="Workspace workflow">
+        {([
+          ['projects', 'Projects & journeys', 'Define what matters to your users.', 1],
+          ['settings', 'Workspace settings', 'Manage the workspace and its configuration.', 4],
+          ['runners', 'Runner inventory', 'Check readiness before dispatching work.', 3],
+        ] as const).map(([path, title, detail, icon]) => (
+          <Link key={path} to={workspacePath(workspaceId, path)}>
+            <SectionIcon index={icon} /><strong>{title}</strong><span>{detail}</span>
+          </Link>
+        ))}
+      </nav>
       <FindingsSection workspaceId={workspaceId} />
 
       <section className="af-stack">

@@ -36,7 +36,7 @@ export const ChooseWorkspaceScreen = (): JSX.Element => {
         </EmptyState>
       ) : (
         <nav aria-label="Your workspaces">
-          <ul className="af-nav-list">
+          <ul className="af-nav-list af-workspace-cards">
             {workspaces.map((workspace) => (
               <li key={workspace.workspaceId}>
                 <Link to={workspacePath(workspace.workspaceId)}>
