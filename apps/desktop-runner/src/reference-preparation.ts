@@ -6,7 +6,7 @@ import { prepareSafariReferenceApp } from './safari-launcher.js';
 import type { SafariOriginOptions } from './safari-origin.js';
 
 export interface ReferencePreparationOptions {
-  readonly fixture: Omit<ReferenceAppSetupOptions, 'launch' | 'fetch' | 'observedBuildDigest'>;
+  readonly fixture: Omit<ReferenceAppSetupOptions, 'launch' | 'fetch' | 'signal' | 'observedBuildDigest'>;
   /** Separate approval for fixture reconciliation and opening Safari, not reader consent. */
   readonly authorize: (signal: AbortSignal) => Promise<void>;
 }
@@ -33,9 +33,11 @@ export function createReferencePreparation(options: ReferencePreparationOptions,
   const prepare = ports.prepare ?? prepareSafariReferenceApp;
   let used = false;
   let fenced = false;
-  return async (assertHeld: () => void, signal: AbortSignal): Promise<RuntimeProbeEvidence> => {
-    if (used) { fenced = true; throw new Error('reference preparation cannot be replayed'); }
+  const cancellation = new AbortController();
+  return async (assertHeld: () => void, callerSignal: AbortSignal): Promise<RuntimeProbeEvidence> => {
+    if (used) { fenced = true; cancellation.abort(); throw new Error('reference preparation cannot be replayed'); }
     used = true;
+    const signal = AbortSignal.any([callerSignal, cancellation.signal]);
     const guard = () => {
       if (signal.aborted || fenced) throw new Error('reference preparation cancelled');
       assertHeld();
@@ -62,6 +64,7 @@ export function createReferencePreparation(options: ReferencePreparationOptions,
       setupToken: fixture.setupToken, variant: fixture.variant,
       expectedBuildDigest: fixture.expectedBuildDigest, observedBuildDigest: measured.observedBuildDigest,
       expectedFixtureDigest: fixture.expectedFixtureDigest,
+      signal,
     }, { ...target, authorize, assertDesktopHeld: guard, signal });
     guard();
     if (result.startUrl !== target.expectedUrl || result.browserVersion !== target.expectedBrowserVersion) {

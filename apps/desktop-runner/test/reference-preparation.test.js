@@ -19,7 +19,8 @@ function fixture(overrides = {}) {
     async prepare(setup, host) {
       calls.push('prepare'); host.assertDesktopHeld();
       assert.equal(setup.observedBuildDigest, hash);
-      assert.equal(host.signal, controller.signal);
+      assert.equal(host.signal.aborted, false);
+      assert.equal(setup.signal, host.signal);
       assert.equal('fetch' in setup, false);
       return {startUrl: safari.expectedUrl, browserVersion: safari.expectedBrowserVersion,
         evidence: {permittedOrigin: origin, environmentResetSucceeded: true}};
@@ -96,4 +97,24 @@ test('a concurrent second call fences the original pending preparation', async (
   release({expectedBuildDigest: f.hash, observedBuildDigest: f.hash});
   await assert.rejects(first, /cancelled/);
   assert.equal(f.calls.includes('prepare'), false);
+});
+
+test('replay and caller cancellation abort the in-flight preparation signal', async () => {
+  for (const mode of ['replay', 'caller']) {
+    const f = fixture(); let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    f.ports.prepare = async (setup, host) => {
+      assert.equal(setup.signal, host.signal);
+      return new Promise((_resolve, reject) => {
+        host.signal.addEventListener('abort', () => reject(new Error('effect cancelled')), {once: true});
+        started();
+      });
+    };
+    const run = f.make(), first = run(() => {}, f.controller.signal);
+    const refused = assert.rejects(first, /cancelled/);
+    await ready;
+    if (mode === 'replay') await assert.rejects(run(() => {}, f.controller.signal), /replayed/);
+    else f.controller.abort();
+    await refused;
+  }
 });

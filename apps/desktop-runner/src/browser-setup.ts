@@ -17,6 +17,7 @@ export type SetupFetch = (
     readonly method: 'POST';
     readonly headers: Readonly<Record<string, string>>;
     readonly redirect: 'error';
+    readonly signal?: AbortSignal;
   },
 ) => Promise<FetchResponse>;
 
@@ -43,6 +44,7 @@ export interface ReferenceAppSetupOptions {
    */
   readonly expectedFixtureDigest: string;
   readonly fetch?: SetupFetch;
+  readonly signal?: AbortSignal;
   readonly launch: BrowserLauncher;
 }
 
@@ -71,7 +73,9 @@ function assertLoopbackOrigin(raw: string): URL {
 }
 
 const boundedLocalFetch: SetupFetch = async (url, init) => {
-  const response = await globalThis.fetch(url, { ...init, signal: AbortSignal.timeout(5_000) });
+  const timeout = AbortSignal.timeout(5_000);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  const response = await globalThis.fetch(url, { ...init, signal });
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -140,6 +144,7 @@ export async function prepareReferenceApp(
     throw new Error('the independently observed build must match before fixture reconciliation');
   }
   const doFetch: SetupFetch = options.fetch ?? boundedLocalFetch;
+  options.signal?.throwIfAborted();
   const headers = { 'x-setup-token': options.setupToken };
 
   // Reconcile the existing empty fixture only. Never globally reset the application or select
@@ -149,14 +154,17 @@ export async function prepareReferenceApp(
   endpoint.searchParams.set('nonce', options.reservedNonce);
   const fixtureResponse = await doFetch(
     endpoint.href,
-    { method: 'POST', headers, redirect: 'error' },
+    { method: 'POST', headers, redirect: 'error', ...(options.signal ? { signal: options.signal } : {}) },
   );
+  options.signal?.throwIfAborted();
   if (!fixtureResponse.ok || fixtureResponse.status !== 200) {
     throw new Error(`fixture reconciliation returned HTTP ${fixtureResponse.status}; browser launch is refused`);
   }
   const fixture = readFixture(await fixtureResponse.json(), options.variant, options.expectedFixtureDigest, options.reservedNonce);
+  options.signal?.throwIfAborted();
   const startUrl = new URL(`/form/${encodeURIComponent(fixture.nonce)}`, origin).href;
   const launched = await options.launch(startUrl);
+  options.signal?.throwIfAborted();
   if (launched.observedUrl !== startUrl) {
     throw new Error('browser did not independently observe the exact reserved fixture URL; launch is unconfirmed');
   }

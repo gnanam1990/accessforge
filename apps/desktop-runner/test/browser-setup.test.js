@@ -34,6 +34,33 @@ test('reconciles the reserved nonce without a global reset and projects no crede
   assert.equal(JSON.stringify(projectSetupForNavigator(result)).includes(options.setupToken), false);
 });
 
+test('caller cancellation aborts a pending HTTP response without launching or retrying', async (t) => {
+  const controller = new AbortController(); let requests = 0, received;
+  const ready = new Promise(resolve => { received = resolve; });
+  const permittedOrigin = await serve(t, (_request, response) => {
+    requests++;
+    response.writeHead(200, {'content-type': 'application/json'});
+    response.write('{'); // Leave the actual fetch body pending.
+    received();
+  });
+  const pending = prepareReferenceApp({...options, permittedOrigin, signal: controller.signal, launch: neverLaunch});
+  const refused = assert.rejects(pending);
+  await ready;
+  controller.abort();
+  await refused;
+  assert.equal(requests, 1);
+});
+
+test('a custom fetch cannot turn cancellation into a launch', async () => {
+  const controller = new AbortController();
+  await assert.rejects(prepareReferenceApp({...options, signal: controller.signal,
+    fetch: async (_url, init) => {
+      assert.equal(init.signal, controller.signal);
+      controller.abort();
+      return reply(200);
+    }, launch: neverLaunch}));
+});
+
 for (const status of [201, 403, 409, 500]) {
   test('HTTP ' + status + ' cannot confirm the original existing empty fixture', async () => {
     await assert.rejects(() => prepareReferenceApp({ ...options, fetch: async () => reply(status), launch: neverLaunch }),
