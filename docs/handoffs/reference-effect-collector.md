@@ -59,7 +59,10 @@ are synthetic fixture effects on a real database, not actual VoiceOver or canoni
 Thirty-eight focused domain checks also pass, including fresh-nonce policy stability, separate
 resource identities, substitution refusal and preservation of missing/positive coverage results.
 
-Still required: start/STOP handshake integration, independently retained original collector
-records and closure, source/credential authentication, and finalizer binding to the actual sealed
-execution window and assertion. No production caller or finalizer currently consumes this new
-coverage; C2 is not complete. Do not manufacture an expected window from the returned measurement.
+The original collector-only checkpoint above predates the now-built start/STOP handshake,
+authenticated original READY/CLOSED records and finalizer binding. See
+`reference-effect-observer-records.md` and `reference-effect-worker-process.md` for that
+composition and its backend evidence. Actual configured native/reader/model execution and
+original physical evidence remain unaccepted. The measurement scope remains narrow; do not
+manufacture an expected window from the returned measurement or claim arbitrary external-effect
+coverage. C2 physical acceptance is not complete.

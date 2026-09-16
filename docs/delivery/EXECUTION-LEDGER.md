@@ -1,5 +1,81 @@
 # AccessForge execution ledger
 
+## Verified continuation checkpoint — through PR #207
+
+Source and GitHub were refreshed on 2026-09-16. Remote/local main was clean at
+`a3004d622925e721a3ff45d2e2587d7f1a65beef`; no open PR remained at that checkpoint.
+Refresh live Git/CI before later merges. The older checkpoints below are history,
+not instructions to rebuild completed slices or restart a reader.
+
+Owner constraints remain: Codex OAuth, no AWS/Bedrock target; build/integration
+only, with actual VoiceOver startup/runtime testing paused. Normal review and
+required exact-head CI remain merge gates. Do not infer physical acceptance from
+synthetic checks, native compilation, a source ZIP or GitHub checks.
+
+### Delivered since the older #199 checkpoint
+
+| PR | Delivered slice | Confirmed merge commit |
+| --- | --- | --- |
+| #200 | Narrow NVDA driver; Windows native host and qualification still open | `cb2d939d54e577eb866ea559e151a2baa8d8fca3` |
+| #201 | Effect collector startup cancellation | `7a20033f853d9bc3c5d7304702cfa0838573cc0d` |
+| #202 | Earlier delivery-status checkpoint | `a3d561637ac9a5ff6ece5b064db5454790cfd53c` |
+| #203 | Baseline physical-action authority cancellation | `361952c1c3e1128488226d8dc85f7253b4b25d01` |
+| #204 | Frozen benchmark denominator accounting | `aa652d715fc5af358120965ee4615adc0f41bcc3` |
+| #205 | Readable outcome/evaluator bound to signed manifest | `57ec48e48042a07f8ff15c526425073ec0e9849f` |
+| #206 | Retained benchmark ZIP hash/signature inspection | `30d6a29e23e7e63a6fc3c06fdb1cccb434a2a1e3` |
+| #207 | One-shot reference native-host provisioning factory | `a3004d622925e721a3ff45d2e2587d7f1a65beef` |
+
+These PR heads passed applicable CI and normal source review before merging.
+This does not assert that each separate post-merge main run has completed.
+
+### Current core boundary and next work
+
+**C1:** `createReferenceNativeProvisioner` now assembles a real private attempt
+directory, FileJournal, shared monotonic deadline and receiver-derived lease and
+navigator references. Required live artifact/reference setup and explicit
+authority ports remain. The old statement that no provisioning assembly ships
+is superseded. The deployment-specific operator module still needs real
+stale-input observation, live focus/effect authority and controller-issued
+credentials/consent. Do not replace these with always-allow callbacks. In
+particular, keyboard focus is not proof of a VoiceOver-cursor activation target.
+Next implementation must resolve those concrete authorities/measurements without
+loosening the existing closed-world action, session and evidence boundaries.
+
+**C2:** the protected reference-effect collector, authenticated READY/CLOSED
+records, native worker ownership and finalizer join are built. Current
+`finalize_execution.py` consumes `reference_effect_evidence.observed_assertions`
+after retained-byte/stream checks. The join binds original READY, settled action
+pairs, successful final STOP, CLOSED and the ordinary final observer sample.
+See `docs/handoffs/reference-effect-observer-records.md` for backend integration
+evidence. Do not rebuild the collector/finalizer because older handoffs say they
+are missing. Its scope is protected committed reference insertions, not arbitrary
+external effects; actual configured reader/model execution remains unaccepted.
+
+**E1/E2/E3:** no qualified actual-reader baseline → diagnosis → constrained repair
+→ independent rerun → real human review/export is established. Keep the matrix
+unchanged and respect the owner's runtime-test pause. Code wiring and permission
+are separate from execution evidence.
+
+**R1/R2/R3/R4/D1:** real GitHub App installation/publication, production login and
+non-AWS deployment/recovery, Windows native host/qualification, full fault corpus
+and held-out actual benchmarks/pilot, final demo/license/submission remain open.
+The benchmark report preserves denominators and inspects retained bytes but does
+not verify cohort identity, oracle labels, independent execution or acceptance.
+Codex model OAuth is not the product's hosted-user login choice.
+
+### Available build evidence, not acceptance
+
+The source/web ZIP at main `30d6a29e23e7e63a6fc3c06fdb1cccb434a2a1e3`
+contains 955 independently size/hash-checked inventory files. Archive SHA-256:
+`bd7636e46b9034ed979c307e1a279cded60e5e92f16ed8958f6b7009418c1511`.
+It includes #206 but not #207. Fresh TypeScript/Vite build passed. Native Safari
+origin and VoiceOver capture helpers compiled to arm64 Mach-O binaries without
+being executed. These checks do not establish fresh full-runtime installation,
+reader/model execution, human review or deployment. Older temporary ZIP paths
+below are historical and must not be advertised as currently available.
+
+## Historical checkpoints — superseded for task selection
+
 ## Current owner override — 2026-09-16
 
 The owner chose Codex OAuth, then explicitly retired Bedrock/AWS as the product target.
