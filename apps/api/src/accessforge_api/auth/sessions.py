@@ -61,12 +61,34 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _require_github_binding(
+    conn: psycopg.Connection[dict[str, Any]],
+    *,
+    github_subject: int,
+    user_id: str,
+) -> None:
+    # Consistent binding -> user -> session lock order for issuance, resolution,
+    # rotation and revocation. Re-check after waiting, not from a cached snapshot.
+    binding = conn.execute(
+        "SELECT user_id FROM github_user_identity WHERE github_subject = %s "
+        "AND user_id = %s AND revoked_at IS NULL FOR SHARE",
+        (github_subject, user_id),
+    ).fetchone()
+    enabled = conn.execute(
+        "SELECT id FROM app_user WHERE id = %s AND disabled_at IS NULL FOR SHARE",
+        (user_id,),
+    ).fetchone()
+    if binding is None or enabled is None:
+        raise SessionError("session is not valid")
+
+
 def issue_session(
     conn: psycopg.Connection[dict[str, Any]],
     *,
     user_id: str,
     now: datetime | None = None,
     rotated_from: str | None = None,
+    github_subject: int | None = None,
 ) -> IssuedSession:
     """Create a session for an already-authenticated user.
 
@@ -75,6 +97,19 @@ def issue_session(
     unverified identifier.
     """
     moment = now or datetime.now(UTC)
+    if rotated_from is not None:
+        parent = conn.execute(
+            "SELECT github_subject FROM user_session WHERE id = %s AND user_id = %s "
+            "AND revoked_at IS NULL AND expires_at > %s",
+            (rotated_from, user_id, moment),
+        ).fetchone()
+        if parent is None or (
+            github_subject is not None and github_subject != parent["github_subject"]
+        ):
+            raise SessionError("session is not valid")
+        github_subject = parent["github_subject"]
+    if github_subject is not None:
+        _require_github_binding(conn, github_subject=github_subject, user_id=user_id)
     session_id = str(uuid.uuid4())
     session_token = secrets.token_urlsafe(32)
     csrf_token = secrets.token_urlsafe(32)
@@ -84,8 +119,8 @@ def issue_session(
         """
         INSERT INTO user_session
             (id, user_id, token_hash, csrf_token_hash, created_at, last_seen_at, expires_at,
-             rotated_from)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+             rotated_from, github_subject)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             session_id,
@@ -96,6 +131,7 @@ def issue_session(
             moment,
             expires_at,
             rotated_from,
+            github_subject,
         ),
     )
     return IssuedSession(
@@ -130,11 +166,17 @@ def resolve_session(
     moment = now or datetime.now(UTC)
     row = conn.execute(
         """
-        SELECT id, user_id, csrf_token_hash
+        SELECT id, user_id, csrf_token_hash, github_subject
         FROM user_session
         WHERE token_hash = %s
           AND revoked_at IS NULL
           AND expires_at > %s
+          AND (github_subject IS NULL OR EXISTS (
+              SELECT 1 FROM github_user_identity g JOIN app_user u ON u.id = g.user_id
+              WHERE g.github_subject = user_session.github_subject
+                AND g.user_id = user_session.user_id AND g.revoked_at IS NULL
+                AND u.disabled_at IS NULL
+          ))
         """,
         (_hash(session_token), moment),
     ).fetchone()
@@ -144,6 +186,12 @@ def resolve_session(
         # caller whether a token was ever real.
         raise SessionError("session is not valid")
 
+    if row["github_subject"] is not None:
+        _require_github_binding(
+            conn,
+            github_subject=row["github_subject"],
+            user_id=str(row["user_id"]),
+        )
     conn.execute("UPDATE user_session SET last_seen_at = %s WHERE id = %s", (moment, row["id"]))
     return AuthenticatedSession(
         session_id=str(row["id"]),
@@ -178,8 +226,16 @@ def rotate_session(
     chain remains auditable; the old token stops working immediately.
     """
     moment = now or datetime.now(UTC)
+    # Validate/inherit provider provenance before taking the old session's write
+    # lock, avoiding an inverted lock order against identity revocation.
+    issued = issue_session(
+        conn,
+        user_id=session.user_id,
+        now=moment,
+        rotated_from=session.session_id,
+    )
     revoke_session(conn, session_id=session.session_id, now=moment)
-    return issue_session(conn, user_id=session.user_id, now=moment, rotated_from=session.session_id)
+    return issued
 
 
 def revoke_session(
