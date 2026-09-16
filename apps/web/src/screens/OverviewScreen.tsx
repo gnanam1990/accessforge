@@ -121,9 +121,14 @@ export const OverviewScreen = (): JSX.Element => {
             page.items.length === 0 ? (
               <EmptyState heading="No run has been requested" because="nothing-created-yet">
                 <p className="af-secondary">
-                  A run is requested from a frozen journey version. Nothing here is waiting to be
-                  discovered.
+                  Start with a project, define its target environment, then author and freeze a journey.
+                  Configure an allowance and enroll a compatible desktop runner before requesting a run.
                 </p>
+                <ol className="af-stack">
+                  <li><Link className="af-link" to={workspacePath(workspaceId, 'projects')}>Create a project and journey</Link></li>
+                  <li><Link className="af-link" to={workspacePath(workspaceId, 'settings')}>Set explicit usage limits</Link> (workspace owner)</li>
+                  <li><Link className="af-link" to={workspacePath(workspaceId, 'runners')}>Check runner requirements</Link> before returning to the frozen journey to request work.</li>
+                </ol>
               </EmptyState>
             ) : (
               <DataTable<Run>

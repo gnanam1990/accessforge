@@ -22,7 +22,7 @@ const asRole = (role: string): SessionResponse => ({
   workspaces: [{ workspaceId: 'ws-1', name: 'Alder', role }],
 })
 
-const renderSettings = (server: FakeServer): void => {
+const renderSettings = (server: Pick<FakeServer, 'fetch'>): void => {
   const client = new ApiClient({ fetchImpl: server.fetch, cookieSource: () => '' })
   render(
     <MemoryRouter initialEntries={['/w/ws-1/settings']}>
@@ -30,6 +30,56 @@ const renderSettings = (server: FakeServer): void => {
     </MemoryRouter>,
   )
 }
+
+describe('first workspace allowance', () => {
+  const setup = (role = 'OWNER', marker: unknown = 'WORKSPACE_ENTITLEMENT') => {
+    const server = createFakeServer(asRole(role))
+    let missing = true
+    const writes: Headers[] = []
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/usage') && missing) {
+        return new Response(JSON.stringify({ code: 'DEPENDENCY_UNAVAILABLE',
+          title: 'Setup required', detail: 'No allowance is configured.', setupRequired: marker }),
+        { status: 503, headers: { 'content-type': 'application/problem+json' } })
+      }
+      if (url.endsWith('/settings/entitlement') && init?.method === 'PUT') {
+        writes.push(new Headers(init.headers))
+        missing = false
+      }
+      return server.fetch(input, init)
+    }
+    renderSettings({ fetch: fetchImpl })
+    return { server, writes }
+  }
+
+  it('lets an owner create revision one with an explicit zero revision precondition', async () => {
+    const user = userEvent.setup()
+    const { server, writes } = setup()
+    expect(await screen.findByRole('heading', { name: 'Set your first allowance' })).toBeVisible()
+    expect(screen.getByLabelText(/Runs per day/)).toHaveValue(0)
+    await user.type(screen.getByLabelText(/Why this limit/), 'Setup only; no work authorized')
+    await user.click(screen.getByRole('button', { name: 'Save allowance' }))
+    await screen.findByRole('table', { name: /Consumption in the current window/ })
+    expect(writes[0]?.get('if-match')?.replaceAll('"', '')).toBe('0')
+    expect(server.bodies.find((entry) => entry.url.endsWith('/settings/entitlement'))?.body)
+      .toMatchObject({ maxRunsPerDay: 0, maxModelTokensPerDay: 0, maxConcurrentRuns: 0 })
+    expect(screen.queryByRole('heading', { name: 'Set your first allowance' })).not.toBeInTheDocument()
+  })
+
+  it.each(['VIEWER', 'MAINTAINER'])('explains setup without giving %s a write form', async (role) => {
+    setup(role)
+    expect(await screen.findByText(/Ask a workspace owner/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Save allowance' })).not.toBeInTheDocument()
+  })
+
+  it('does not mistake an unclassified dependency failure for an absent allowance', async () => {
+    setup('OWNER', 'DATABASE_UNAVAILABLE')
+    await screen.findByText('No allowance is configured.')
+    expect(screen.queryByRole('heading', { name: 'Set your first allowance' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save allowance' })).not.toBeInTheDocument()
+  })
+})
 
 describe('usage', () => {
   it('reports measured, estimated and unmeasurable as three different columns', async () => {
@@ -147,7 +197,7 @@ describe('who may change what', () => {
     const server = createFakeServer(asRole('OWNER'))
     renderSettings(server)
 
-    const field = await screen.findByLabelText(/maxRunsPerDay/)
+    const field = await screen.findByLabelText(/Runs per day/)
     await user.clear(field)
     await user.type(screen.getByLabelText(/Why this limit/), 'raising')
     await user.click(screen.getByRole('button', { name: 'Save allowance' }))

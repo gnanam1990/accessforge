@@ -49,6 +49,7 @@ def read_usage(
         raise ProblemDetail(
             ProblemCode.DEPENDENCY_UNAVAILABLE,
             f"{exc} An administrator configures it; nothing raises it automatically.",
+            extra={"setupRequired": "WORKSPACE_ENTITLEMENT"},
         ) from exc
 
     totals = budgets.usage_since(conn, workspace_id=workspace_id, entitlement=entitlement)
@@ -94,7 +95,11 @@ def read_entitlement(
     try:
         entitlement = budgets.current_entitlement(conn, workspace_id=workspace_id)
     except budgets.NoEntitlement as exc:
-        raise ProblemDetail(ProblemCode.DEPENDENCY_UNAVAILABLE, str(exc)) from exc
+        raise ProblemDetail(
+            ProblemCode.DEPENDENCY_UNAVAILABLE,
+            str(exc),
+            extra={"setupRequired": "WORKSPACE_ENTITLEMENT"},
+        ) from exc
     response.headers["ETag"] = f'"{entitlement.revision}"'
     return {
         "revision": entitlement.revision,
