@@ -49,6 +49,7 @@ import type { Member, RetentionClass, UsageRow } from '../api/resources'
 import { SchedulesSection } from './SchedulesSection'
 import { RetentionPolicyForm } from './RetentionPolicyForm'
 import { MemberManagement } from './MemberManagement'
+import { OwnerInvitations } from './OwnerInvitations'
 import { useResource } from '../api/useResource'
 import { useSession, membershipFor } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
@@ -438,7 +439,9 @@ export const SettingsScreen = (): JSX.Element => {
         </p>
       </section>
 
-      <WorkspaceAllowance key={workspaceId} workspaceId={workspaceId} mayConfigure={mayConfigure} />
+      {mayConfigure && <OwnerInvitations key={`invitations-${workspaceId}`} workspaceId={workspaceId} />}
+
+      <WorkspaceAllowance key={`allowance-${workspaceId}`} workspaceId={workspaceId} mayConfigure={mayConfigure} />
 
       <SchedulesSection />
 

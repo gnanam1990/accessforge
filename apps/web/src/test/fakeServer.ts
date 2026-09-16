@@ -413,6 +413,9 @@ export const createFakeServer = (initial: SessionResponse | null = null): FakeSe
       if (url.endsWith('/usage') && method === 'GET') {
         return json(data.usage)
       }
+      if (url.includes('/membership-invitations?') && method === 'GET') {
+        return json({ items: [], nextCursor: null })
+      }
       if (url.includes('/settings/retention') && method === 'GET') {
         return json(data.retention)
       }
