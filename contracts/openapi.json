@@ -61,7 +61,7 @@
         "type": "apiKey"
       },
       "sessionCookie": {
-        "description": "HttpOnly session cookie issued by POST /v1/sessions. Not readable by script, which is why the CSRF token is a separate value rather than the same one.",
+        "description": "HttpOnly session cookie issued by POST /v1/sessions or GitHub browser callback. Not readable by script, which is why the CSRF token is a separate value rather than the same one.",
         "in": "cookie",
         "name": "accessforge_session",
         "type": "apiKey"
@@ -381,6 +381,210 @@
         "summary": "Ready"
       }
     },
+    "/v1/auth/github/callback": {
+      "get": {
+        "description": "Consume browser state before exchange; redirect only to the fixed local root.",
+        "operationId": "github_login_callback",
+        "responses": {
+          "303": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [],
+        "summary": "Github Login Callback",
+        "tags": [
+          "session"
+        ],
+        "x-accessforge-browser-navigation": true
+      }
+    },
+    "/v1/auth/github/start": {
+      "get": {
+        "description": "Top-level browser navigation, not a fetch/JSON API. Redirects to GitHub.com.",
+        "operationId": "github_login_start",
+        "responses": {
+          "303": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [],
+        "summary": "Github Login Start",
+        "tags": [
+          "session"
+        ],
+        "x-accessforge-browser-navigation": true
+      }
+    },
     "/v1/session": {
       "delete": {
         "description": "End this session.\n\nCSRF-protected like any other mutation. A forced sign-out is a small attack, but it is still an\nattack a cross-site request could mount, and exempting it would make the rule conditional.\n\nSigning out with no session succeeds and clears the cookies. Reporting 401 would leave a browser\nholding a cookie it cannot use and no way to discard it.\n\nThe cookies are cleared by writing to the **injected** response rather than by constructing a\nnew one. An earlier version built a fresh `Response(headers=dict(response.headers))`, and\n`dict()` over a header collection keeps one value per name \u2014 so of the two `Set-Cookie`\ndeletions, one silently vanished and the browser kept a cookie the server believed it had\ncleared. A real browser found that; nothing in a status-code assertion would have.",
@@ -591,7 +795,7 @@
     },
     "/v1/sessions": {
       "post": {
-        "description": "Exchange an identity-provider assertion for a browser session.\n\nThe only implemented provider is the local-development bridge described in the module docstring.\nWith no provider configured this is a 503 naming the missing configuration, not a 401: the\ncaller's credentials were never the problem.",
+        "description": "Exchange an identity-provider assertion for a browser session.\n\nThis endpoint only serves the local-development bridge described in the module docstring.\nWith no provider configured this is a 503 naming the missing configuration, not a 401: the\ncaller's credentials were never the problem.",
         "operationId": "sign_in",
         "requestBody": {
           "content": {

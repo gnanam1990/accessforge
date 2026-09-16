@@ -8,7 +8,15 @@ from .config import ApiSettings
 
 def main() -> None:
     settings = ApiSettings()  # type: ignore[call-arg]
-    uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="info")
+    # Structured route-template telemetry already records requests. Raw server
+    # access logs would expose OAuth codes/state in callback query strings.
+    uvicorn.run(
+        create_app(settings),
+        host=settings.host,
+        port=settings.port,
+        log_level="info",
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

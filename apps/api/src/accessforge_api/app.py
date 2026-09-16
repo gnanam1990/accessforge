@@ -43,6 +43,8 @@ from .routes import (
     settings_router,
     stream_router,
 )
+from .routes.github_login import LOGIN_PATHS, protect_response
+from .routes.github_login import router as github_login_router
 from .static_web import StaticWeb
 from .telemetry import (
     SCOPE_CORRELATION_ID,
@@ -91,7 +93,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 #: Paths that legitimately answer without a session. Everything else requires one, and the contract
 #: says so rather than leaving a consumer to infer it from a 401 in production.
-_UNAUTHENTICATED = frozenset({"/health/live", "/health/ready", "/diagnostics", "/v1/sessions"})
+_UNAUTHENTICATED = (
+    frozenset({"/health/live", "/health/ready", "/diagnostics", "/v1/sessions"}) | LOGIN_PATHS
+)
 
 #: FastAPI attaches this to every operation with a body or a path parameter, describing a 422 that
 #: this application never returns: `RequestValidationError` is caught and reshaped into an RFC7807
@@ -143,7 +147,8 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
             "in": "cookie",
             "name": "accessforge_session",
             "description": (
-                "HttpOnly session cookie issued by POST /v1/sessions. Not readable by script, "
+                "HttpOnly session cookie issued by POST /v1/sessions or GitHub browser callback. "
+                "Not readable by script, "
                 "which is why the CSRF token is a separate value rather than the same one."
             ),
         },
@@ -236,10 +241,9 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
             # documents a refusal the server cannot produce is worse than one that omits it: a
             # client writes a retry path for a response that never arrives, and the omission is
             # invisible until something depends on it.
-            if (
-                not machine
-                and method.upper() in MUTATING_METHODS
-                and path.startswith(_RATE_LIMITED_PREFIX)
+            if not machine and (
+                (method.upper() in MUTATING_METHODS and path.startswith(_RATE_LIMITED_PREFIX))
+                or path == "/v1/auth/github/start"
             ):
                 responses["429"] = dict(rate_limited_response)
             if machine:
@@ -339,6 +343,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         # value, and `X-Correlation-Id` is the server's -- the one that appears in the log.
         response.headers["X-Request-Id"] = str(request.scope[SCOPE_REQUEST_ID])
         response.headers["X-Correlation-Id"] = str(request.scope[SCOPE_CORRELATION_ID])
+        if request.url.path in LOGIN_PATHS:
+            protect_response(response, callback=request.url.path.endswith("/callback"))
         return response
 
     @app.exception_handler(ProblemDetail)
@@ -405,6 +411,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         ).to_response()
 
     for router in (
+        github_login_router,
         diagnosis_requests_router,
         session_router,
         projects_router,

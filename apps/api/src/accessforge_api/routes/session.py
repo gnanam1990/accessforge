@@ -11,7 +11,7 @@ refuses with `DEPENDENCY_UNAVAILABLE` rather than inventing a credential store. 
 that refusal as what it is — sign-in is unavailable because a dependency is missing — instead of a
 login form that could never succeed.
 
-**One provider is implemented, and it is a local-development bridge.** `local-development` accepts
+**This email endpoint is a local-development bridge.** `local-development` accepts
 an email and issues a session for a matching, enabled `app_user` **with no secret at all**. That is
 an authentication bypass by construction, so:
 
@@ -25,6 +25,11 @@ an authentication bypass by construction, so:
 
 It exists so a developer can actually operate the product on their own machine. It is not a sign-in
 mode for anything else, and the handoff says so.
+
+An optional GitHub browser flow is implemented in `routes/github_login.py`. It
+requires explicit configuration and trusted existing-user bindings; this email
+endpoint refuses in GitHub mode. Real OAuth/browser acceptance remains separate
+from the route's synthetic-provider integration tests.
 
 **Two cookies, doing different jobs.** The session cookie is `HttpOnly` — script must not be able to
 read a credential. The CSRF cookie deliberately is not: the browser echoes it back in a header, the
@@ -101,7 +106,7 @@ def _clear_session_cookies(response: Response, *, secure: bool) -> None:
 def sign_in(request: Request, response: Response, payload: dict[str, Any]) -> dict[str, Any]:
     """Exchange an identity-provider assertion for a browser session.
 
-    The only implemented provider is the local-development bridge described in the module docstring.
+    This endpoint only serves the local-development bridge described in the module docstring.
     With no provider configured this is a 503 naming the missing configuration, not a 401: the
     caller's credentials were never the problem.
     """
@@ -112,6 +117,12 @@ def sign_in(request: Request, response: Response, payload: dict[str, Any]) -> di
             "no identity provider is configured, so this deployment cannot sign anyone in. This is "
             "a missing dependency rather than a rejected credential: authentication is delegated "
             "to a provider, and none has been supplied.",
+        )
+
+    if config.identity_provider != "local-development":
+        raise ProblemDetail(
+            ProblemCode.NOT_AUTHENTICATED,
+            "this deployment requires its configured browser identity flow",
         )
 
     if not isinstance(payload, dict):
