@@ -9,6 +9,7 @@ dependencies = [
   "pydantic>=2.10",
   "pydantic-settings>=2.6",
   "psycopg[binary]>=3.2",
+  "httpx>=0.28",
 ]
 
 [build-system]
