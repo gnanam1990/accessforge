@@ -57,6 +57,8 @@ export interface ProbeResult {
 
 export interface ProbeEnvironment {
   readonly platform?: () => string;
+  /** OS hardware identifier; never a hostname or an operator-supplied enrollment alias. */
+  readonly deviceIdentifier?: () => string | undefined;
   /** Read current locale and active keyboard input source; never target/enrollment values. */
   readonly localeAndKeyboard?: () => { readonly locale: string; readonly keyboardLayout: string } | undefined;
   /** Whether a path exists. Injected so tests do not need a configured VoiceOver. */
@@ -545,6 +547,12 @@ export function createHostEnvironment(options: HostEnvironmentOptions = {}): Pro
     auditSessionId: () => {
       const session = readConsoleSession(run);
       return session?.kCGSSessionAuditIDKey?.toString();
+    },
+    deviceIdentifier: () => {
+      const result = run('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']);
+      if (result.status !== 0 || result.stdout.length > 65536) return undefined;
+      const matches = [...result.stdout.matchAll(/"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})"/g)];
+      return matches.length === 1 ? matches[0]?.[1]?.toLowerCase() : undefined;
     },
     processAuditSessionId: () => {
       const result = run('/usr/bin/xcrun', ['swift', '-e', PROCESS_SESSION_PROBE]);
