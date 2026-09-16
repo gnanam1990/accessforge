@@ -653,6 +653,13 @@ def test_the_session_routes_are_documented_as_uncovered(db: str, api: TestClient
         if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
         and not path.startswith("/v1/workspaces/")
     }
+    # Recipient acceptance has a verified principal but no membership yet. Its route-specific
+    # limiter charges a durable PRINCIPAL bucket before resolving the caller-chosen offer IDs.
+    # Keep this exception exact: future non-workspace mutations still need an explicit decision.
+    acceptance = "/v1/invitation-offers/{workspace_id}/{invitation_id}/accept"
+    assert "429" in contract["paths"][acceptance]["post"]["responses"]
+    assert f"POST {acceptance}" in uncovered
+    uncovered.remove(f"POST {acceptance}")
     assert uncovered == {"POST /v1/sessions", "DELETE /v1/session"}, (
         "a mutating route outside /v1/workspaces/ appeared; it is not reached by the rate limit "
         f"chokepoint in build_context and needs its own decision: {sorted(uncovered)}"

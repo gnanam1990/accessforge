@@ -45,6 +45,7 @@ from .routes import (
 )
 from .routes.github_login import LOGIN_PATHS, protect_response
 from .routes.github_login import router as github_login_router
+from .routes.invitation_acceptance import router as invitation_acceptance_router
 from .routes.membership_invitations import router as membership_invitations_router
 from .static_web import StaticWeb
 from .telemetry import (
@@ -247,6 +248,7 @@ def _describe_contract(app: FastAPI) -> dict[str, Any]:
             if not machine and (
                 (method.upper() in MUTATING_METHODS and path.startswith(_RATE_LIMITED_PREFIX))
                 or path == "/v1/auth/github/start"
+                or (method.upper() == "POST" and path.startswith("/v1/invitation-offers/"))
             ):
                 responses["429"] = dict(rate_limited_response)
             if machine:
@@ -419,6 +421,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         session_router,
         projects_router,
         membership_invitations_router,
+        invitation_acceptance_router,
         reader_startup_router,
         navigator_model_router,
         repair_requests_router,
