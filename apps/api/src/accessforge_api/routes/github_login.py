@@ -23,6 +23,7 @@ from accessforge_api.auth.github_identity import (
     authorization_url,
     exchange_identity,
 )
+from accessforge_api.auth.invitation_continuation import InvitationContinuation
 from accessforge_api.auth.membership import record_global_audit_event
 from accessforge_api.config import ApiSettings
 from accessforge_api.problems import ProblemCode, ProblemDetail
@@ -90,7 +91,7 @@ async def _refuse(request: Request, *, unavailable: bool = False) -> None:
     )
 
 
-def _browser_secrets(request: Request) -> tuple[str, str]:
+def _browser_secrets(request: Request) -> tuple[str, str, InvitationContinuation | None]:
     values = []
     headers = request.headers.getlist("cookie")
     if sum(map(len, headers)) > 16384:
@@ -100,10 +101,25 @@ def _browser_secrets(request: Request) -> tuple[str, str]:
             name, separator, value = item.strip().partition("=")
             if name == LOGIN_COOKIE and separator:
                 values.append(value)
-    if len(values) != 1 or not re.fullmatch(r"[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}", values[0]):
+    if len(values) != 1:
         raise GitHubIdentityError("GitHub login refused")
-    browser, verifier = values[0].split(".")
-    return browser, verifier
+    parts = values[0].split(".")
+    if len(parts) not in (2, 4) or not all(
+        re.fullmatch(r"[A-Za-z0-9_-]{43}", part) for part in parts[:2]
+    ):
+        raise GitHubIdentityError("GitHub login refused")
+    continuation = InvitationContinuation(parts[2], parts[3]) if len(parts) == 4 else None
+    return parts[0], parts[1], continuation
+
+
+def _continuation(request: Request) -> InvitationContinuation | None:
+    pairs = list(request.query_params.multi_items())
+    if not pairs:
+        return None
+    query = dict(pairs)
+    if len(pairs) != 2 or set(query) != {"invitationWorkspace", "invitationId"}:
+        raise GitHubIdentityError("GitHub login refused")
+    return InvitationContinuation(query["invitationWorkspace"], query["invitationId"])
 
 
 @router.get(
@@ -118,20 +134,23 @@ async def github_login_start(request: Request) -> Response:
         settings, config = _configuration(request)
         expected = urlsplit(config.redirect_uri)
         origin = f"https://{expected.netloc}"
+        continuation = _continuation(request)
         if (
-            request.query_params
-            or request.headers.get("sec-fetch-site") == "cross-site"
+            request.headers.get("sec-fetch-site") == "cross-site"
             or request.headers.get("origin", origin) != origin
         ):
             raise GitHubIdentityError("GitHub login refused")
-        challenge = await run_in_threadpool(create_challenge, _database_url(settings), config)
+        challenge = await run_in_threadpool(
+            create_challenge, _database_url(settings), config, continuation=continuation
+        )
         response = RedirectResponse(
             authorization_url(config, state=challenge.state, code_verifier=challenge.code_verifier),
             status_code=303,
         )
         response.set_cookie(
             LOGIN_COOKIE,
-            f"{challenge.browser_secret}.{challenge.code_verifier}",
+            f"{challenge.browser_secret}.{challenge.code_verifier}"
+            + (continuation.cookie_suffix if continuation else ""),
             max_age=300,
             httponly=True,
             secure=True,
@@ -160,7 +179,7 @@ async def github_login_start(request: Request) -> Response:
     openapi_extra={"x-accessforge-browser-navigation": True},
 )
 async def github_login_callback(request: Request) -> Response:
-    """Consume browser state before exchange; redirect only to the fixed local root."""
+    """Consume bound browser state before exchange; return only to an internal fixed route."""
     try:
         settings, config = _configuration(request)
         pairs = list(request.query_params.multi_items())
@@ -178,7 +197,7 @@ async def github_login_callback(request: Request) -> Response:
             or ("code" in query) == ("error" in query)
         ):
             raise GitHubIdentityError("GitHub login refused")
-        browser, verifier = _browser_secrets(request)
+        browser, verifier, continuation = _browser_secrets(request)
         await run_in_threadpool(
             consume_challenge,
             _database_url(settings),
@@ -186,12 +205,15 @@ async def github_login_callback(request: Request) -> Response:
             state=query["state"],
             browser_secret=browser,
             code_verifier=verifier,
+            continuation=continuation,
         )
         if "error" in query:
             raise GitHubIdentityError("GitHub login refused")
         identity = await exchange_identity(config, code=query["code"], code_verifier=verifier)
         issued = await run_in_threadpool(issue_github_session, _database_url(settings), identity)
-        response = RedirectResponse("/", status_code=303)
+        response = RedirectResponse(
+            continuation.return_path if continuation else "/", status_code=303
+        )
         _set_session_cookies(
             response,
             session_token=issued.session_token,

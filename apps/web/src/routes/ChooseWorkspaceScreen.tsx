@@ -13,16 +13,19 @@
 
 import type { JSX } from 'react'
 
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 
 import { RouteHeading } from '../a11y/RouteHeading'
 import { EmptyState } from '../components/states'
 import { workspacePath } from './routeMap'
 import { useSession } from '../session/SessionProvider'
 import { AcceptInvitation } from './AcceptInvitation'
+import { invitationReference } from './invitationReference'
 
 export const ChooseWorkspaceScreen = (): JSX.Element => {
   const { state } = useSession()
+  const { search } = useLocation()
+  const invitation = invitationReference(search)
   const workspaces = state.status === 'authenticated' ? state.workspaces : []
 
   return (
@@ -49,7 +52,9 @@ export const ChooseWorkspaceScreen = (): JSX.Element => {
           </ul>
         </nav>
       )}
-      {state.status === 'authenticated' && <AcceptInvitation key={state.userId} />}
+      {state.status === 'authenticated' && <AcceptInvitation
+        key={`${state.userId}-${invitation?.workspaceId ?? ''}-${invitation?.invitationId ?? ''}`}
+        initialReference={invitation} />}
     </>
   )
 }

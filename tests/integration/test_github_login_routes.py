@@ -77,6 +77,34 @@ def _start(client: TestClient) -> tuple[str, str]:
     return parse_qs(location.query)["state"][0], cookie
 
 
+def test_invitation_context_survives_login_but_cookie_substitution_refuses(
+    client: TestClient,
+) -> None:
+    workspace, invitation = str(uuid.uuid4()), str(uuid.uuid4())
+    params = {"invitationWorkspace": workspace, "invitationId": invitation}
+    start = client.get("/v1/auth/github/start", params=params)
+    assert start.status_code == 303
+    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+    cookie = client.cookies.get(LOGIN_COOKIE)
+    assert cookie and cookie.endswith(f".{workspace}.{invitation}")
+    assert workspace not in start.headers["location"]  # Never sent to the provider.
+    callback = {"state": state, "code": "valid-code"}
+    altered = cookie.rsplit(".", 1)[0] + "." + str(uuid.uuid4())
+    refused = client.get(
+        "/v1/auth/github/callback", params=callback, headers={"cookie": f"{LOGIN_COOKIE}={altered}"}
+    )
+    assert refused.status_code == 401
+    assert _app(client).state.identity_calls == 0
+    restored = client.get(
+        "/v1/auth/github/callback", params=callback, headers={"cookie": f"{LOGIN_COOKIE}={cookie}"}
+    )
+    assert restored.status_code == 303
+    assert restored.headers["location"] == "/workspaces?" + urlencode(params)
+    current = client.get("/v1/session")
+    assert current.status_code == 200 and current.json()["workspaces"] == []
+    assert _app(client).state.identity_calls == 1
+
+
 @pytest.mark.parametrize("issuer", [None, "https://github.com/login/oauth"])
 def test_callback_commits_state_then_identity_then_audited_session(
     client: TestClient, issuer: str | None
