@@ -15,6 +15,9 @@ function fixture(t, mode = 'good') {
 const fs = require('node:fs');
 const input = JSON.parse(fs.readFileSync(3, 'utf8'));
 if (process.env.GITHUB_TOKEN !== undefined || process.argv.some(v => v.includes('private-token'))) process.exit(5);
+if (${JSON.stringify(mode)} === 'codex-env' && (process.env.HOME !== '/operator/home' ||
+    process.env.PATH !== '/operator/bin' || process.env.CODEX_HOME !== '/operator/codex' ||
+    process.env.OPENAI_API_KEY !== undefined || process.env.AWS_ACCESS_KEY_ID !== undefined)) process.exit(6);
 console.log('private-token'); console.error('private-token');
 if (${JSON.stringify(mode)} === 'nonzero') process.exit(3);
 if (${JSON.stringify(mode)} === 'oversize') { fs.writeSync(4, 'x'.repeat(3000)); process.exit(0); }
@@ -68,6 +71,28 @@ test('billable approval and credential isolation are checked before physical boo
     environment: {...h.options.environment, GITHUB_TOKEN: 'not-a-model-credential'}}));
   assert.equal(bootstraps, 0);
 });
+
+test('Codex receives only explicit OAuth home and executable paths through the real child environment', {skip: process.platform === 'win32'}, async t => {
+  const h = fixture(t, 'codex-env');
+  h.options.modelProfile = {provider: 'codex-chatgpt'};
+  h.options.environment = {...h.options.environment, HOME: '/operator/home', PATH: '/operator/bin', CODEX_HOME: '/operator/codex'};
+  assert.deepEqual(await runNavigatorProcess(h.bridge, h.options), {status: 'FINALIZING'});
+});
+
+for (const invalid of [{}, {HOME: '/operator/home'}, {HOME: 'relative', PATH: '/operator/bin'},
+  {HOME: '/operator/home', PATH: '/operator/bin:'}, {HOME: '/operator/home', PATH: '.'},
+  {HOME: '/operator/home', PATH: '/operator/bin', CODEX_HOME: 'relative'},
+  {HOME: '/operator/home', PATH: '/operator/bin', AWS_ACCESS_KEY_ID: 'forbidden'},
+  {HOME: '/operator/home', PATH: '/operator/bin', OPENAI_API_KEY: 'forbidden'}]) {
+  test('Codex rejects missing paths or foreign credentials before bootstrap: ' + JSON.stringify(Object.keys(invalid)), {skip: process.platform === 'win32'}, async t => {
+    const h = fixture(t);
+    let bootstraps = 0;
+    h.options.modelProfile = {provider: 'codex-chatgpt'};
+    h.options.environment = {ACCESSFORGE_DATABASE_URL: 'unused', ...invalid};
+    await assert.rejects(startOwnedNavigatorExecution(async () => { bootstraps++; return h.bridge; }, h.options));
+    assert.equal(bootstraps, 0);
+  });
+}
 
 test('abort during observer closure cannot later finish or release', {skip: process.platform === 'win32'}, async t => {
   const h = fixture(t);
