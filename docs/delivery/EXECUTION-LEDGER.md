@@ -890,3 +890,17 @@ See the desktop-enrollment-observation handoff for the exact envelope and enroll
 VoiceOver-adapter and desktop-runner TypeScript builds plus seven focused injected-observation/
 entrypoint checks passed. No actual host observation, reader action, model call, production write
 or deployment occurred. CI/merge and actual desktop qualification remain outstanding.
+
+## Recoverable enrollment receipt — 2026-09-16
+
+The enrollment route now uses the existing transactional idempotency mechanism when a bounded
+key is supplied. A lost response can be retried with the same principal/workspace/key/body without
+redeeming the single-use token again. Fresh infrastructure authority is checked before replay;
+changed bodies conflict. Only the non-secret enrollment receipt is retained, alongside a request
+digest, not the raw token. Replay/no-store headers distinguish the original receipt from live
+runner status. Legacy no-key behavior remains single-use; token issuance is not made replayable.
+
+Eleven focused parser/route-boundary checks, changed Python Ruff formatting/lint and mypy, and
+OpenAPI freshness passed. A real-HTTP/database regression for replay, one runner, changed-body
+refusal, token-free result storage and revoked-authority refusal is committed for required CI,
+not locally executed. No actual enrollment or provider/reader operation occurred.

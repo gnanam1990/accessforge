@@ -553,7 +553,7 @@ def _enrollment_identity(body: dict[str, Any]) -> tuple[PhysicalSession, RunnerP
 
 @router.post("/runners", status_code=status.HTTP_201_CREATED)
 def enroll_runner(
-    workspace_id: str, request: Request, conn: Conn, payload: dict[str, Any]
+    workspace_id: str, request: Request, response: Response, conn: Conn, payload: dict[str, Any]
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
@@ -564,16 +564,10 @@ def enroll_runner(
         body,
         frozenset({"token", "name", "session", "profile"}),
     )
+    if context.idempotency_key is not None and not 1 <= len(context.idempotency_key) <= 200:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "bounded Idempotency-Key required")
     try:
         session, profile = _enrollment_identity(body)
-        enrolled = runners.enroll_runner(
-            conn,
-            workspace_id=workspace_id,
-            token=body["token"],
-            name=body["name"],
-            session=session,
-            profile=profile,
-        )
     except (KeyError, TypeError) as exc:
         raise ProblemDetail(
             ProblemCode.INVALID_INPUT,
@@ -585,15 +579,37 @@ def enroll_runner(
         raise ProblemDetail(
             ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
         ) from exc
-    except runners.RunnerError as exc:
-        raise ProblemDetail(ProblemCode.CONFLICT, str(exc), request_id=context.request_id) from exc
 
-    # PREFLIGHT_REQUIRED, always. There is no request body that could produce a READY runner.
-    return {
-        "runnerId": enrolled.runner_id,
-        "status": str(enrolled.status),
-        "profileDigest": enrolled.profile_digest,
-    }
+    def perform() -> dict[str, Any]:
+        try:
+            enrolled = runners.enroll_runner(
+                conn,
+                workspace_id=workspace_id,
+                token=body["token"],
+                name=body["name"],
+                session=session,
+                profile=profile,
+            )
+        except EnrollmentError as exc:
+            raise ProblemDetail(
+                ProblemCode.INVALID_INPUT, str(exc), request_id=context.request_id
+            ) from exc
+        except runners.RunnerError as exc:
+            raise ProblemDetail(
+                ProblemCode.CONFLICT, str(exc), request_id=context.request_id
+            ) from exc
+        # A replay preserves this enrollment receipt, not the runner's later readiness state.
+        return {
+            "runnerId": enrolled.runner_id,
+            "status": str(enrolled.status),
+            "profileDigest": enrolled.profile_digest,
+        }
+
+    outcome = run_idempotently(conn, context, route="POST /runners", body=body, perform=perform)
+    response.headers["Cache-Control"] = "no-store"
+    if outcome.replayed:
+        response.headers["Idempotent-Replay"] = "true"
+    return outcome.response or {}
 
 
 @router.get("/runners")
