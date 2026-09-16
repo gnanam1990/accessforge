@@ -117,6 +117,39 @@ does not enable actual reader execution. No worker has been deployed automatical
 
 ## 2. Deploy order — fixed, and one-directional
 
+### Downloadable release candidate
+
+The trusted release workflow packages a source-and-web ZIP after its required CI completes.
+The workflow artifact is named `accessforge-release-<commit>` and contains the ZIP plus its
+SHA-256 checksum. It is retained for 30 days; it is not a GitHub Release publication or deployment.
+The ZIP includes committed source with lockfiles, freshly built web assets, a per-file digest
+manifest and an installation/limitations note. Untracked source files (including local `.env`)
+are excluded; source/web symlinks and an existing output path are refused.
+
+To package locally, first commit reviewed source changes and build the web from that checkout:
+
+```bash
+pnpm --filter @accessforge/web build
+python scripts/package_release.py --output accessforge-release.zip
+```
+
+The script prints the outer SHA-256 checksum. It requires a clean tracked checkout and never
+installs dependencies, applies migrations or contacts a model. The manifest inventories bytes;
+it is not a signature, CI attestation or proof that arbitrary caller-supplied assets match the
+source. The trusted workflow builds and packages together. Dependencies and desktop/model runtimes
+are not bundled: installation remains the locked source workflow above. Static web hosting must
+provide SPA fallback and same-origin `/v1` API routing. Actual reader, model, repair/rerun/review,
+fresh-install and hosted acceptance remain separate requirements.
+
+Before upload, the workflow extracts that same ZIP into a new directory, runs
+`uv sync --frozen --no-dev` there, then executes `scripts/check_release_install.py` with the
+extracted environment's isolated Python. It checks API/worker imports resolve inside the extracted
+source and loads the packaged schema/migration series. This catches missing runtime dependencies
+and source assets; it does not start services, connect to a database, migrate or prove a complete
+fresh product deployment.
+
+### Service upgrade order
+
 1. **Take a backup.** A migration is the change a restore exists for.
 2. `scripts/migrate.py` — a single, separate, deliberate step.
 3. Start the new binaries.

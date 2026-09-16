@@ -20,11 +20,26 @@ remain unfinished; do not substitute setup history for fresh negative/unknown ru
 
 ## Current continuation queue — refreshed 2026-09-16
 
+Release packaging slice (`feat/release-bundle`): the trusted release workflow now builds web assets
+after required CI and uploads a downloadable source/web ZIP with checksum, exact source commit,
+per-file inventory and explicit limitations. The packager refuses dirty tracked inputs, symlinks
+and overwrite, and excludes untracked source secrets. This is build output, not deployment or
+reader/model acceptance. The owner requested build-only work; actual VoiceOver tests remain paused.
+Private operator provisioning and stale-input measurement are still open; packaging does not close
+those runtime integration gaps. #197 is merged at `b98137a9957cf6e7ed343911ce33263ea9fc96b6`
+after exact-head CI and normal review; local main was synchronized to that commit.
+Local release rehearsal: the bundle at source commit `6165368241ca5e9df3508033d5b4ffd82900acb5`
+was extracted into a new directory and installed with frozen, non-dev dependencies. All four
+API/navigator/diagnosis/repair modules imported; six schemas and seventy migration files loaded.
+No services were started and no migrations executed. The workflow now performs an isolated-Python
+extracted-source import check before upload. This establishes install/import behavior, not the
+complete fresh-install product path or actual reader/model execution.
+
 Latest owner instruction: continue build/integration only; do not perform further actual VoiceOver
 startup or runtime tests. The manual host attempt below is historical. Actual qualification stays
 pending and must not hold up independently buildable code.
 
-Current build slice (`fix/candidate-authority-cancellation`): startup and action authorization now
+Merged #197 (`fix/candidate-authority-cancellation`): startup and action authorization now
 receive per-operation cancellation signals, composed with host cancellation at the private operator
 boundary. Timeout, refusal and completion close those signals. A late physical preflight is fenced
 before opening a stale approval request, not merely before reader dispatch. SDK start/stop remain
@@ -44,22 +59,20 @@ of unapproved typing before setup authorization. These are synthetic orchestrati
 not actual qualification. Concrete private provisioning, stale-input measurement, actual reader
 qualification and the full repair/rerun/review/release acceptance remain open.
 
-Verified remote/local main is `6667abf8ad074694e6978090a376a89a5f24b5a5`: #186–191
+Verified remote/local main is `b98137a9957cf6e7ed343911ce33263ea9fc96b6`: #186–197
 are merged after exact-head CI and normal review. This includes Codex diagnosis/repair,
 Bedrock retirement, navigator/runtime/consent composition, provider-independent packaging,
 consent UI and retained finalization/export integration. Do not rebuild those slices or
 treat their historical pending notes as current. The retained integration uses synthetic
 CLI/desktop observations and remains INCONCLUSIVE, not actual-reader acceptance.
 
-Work in flight, not yet merged at this checkpoint:
-1. #192 head `e6f048bd48095858f26974909509a0dbaa54b502`: explicit Codex OAuth home/path
-   forwarding to the native child, with no parent environment inheritance; 19 focused tests pass.
-2. #193 branch `fix/codex-profile-before-native-start`: reject retired, partial, mixed and
-   out-of-bounds model profiles before physical bootstrap; 20 focused tests and TypeScript pass.
-   Exact-head CI is still required. Neither slice starts a reader or invokes a model in its tests.
+Also merged: #192 native OAuth environment forwarding, #193 profile validation before startup,
+#194 non-AWS operator documentation, #195–196 reference preparation integration, and #197 bounded
+approval cancellation. Do not repeat these as pending work. #198 release packaging and #199
+same-origin web serving are the current PRs; both still require their applicable exact-head CI.
 
 Next implementation/acceptance sequence:
-- Finish exact-head CI/review/ordered merges for #192–193 and synchronize local main.
+- Finish exact-head CI/review/ordered merges for #198–199 and synchronize local main.
 - Trace C1 from `apps/desktop-runner/src/execution-bootstrap.ts` and
   `native-start-listener.ts` through the actual private host/runtime callbacks. Do not add more
   provider adapters or re-ask the resolved provider selection.
