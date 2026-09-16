@@ -556,11 +556,12 @@ export interface InvitationOffer {
   readonly ttlSeconds: number;
   readonly reason: string;
 }
-const invitationPath = (workspaceId: string, id: string): string =>
-  `${base(workspaceId)}/membership-invitations/${encodeURIComponent(id)}`;
+const invitationPath = (workspaceId: string, invitationId: string): string =>
+  `${base(workspaceId)}/membership-invitations/${encodeURIComponent(invitationId)}`;
 export const listInvitations = (client: ApiClient, workspaceId: string, after: string | null,
   signal: AbortSignal): Promise<ApiOutcome<Page<MembershipInvitation>>> => client.request(
-    `${base(workspaceId)}/membership-invitations?limit=20${after === null ? '' : `&after=${encodeURIComponent(after)}`}`,
+    `${base(workspaceId)}/membership-invitations` +
+    `?limit=20${after === null ? '' : `&after=${encodeURIComponent(after)}`}`,
     { signal });
 export const readInvitation = (client: ApiClient, workspaceId: string, id: string,
   signal?: AbortSignal): Promise<ApiOutcome<MembershipInvitation>> =>
