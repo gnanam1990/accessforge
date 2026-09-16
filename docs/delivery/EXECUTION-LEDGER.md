@@ -20,6 +20,20 @@ remain unfinished; do not substitute setup history for fresh negative/unknown ru
 
 ## Current continuation queue — refreshed 2026-09-16
 
+Latest owner instruction: continue build/integration only; do not perform further actual VoiceOver
+startup or runtime tests. The manual host attempt below is historical. Actual qualification stays
+pending and must not hold up independently buildable code.
+
+Current build slice (`fix/candidate-authority-cancellation`): startup and action authorization now
+receive per-operation cancellation signals, composed with host cancellation at the private operator
+boundary. Timeout, refusal and completion close those signals. A late physical preflight is fenced
+before opening a stale approval request, not merely before reader dispatch. SDK start/stop remain
+non-cancellable and unresolved startup still retains the claim. Concrete private provisioning and
+stale-input measurement are still unfinished; this is lifecycle integration, not qualification.
+TypeScript compilation and 31 focused synthetic candidate/host checks pass, including cancellation
+on timeout, fresh per-action signals and zero approval callbacks after late preflight completion.
+No actual reader, model call, database migration or deployment was performed for this build slice.
+
 Qualification setup follow-on (`feat/qualification-reference-preparation`): after #195 merged
 as `583bc1b6c222bf98cae77c47a68b380ace47c643`, the labelled candidate host now composes the
 same optional reference preparation before its first preflight, after action validation. It
@@ -64,12 +78,25 @@ This is the single continuation queue, not a release certificate. Earlier snapsh
 other PLAN/REMAINING handoffs are historical, not current task selectors. Refresh GitHub heads
 before acting. No overall completion percentage has been established.
 
-Latest operator state: local sign-in works, VoiceOver AppleScript control is ON, AWS is declined.
-Runner preference reads still return EPERM. System Settings confirms the exact runner Node's Full
-Disk Access entry exists but its switch is OFF; presence in Files & Folders was not a grant.
-Enabling that broader permission is awaiting a new action-time confirmation, not the previous
-AppleScript-control confirmation. No reader was started. See the final local-recovery checkpoint;
-older host, AWS and checkout notes below are historical, not current prerequisites.
+Latest operator state — live host checks on 2026-09-16: the owner explicitly approved Full Disk
+Access for ChatGPT.app after the exact Node grant alone left EPERM. Both approved entries are ON;
+the older ambiguous Node entry remains OFF. A fresh runner process now reads the VoiceOver
+preference successfully and reader-control configuration is TRUE. Do not repeat the resolved
+FDA permission request or describe EPERM as the current blocker.
+
+Read-only host probes report macOS/Safari profile-version checks, Accessibility and unlocked
+screen TRUE. Console and runner process both report audit session 100023; that observation alone
+is not a provisioned desktop assignment. Automation returns native status -600 while VoiceOver
+is stopped, therefore UNKNOWN, not denied. Build/reset/origin/stale-input and other owned runtime
+evidence remain unavailable without the concrete private provisioner.
+
+With the owner's reader-startup approval, a bounded manual System Settings startup was attempted.
+The VoiceOver switch briefly became ON, then reverted OFF. Native logs show VoiceOver PID 16818
+starting and entering its exit handler at 12:31:32 local time; a subsequent process probe found
+no running VoiceOver. The reason for exit is not established. Capture responsiveness was false;
+no reader action, speech trace, model call or qualified matrix resulted. VoiceOver is confirmed
+OFF after this attempt. Next: diagnose the startup exit and complete concrete private host
+provisioning; do not bypass UNKNOWN preflight checks or enroll the matrix from this host check.
 
 ## Verified checkpoint
 

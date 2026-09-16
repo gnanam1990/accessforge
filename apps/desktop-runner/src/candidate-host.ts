@@ -101,14 +101,21 @@ export async function runCandidateHost(modulePath: string, outputDirectory: stri
       }
       const report = await preflight(); guard(); return report;
     },
-    authorizeReaderStartup: async () => {
-      guard(); await config.authorizeStartup(signal); guard();
+    authorizeReaderStartup: async authoritySignal => {
+      const approvalSignal = AbortSignal.any([signal, authoritySignal]);
+      approvalSignal.throwIfAborted();
+      guard(); await config.authorizeStartup(approvalSignal); guard();
+      approvalSignal.throwIfAborted();
       if (probeReaderControlConfigured(environment).condition !== 'TRUE') throw new Error('reader control unavailable');
       guard();
     },
-    authorizePhysicalAction: async request => {
-      guard(); await config.authorizeAction(structuredClone(request), signal); guard();
+    authorizePhysicalAction: async (request, authoritySignal) => {
+      const approvalSignal = AbortSignal.any([signal, authoritySignal]);
+      approvalSignal.throwIfAborted();
+      guard(); await config.authorizeAction(structuredClone(request), approvalSignal); guard();
+      approvalSignal.throwIfAborted();
       await origin(); guard();
+      approvalSignal.throwIfAborted();
     },
     adapter: {
       async start() { guard(); adapter = createGuidepupVoiceOverAdapter({ monotonicNow: clock.monotonic }); await adapter.start(); guard(); },
