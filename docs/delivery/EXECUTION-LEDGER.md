@@ -1,6 +1,66 @@
 # AccessForge execution ledger
 
-## Verified continuation checkpoint — through PR #207
+## Verified continuation checkpoint — main through PR #214
+
+Refreshed against source/GitHub on 2026-09-16. Remote/local main is
+`ff8ac6c838ba5c19022708839ef82353c3329fc3`. This snapshot supersedes the older
+#207 checkpoint below for task selection; it is not a claim of full completion.
+Normal review and required exact-head CI remain merge gates. VoiceOver is
+build/compile only: no startup/runtime test, OS-permission change or actual
+reader/model acceptance is authorized by this continuation checkpoint.
+
+### Delivered since #207
+
+| PR | Delivered slice | Confirmed merge commit |
+| --- | --- | --- |
+| #208 | Prior delivery-flow reconciliation | `b883810408d19100f52f9fde2ad655f606c9953a` |
+| #209 | Isolated missing-label fixture; protected PostgreSQL UTF-8 initialization | `948582e8b9ee5b49399dc7ab37b59f0fc8c92b4e` |
+| #210/#211 | Broken focus recovery and keyboard trap variants, merged as the tested #211 composition | `ee5ccfde404a8654b5a8b9e63ce7fd6172f6f7bd` |
+| #212 | Fixed-host, bounded GitHub user identity transport with S256 PKCE | `0a208cf6a825daa72de77f440fac65f994e047ff` |
+| #213 | Independently committed, single-use browser-bound OAuth challenges | `bee0f540f3b328cbaf20c1e7ce08a8330d33ec8e` |
+| #214 | Explicit operator account binding; audited, revocable provider-bound sessions | `ff8ac6c838ba5c19022708839ef82353c3329fc3` |
+
+#210 was resolved through the exact tested cumulative #211 head, not by claiming
+its then-pending standalone run had passed. Its standalone checks are now also
+verified successful. The versioned fault variants preserve the existing backend
+contract. The owned baseline still requires its originally approved `inaccessible`
+variant; none of the new variants was silently substituted into a sealed run.
+Fixture HTTP/database validation and emitted-JavaScript checks do not prove an
+actual reader detects the defects or establish independent oracle labels.
+
+### Pending heads — refresh rather than assume
+
+- #215: browser start/callback/configuration and generated contract work at
+  `c5b6d215a8e97bc70af6a5e4b25ec89e5d5182a3`. Original CI failed strict typing
+  in two new test files; those errors were corrected and the latest run is pending.
+- #216: provider-aware UI/public discovery at
+  `0e8464f33bb922fbdea3b01f2f5b13bfce8dc6e0`, stacked on corrected #215; CI pending.
+- Merge only the current validated head, sync local main, then rebuild the release
+  artifact once that composition is settled. Do not label open-branch UI as merged.
+- Optional GitHub app-user login is **not Codex model OAuth** or publication via
+  the GitHub App. No dedicated OAuth app, live binding or credential configuration
+  was installed. Synthetic provider identity in ASGI checks is not OAuth acceptance.
+
+### Remaining requirements, separated by evidence needed
+
+| Boundary | Current source/evidence | Still required |
+| --- | --- | --- |
+| C1 native host | One-shot private provisioner, shared deadline and live probe interfaces built | Concrete independent stale-input/focus-effect authority and operator credentials/consent; never always-allow callbacks |
+| C2 effect integration | `finalize_execution.py` imports and consumes authenticated reference effect assertions | Actual configured run; protected committed insertions do not cover arbitrary external effects |
+| Reader/model repair loop | Codex runtime and baseline/repair/rerun/review plumbing built; matrix explicitly does not claim actual-reader qualification | Real permitted baseline → diagnosis → constrained repair → independent rerun → human review/export; VoiceOver tests remain paused |
+| Hosted identity | Transport/challenge/account-session layers on main; routes/UI pending CI | Merge current heads, then separate approved real OAuth/TLS/proxy/logging acceptance |
+| Publication/deployment | GitHub App and non-AWS release infrastructure built | Real installation/publication/recovery and deployment/capacity evidence |
+| Windows and benchmark acceptance | Narrow NVDA driver, fault variants and bounded benchmark accounting built | Real Windows host/qualification, independent held-out oracle/corpus, actual mutation/unsafe-comparison and pilot evidence |
+| Final delivery | Source/web packaging exists | Owner license/demo/submission choices and final accepted deliverables, not a renamed source ZIP |
+
+The latest retained ZIP `accessforge-ee5ccfd.zip` is through #211; SHA-256 freshly
+rechecked as `17ae75c5d6e9d63ecf917fbbc409e1d657cfe2467c12ecec861ccf98f5d9ebe1`.
+It does not contain #212–216. No fresh extracted install or physical acceptance
+was performed for this checkpoint. Build tests used dedicated disposable local
+PostgreSQL only; those task-owned containers were stopped and removed. No live
+database migration, deployed identity change or reader execution occurred.
+
+## Earlier verified checkpoint — through PR #207 (historical)
 
 Source and GitHub were refreshed on 2026-09-16. Remote/local main was clean at
 `a3004d622925e721a3ff45d2e2587d7f1a65beef`; no open PR remained at that checkpoint.
