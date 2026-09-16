@@ -33,7 +33,7 @@ from collections.abc import Iterator
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
@@ -247,6 +247,7 @@ def execution_body(
         "action-policy",
         "stop-policy",
         "model-policy",
+        "codex-model-policy",
         "navigator-policy",
         "fresh-stop-policy",
         "collector-policy",
@@ -262,6 +263,10 @@ def execution_body(
             from accessforge_domain.navigator_model import default_profile
 
             body["modelConfigDigest"] = digest(default_profile())
+        if request.param == "codex-model-policy":
+            from accessforge_domain.codex_navigation import default_profile as codex_profile
+
+            body["modelConfigDigest"] = digest(codex_profile())
         if request.param == "navigator-policy":
             policy.update(
                 taskSummary="Inspect the form with the reader",
@@ -3695,7 +3700,7 @@ def test_authenticated_reader_evidence(
         assert client.post(url + "/observation", json=body, headers=headers).status_code == 403
 
 
-@pytest.mark.parametrize("execution_body", ["model-policy"], indirect=True)
+@pytest.mark.parametrize("execution_body", ["model-policy", "codex-model-policy"], indirect=True)
 def test_navigator_model_consent_and_non_replayable_budget_admission(
     db: str,
     client: TestClient,
@@ -3706,7 +3711,7 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
     """Real human API/session/ledger boundaries; no model or physical reader invocation."""
     import secrets
 
-    from accessforge_domain.navigator_model import default_profile, reserved_tokens
+    from accessforge_domain.navigator_model import reserved_tokens
     from accessforge_persistence import navigator_model_calls
 
     ref, ticket = manual_dispatch_reference, supervisor_ticket
@@ -3715,6 +3720,11 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
     scope = client.get(base + "/scope")
     assert scope.status_code == 200
     assert scope.json()["billableCallAcknowledged"] is False
+
+    def default_profile() -> dict[str, Any]:
+        return cast(dict[str, Any], scope.json()["modelProfile"])
+
+    expected_hold = 12000 if default_profile()["provider"] == "codex-chatgpt" else 24000
     body = {
         "manifestDigest": scope.json()["manifestDigest"],
         "modelProfile": default_profile(),
@@ -3745,7 +3755,7 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
     assert created.status_code == 201, created.text
     assert client.post(base, json=body, headers=headers).json() == created.json()
     consent_id = created.json()["consentId"]
-    assert created.json()["tokensPerCall"] == reserved_tokens(default_profile()) == 24000
+    assert created.json()["tokensPerCall"] == reserved_tokens(default_profile()) == expected_hold
     secret = secrets.token_urlsafe(32)
     assert (
         client.post(
@@ -3772,7 +3782,11 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
             "SELECT status,purpose,reserved_tokens FROM diagnosis_invocation WHERE operation_id=%s",
             (operation_id,),
         ).fetchone()
-        assert row == {"status": "STARTED", "purpose": "NAVIGATOR", "reserved_tokens": 24000}
+        assert row == {
+            "status": "STARTED",
+            "purpose": "NAVIGATOR",
+            "reserved_tokens": expected_hold,
+        }
         assert conn.execute("SELECT count(*) AS n FROM runner_action").fetchone() == {"n": 0}
     for replacement in (operation_id, str(uuid.uuid4())):
         with pytest.raises(navigator_model_calls.Refused), workspace_connection(db, WS) as conn:
@@ -3843,6 +3857,23 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
             {"requestId": "synthetic-response-1", "httpStatus": 200, "streamCompleted": True}
         ],
     }
+    if default_profile()["provider"] == "codex-chatgpt":
+        from accessforge_domain.codex_navigation import MEANING as CODEX_MEANING
+
+        runtime_observation = {
+            "meaning": CODEX_MEANING,
+            "profile": default_profile(),
+            "cli": {
+                "threadId": str(uuid.uuid4()),
+                "version": "0.154.0",
+                "authMode": "chatgpt",
+                "requestedModel": "gpt-6-astra",
+                "exitCode": 0,
+                "turnCompleted": True,
+                "inputTokens": 10,
+                "outputTokens": 5,
+            },
+        }
     # Synthetic provider receipt only; this exercises durable isolation and binding, not Bedrock.
     with workspace_connection(db, WS) as conn:
         assert conn.execute(
@@ -3856,7 +3887,7 @@ def test_navigator_model_consent_and_non_replayable_budget_admission(
                 operation_id=operation_id,
                 observation={
                     **runtime_observation,
-                    "profile": {**default_profile(), "provider_max_tokens": 1024},
+                    "profile": {**default_profile(), "invocation_output_tokens": 2048},
                 },
             )
         navigator_runtime.retain(

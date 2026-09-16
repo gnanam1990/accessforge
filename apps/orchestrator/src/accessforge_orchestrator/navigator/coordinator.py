@@ -15,6 +15,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from accessforge_domain.canonical import digest
+from accessforge_domain.codex_navigation import validate_profile as validate_codex_profile
 from accessforge_domain.timestamps import to_rfc3339_utc
 from accessforge_navigation_tools import (
     ActionName,
@@ -34,6 +35,7 @@ from .agent import (
     build_strands_agent,
 )
 from .checkpoints import CheckpointKind, PlanningCheckpoint
+from .codex import CodexNavigationProfile, CodexNavigator
 from .config import NavigatorModelProfile
 from .native_transport import NativeNavigatorTransport
 from .postgres import PostgresPlanningCheckpointSink
@@ -116,7 +118,7 @@ class NativeNavigatorSession:
         database_url: str,
         reference: DispatchReference,
         consent_id: str,
-        profile: NavigatorModelProfile,
+        profile: NavigatorModelProfile | CodexNavigationProfile,
         private_reference: dict[str, Any],
     ) -> None:
         self._database_url, self._reference = database_url, reference
@@ -169,7 +171,10 @@ class NativeNavigatorSession:
         provider_entered = False
         disposition: Literal["RECORDED", "UNCONFIRMED", "NOT_CALLED"] = "NOT_CALLED"
         try:
-            self._profile.assert_installed_sdk()
+            if isinstance(self._profile, CodexNavigationProfile):
+                validate_codex_profile(self._profile.model_dump(mode="json"))
+            else:
+                self._profile.assert_installed_sdk()
             turn = self._load()
             model_digest = digest(self._profile.model_dump(mode="json"))
             if turn.model_config_digest != model_digest:
@@ -208,6 +213,7 @@ class NativeNavigatorSession:
 
             def build(fence: Event) -> NavigatorAgent:
                 nonlocal provider_entered, disposition
+                assert isinstance(self._profile, NavigatorModelProfile)
                 self._recheck(turn, operation_id, reserved_digest)
                 # Construction may resolve credentials/contact provider infrastructure. From this
                 # point on, unknown/error/cancellation can never release the hold as NOT_CALLED.
@@ -220,9 +226,24 @@ class NativeNavigatorSession:
                     utc_now=utc_now,
                 )
 
-            outcome = await StrandsNavigator(
-                profile=self._profile, checkpoints=sink, utc_now=utc_now, agent_builder=build
-            ).run_turn(turn.projection, cancel_signal=self._fence)
+            if isinstance(self._profile, CodexNavigationProfile):
+
+                def authorize_codex() -> None:
+                    nonlocal provider_entered, disposition
+                    self._recheck(turn, operation_id, reserved_digest)
+                    provider_entered, disposition = True, "UNCONFIRMED"
+
+                outcome = await CodexNavigator(
+                    profile=self._profile,
+                    gateway=gateway,
+                    checkpoints=sink,
+                    utc_now=utc_now,
+                    authorize_invocation=authorize_codex,
+                ).run_turn(turn.projection, cancel_signal=self._fence)
+            else:
+                outcome = await StrandsNavigator(
+                    profile=self._profile, checkpoints=sink, utc_now=utc_now, agent_builder=build
+                ).run_turn(turn.projection, cancel_signal=self._fence)
             if outcome.runtime_observation is not None:
                 with workspace_connection(self._database_url, self._reference.workspace_id) as conn:
                     navigator_runtime.retain(

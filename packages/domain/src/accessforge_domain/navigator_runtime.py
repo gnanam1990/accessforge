@@ -5,17 +5,22 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import codex_navigation
 from .navigator_model import validate_profile
 
 MEANING = "SDK_REQUEST_CONFIGURATION_AND_RESPONSE_NOT_PROVIDER_MODEL_ATTESTATION"
 
 
 def validate_observation(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("meaning") == codex_navigation.MEANING:
+        return codex_navigation.validate_observation(value)
     if not isinstance(value, dict) or set(value) != {"meaning", "profile", "requests"}:
         raise ValueError("closed navigator runtime observation required")
     if value["meaning"] != MEANING or not isinstance(value["profile"], dict):
         raise ValueError("navigator runtime meaning or profile unavailable")
     validate_profile(value["profile"])
+    if value["profile"]["provider"] != "amazon-bedrock":
+        raise ValueError("legacy HTTP receipt requires its original Bedrock profile")
     requests = value["requests"]
     if (
         not isinstance(requests, list)

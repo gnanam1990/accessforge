@@ -22,7 +22,7 @@ from accessforge_orchestrator.codex_agent import (
 
 def events() -> list[dict[str, Any]]:
     return [
-        {"type": "thread.started", "thread_id": "thread-1"},
+        {"type": "thread.started", "thread_id": "00000000-0000-4000-8000-000000000001"},
         {"type": "turn.started"},
         {"type": "item.completed", "item": {"type": "agent_message", "text": '{"ok":true}'}},
         {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}},
@@ -35,9 +35,10 @@ async def read(items: list[dict[str, Any]], fence: Event | None = None) -> str:
         stream.feed_data(json.dumps(item).encode() + b"\n")
     stream.feed_eof()
     proc = cast(asyncio.subprocess.Process, SimpleNamespace(stdout=stream))
-    return await CodexStructuredAgent._read(
+    result = await CodexStructuredAgent._read(
         proc, {"turns": 1, "total_tokens": 20, "output_tokens": 8}, fence or Event()
     )
+    return result.output
 
 
 @pytest.mark.asyncio

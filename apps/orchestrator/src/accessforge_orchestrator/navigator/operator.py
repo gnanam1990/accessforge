@@ -20,6 +20,7 @@ from uuid import UUID
 from accessforge_domain.navigator_model import validate_profile
 from accessforge_orchestrator.manual_dispatch import DispatchReference
 
+from .codex import CodexNavigationProfile
 from .config import NavigatorModelProfile
 from .coordinator import NativeNavigatorSession
 
@@ -122,7 +123,11 @@ async def run_host_session(config: dict[str, Any], database_url: str) -> dict[st
         database_url=database_url,
         reference=reference,
         consent_id=config["consentId"],
-        profile=NavigatorModelProfile.model_validate(config["modelProfile"]),
+        profile=(
+            CodexNavigationProfile.model_validate(config["modelProfile"])
+            if config["modelProfile"]["provider"] == "codex-chatgpt"
+            else NavigatorModelProfile.model_validate(config["modelProfile"])
+        ),
         private_reference=config["privateReference"],
     )
     loop = asyncio.get_running_loop()

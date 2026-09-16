@@ -94,6 +94,52 @@ request IDs, provider model attestation or hard token caps), compose it into res
 and finalization, then select this navigator in `NativeNavigatorSession`. Do not unblock actual
 reader acceptance from a synthetic gateway or a CLI connectivity result.
 
+## Codex consent and runtime composition
+
+The subsequent runtime slice adds a closed Codex profile and a distinct
+`CLI_CONFIGURATION_AND_COMPLETION_NOT_PROVIDER_MODEL_ATTESTATION` observation. It contains the
+original canonical CLI thread ID, verified CLI version, forced ChatGPT authentication mode,
+requested model, zero exit status, completed-turn flag and reported input/output usage. Prompt,
+answer, credentials and invented HTTP request IDs are excluded. The parser rejects missing or
+duplicate thread starts. Old Bedrock receipt semantics remain unchanged; mixing a Codex profile
+into a legacy HTTP receipt is rejected.
+
+The operator now parses Codex profiles, and `NativeNavigatorSession` selects the Codex planner
+after exact manifest/profile comparison and committed one-shot reservation. Fresh consent is
+checked before invocation and again by the existing dispatch gateway. Completed CLI evidence is
+validated before dispatch and retained by the existing original-operation runtime repository.
+Model-scope preview selects the exact known profile matching the sealed digest; it never changes
+an old seal to Codex implicitly. Historical Bedrock parsing does not re-enable its retired factory.
+The hold for Codex is a quota-admission amount, not a currency cap or observed HTTP retry count.
+
+72 focused tests pass, including synthetic coordinator reservation/revocation/receipt-retention
+checks and Codex/legacy profile separation. Ruff and strict mypy pass on the 12 changed code/test
+files. A real Codex call against a synthetic reader projection and synthetic desktop gateway
+completed with exactly one dispatch and the new CLI observation. No actual reader was executed.
+New real PostgreSQL/S3 round-trip acceptance of this Codex-specific path, finalization/export
+coverage, operator defaults/UI disclosure and removal of residual Strands tool-wrapper coupling
+remain to verify. No live migration, deployment or OS permission change occurred.
+
 Official references: [Codex authentication](https://developers.openai.com/codex/auth),
 [SDK integration](https://developers.openai.com/codex/sdk), and
 [app-server protocol](https://learn.chatgpt.com/docs/app-server).
+
+### PostgreSQL admission correction
+
+The real database check exposed a legacy-only runtime receipt trigger. Forward migration 0070
+adds the exact Codex provider/CLI-meaning pair while retaining the legacy provider/HTTP-meaning
+pair, immutable receipts, workspace isolation and the original open invocation/profile binding.
+No historical migration, consent or receipt is rewritten. The real API/session/reservation and
+receipt-retention test now covers both providers: 2 cases pass under a disposable non-superuser
+database role. All 39 forward-migration/interruption checks pass in their disposable databases.
+The temporary databases and role were removed. These are synthetic receipt integration checks,
+not actual reader or live-provider acceptance; no live database migration was performed.
+
+### Finalizer completion uniqueness
+
+Finalization now refuses reuse of one Codex CLI thread completion across independent action
+invocations, even when operation IDs and canonical observation digests differ appropriately.
+The new duplicate-completion regression failed before the guard and passes afterward. Distinct
+Codex completions are accepted, and historical Bedrock interpretation is unchanged. The two
+runtime-evidence test modules pass all 59 cases; Ruff and strict mypy pass. This is retained
+artifact interpretation coverage, not S3/export or physical reader acceptance.
