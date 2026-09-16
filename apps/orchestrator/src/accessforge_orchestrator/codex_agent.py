@@ -20,7 +20,8 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel
-from strands.types.agent import Limits
+
+from accessforge_orchestrator.proposal_limits import Limits
 
 CODEX_VERSION = "0.154.0"
 CODEX_MODEL = "gpt-6-astra"

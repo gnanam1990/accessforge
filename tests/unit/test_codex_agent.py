@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import subprocess
 import sys
 from threading import Event
 from types import SimpleNamespace
@@ -153,3 +154,23 @@ def test_schema_preserves_property_named_default_and_rejects_open_objects() -> N
     assert structured_schema(Closed)["required"] == ["default"]
     with pytest.raises(ValueError, match="closed object"):
         structured_schema(Open)
+
+
+def test_codex_diagnosis_and_repair_import_without_strands() -> None:
+    script = """
+import sys
+import importlib.abc
+class NoStrands(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'strands' or fullname.startswith('strands.'):
+            raise ImportError('Strands intentionally unavailable')
+sys.meta_path.insert(0, NoStrands())
+from accessforge_orchestrator.codex_agent import CodexStructuredAgent
+from accessforge_orchestrator.diagnosis.agent import DiagnosisWorker
+from accessforge_orchestrator.repair.worker import RepairWorker
+assert not any(n == 'strands' or n.startswith('strands.') for n in sys.modules)
+"""
+    result = subprocess.run(  # noqa: S603 - fixed local interpreter and literal import probe
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=15, check=False
+    )
+    assert result.returncode == 0, result.stderr

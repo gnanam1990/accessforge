@@ -17,13 +17,13 @@ from threading import Event
 from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from strands.types.agent import Limits
 
 from accessforge_domain.canonical import digest
 from accessforge_domain.patch_policy import ProposedChange, inspect_patch
 from accessforge_orchestrator.codex_agent import CodexStructuredAgent, ProposalResult
 from accessforge_orchestrator.diagnosis.agent import DiagnosisAgentProfile
 from accessforge_orchestrator.diagnosis.models import DiagnosisValidation, SourceIdentity
+from accessforge_orchestrator.proposal_limits import Limits
 from accessforge_persistence.patches import MAX_CHANGE_BYTES, patch_digest
 
 

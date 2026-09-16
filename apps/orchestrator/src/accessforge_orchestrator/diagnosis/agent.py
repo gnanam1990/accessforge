@@ -9,9 +9,9 @@ from threading import Event
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
-from strands.types.agent import Limits
 
 from accessforge_orchestrator.codex_agent import CodexStructuredAgent, ProposalResult
+from accessforge_orchestrator.proposal_limits import Limits
 
 from .models import DiagnosisDraft, DiagnosisProjection, DiagnosisValidation
 from .validation import DiagnosisValidator

@@ -154,3 +154,9 @@ Four gateway boundary tests run against both implementations. All 58 focused nav
 coordinator cases pass, as does strict mypy on the navigator package and modified test module.
 Legacy coordinator/type imports still load Strands elsewhere; complete dependency removal remains
 pending. No provider call, actual reader execution or operating-system change was performed.
+
+The proposal adapter, diagnosis and repair workers now use a local structural admission-limit
+type rather than importing Strands for annotations. A fresh-interpreter regression explicitly
+blocks every Strands import and successfully loads all three components. Their 35 focused tests
+pass; strict mypy passes across all 68 orchestrator source files. This does not remove the
+remaining legacy navigator dependency, nor change the token limits into provider spending caps.
