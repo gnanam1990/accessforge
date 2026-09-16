@@ -774,14 +774,17 @@ def test_the_contract_documents_retry_after_on_exactly_the_limited_operations(db
                 assert "429" not in operation["responses"]
     assert promising, "no operation documents the rate-limit refusal at all"
 
-    # And every read stays silent about it, because reads are not limited.
+    # Ordinary reads stay silent. OAuth start is a top-level browser GET that
+    # creates a challenge and has a separate global database admission limit.
+    # Keep exact equality: neither callback/discovery nor unrelated GET routes
+    # may acquire a Retry-After promise without corresponding enforcement.
     reads_promising = {
         f"GET {path}"
         for path, ops in contract["paths"].items()
         if "get" in ops
         and "Retry-After" in ops["get"]["responses"].get("429", {}).get("headers", {})
     }
-    assert reads_promising == set()
+    assert reads_promising == {"GET /v1/auth/github/start"}
 
 
 # --- the charge outlives the request's own transaction
