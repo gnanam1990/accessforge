@@ -18,6 +18,94 @@ from accessforge_persistence.memberships import MembershipChangeError
 pytestmark = pytest.mark.integration
 
 
+def test_recipient_acceptance_limit_survives_missing_offer_and_replica_restart(
+    test_database_url: str, invited: tuple[str, str, str, int, str]
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from accessforge_api.app import create_app
+    from accessforge_api.auth.sessions import CSRF_HEADER, SESSION_COOKIE, issue_session
+    from accessforge_api.config import ApiSettings
+
+    workspace, _, target, subject, invitation = invited
+    with unscoped_connection(test_database_url) as conn:
+        recipient = issue_session(conn, user_id=target, github_subject=subject)
+    settings = ApiSettings(
+        database_url=test_database_url,
+        evidence_endpoint_url="http://127.0.0.1:9000",
+        evidence_bucket="unused",
+        evidence_access_key="unused",
+        evidence_secret_key="unused",
+        environment="test",
+        rate_limit_principal_per_minute=1,
+        rate_limit_burst_multiplier=1,
+    )
+    headers = {CSRF_HEADER: recipient.csrf_token, "If-Match": "1"}
+    with TestClient(create_app(settings), base_url="https://testserver.local") as client:
+        client.cookies.set(SESSION_COOKIE, recipient.session_token)
+        # Authentication/CSRF failure cannot charge even the verified principal's bucket.
+        assert (
+            client.post(
+                f"/v1/invitation-offers/{workspace}/{invitation}/accept", json={"accept": True}
+            ).status_code
+            == 403
+        )
+        with unscoped_connection(test_database_url) as conn:
+            assert (
+                conn.execute(
+                    "SELECT scope_id FROM rate_limit_bucket WHERE scope_id=%s", (target,)
+                ).fetchone()
+                is None
+            )
+        # A guessed offer consumes admission even though the tenant transaction rolls back.
+        refused = client.post(
+            f"/v1/invitation-offers/{workspace}/{uuid4()}/accept",
+            json={"accept": True},
+            headers=headers,
+        )
+        assert refused.status_code == 404
+    with unscoped_connection(test_database_url) as conn:
+        bucket = conn.execute(
+            "SELECT scope_kind,workspace_id FROM rate_limit_bucket WHERE scope_id=%s", (target,)
+        ).fetchone()
+        assert bucket == {"scope_kind": "PRINCIPAL", "workspace_id": None}
+        # Freeze refill in the future instead of relying on test execution taking <60 seconds.
+        conn.execute(
+            "UPDATE rate_limit_bucket SET tokens=0,refilled_at=clock_timestamp()+interval '1 hour' "
+            "WHERE scope_kind='PRINCIPAL' AND scope_id=%s",
+            (target,),
+        )
+    with TestClient(create_app(settings), base_url="https://testserver.local") as replica:
+        replica.cookies.set(SESSION_COOKIE, recipient.session_token)
+        limited = replica.post(
+            f"/v1/invitation-offers/{workspace}/{invitation}/accept",
+            json={"accept": True},
+            headers=headers,
+        )
+        assert limited.status_code == 429
+        assert limited.json()["code"] == "RATE_LIMITED"
+        assert int(limited.headers["Retry-After"]) > 0
+        assert (
+            replica.get(f"/v1/invitation-offers/{workspace}/{invitation}").json()["state"]
+            == "PENDING"
+        )
+    with workspace_connection(test_database_url, workspace) as conn:
+        assert (
+            conn.execute(
+                "SELECT scope_id FROM rate_limit_bucket "
+                "WHERE scope_kind='WORKSPACE' AND scope_id=%s",
+                (workspace,),
+            ).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT user_id FROM workspace_membership WHERE user_id=%s", (target,)
+            ).fetchone()
+            is None
+        )
+
+
 def test_recipient_offer_identity_csrf_atomic_acceptance_and_session_rotation(
     test_database_url: str, invited: tuple[str, str, str, int, str]
 ) -> None:
