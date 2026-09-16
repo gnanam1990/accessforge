@@ -16,6 +16,13 @@ proves a real Codex proposal through a synthetic one-action gateway. Production 
 selection remains pending Codex-native consent/profile and runtime-receipt composition. No reader
 or live database operation occurred. See the migration handoff for evidence boundaries.
 
+Next runtime slice: the Codex operator/coordinator path now composes exact profile comparison,
+one-shot reservation, fresh invocation and action authority, and content-free original CLI
+completion retention. 72 focused checks and a real Codex/synthetic-gateway run pass. Remaining
+immediate work is Codex-specific database/finalization/export acceptance, current operator/UI
+defaults and residual Strands wrapper removal, then actual host qualification. #186 is still in
+its original real-PostgreSQL CI job; no retry/restart or merge has been performed.
+
 Current planning checkpoint: 2026-09-15. This is the single continuation queue, not a release
 certificate. Original requirements remain in `specs/accessforge/`. Earlier PLAN/REMAINING tables
 and handoffs are historical evidence, not current task selectors. Refresh source and GitHub state

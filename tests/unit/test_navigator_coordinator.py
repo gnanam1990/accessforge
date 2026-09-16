@@ -42,6 +42,79 @@ RUN_REF = "navigator:" + digest(asdict(REF))
 NOW = "2026-09-13T12:00:00Z"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revoked", [False, True])
+async def test_codex_coordinator_preserves_reservation_authority_and_retention(
+    harness: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    revoked: bool,
+) -> None:
+    from pydantic import BaseModel
+
+    from accessforge_domain.codex_navigation import MEANING
+    from accessforge_navigation_tools import ProposedAction
+    from accessforge_orchestrator.codex_agent import CodexStructuredAgent, StructuredResult
+    from accessforge_orchestrator.navigator import codex
+    from accessforge_persistence import navigator_runtime
+
+    h = harness
+    h.revoked = revoked
+    profile = codex.CodexNavigationProfile()
+    h.model_digest = digest(profile.model_dump(mode="json"))
+    h.session._profile = profile
+
+    class Model(CodexStructuredAgent):
+        async def invoke_async(
+            self,
+            prompt: str,
+            *,
+            structured_output_model: type[BaseModel],
+            limits: Limits,
+            cancel_signal: Event,
+        ) -> StructuredResult:
+            h.events.append("codex-provider")
+            return StructuredResult(
+                ProposedAction.model_validate(
+                    {
+                        "runRef": RUN_REF,
+                        "action": "STOP",
+                    }
+                ),
+                {
+                    "threadId": "00000000-0000-4000-8000-000000000001",
+                    "version": "0.154.0",
+                    "authMode": "chatgpt",
+                    "requestedModel": "gpt-6-astra",
+                    "exitCode": 0,
+                    "turnCompleted": True,
+                    "inputTokens": 10,
+                    "outputTokens": 5,
+                },
+            )
+
+    def retain(conn: Any, **kwargs: Any) -> None:
+        h.events.append(("runtime-retained", kwargs["observation"]))
+
+    monkeypatch.setattr(codex, "CodexStructuredAgent", Model)
+    monkeypatch.setattr(navigator_runtime, "retain", retain)
+    result = await h.session.run_next_turn()
+    if revoked:
+        assert result.disposition == "NOT_CALLED"
+        assert "codex-provider" not in h.events
+    else:
+        assert result.disposition == "RECORDED" and result.next_action_sequence is None
+        first_reserve = next(
+            i for i, e in enumerate(h.events) if isinstance(e, tuple) and e[0] == "reserve"
+        )
+        assert h.events[first_reserve + 1] == "committed"
+        assert first_reserve < h.events.index("authorize") < h.events.index("codex-provider")
+        retained = next(
+            e[1] for e in h.events if isinstance(e, tuple) and e[0] == "runtime-retained"
+        )
+        assert retained["meaning"] == MEANING and "requests" not in retained
+        assert retained["profile"] == profile.model_dump(mode="json")
+
+
 @pytest.fixture
 def harness(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     h = SimpleNamespace(

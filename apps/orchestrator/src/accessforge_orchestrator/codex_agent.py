@@ -17,6 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
 from typing import Any, Protocol
+from uuid import UUID
 
 from pydantic import BaseModel
 from strands.types.agent import Limits
@@ -39,6 +40,15 @@ class ProposalResult(Protocol):
 @dataclass(frozen=True)
 class StructuredResult:
     structured_output: BaseModel
+    cli_observation: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ParsedTurn:
+    output: str
+    thread_id: str
+    input_tokens: int
+    output_tokens: int
 
 
 def structured_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -204,17 +214,31 @@ class CodexStructuredAgent:
                 output = await self._read(proc, limits, cancel_signal)
                 if await proc.wait() != 0 or cancel_signal.is_set():
                     raise CodexUnavailable("Codex did not finish successfully")
-                return StructuredResult(structured_output_model.model_validate_json(output))
+                return StructuredResult(
+                    structured_output_model.model_validate_json(output.output),
+                    {
+                        "threadId": output.thread_id,
+                        "version": CODEX_VERSION,
+                        "authMode": "chatgpt",
+                        "requestedModel": self.model_id,
+                        "exitCode": 0,
+                        "turnCompleted": True,
+                        "inputTokens": output.input_tokens,
+                        "outputTokens": output.output_tokens,
+                    },
+                )
             finally:
                 # No retry/resume after timeout, cancellation, malformed output or lost response.
                 await _stop(proc)
 
     @staticmethod
-    async def _read(proc: asyncio.subprocess.Process, limits: Limits, fence: Event) -> str:
+    async def _read(proc: asyncio.subprocess.Process, limits: Limits, fence: Event) -> ParsedTurn:
         assert proc.stdout is not None
         total = 0
         started = completed = False
         output: str | None = None
+        thread_id: str | None = None
+        incoming = outgoing = 0
         while True:
             if fence.is_set():
                 raise CodexUnavailable("Codex invocation cancelled")
@@ -241,9 +265,13 @@ class CodexStructuredAgent:
             kind = event.get("type")
             if completed:
                 raise CodexUnavailable("Unexpected event after Codex completion")
-            if kind == "thread.started" and not started:
+            if kind == "thread.started" and not started and thread_id is None:
+                candidate = event.get("thread_id")
+                if not isinstance(candidate, str) or str(UUID(candidate)) != candidate:
+                    raise CodexUnavailable("Original canonical Codex thread identity required")
+                thread_id = candidate
                 continue
-            if kind == "turn.started" and not started:
+            if kind == "turn.started" and not started and thread_id is not None:
                 started = True
                 continue
             if kind in ("item.started", "item.updated", "item.completed") and started:
@@ -270,9 +298,9 @@ class CodexStructuredAgent:
                 completed = True
                 continue
             raise CodexUnavailable("Codex stream failed or violated the one-turn protocol")
-        if not completed or output is None:
+        if not completed or output is None or thread_id is None:
             raise CodexUnavailable("No complete Codex structured response")
-        return output
+        return ParsedTurn(output, thread_id, incoming, outgoing)
 
 
 async def _stop(proc: asyncio.subprocess.Process) -> None:

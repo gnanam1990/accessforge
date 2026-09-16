@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from . import codex_navigation
+
 IDENTITY = {
     "sdk_distribution": "strands-agents",
     "sdk_version": "1.55.1",
@@ -42,6 +44,9 @@ def default_profile() -> dict[str, Any]:
 
 
 def validate_profile(profile: dict[str, Any]) -> None:
+    if profile.get("provider") == "codex-chatgpt":
+        codex_navigation.validate_profile(profile)
+        return
     if set(profile) != set(IDENTITY) | set(INTEGER_BOUNDS) | {"call_timeout_seconds"}:
         raise ValueError("complete closed navigator model profile required")
     if any(profile[key] != value for key, value in IDENTITY.items()):
@@ -68,4 +73,7 @@ def validate_profile(profile: dict[str, Any]) -> None:
 def reserved_tokens(profile: dict[str, Any]) -> int:
     """Conservative hold includes all configured provider attempts; not measured use or money."""
     validate_profile(profile)
+    if profile["provider"] == "codex-chatgpt":
+        # A quota admission hold only; CLI-internal HTTP retries are not observed or capped here.
+        return int(profile["invocation_total_tokens"])
     return int(profile["invocation_total_tokens"] * profile["model_attempts"])

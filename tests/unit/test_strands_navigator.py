@@ -115,7 +115,9 @@ RUN_REF = "run-1:attempt-1:epoch-4"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["success", "wrong-run", "cancel", "revoked", "timeout", "error"])
+@pytest.mark.parametrize(
+    "case", ["success", "wrong-run", "cancel", "revoked", "timeout", "error", "no-receipt"]
+)
 async def test_codex_proposal_settles_before_original_gateway_dispatch(case: str) -> None:
     from pydantic import BaseModel
 
@@ -152,7 +154,19 @@ async def test_codex_proposal_settles_before_original_gateway_dispatch(case: str
                         "runRef": "wrong" if case == "wrong-run" else RUN_REF,
                         "action": "NEXT",
                     }
-                )
+                ),
+                None
+                if case == "no-receipt"
+                else {
+                    "threadId": "00000000-0000-4000-8000-000000000001",
+                    "version": "0.154.0",
+                    "authMode": "chatgpt",
+                    "requestedModel": "gpt-6-astra",
+                    "exitCode": 0,
+                    "turnCompleted": True,
+                    "inputTokens": 10,
+                    "outputTokens": 5,
+                },
             )
 
     def authorize() -> None:
@@ -161,7 +175,7 @@ async def test_codex_proposal_settles_before_original_gateway_dispatch(case: str
             raise RuntimeError("consent revoked")
 
     planner = CodexNavigator(
-        profile=CodexNavigationProfile(call_timeout_seconds=0.02),
+        profile=CodexNavigationProfile(call_timeout_seconds=0.02 if case == "timeout" else 30),
         gateway=gateway(dispatched),
         checkpoints=sink,
         utc_now=lambda: NOW,
@@ -169,7 +183,7 @@ async def test_codex_proposal_settles_before_original_gateway_dispatch(case: str
         agent=Model(system_prompt="synthetic test"),
     )
     result = await planner.run_turn(projection(), cancel_signal=fence)
-    assert result.runtime_observation is None
+    assert (result.runtime_observation is not None) == (case == "success")
     assert order == (["authorized"] if case == "revoked" else ["authorized", "model"])
     if case == "success":
         assert result.stop_reason is NavigatorStopReason.COMPLETED
