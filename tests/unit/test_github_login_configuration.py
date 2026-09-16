@@ -83,6 +83,6 @@ def test_server_entrypoint_disables_raw_query_access_logging(
 ) -> None:
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(entrypoint, "ApiSettings", _settings)
-    monkeypatch.setattr(entrypoint.uvicorn, "run", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: calls.append(kwargs))
     entrypoint.main()
     assert calls[0]["access_log"] is False
