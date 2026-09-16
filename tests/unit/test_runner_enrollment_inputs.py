@@ -76,6 +76,7 @@ def test_closed_complete_typed_identity() -> None:
 def test_enrollment_receipt_replay_does_not_redeem_again(monkeypatch: pytest.MonkeyPatch) -> None:
     from accessforge_api.dependencies import IdempotentOutcome
     from accessforge_api.routes import runners as route
+    from accessforge_persistence import runners as runner_store
 
     context = SimpleNamespace(idempotency_key="same-operation", request_id="request")
     monkeypatch.setattr(route, "authorize", lambda *args: context)
@@ -87,7 +88,7 @@ def test_enrollment_receipt_replay_does_not_redeem_again(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(route, "run_idempotently", replay)
     monkeypatch.setattr(
-        route.runners, "enroll_runner", lambda *args, **kwargs: pytest.fail("redeemed")
+        runner_store, "enroll_runner", lambda *args, **kwargs: pytest.fail("redeemed")
     )
     response = Response()
     assert (
