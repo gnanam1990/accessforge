@@ -140,9 +140,9 @@ async def _registration_context(request: Request) -> InvitationContinuation:
         raise GitHubIdentityError("GitHub registration refused")
     body = bytearray()
     async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > 4096:
+        if len(body) + len(chunk) > 4096:
             raise GitHubIdentityError("GitHub registration refused")
+        body.extend(chunk)
     try:
         pairs = parse_qsl(
             body.decode("utf-8"),
