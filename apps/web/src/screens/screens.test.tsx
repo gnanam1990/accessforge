@@ -618,7 +618,7 @@ describe('the runner inventory', () => {
     ).toBeVisible()
   })
 
-  it('discloses the untested and unavailable reader matrix', async () => {
+  it('distinguishes adapter implementation from actual desktop qualification', async () => {
     const server = createFakeServer(MEMBER)
     renderAt(server, '/w/ws-1/runners')
     await screen.findByRole('heading', { level: 1, name: 'Runners' })
@@ -628,8 +628,8 @@ describe('the runner inventory', () => {
     })
     // A screen offering three profiles without saying which are verified invites an operator to
     // choose one that cannot run.
-    expect(within(matrix).getByText(/No real VoiceOver trace has been captured/)).toBeVisible()
-    expect(within(matrix).getByText(/belongs to module 09 and is not implemented/)).toBeVisible()
+    expect(within(matrix).getByText(/this website does not verify VoiceOver/)).toBeVisible()
+    expect(within(matrix).getByText(/Adapter implementation alone is not proof/)).toBeVisible()
   })
 })
 

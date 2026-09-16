@@ -54,6 +54,22 @@ import { useWorkspaceId } from './useWorkspaceId'
 /** The roles that may change a limit or a retention policy. Owner only, per module 03's matrix. */
 const MAY_CONFIGURE = new Set(['OWNER'])
 
+const INITIAL_ALLOWANCE = {
+  maxRunsPerDay: 0,
+  maxActionsPerDay: 0,
+  maxWallSecondsPerDay: 0,
+  maxModelTokensPerDay: 0,
+  maxConcurrentRuns: 0,
+}
+
+const LIMIT_LABEL: Record<string, string> = {
+  maxRunsPerDay: 'Runs per day',
+  maxActionsPerDay: 'Actions per day',
+  maxWallSecondsPerDay: 'Wall-clock seconds per day',
+  maxModelTokensPerDay: 'Model tokens per day',
+  maxConcurrentRuns: 'Concurrent runs',
+}
+
 const KIND_LABEL: Record<string, string> = {
   RUN_ADMITTED: 'Runs admitted',
   ACTION_DISPATCHED: 'Actions dispatched',
@@ -86,6 +102,10 @@ const EntitlementForm = ({
   const fieldIds = useId()
 
   const idFor = (key: string): string => `${fieldIds}-${key}`
+  const errorFor = (fieldId: string): { error?: string } => {
+    const found = errors.find((error) => error.fieldId === fieldId)
+    return found === undefined ? {} : { error: found.message }
+  }
 
   const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
@@ -96,10 +116,10 @@ const EntitlementForm = ({
     const numbers: Record<string, number> = {}
     for (const [key, raw] of Object.entries(values)) {
       const parsed = Number(raw)
-      if (raw.trim() === '' || !Number.isInteger(parsed) || parsed < 0) {
+      if (raw.trim() === '' || !Number.isSafeInteger(parsed) || parsed < 0) {
         found.push({
           fieldId: idFor(key),
-          message: `${key} must be a whole number of zero or more. There is no value meaning unlimited.`,
+          message: `${LIMIT_LABEL[key] ?? key} must be a safe whole number of zero or more. There is no value meaning unlimited.`,
         })
       } else {
         numbers[key] = parsed
@@ -145,7 +165,7 @@ const EntitlementForm = ({
 
   return (
     <div className="af-panel af-stack">
-      <h3>Change the allowance</h3>
+      <h3>{revision === 0 ? 'Set your first allowance' : 'Change the allowance'}</h3>
       <p className="af-secondary">
         Saving appends a revision. The current one is unchanged, so a run admitted under it stays
         explainable.
@@ -161,7 +181,8 @@ const EntitlementForm = ({
 
       <form onSubmit={(event) => void submit(event)} noValidate>
         {Object.keys(current).map((key) => (
-          <FormField key={key} id={idFor(key)} label={key} required>
+          <FormField key={key} id={idFor(key)} label={LIMIT_LABEL[key] ?? key}
+            {...errorFor(idFor(key))} required>
             {({ id, describedBy, invalid }) => (
               <input
                 id={id}
@@ -181,6 +202,7 @@ const EntitlementForm = ({
         <FormField
           id={reasonId}
           label="Why this limit"
+          {...errorFor(reasonId)}
           hint="Recorded with the revision, so somebody can be asked about it later."
           required
         >
@@ -260,7 +282,20 @@ export const SettingsScreen = (): JSX.Element => {
 
       <section className="af-stack">
         <h2>Usage and allowance</h2>
-        <ResourceView resource={usage} what="this workspace's usage">
+        {usage.state.kind === 'problem' &&
+          usage.state.problem.setupRequired === 'WORKSPACE_ENTITLEMENT' ? (
+          <>
+            <Notice tone="information" heading="Workspace setup needed" headingLevel={3}>
+              <p>No allowance has been configured. Runs stay blocked until an owner sets explicit limits.
+                Zero allows no work; there is no unlimited setting. Saving limits does not start a run.</p>
+              {!mayConfigure && <p>Ask a workspace owner to configure the first allowance.</p>}
+            </Notice>
+            {mayConfigure && <EntitlementForm key={workspaceId}
+              workspaceId={workspaceId} revision={0} current={INITIAL_ALLOWANCE}
+              onSaved={() => setSaved((current) => current + 1)} />}
+            <Button onClick={usage.reload}>Check setup again</Button>
+          </>
+        ) : <ResourceView resource={usage} what="this workspace's usage">
           {(value) => (
             <>
               <Notice tone="information" heading="What these numbers are" headingLevel={3}>
@@ -351,7 +386,7 @@ export const SettingsScreen = (): JSX.Element => {
               )}
             </>
           )}
-        </ResourceView>
+        </ResourceView>}
       </section>
 
       <SchedulesSection />

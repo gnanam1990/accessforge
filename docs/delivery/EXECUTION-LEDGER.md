@@ -710,3 +710,35 @@ PR #184 passed all applicable checks at `20794c7822c49dd5c956641e410c5ef56823c5f
 and merged as `705572af4f3d26940441b117644636a7bf79a36f`; local main is synchronized.
 PR #185 is being retargeted onto that main and still requires its own exact-head CI/merge.
 See the operator handoff for configuration, authority and unconfirmed-outcome boundaries.
+
+## Hosted owner workflow and first-workspace setup — 2026-09-16
+
+Modern frontend PR #222 merged as `49306f221ddd55cd010b6c8397fa5f865d78b84c`.
+GitHub issuer compatibility PR #223 passed exact-head CI at
+`74d73afaedff6c45801eda074dc39b97abedf16d` and merged as
+`9f1c403c03d9471a98f768d1855365fcc011edc8`. Its source was deployed to the existing
+Railway web service as `818ce086-7701-4a6e-87c7-8bcde53d5435` before merge.
+Actual public-profile GitHub OAuth reached the authenticated OWNER workspace selection
+and overview. Workspace creation and verified numeric GitHub identity binding used audited
+operator functions; this is real login evidence, not actual runner/model evidence.
+
+The next code slice fixes the first-owner bootstrap deadlock: missing usage previously hid the
+only allowance form. Authenticated allowance/usage reads now distinguish an absent entitlement
+with the scalar `setupRequired=WORKSPACE_ENTITLEMENT` problem extension. Only this confirmed
+condition offers an OWNER a first-revision form using If-Match zero; generic dependency failures
+and non-owner roles do not. Initial limits are zero, never unlimited or automatically saved.
+Overview now links the first-run prerequisites, and the runner matrix distinguishes adapter
+implementation from per-desktop qualification. Form labels and linked inline errors are clearer.
+
+Focused verification: frontend production build, 78 UI/client checks and two isolated PostgreSQL
+route checks passed. Local development identity configuration initially prevented the route fixture
+from starting; explicitly using the disabled identity provider resolved that test-only environment
+conflict. No authentication guard was weakened. This slice still requires its exact-head CI/merge
+and deployment confirmation. No production allowance, project, run or model grant was created.
+
+Submission gap remains a genuine end-to-end workflow, not another decorative dashboard:
+project/environment → frozen journey/manifest → qualified runner → baseline → actual Codex
+diagnosis and constrained repair → independent rerun → human review/export. Schedules/grants,
+membership mutations and retention edits still lack complete browser authoring surfaces.
+The current user instruction excludes actual VoiceOver/AT testing; do not claim those results
+or replace them with synthetic evidence. No public submission has been performed.

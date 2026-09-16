@@ -37,6 +37,8 @@ export interface Problem {
   readonly detail: string
   readonly status: number
   readonly requestId: string | null
+  /** Only emitted after the server confirms this workspace has no allowance revision. */
+  readonly setupRequired?: 'WORKSPACE_ENTITLEMENT'
 }
 
 const isProblemCode = (value: unknown): value is ProblemCode =>
@@ -64,5 +66,9 @@ export const parseProblem = (status: number, body: unknown): Problem => {
         : 'The server refused the request and did not explain why in a form this client recognises.',
     status,
     requestId: typeof requestId === 'string' ? requestId : null,
+    ...(status === 503 && code === 'DEPENDENCY_UNAVAILABLE' &&
+    record['setupRequired'] === 'WORKSPACE_ENTITLEMENT'
+      ? { setupRequired: 'WORKSPACE_ENTITLEMENT' as const }
+      : {}),
   }
 }

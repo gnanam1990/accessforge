@@ -10,10 +10,8 @@
  * is shown on the page rather than summarised away. INV-02 turns on this: a missing reader
  * capability must never resolve to a pass, and a list is the first place that inference gets made.
  *
- * **It must not hide the unsupported matrix.** E0 has one pinned reader profile and it is not
- * verified on this host; Windows and NVDA are not runnable at all until module 09 passes. Those are
- * stated as facts on the screen, because an operator choosing a profile from a list of three
- * reasonably concludes all three work.
+ * **Implementation is not qualification.** Reader adapter code does not establish that a particular
+ * enrolled desktop can execute a journey. Runtime evidence belongs to each runner and run.
  */
 
 import type { JSX } from 'react'
@@ -55,18 +53,18 @@ const MATRIX: readonly {
   {
     platform: 'macOS',
     reader: 'VoiceOver',
-    state: 'Not verified',
+    state: 'Requires desktop qualification',
     detail:
-      'The pinned E0 profile. No real VoiceOver trace has been captured on this installation, so ' +
-      'no runner can pass preflight for it yet.',
+      'Requires a dedicated macOS desktop, explicit reader consent and a supported profile. ' +
+      'Check the enrolled runner’s preflight evidence; this website does not verify VoiceOver.',
   },
   {
     platform: 'Windows',
     reader: 'NVDA',
-    state: 'Unavailable',
+    state: 'Requires desktop qualification',
     detail:
-      'Windows execution belongs to module 09 and is not implemented. Selecting it is not ' +
-      'possible rather than merely unlikely to work.',
+      'Requires a Windows desktop with the supported NVDA adapter and explicit reader consent. ' +
+      'Adapter implementation alone is not proof of a qualified runner or a passing result.',
   },
   {
     platform: 'Mobile and PDF',

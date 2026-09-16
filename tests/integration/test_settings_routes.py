@@ -118,6 +118,26 @@ def _entitlement_body(**over: Any) -> dict[str, Any]:
 # --------------------------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("path", ["usage", "settings/entitlement"])
+def test_missing_allowance_has_an_explicit_bootstrap_marker(
+    client: TestClient, db: str, path: str
+) -> None:
+    headers = _sign_in(db, client)
+    response = client.get(f"/v1/workspaces/{WS}/{path}")
+    assert response.status_code == 503
+    assert response.json()["setupRequired"] == "WORKSPACE_ENTITLEMENT"
+    saved = client.put(
+        f"/v1/workspaces/{WS}/settings/entitlement",
+        json=_entitlement_body(),
+        headers={**headers, "If-Match": "0"},
+    )
+    assert saved.status_code == 201
+    assert saved.json()["revision"] == 1
+    reread = client.get(f"/v1/workspaces/{WS}/{path}")
+    assert reread.status_code == 200
+    assert "setupRequired" not in reread.json()
+
+
 def test_a_run_cannot_be_requested_before_anyone_configures_an_allowance(
     client: TestClient, db: str, manifest: str
 ) -> None:
