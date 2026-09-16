@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from fastapi import FastAPI
@@ -119,7 +119,7 @@ def test_callback_refuses_before_provider_on_browser_binding_failure(
         url = "https://wrong.example.test/v1/auth/github/callback"
     else:
         url = "http://app.example.test/v1/auth/github/callback"
-    result = client.get(url, params=params, headers=headers)
+    result = client.get(url, params=urlencode(params), headers=headers)
     assert result.status_code == 401
     assert result.headers["cache-control"] == "no-store"
     assert "Max-Age=0" in result.headers["set-cookie"]
@@ -145,9 +145,8 @@ def test_provider_failure_burns_state_and_redacts_details(
     assert "PRIVATE_CODE" not in "".join(records)
     with unscoped_connection(_app(client).state.config.database_url) as conn:
         assert conn.execute("SELECT * FROM user_session").fetchall() == []
-        assert conn.execute("SELECT consumed_at FROM github_login_challenge").fetchone()[
-            "consumed_at"
-        ]
+        row = conn.execute("SELECT consumed_at FROM github_login_challenge").fetchone()
+        assert row is not None and row["consumed_at"] is not None
     assert cookie not in result.text
 
 
