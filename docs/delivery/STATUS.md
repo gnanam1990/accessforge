@@ -1,5 +1,33 @@
 # Delivery status
 
+## Current checkpoint — 2026-09-16
+
+Authoritative task selection lives in [EXECUTION-LEDGER.md](EXECUTION-LEDGER.md).
+Everything after the historical-checkpoint heading below is an older record, not
+a current missing-module list or authorization to start a reader.
+
+- Remote and local main were verified clean at
+  `bac2b501efffff9078bc7ef9856fcb87473880a1` after #198 and #199 merged.
+  Their exact PR heads passed all applicable checks; this does not claim that
+  the separate post-merge main workflow has finished.
+- Codex diagnosis/repair and navigator integration, protected baseline and
+  retained finalization/export paths are built. A source/web release ZIP and
+  optional same-origin built UI serving are now on main.
+- The fresh main bundle contains 941 inventoried files. All hashes matched;
+  frozen non-dev extracted installation imported four modules and loaded six
+  schemas and seventy migration files. This is install/import evidence only.
+- #200 narrow NVDA driver and #201 observer-startup cancellation fix are open
+  at this checkpoint. Refresh their exact-head CI and merge state before acting.
+- No qualified actual-reader baseline → model repair → independent rerun →
+  human review acceptance is established. Native private provisioning and
+  stale-input-source measurement remain implementation gaps.
+- Actual VoiceOver startup/runtime testing is paused by the owner. Do not use
+  historical permission grants as authorization to resume those tests.
+  Production identity/deployment, real GitHub App delivery, Windows/NVDA
+  qualification, pilot evidence and final submission remain unaccepted.
+
+## Historical checkpoint — not current task selection
+
 **Last refreshed:** 2026-09-10 (module 07 merged; verified on main)
 **Repository:** `github.com/gnanam1990/accessforge` (public)
 **Target branch:** `main`
