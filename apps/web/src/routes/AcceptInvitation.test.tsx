@@ -64,3 +64,14 @@ it('does not offer acceptance for another reference or a terminal offer', async 
   expect(await screen.findByRole('status')).toHaveTextContent('could not be verified')
   expect(screen.queryByRole('button', { name: 'Accept invitation' })).not.toBeInTheDocument()
 })
+
+it.each(['MAINTAINER', 'ENGINEER'])('validates the offered role against the server role vocabulary: %s', async (role) => {
+  await setup({}, { ...offer, role })
+  if (role === 'MAINTAINER') {
+    expect(await screen.findByRole('button', { name: 'Accept invitation' })).toBeDisabled()
+    expect(screen.getByText(/Offered role: MAINTAINER/)).toBeVisible()
+  } else {
+    expect(await screen.findByRole('status')).toHaveTextContent('could not be verified')
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).not.toBeInTheDocument()
+  }
+})

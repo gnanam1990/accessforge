@@ -10,6 +10,7 @@ import { ResourceView } from '../components/ResourceView'
 import { FormField } from '../components/FormField'
 import { ErrorSummary } from '../components/ErrorSummary'
 import type { FieldError } from '../components/ErrorSummary'
+import { invitationQuery } from '../routes/invitationReference'
 
 const roles = ['VIEWER', 'REVIEWER', 'MAINTAINER', 'OWNER'] as const
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -34,8 +35,9 @@ export const OwnerInvitations = ({ workspaceId }: { readonly workspaceId: string
   return <section className="af-panel af-stack">
     <h2>Workspace invitations</h2>
     <p>Prepare an offer for an exact GitHub numeric account ID, not an email or username.
-      This does not send an email, create an account or grant access. Verified recipient acceptance
-      is not yet available in this interface.</p>
+      This does not send an email, create an account or grant access. Inspect a pending offer to
+      share its link. The recipient must sign in with the invited GitHub account, read the offer
+      and explicitly accept it. Their account must already be provisioned.</p>
     <p>OWNER manages people, policy and infrastructure. MAINTAINER configures projects and approves
       runs/patches. REVIEWER reads evidence and records reviews. VIEWER reads evidence.</p>
     {receipt !== null && <p role="status">{receipt}</p>}
@@ -191,6 +193,13 @@ const RevokeOffer = ({ workspaceId, record, onRead, onChanged }: {
   return <div className="af-stack">
     <p>GitHub ID {record.githubSubject}; {record.role}; state {record.state}; revision {record.revision}.</p>
     <p>Reason: {record.reason}. Expires: {record.expiresAt}.</p>
+    {record.state === 'PENDING' && uuid.test(workspaceId) && <FormField
+      label="Invitation link" hint="Copy and share with the invited person. This is a reference, not an access token; sharing it does not send an email or grant membership.">
+      {({ id: fieldId, describedBy }) => <input id={fieldId} aria-describedby={describedBy}
+        readOnly value={`${window.location.origin}/workspaces?${invitationQuery({
+          workspaceId: workspaceId.toLowerCase(), invitationId: record.invitationId.toLowerCase(),
+        })}`} onFocus={event => event.currentTarget.select()} />}
+    </FormField>}
     <p>Revoking an offer does not remove an accepted membership. Use membership controls for existing access.</p>
     {message !== null && <p role="alert">{message}</p>}
     {['PENDING', 'EXPIRED'].includes(record.state) && <fieldset disabled={busy || locked}>
