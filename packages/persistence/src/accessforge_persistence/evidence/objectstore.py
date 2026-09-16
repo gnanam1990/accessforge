@@ -165,6 +165,19 @@ class S3Settings:
     region: str = "us-east-1"
 
 
+def _empty_bucket_policy(response: object, *, empty_wrapper: str | None = None) -> bool:
+    """Accept only absent policy data, not arbitrary successful S3 responses.
+
+    Some S3-compatible providers return an empty successful document instead of
+    AWS's missing-policy error. Ignore SDK transport metadata, but reject unknown
+    policy fields, null values, suspended versioning and even disabled rules.
+    """
+    if not isinstance(response, dict):
+        return False
+    payload = {key: value for key, value in response.items() if key != "ResponseMetadata"}
+    return payload == {} or (empty_wrapper is not None and payload == {empty_wrapper: {}})
+
+
 class S3ArtifactStore:
     """A real S3-compatible store. Exercised in tests against MinIO, not a fake.
 
@@ -264,21 +277,30 @@ class S3ArtifactStore:
         from botocore.exceptions import BotoCoreError, ClientError
 
         try:
-            if self._client.get_bucket_versioning(Bucket=self._bucket).get("Status"):
+            if not _empty_bucket_policy(self._client.get_bucket_versioning(Bucket=self._bucket)):
                 raise ArtifactStoreError("candidate retirement requires a never-versioned bucket")
-            for operation, absent in (
-                (self._client.get_bucket_lifecycle_configuration, "NoSuchLifecycleConfiguration"),
-                (self._client.get_bucket_replication, "ReplicationConfigurationNotFoundError"),
+            for operation, absent, empty_wrapper in (
+                (
+                    self._client.get_bucket_lifecycle_configuration,
+                    "NoSuchLifecycleConfiguration",
+                    None,
+                ),
+                (
+                    self._client.get_bucket_replication,
+                    "ReplicationConfigurationNotFoundError",
+                    "ReplicationConfiguration",
+                ),
             ):
                 try:
-                    operation(Bucket=self._bucket)
+                    response = operation(Bucket=self._bucket)
                 except ClientError as exc:
                     if exc.response.get("Error", {}).get("Code") != absent:
                         raise
                 else:
-                    raise ArtifactStoreError(
-                        "candidate tombstones require no bucket lifecycle or replication policy"
-                    )
+                    if not _empty_bucket_policy(response, empty_wrapper=empty_wrapper):
+                        raise ArtifactStoreError(
+                            "candidate tombstones require no bucket lifecycle or replication policy"
+                        )
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStoreUnavailable(
                 "cannot establish candidate retirement configuration"
