@@ -27,7 +27,7 @@
  * it to false would not make deletion stop breaking anything.
  */
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { JSX } from 'react'
 
 import { RouteHeading } from '../a11y/RouteHeading'
@@ -49,6 +49,7 @@ import type { Member, RetentionClass, UsageRow } from '../api/resources'
 import { SchedulesSection } from './SchedulesSection'
 import { RetentionPolicyForm } from './RetentionPolicyForm'
 import { MemberManagement } from './MemberManagement'
+import { OwnerInvitations } from './OwnerInvitations'
 import { useResource } from '../api/useResource'
 import { useSession, membershipFor } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
@@ -84,11 +85,13 @@ const EntitlementForm = ({
   revision,
   current,
   onSaved,
+  readState,
 }: {
   readonly workspaceId: string
   readonly revision: number
   readonly current: Record<string, number>
   readonly onSaved: () => void
+  readonly readState: 'ready' | 'loading' | 'failed'
 }): JSX.Element => {
   const { client } = useSession()
   const { announce } = useAnnouncer()
@@ -100,6 +103,7 @@ const EntitlementForm = ({
   const [errors, setErrors] = useState<readonly { fieldId: string; message: string }[]>([])
   const [submissionId, setSubmissionId] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [locked, setLocked] = useState(false)
   const [refusal, setRefusal] = useState<string | null>(null)
   const fieldIds = useId()
 
@@ -111,6 +115,7 @@ const EntitlementForm = ({
 
   const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
+    if (busy || locked || readState !== 'ready') return
     setSubmissionId((current2) => current2 + 1)
     setRefusal(null)
 
@@ -144,13 +149,22 @@ const EntitlementForm = ({
       revision,
     )
     setBusy(false)
+    // A lost response may follow a committed write. Never replay a stale revision blindly.
+    setLocked(true)
 
     switch (outcome.kind) {
       case 'ok':
-      case 'accepted':
+        if (outcome.value === null || typeof outcome.value !== 'object' ||
+          !Number.isSafeInteger(outcome.value.revision) || outcome.value.revision !== revision + 1) {
+          setRefusal('The save receipt could not be confirmed. Read the current allowance before making another change.')
+          break
+        }
         announce(`Allowance saved as revision ${outcome.value.revision}.`)
         setReason('')
         onSaved()
+        break
+      case 'accepted':
+        setRefusal('The server accepted the request but did not confirm a saved allowance. Read the current allowance before continuing.')
         break
       case 'problem':
         setRefusal(outcome.problem.detail)
@@ -161,6 +175,7 @@ const EntitlementForm = ({
       case 'cancelled':
       case 'stale':
       case 'unauthenticated':
+        setRefusal('The save could not be confirmed. Read the current allowance before continuing; you may need to sign in again.')
         break
     }
   }
@@ -176,12 +191,20 @@ const EntitlementForm = ({
       <ErrorSummary submissionId={submissionId} errors={errors} />
 
       {refusal !== null && (
-        <Notice tone="problem" heading="The allowance was not changed" headingLevel={4} live>
+        <Notice tone="problem" heading="Allowance save needs attention" headingLevel={4} live>
           <p>{refusal}</p>
+          <p>Discard this draft and read the current allowance before making another change. This does not resend the save.</p>
+          <Button disabled={readState === 'loading'} onClick={onSaved}>Read current allowance and discard draft</Button>
         </Notice>
       )}
 
+      {readState !== 'ready' && <p role="status">
+        {readState === 'loading' ? 'Reading current allowance. Your draft is kept and locked.' :
+          'Current allowance could not be read. Your draft is kept and locked; retry the read.'}
+      </p>}
       <form onSubmit={(event) => void submit(event)} noValidate>
+        <fieldset disabled={busy || locked || readState !== 'ready'}>
+        <legend>Allowance limits and reason</legend>
         {Object.keys(current).map((key) => (
           <FormField key={key} id={idFor(key)} label={LIMIT_LABEL[key] ?? key}
             {...errorFor(idFor(key))} required>
@@ -222,72 +245,45 @@ const EntitlementForm = ({
         <Button type="submit" variant="primary" busy={busy}>
           Save allowance
         </Button>
+        </fieldset>
       </form>
     </div>
   )
 }
 
-export const SettingsScreen = (): JSX.Element => {
-  const workspaceId = useWorkspaceId()
-  const { client, state } = useSession()
-  const [saved, setSaved] = useState(0)
-  const [selectedMember, setSelectedMember] = useState<Member | null>(null)
-
-  const membership = membershipFor(state, workspaceId)
-  const mayConfigure = membership !== null && MAY_CONFIGURE.has(membership.role)
-
-  const members = useResource(
-    (signal) => listMembers(client, workspaceId, signal),
-    [client, workspaceId],
-  )
-  const usage = useResource(
-    (signal) => readUsage(client, workspaceId, signal),
-    [client, workspaceId, saved],
-  )
-  const retention = useResource(
-    (signal) => readRetention(client, workspaceId, signal),
-    [client, workspaceId],
-  )
-
+const WorkspaceAllowance = ({ workspaceId, mayConfigure }: {
+  readonly workspaceId: string; readonly mayConfigure: boolean
+}): JSX.Element => {
+  const { client } = useSession()
+  const usage = useResource(signal => readUsage(client, workspaceId, signal), [client, workspaceId])
+  const [snapshot, setSnapshot] = useState<{
+    revision: number; current: Record<string, number>; generation: number
+  } | null>(null)
+  const setupRequired = usage.state.kind === 'problem' &&
+    usage.state.problem.setupRequired === 'WORKSPACE_ENTITLEMENT'
+  // Keep the editor outside ResourceView: failed/loading reads must not destroy its draft.
+  // Only a successful read (including confirmed initial setup) replaces the editor snapshot.
+  useEffect(() => {
+    const state = usage.state
+    if (state.kind === 'ready') {
+      const value = state.value
+      setSnapshot(previous => ({
+        revision: value.entitlementRevision,
+        current: {
+          maxRunsPerDay: value.usage.find(row => row.kind === 'RUN_ADMITTED')?.limit ?? 0,
+          maxActionsPerDay: value.usage.find(row => row.kind === 'ACTION_DISPATCHED')?.limit ?? 0,
+          maxWallSecondsPerDay: value.usage.find(row => row.kind === 'WALL_SECONDS')?.limit ?? 0,
+          maxModelTokensPerDay: value.usage.find(row => row.kind === 'MODEL_TOKENS')?.limit ?? 0,
+          maxConcurrentRuns: value.maxConcurrentRuns,
+        },
+        generation: (previous?.generation ?? 0) + 1,
+      }))
+    } else if (state.kind === 'problem' && state.problem.setupRequired === 'WORKSPACE_ENTITLEMENT') {
+      setSnapshot(previous => ({ revision: 0, current: INITIAL_ALLOWANCE,
+        generation: (previous?.generation ?? 0) + 1 }))
+    }
+  }, [usage.state])
   return (
-    <>
-      <RouteHeading>Workspace settings</RouteHeading>
-
-      {!mayConfigure && (
-        <Notice tone="information" heading="You can read these settings but not change them" headingLevel={2}>
-          <p>
-            Changing an allowance or a retention policy needs the owner role. Every value below is
-            shown in full — a setting somebody cannot change is still one they may need to know.
-          </p>
-        </Notice>
-      )}
-
-      <section className="af-stack">
-        <h2>Membership</h2>
-        <ResourceView resource={members} what="this workspace's members">
-          {(page) => (
-            <DataTable<Member>
-              caption="People with an active membership in this workspace, and what each may do"
-              rows={page.items}
-              rowKey={(member) => member.userId}
-              columns={[
-                { key: 'email', header: 'Person', isRowHeader: true, cell: (m) => m.email },
-                { key: 'role', header: 'Role', cell: (m) => m.role },
-                ...(mayConfigure ? [{ key: 'manage', header: 'Access', cell: (m: Member) =>
-                  <Button onClick={() => setSelectedMember(m)}>Manage {m.email}</Button> }] : []),
-              ]}
-            />
-          )}
-        </ResourceView>
-        {mayConfigure && selectedMember !== null && <MemberManagement
-          key={`${workspaceId}-${selectedMember.userId}`} workspaceId={workspaceId}
-          member={selectedMember} onSaved={members.reload} />}
-        <p className="af-secondary">
-          Membership is granted and revoked by an owner. Revocation takes effect on the next
-          request, not on the next sign-in.
-        </p>
-      </section>
-
       <section className="af-stack">
         <h2>Usage and allowance</h2>
         {usage.state.kind === 'problem' &&
@@ -298,9 +294,7 @@ export const SettingsScreen = (): JSX.Element => {
                 Zero allows no work; there is no unlimited setting. Saving limits does not start a run.</p>
               {!mayConfigure && <p>Ask a workspace owner to configure the first allowance.</p>}
             </Notice>
-            {mayConfigure && <EntitlementForm key={workspaceId}
-              workspaceId={workspaceId} revision={0} current={INITIAL_ALLOWANCE}
-              onSaved={() => setSaved((current) => current + 1)} />}
+
             <Button onClick={usage.reload}>Check setup again</Button>
           </>
         ) : <ResourceView resource={usage} what="this workspace's usage">
@@ -374,28 +368,80 @@ export const SettingsScreen = (): JSX.Element => {
                 {value.concurrentRuns} of {value.maxConcurrentRuns} concurrent runs in progress.
               </p>
 
-              {mayConfigure && (
-                <EntitlementForm
-                  workspaceId={workspaceId}
-                  revision={value.entitlementRevision}
-                  current={{
-                    maxRunsPerDay:
-                      value.usage.find((row) => row.kind === 'RUN_ADMITTED')?.limit ?? 0,
-                    maxActionsPerDay:
-                      value.usage.find((row) => row.kind === 'ACTION_DISPATCHED')?.limit ?? 0,
-                    maxWallSecondsPerDay:
-                      value.usage.find((row) => row.kind === 'WALL_SECONDS')?.limit ?? 0,
-                    maxModelTokensPerDay:
-                      value.usage.find((row) => row.kind === 'MODEL_TOKENS')?.limit ?? 0,
-                    maxConcurrentRuns: value.maxConcurrentRuns,
-                  }}
-                  onSaved={() => setSaved((current) => current + 1)}
-                />
-              )}
+
             </>
           )}
         </ResourceView>}
+        {mayConfigure && snapshot !== null && usage.state.kind !== 'gone' && (
+          <EntitlementForm key={snapshot.generation} workspaceId={workspaceId}
+            revision={snapshot.revision} current={snapshot.current}
+            readState={usage.state.kind === 'loading' ? 'loading' :
+              usage.state.kind === 'ready' || setupRequired ? 'ready' : 'failed'}
+            onSaved={usage.reload} />
+        )}
       </section>
+  )
+}
+
+export const SettingsScreen = (): JSX.Element => {
+  const workspaceId = useWorkspaceId()
+  const { client, state } = useSession()
+  const [selectedMember, setSelectedMember] = useState<Member | null>(null)
+
+  const membership = membershipFor(state, workspaceId)
+  const mayConfigure = membership !== null && MAY_CONFIGURE.has(membership.role)
+
+  const members = useResource(
+    (signal) => listMembers(client, workspaceId, signal),
+    [client, workspaceId],
+  )
+  const retention = useResource(
+    (signal) => readRetention(client, workspaceId, signal),
+    [client, workspaceId],
+  )
+
+  return (
+    <>
+      <RouteHeading>Workspace settings</RouteHeading>
+
+      {!mayConfigure && (
+        <Notice tone="information" heading="You can read these settings but not change them" headingLevel={2}>
+          <p>
+            Changing an allowance or a retention policy needs the owner role. Every value below is
+            shown in full — a setting somebody cannot change is still one they may need to know.
+          </p>
+        </Notice>
+      )}
+
+      <section className="af-stack">
+        <h2>Membership</h2>
+        <ResourceView resource={members} what="this workspace's members">
+          {(page) => (
+            <DataTable<Member>
+              caption="People with an active membership in this workspace, and what each may do"
+              rows={page.items}
+              rowKey={(member) => member.userId}
+              columns={[
+                { key: 'email', header: 'Person', isRowHeader: true, cell: (m) => m.email },
+                { key: 'role', header: 'Role', cell: (m) => m.role },
+                ...(mayConfigure ? [{ key: 'manage', header: 'Access', cell: (m: Member) =>
+                  <Button onClick={() => setSelectedMember(m)}>Manage {m.email}</Button> }] : []),
+              ]}
+            />
+          )}
+        </ResourceView>
+        {mayConfigure && selectedMember !== null && <MemberManagement
+          key={`${workspaceId}-${selectedMember.userId}`} workspaceId={workspaceId}
+          member={selectedMember} onSaved={members.reload} />}
+        <p className="af-secondary">
+          Membership is granted and revoked by an owner. Revocation takes effect on the next
+          request, not on the next sign-in.
+        </p>
+      </section>
+
+      {mayConfigure && <OwnerInvitations key={`invitations-${workspaceId}`} workspaceId={workspaceId} />}
+
+      <WorkspaceAllowance key={`allowance-${workspaceId}`} workspaceId={workspaceId} mayConfigure={mayConfigure} />
 
       <SchedulesSection />
 
