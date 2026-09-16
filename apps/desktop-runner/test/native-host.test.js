@@ -65,7 +65,7 @@ test('incomplete candidate configuration is refused before trace, claim or adapt
   assert.deepEqual(readdirSync(root), ['candidate.mjs']);
 });
 
-test('assembled candidate host retains the original claim when runtime evidence is unavailable', async t => {
+for (const preparation of [false, true]) test(`assembled candidate host retains its claim on ${preparation ? 'invalid actions before setup' : 'unavailable runtime'}`, async t => {
   const root = directory(t), modulePath = join(root, 'candidate.mjs');
   const reference = { workspaceId: '00000000-0000-0000-0000-000000000001',
     runId: '00000000-0000-0000-0000-000000000002', attemptId: '00000000-0000-0000-0000-000000000003',
@@ -73,17 +73,26 @@ test('assembled candidate host retains the original claim when runtime evidence 
   const artifactProbe = { expectedBuildDigest: 'a'.repeat(64), reference: {
     protocol: 'accessforge.artifact-probe.v1', socketPath: join(root, 'unused.sock'), token: 'b'.repeat(64),
     taskId: 'synthetic', candidateId: 'synthetic', imageId: 'synthetic', daemonId: 'synthetic' } };
+  globalThis.__afCandidateSetupReached = false;
+  t.after(() => { delete globalThis.__afCandidateSetupReached; });
   writeFileSync(modulePath, `export async function provisionCandidateProof() { return {
     desktop: ${JSON.stringify({directory: root, desktopSessionId: '123', reference})},
     physicalPreflight: { expectedDesktopSessionId: '123', artifactProbe: ${JSON.stringify(artifactProbe)},
       async observeRuntimeEvidence() { throw new Error('synthetic unavailable source'); } },
     safari: { expectedUrl: 'http://127.0.0.1:8081/form/synthetic-fixture-123', expectedBrowserVersion: '26.6' },
-    actions: [{action: 'NEXT'}], approvedTextValues: [], maxDurationSeconds: 60, actionTimeoutMs: 100,
+    ${preparation ? `referencePreparation: { fixture: {
+      permittedOrigin: 'http://127.0.0.1:8081', reservedNonce: 'synthetic-fixture-123',
+      setupToken: 'synthetic-only', variant: 'accessible', expectedBuildDigest: '${'a'.repeat(64)}',
+      expectedFixtureDigest: '${'c'.repeat(64)}'
+    }, async authorize() { globalThis.__afCandidateSetupReached = true; throw new Error('unexpected setup'); } },` : ''}
+    actions: ${JSON.stringify(preparation ? [{action: 'TYPE_TEXT', text: 'not-approved'}] : [{action: 'NEXT'}])},
+    approvedTextValues: [], maxDurationSeconds: 60, actionTimeoutMs: 100,
     async authorizeStartup() { throw new Error('must never reach reader startup'); },
     async authorizeAction() { throw new Error('must never reach physical action'); }
   }; }`, {mode: 0o600});
   const args = ['--candidate-proof', modulePath, '--output-dir', join(root, 'proof'), '--allow-reader-startup'];
   assert.equal(await cli(args, () => {}), 78);
+  assert.equal(globalThis.__afCandidateSetupReached, false);
   const claimPath = join(root, 'desktop-123.json');
   const claim = readFileSync(claimPath, 'utf8');
   assert.deepEqual(JSON.parse(claim).reference, reference);
