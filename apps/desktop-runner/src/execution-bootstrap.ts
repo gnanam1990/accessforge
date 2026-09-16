@@ -86,9 +86,11 @@ export async function runProvisionedNavigatorExecution(
           authorize: createEffectStartupAuthorization(
             signal => bootstrap.readerStartup.authorize(signal), effect, lifetime.signal),
         },
-        async authorizePhysicalAction(command: Parameters<typeof bootstrap.authorizePhysicalAction>[0]) {
+        async authorizePhysicalAction(command: Parameters<typeof bootstrap.authorizePhysicalAction>[0], signal: AbortSignal) {
+          signal.throwIfAborted();
           effect.assertActive();
-          await bootstrap.authorizePhysicalAction(command);
+          await bootstrap.authorizePhysicalAction(command, signal);
+          signal.throwIfAborted();
           effect.assertActive();
         },
       };
