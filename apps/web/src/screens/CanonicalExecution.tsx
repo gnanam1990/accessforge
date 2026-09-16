@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import type { JSX } from 'react'
 import { Link } from 'react-router-dom'
-import { approveExecutionSeal, readExecutionApproval, readExecutionSeal, requestRun } from '../api/resources'
+import { approveExecutionSeal, getRun, readExecutionApproval, readExecutionSeal, requestRun } from '../api/resources'
 import type { ExecutionSeal, RunRequested, SealedManifest } from '../api/resources'
 import { useResource } from '../api/useResource'
 import { Button } from '../components/Button'
@@ -42,6 +42,13 @@ const ExecutionDecision = ({ workspaceId, projectId, seal, mayExecute }: {
 }): JSX.Element => {
   const { client } = useSession()
   const [refresh, setRefresh] = useState(0)
+  const reservedRunId = String(seal.canonicalManifest!['runId'])
+  const run = useResource((signal) => getRun(client, workspaceId, reservedRunId, signal),
+    [client, workspaceId, reservedRunId, refresh])
+  const notAdmitted = run.state.kind === 'problem' && run.state.problem.status === 404 &&
+    run.state.problem.code === 'RESOURCE_NOT_FOUND'
+  const matchedRun = run.state.kind === 'ready' && run.state.value.runId === reservedRunId &&
+    run.state.value.manifestDigest === seal.manifestDigest
   const approval = useResource((signal) => readExecutionApproval(client, workspaceId, projectId,
     seal.sealedManifestId, signal), [client, workspaceId, projectId, seal.sealedManifestId, refresh])
   const [expiresAt, setExpiresAt] = useState('')
@@ -89,7 +96,7 @@ const ExecutionDecision = ({ workspaceId, projectId, seal, mayExecute }: {
   }
 
   const queue = async (): Promise<void> => {
-    if (busy || !current) return
+    if (busy || !current || !notAdmitted) return
     const key = runKey ?? crypto.randomUUID()
     setRunKey(key)
     setBusy(true)
@@ -100,8 +107,10 @@ const ExecutionDecision = ({ workspaceId, projectId, seal, mayExecute }: {
       setMessage('Run requested, not completed. A qualified runner and all live prerequisites are still required.')
     } else if (outcome.kind === 'problem') {
       setMessage(outcome.problem.detail)
+      run.reload()
     } else if (outcome.kind === 'offline') {
       setMessage('Run request outcome is unknown. Retry reuses this exact request; do not create a new seal to retry it.')
+      run.reload()
     }
   }
 
@@ -119,7 +128,8 @@ const ExecutionDecision = ({ workspaceId, projectId, seal, mayExecute }: {
         ? canonical['permittedEffects'].join(', ') : 'Not available'}</dd>
     </dl>
     <pre className="af-mono">{JSON.stringify(canonical, null, 2)}</pre>
-    {message !== null && <Notice tone="information" heading="Execution decision status" headingLevel={4} live>
+    {message !== null && !(matchedRun && runKey !== null && requested === null) &&
+      <Notice tone="information" heading="Execution decision status" headingLevel={4} live>
       <p>{message}</p></Notice>}
     {missing ? <p>No execution approval has been issued for this seal.</p> :
       <ResourceView resource={approval} what="the execution approval">{(value) => <>
@@ -141,13 +151,23 @@ const ExecutionDecision = ({ workspaceId, projectId, seal, mayExecute }: {
         {pendingApproval === null ? 'Approve exact execution' : 'Retry same approval'}
       </Button>
     </>}
-    {mayExecute && current && requested === null && <>
+    {requested === null && (notAdmitted ? <p>No run record exists for this reserved identity yet.</p> :
+      <ResourceView resource={run} what="the reserved run record">{(value) =>
+        value.runId === reservedRunId && value.manifestDigest === seal.manifestDigest ?
+          <Notice tone="information" heading="This run has already been requested" headingLevel={4}>
+            <p>Recorded status: {value.status}. Outcome: {value.outcome}. A request is not proof of completed execution.</p>
+            <Link className="af-link" to={workspacePath(workspaceId, `runs/${value.runId}`)}>Open existing run</Link>
+          </Notice> : <Notice tone="problem" heading="Run identity did not match" headingLevel={4}>
+            <p>The returned record does not match the selected seal. No new request is available; refresh or ask an operator to investigate.</p>
+          </Notice>
+      }</ResourceView>)}
+    {mayExecute && current && notAdmitted && requested === null && <>
       <p>Requesting queues the exact reserved run. The server rechecks allowance and identity;
         dispatch rechecks approval, expiry, environment and runner eligibility. It is not a passing result.</p>
       <Button variant="primary" busy={busy}
         onClick={() => void queue()}>{runKey === null ? 'Request this approved run' : 'Retry same run request'}</Button>
     </>}
     {requested !== null && <Link className="af-link" to={workspacePath(workspaceId, `runs/${requested.runId}`)}>Open requested run</Link>}
-    <Button disabled={busy} onClick={() => setRefresh((value) => value + 1)}>Refresh approval status</Button>
+    <Button disabled={busy} onClick={() => setRefresh((value) => value + 1)}>Refresh approval and run status</Button>
   </div>
 }

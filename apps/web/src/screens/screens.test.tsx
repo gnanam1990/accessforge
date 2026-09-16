@@ -85,16 +85,34 @@ const JOURNEY = {
 }
 
 describe('canonical execution decisions', () => {
-  const setupCanonical = (role = 'MAINTAINER', unknownOnce = false, mismatched = false) => {
+  const setupCanonical = (role = 'MAINTAINER', unknownOnce = false, mismatched = false,
+    runMode?: 'existing' | 'unavailable' | 'mismatch' | 'lost-response') => {
     const server = createFakeServer({ ...MEMBER, workspaces: [{ workspaceId: 'ws-1', name: 'Alder', role }] })
     server.data.journeyVersions.push(JOURNEY)
     server.data.sealedManifests.push({ ...MANIFEST, manifestKind: 'CANONICAL_EXECUTION', runId: 'reserved-1' })
-    let approval: Record<string, unknown> | null = null
+    let approval: Record<string, unknown> | null = runMode === undefined ? null : {
+      approvalId: 'approval-1', targetId: 'm-1', targetDigest: MANIFEST.manifestDigest,
+      expectedRevision: 2, scope: 'RUN_EFFECTS', expiresAt: '2099-01-01T00:00:00Z',
+      revokedAt: null, meaning: 'Stored decision only.',
+    }
+    let admitted = runMode !== 'lost-response'
+    let runRequests = 0
     const writes: { path: string; body: Record<string, unknown>; headers: Headers }[] = []
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value),
       { status, headers: { 'content-type': 'application/json' } })
     const fetchImpl: typeof fetch = async (input, init) => {
       const path = String(input)
+      if (runMode !== undefined && path.endsWith('/runs/reserved-1')) {
+        if (!admitted) return json({ code: 'RESOURCE_NOT_FOUND', detail: 'Not admitted yet' }, 404)
+        if (runMode === 'unavailable') return json({ code: 'DEPENDENCY_UNAVAILABLE', detail: 'Run status unavailable' }, 503)
+        return json({ runId: 'reserved-1', manifestDigest: runMode === 'mismatch' ? 'wrong' : MANIFEST.manifestDigest,
+          status: 'QUEUED', outcome: 'NOT_EVALUATED' })
+      }
+      if (runMode === 'lost-response' && path.endsWith('/runs') && init?.method === 'POST') {
+        runRequests += 1
+        admitted = true
+        throw new TypeError('response lost after admission')
+      }
       if (path.endsWith('/seals/m-1')) return json({ sealedManifestId: 'm-1',
         manifestDigest: mismatched ? 'wrong' : MANIFEST.manifestDigest, manifestKind: 'CANONICAL_EXECUTION', revision: 2,
         canonicalManifest: { runId: 'reserved-1', authorizationId: 'approval-1', expiresAt: '2099-12-31T00:00:00Z',
@@ -113,7 +131,7 @@ describe('canonical execution decisions', () => {
       return server.fetch(input, init)
     }
     renderAt({ ...server, fetch: fetchImpl }, '/w/ws-1/projects/p-1/journeys/j-1')
-    return { server, writes }
+    return { server, writes, runRequests: () => runRequests }
   }
   const selectCanonical = async () => {
     const user = userEvent.setup()
@@ -156,6 +174,29 @@ describe('canonical execution decisions', () => {
     await selectCanonical()
     expect(await screen.findByText(/Only a workspace owner or maintainer/)).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Approve exact execution' })).not.toBeInTheDocument()
+  })
+  it('opens an already admitted canonical run rather than requesting it again', async () => {
+    setupCanonical('OWNER', false, false, 'existing')
+    await selectCanonical()
+    expect(await screen.findByRole('link', { name: 'Open existing run' }))
+      .toHaveAttribute('href', '/w/ws-1/runs/reserved-1')
+    expect(screen.getByText(/Recorded status: QUEUED. Outcome: NOT_EVALUATED/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Request this approved run' })).not.toBeInTheDocument()
+  })
+  it.each(['unavailable', 'mismatch'] as const)('does not offer another request on %s run evidence', async (mode) => {
+    setupCanonical('OWNER', false, false, mode)
+    await selectCanonical()
+    expect(await screen.findByText(mode === 'unavailable' ? 'Run status unavailable' : 'Run identity did not match')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Request this approved run' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open existing run' })).not.toBeInTheDocument()
+  })
+  it('reconciles a lost request response to its actual reserved run without another POST', async () => {
+    const fixture = setupCanonical('OWNER', false, false, 'lost-response')
+    const user = await selectCanonical()
+    await user.click(await screen.findByRole('button', { name: 'Request this approved run' }))
+    expect(await screen.findByRole('link', { name: 'Open existing run' })).toBeVisible()
+    expect(fixture.runRequests()).toBe(1)
+    expect(screen.queryByRole('button', { name: 'Retry same run request' })).not.toBeInTheDocument()
   })
   it('refuses controls when seal inspection does not match the selected digest', async () => {
     setupCanonical('OWNER', false, true)
