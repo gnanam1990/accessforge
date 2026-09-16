@@ -53,9 +53,8 @@ route wiring remain absent: these helpers alone are not a sign-in flow.
   cookie carrying the original verifier and browser secret. Consume before token
   exchange; never accept those secrets from callback query parameters. Add bounded
   challenge creation/rate limiting and expired-row cleanup before enabling routes.
-- Bind numeric provider subjects to existing local users through a trusted
-  administrative path. Do not auto-link matching email/login or grant workspace
-  membership because the OAuth provider authenticated someone.
+- Use the explicit operator binding and fresh-subject issuance described below;
+  never pass a callback/body-supplied subject directly to the issuer.
 - Add disabled-by-default validated provider configuration, start/callback routes,
   secure cookie handling, refusal/audit paths, existing-account disable checks,
   session issuance and UI discovery. Preserve local-only login restrictions.
@@ -71,3 +70,41 @@ duplicate JSON, redirect refusal, oversized responses, scope and subject confusi
 PKCE construction and cancellation of a stalled body. They are not external login
 acceptance. HTTPX is now an explicit API dependency; the lock changed only that
 dependency metadata, with no new resolved package version.
+
+## Built operator account binding and session provenance
+
+Migration `0072_github_user_identity.sql` creates a one-to-one binding from a
+positive GitHub numeric subject to an existing local user UUID. The operator
+helper never creates accounts, matches email/login names, grants membership,
+overwrites conflicts or reactivates a revoked binding. Existing non-GitHub
+sessions remain unbound; the migration invents no identity assertion.
+
+`scripts/github_user_identity.py bind --github-user-id NUMERIC_ID --user-id LOCAL_UUID
+--operator AUDIT_LABEL` is an explicit host-operator command. `revoke` takes the
+subject and label but no local-user argument. It requires `ACCESSFORGE_DATABASE_URL`
+and performs no migration, provider call or automatic setup. **The operator must
+independently verify ownership of both identities first.** Database/host access
+is the authority; the label is only attribution, not authorization. This is not
+a tenant-accessible administration endpoint. No live binding was created here.
+Revocation is permanent in this interface; restoration/reassignment needs a
+separately reviewed recovery path, not direct SQL instructions in a login route.
+
+After the future route consumes state and obtains a fresh GitHub `/user` result,
+`issue_github_session` checks the binding and enabled local account, issues an
+existing-format session and commits the success audit in the same transaction.
+A `GitHubSubject` object is data, not a signed credential or proof by itself.
+Session rows retain the provider subject via a user-matching composite foreign
+key; rotation retains that provenance and rechecks the binding/account. Each
+resolution checks current binding revocation/account disable state. The operator
+revoker revokes associated sessions atomically; it does not revoke independent
+local sessions or change memberships. Binding/user/session lock ordering also
+covers resolve-then-rotate, which already updates the old session's last-seen time.
+Audit write failure rolls back binding, issuance and revocation rather than
+leaving unaudited authority. Refusal auditing at the future HTTP boundary remains
+part of route integration.
+
+Focused real PostgreSQL coverage includes concurrent conflicting bindings,
+issuance/rotation races with revocation, provider provenance after rotation,
+disabled/revoked resolution, audit failure rollback and previous-schema session
+preservation. CLI unit checks cover invalid subjects/arguments and error redaction.
+These are implementation checks, not actual GitHub login or reader acceptance.
