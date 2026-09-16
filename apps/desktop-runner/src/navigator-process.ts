@@ -11,6 +11,7 @@ const owned = new WeakSet<Bridge>();
 const environmentKeys = new Set(['ACCESSFORGE_DATABASE_URL', 'AWS_ACCESS_KEY_ID',
   'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE',
   'AWS_CONFIG_FILE', 'SSL_CERT_FILE']);
+const codexEnvironmentKeys = new Set(['ACCESSFORGE_DATABASE_URL', 'HOME', 'PATH', 'CODEX_HOME', 'TMPDIR']);
 
 export interface NavigatorProcessOptions {
   readonly pythonExecutable: string;
@@ -27,6 +28,8 @@ export interface NavigatorProcessOptions {
 }
 
 function validate(options: NavigatorProcessOptions): void {
+  const codex = options.modelProfile.provider === 'codex-chatgpt';
+  const allowedEnvironment = codex ? codexEnvironmentKeys : environmentKeys;
   if (process.platform === 'win32' || options.allowBillableModelCalls !== true || options.signal.aborted ||
       !isAbsolute(options.pythonExecutable) || resolve(options.pythonExecutable) !== options.pythonExecutable ||
       realpathSync(dirname(options.pythonExecutable)) !== dirname(options.pythonExecutable) ||
@@ -35,9 +38,15 @@ function validate(options: NavigatorProcessOptions): void {
       options.deadlineMonotonic - performance.now() > 1800000 ||
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(options.consentId) ||
       !options.environment.ACCESSFORGE_DATABASE_URL ||
-      Object.entries(options.environment).some(([key, value]) => !environmentKeys.has(key) ||
+      Object.entries(options.environment).some(([key, value]) => !allowedEnvironment.has(key) ||
         typeof value !== 'string' || !value || value.includes('\0'))) {
     throw new Error('navigator process requires explicit private provider configuration and live consent');
+  }
+  if (codex && (!isAbsolute(options.environment.HOME ?? '') ||
+      !options.environment.PATH || options.environment.PATH.split(':').some(path => !isAbsolute(path)) ||
+      ['CODEX_HOME', 'TMPDIR'].some(key => options.environment[key] !== undefined &&
+        !isAbsolute(options.environment[key]!)))) {
+    throw new Error('Codex requires explicit absolute home and executable search paths');
   }
   parseReference(options.reference);
 }

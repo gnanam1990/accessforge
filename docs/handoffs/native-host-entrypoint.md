@@ -12,6 +12,19 @@ the launcher owns cancellation and does not accept a replacement signal. Bootstr
 the existing startup-consent reference, exact lease identity, runtime/action callbacks,
 journal, private directories and sealed Safari target requirements.
 
+For the active `codex-chatgpt` model profile, navigator `environment` must explicitly
+provide `ACCESSFORGE_DATABASE_URL`, an absolute operator `HOME`, and a `PATH` containing
+only absolute search directories. Optional `CODEX_HOME` and `TMPDIR` must also be absolute.
+Select the operator's existing Codex login store; never copy authentication tokens into
+this module. The parent environment is not inherited. AWS credentials, API keys and other
+environment entries are rejected before physical bootstrap. The Python proposal adapter
+passes only its narrower OAuth/path allowlist to Codex, not the database credential.
+Legacy profile environment compatibility does not reactivate the retired Bedrock provider.
+
+The focused process test exercises explicit path forwarding through a real child process
+and refusal of missing/relative paths or foreign credentials before bootstrap. It uses a
+synthetic child, not a model, and is not native reader or authenticated Codex acceptance.
+
 This .mjs module is trusted operator code, **not untrusted configuration or a sandbox**.
 It executes with the user's host privileges, including its imports. Only load independently
 reviewed operator code, never files returned by the navigator, a candidate build or a browser.
