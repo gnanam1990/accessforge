@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from accessforge_persistence import unscoped_connection
 
 from .github_identity import GitHubIdentityError, GitHubOAuthConfiguration
+from .invitation_continuation import InvitationContinuation
 
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 
@@ -38,10 +39,12 @@ def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _configuration(config: GitHubOAuthConfiguration) -> str:
+def _configuration(
+    config: GitHubOAuthConfiguration, continuation: InvitationContinuation | None = None
+) -> str:
     # Bind secret rotation too. A digest of a high-entropy client secret is not
     # a reusable provider credential; never persist/log the canonical input.
-    return _hash(
+    original = _hash(
         json.dumps(
             [
                 "accessforge.github-login/1",
@@ -52,9 +55,21 @@ def _configuration(config: GitHubOAuthConfiguration) -> str:
             separators=(",", ":"),
         )
     )
+    # Preserve ordinary in-flight logins across rollout. Context-bearing logins get a separate
+    # domain and binding, so a cookie edit cannot replace/remove/add invitation references.
+    return (
+        original
+        if continuation is None
+        else _hash(f"accessforge.github-invitation/1:{original}{continuation.cookie_suffix}")
+    )
 
 
-def create_challenge(database_url: str, config: GitHubOAuthConfiguration) -> BrowserChallenge:
+def create_challenge(
+    database_url: str,
+    config: GitHubOAuthConfiguration,
+    *,
+    continuation: InvitationContinuation | None = None,
+) -> BrowserChallenge:
     """Commit a five-minute challenge before returning its transient credentials."""
     challenge = BrowserChallenge(*(secrets.token_urlsafe(32) for _ in range(3)))
     limited = False
@@ -89,7 +104,7 @@ def create_challenge(database_url: str, config: GitHubOAuthConfiguration) -> Bro
                     _hash(challenge.state),
                     _hash(challenge.browser_secret),
                     _hash(challenge.code_verifier),
-                    _configuration(config),
+                    _configuration(config, continuation),
                 ),
             )
     # Commit expired-row cleanup even when creation is refused.
@@ -105,6 +120,7 @@ def consume_challenge(
     state: str,
     browser_secret: str,
     code_verifier: str,
+    continuation: InvitationContinuation | None = None,
 ) -> None:
     """Atomically consume and commit before returning, or refuse generically.
 
@@ -132,7 +148,12 @@ def consume_challenge(
               AND expires_at > clock_timestamp()
             RETURNING state_hash
             """,
-            (_hash(state), _hash(browser_secret), _hash(code_verifier), _configuration(config)),
+            (
+                _hash(state),
+                _hash(browser_secret),
+                _hash(code_verifier),
+                _configuration(config, continuation),
+            ),
         ).fetchone()
         if row is None:
             raise GitHubIdentityError("GitHub login challenge refused")

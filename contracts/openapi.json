@@ -383,7 +383,7 @@
     },
     "/v1/auth/github/callback": {
       "get": {
-        "description": "Consume browser state before exchange; redirect only to the fixed local root.",
+        "description": "Consume bound browser state before exchange; return only to an internal fixed route.",
         "operationId": "github_login_callback",
         "responses": {
           "303": {

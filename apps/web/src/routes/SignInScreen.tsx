@@ -22,6 +22,7 @@
 import type { JSX } from 'react'
 
 import { useEffect, useId, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 
 import { Button } from '../components/Button'
 import { ErrorSummary } from '../components/ErrorSummary'
@@ -34,6 +35,7 @@ import { SignInProviderGate } from '../session/SignInProviderGate'
 import type { SignInFailure } from '../session/SessionProvider'
 
 export const SignInScreen = (): JSX.Element => {
+  const { search } = useLocation()
   const { state, signIn } = useSession()
   const [email, setEmail] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -82,7 +84,7 @@ export const SignInScreen = (): JSX.Element => {
   return (
     <WelcomeLayout>
 
-      <SignInProviderGate>
+      <SignInProviderGate invitationSearch={search}>
       <ErrorSummary
         submissionId={submissionId}
         errors={error === null ? [] : [{ fieldId, message: error }]}

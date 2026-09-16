@@ -5,6 +5,7 @@ import type { JSX, ReactNode } from 'react'
 import { Button } from '../components/Button'
 import { Notice } from '../components/Notice'
 import { useSession } from './SessionProvider'
+import { invitationQuery, invitationReference } from '../routes/invitationReference'
 
 type Provider = 'none' | 'local-development' | 'github'
 type Discovery = { readonly status: 'loading' } | { readonly status: 'failed' }
@@ -17,11 +18,14 @@ const providerFrom = (value: unknown): Provider | null => {
     || value.provider === 'github' ? value.provider : null
 }
 
-export const SignInProviderGate = ({ children }: { readonly children: ReactNode }): JSX.Element => {
+export const SignInProviderGate = ({ children, invitationSearch = '' }: {
+  readonly children: ReactNode; readonly invitationSearch?: string
+}): JSX.Element => {
   const { client } = useSession()
   const [discovery, setDiscovery] = useState<Discovery>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
   const descriptionId = useId()
+  const invitation = invitationReference(invitationSearch)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -50,11 +54,13 @@ export const SignInProviderGate = ({ children }: { readonly children: ReactNode 
   )
   if (discovery.provider === 'github') return (
     <div className="af-panel af-stack">
-      <a className="af-button af-button--primary" href="/v1/auth/github/start"
+      <a className="af-button af-button--primary" href={'/v1/auth/github/start' + (invitation ? `?${invitationQuery(invitation)}` : '')}
         aria-describedby={descriptionId}>Continue with GitHub</a>
       <p id={descriptionId}>Continue to GitHub to sign in, then return to AccessForge.
         Your GitHub account must already be linked by an operator; signing in does not grant
         workspace access.</p>
+      {invitation && <p>Your invitation references will be kept through sign-in. You must read and
+        explicitly accept the offer afterwards; this link does not create an account or grant access.</p>}
     </div>
   )
   return <>{children}</>

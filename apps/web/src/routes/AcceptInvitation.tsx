@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Button } from '../components/Button'
 import { FormField } from '../components/FormField'
 import { useSession } from '../session/SessionProvider'
+import type { InvitationReference } from './invitationReference'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ROLES = ['OWNER', 'ENGINEER', 'REVIEWER', 'VIEWER']
@@ -12,10 +13,12 @@ type Offer = {
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object'
 
-export function AcceptInvitation() {
+export function AcceptInvitation({ initialReference = null }: {
+  readonly initialReference?: InvitationReference | null
+}) {
   const { client, state, refresh } = useSession()
-  const [workspace, setWorkspace] = useState('')
-  const [invitation, setInvitation] = useState('')
+  const [workspace, setWorkspace] = useState(initialReference?.workspaceId ?? '')
+  const [invitation, setInvitation] = useState(initialReference?.invitationId ?? '')
   const [offer, setOffer] = useState<Offer | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState(false)
