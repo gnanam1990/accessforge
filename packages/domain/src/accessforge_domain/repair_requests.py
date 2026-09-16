@@ -11,7 +11,6 @@ from .diagnosis_requests import model_profile as diagnosis_profile
 def model_profile() -> dict[str, Any]:
     return {
         **diagnosis_profile(),
-        "provider_max_tokens": 4096,
         "invocation_output_tokens": 4096,
         "invocation_total_tokens": 50000,
         "max_context_characters": 200000,

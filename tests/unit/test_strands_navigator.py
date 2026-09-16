@@ -8,7 +8,9 @@ from threading import Event
 from typing import Any, cast
 
 import pytest
+from botocore.config import Config as BotocoreConfig
 from pydantic import ValidationError
+from strands import Agent, ModelRetryStrategy
 from strands.agent.agent_result import AgentResult
 from strands.types.agent import Limits
 
@@ -16,6 +18,7 @@ from accessforge_domain.journeys.dsl import ALLOWED_ACTIONS
 from accessforge_navigation_tools import (
     ActionName,
     DispatchResult,
+    NavigationGateway,
     NavigationRuntimeState,
     NavigationToolGateway,
     NavigatorProjection,
@@ -31,10 +34,80 @@ from accessforge_orchestrator.navigator import (
     PlanningCheckpoint,
     PostgresPlanningCheckpointSink,
     StrandsNavigator,
-    build_strands_agent,
     installed_strands_version,
     make_navigation_tool,
 )
+from accessforge_orchestrator.navigator.agent import SYSTEM_PROMPT
+from accessforge_orchestrator.navigator.checkpoints import PlanningCheckpointSink
+from accessforge_orchestrator.navigator.runtime import ObservedBedrockModel
+from accessforge_orchestrator.navigator.tooling import UtcClock
+
+
+def build_strands_agent(
+    *,
+    profile: NavigatorModelProfile,
+    gateway: NavigationGateway,
+    checkpoints: PlanningCheckpointSink,
+    cancel_fence: Event,
+    utc_now: UtcClock,
+) -> Agent:
+    """Historical test-only factory for synthetic Bedrock evidence compatibility."""
+
+    profile.assert_installed_sdk()
+    model = ObservedBedrockModel(
+        model_id=profile.model_id,
+        region_name=profile.region_name,
+        temperature=profile.temperature,
+        max_tokens=profile.provider_max_tokens,
+        # Strands owns the sole retry budget. Botocore's default/configured retry layer
+        # would multiply it without a corresponding consent reservation. Explicit config
+        # also wins over AWS_MAX_ATTEMPTS and shared-profile retry settings.
+        boto_client_config=BotocoreConfig(
+            retries={"total_max_attempts": 1, "mode": "standard"},
+            connect_timeout=min(10, profile.call_timeout_seconds),
+            read_timeout=profile.call_timeout_seconds,
+            ignore_configured_endpoint_urls=True,
+        ),
+    )
+    runtime = model.client.meta
+    if (
+        runtime.region_name != profile.region_name
+        or runtime.endpoint_url != f"https://bedrock-runtime.{profile.region_name}.amazonaws.com"
+        or runtime.config.retries != {"total_max_attempts": 1, "mode": "standard"}
+        or runtime.config.connect_timeout != min(10, profile.call_timeout_seconds)
+        or runtime.config.read_timeout != profile.call_timeout_seconds
+    ):
+        # Do not log client configuration or credentials on a mismatched runtime.
+        model.client.close()
+        raise RuntimeError("navigator provider transport differs from its bounded configuration")
+    retry = ModelRetryStrategy(
+        max_attempts=profile.model_attempts,
+        initial_delay=profile.retry_initial_delay_seconds,
+        max_delay=profile.retry_max_delay_seconds,
+    )
+    navigation_tool = make_navigation_tool(
+        gateway=gateway,
+        checkpoints=checkpoints,
+        cancel_fence=cancel_fence,
+        utc_now=utc_now,
+    )
+    return Agent(
+        name="accessforge-navigator",
+        description="Bounded actual-reader navigation planner",
+        model=model,
+        tools=[navigation_tool],
+        system_prompt=SYSTEM_PROMPT,
+        callback_handler=None,
+        conversation_manager=None,
+        load_tools_from_directory=False,
+        context_manager=False,
+        session_manager=None,
+        memory_manager=None,
+        retry_strategy=retry,
+        checkpointing=False,
+        background_tasks=False,
+    )
+
 
 NOW = "2026-09-12T12:00:00Z"
 RUN_REF = "run-1:attempt-1:epoch-4"
@@ -123,6 +196,25 @@ def profile(**overrides: object) -> NavigatorModelProfile:
     }
     values.update(overrides)
     return NavigatorModelProfile.model_validate(values)
+
+
+def test_production_bedrock_factory_is_retired_before_client_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import accessforge_orchestrator.navigator.agent as module
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("retired factory must not create an AWS client")
+
+    monkeypatch.setattr(module, "ObservedBedrockModel", forbidden)
+    with pytest.raises(RuntimeError, match="Bedrock navigator retired"):
+        module.build_strands_agent(
+            profile=profile(),
+            gateway=gateway([]),
+            checkpoints=RecordingSink(),
+            cancel_fence=Event(),
+            utc_now=lambda: NOW,
+        )
 
 
 def test_real_strands_agent_has_one_tool_and_never_loads_a_poisoned_directory(

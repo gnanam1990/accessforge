@@ -1,4 +1,4 @@
-"""Actual Strands diagnosis agent with no executable tools."""
+"""Bounded Codex diagnosis proposals validated against retained evidence."""
 
 from __future__ import annotations
 
@@ -9,12 +9,9 @@ from threading import Event
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
-from strands import Agent, ModelRetryStrategy
-from strands.agent.agent_result import AgentResult
-from strands.models import BedrockModel
 from strands.types.agent import Limits
 
-from accessforge_orchestrator.navigator.config import installed_strands_version
+from accessforge_orchestrator.codex_agent import CodexStructuredAgent, ProposalResult
 
 from .models import DiagnosisDraft, DiagnosisProjection, DiagnosisValidation
 from .validation import DiagnosisValidator
@@ -32,10 +29,10 @@ only.
 class DiagnosisAgentProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    sdk_version: Literal["1.55.1"] = "1.55.1"
-    model_id: Literal["global.anthropic.claude-sonnet-4-6"] = "global.anthropic.claude-sonnet-4-6"
-    region_name: Literal["us-east-1"] = "us-east-1"
-    provider_max_tokens: int = Field(default=1500, ge=256, le=4096)
+    provider: Literal["codex-chatgpt"] = "codex-chatgpt"
+    sdk_version: Literal["0.154.0"] = "0.154.0"
+    model_id: Literal["gpt-6-astra"] = "gpt-6-astra"
+    budget_semantics: Literal["RESULT_ADMISSION_NOT_SPEND_CAP"] = "RESULT_ADMISSION_NOT_SPEND_CAP"
     invocation_output_tokens: int = Field(default=2000, ge=256, le=4096)
     invocation_total_tokens: int = Field(default=20000, ge=1000, le=50000)
     max_context_characters: int = Field(default=50000, ge=1000, le=200000)
@@ -50,39 +47,14 @@ class DiagnosisAgent(Protocol):
         structured_output_model: type[DiagnosisDraft],
         limits: Limits,
         cancel_signal: Event,
-    ) -> AgentResult: ...
+    ) -> ProposalResult: ...
 
 
 AgentBuilder = Callable[[Event], DiagnosisAgent]
 
 
-def build_diagnosis_agent(profile: DiagnosisAgentProfile) -> Agent:
-    observed = installed_strands_version()
-    if observed != profile.sdk_version:
-        raise RuntimeError(
-            f"strands-agents {observed} is installed; diagnosis requires {profile.sdk_version}"
-        )
-    model = BedrockModel(
-        model_id=profile.model_id,
-        region_name=profile.region_name,
-        temperature=0,
-        max_tokens=profile.provider_max_tokens,
-    )
-    return Agent(
-        name="accessforge-diagnoser",
-        description="Evidence and frozen-source hypothesis generator",
-        model=model,
-        tools=[],
-        system_prompt=SYSTEM_PROMPT,
-        callback_handler=None,
-        load_tools_from_directory=False,
-        context_manager=False,
-        session_manager=None,
-        memory_manager=None,
-        checkpointing=False,
-        background_tasks=False,
-        retry_strategy=ModelRetryStrategy(max_attempts=2, initial_delay=1, max_delay=2),
-    )
+def build_diagnosis_agent(profile: DiagnosisAgentProfile) -> CodexStructuredAgent:
+    return CodexStructuredAgent(system_prompt=SYSTEM_PROMPT, model_id=profile.model_id)
 
 
 class DiagnosisWorker:
@@ -140,6 +112,9 @@ class DiagnosisWorker:
                 ),
                 timeout=self._profile.call_timeout_seconds,
             )
+        except asyncio.CancelledError:
+            fence.set()
+            raise
         except TimeoutError:
             fence.set()
             return self._unsupported("diagnosis provider timed out; no hypothesis was substituted")
