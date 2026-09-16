@@ -18,6 +18,109 @@ from accessforge_persistence.memberships import MembershipChangeError
 pytestmark = pytest.mark.integration
 
 
+def test_recipient_offer_identity_csrf_atomic_acceptance_and_session_rotation(
+    test_database_url: str, invited: tuple[str, str, str, int, str]
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from accessforge_api.app import create_app
+    from accessforge_api.auth.sessions import CSRF_HEADER, SESSION_COOKIE, issue_session
+    from accessforge_api.config import ApiSettings
+
+    workspace, owner, target, subject, invitation = invited
+    with unscoped_connection(test_database_url) as conn:
+        conn.execute(
+            "INSERT INTO github_user_identity(github_subject,user_id) VALUES (%s,%s)",
+            (subject + 1, owner),
+        )
+        unverified = issue_session(conn, user_id=target)
+        recipient = issue_session(conn, user_id=target, github_subject=subject)
+        wrong_identity = issue_session(conn, user_id=owner, github_subject=subject + 1)
+    settings = ApiSettings(
+        database_url=test_database_url,
+        evidence_endpoint_url="http://127.0.0.1:9000",
+        evidence_bucket="unused",
+        evidence_access_key="unused",
+        evidence_secret_key="unused",
+        environment="test",
+    )
+    path = f"/v1/invitation-offers/{workspace}/{invitation}"
+    with TestClient(create_app(settings), base_url="https://testserver.local") as client:
+
+        def use(token: str) -> None:
+            client.cookies.set(SESSION_COOKIE, token, domain="testserver.local", path="/")
+
+        use(unverified.session_token)
+        assert client.get(path).status_code == 401
+        use(wrong_identity.session_token)
+        assert client.get(path).status_code == 404
+        use(recipient.session_token)
+        assert client.get("/v1/session").json()["workspaces"] == []
+        offer = client.get(path)
+        assert offer.status_code == 200, offer.text
+        assert offer.json()["role"] == "REVIEWER" and offer.headers["etag"] == '"1"'
+        assert offer.headers["cache-control"] == "no-store"
+        assert client.get(f"/v1/invitation-offers/{uuid4()}/{invitation}").status_code == 404
+        assert (
+            client.post(
+                path + "/accept", json={"accept": True}, headers={"If-Match": '"1"'}
+            ).status_code
+            == 403
+        )
+        headers = {CSRF_HEADER: recipient.csrf_token}
+        assert (
+            client.post(path + "/accept", json={"accept": True}, headers=headers).status_code == 428
+        )
+        headers["If-Match"] = '"1"'
+        assert (
+            client.post(
+                path + "/accept", json={"accept": True, "userId": owner}, headers=headers
+            ).status_code
+            == 400
+        )
+        accepted = client.post(path + "/accept", json={"accept": True}, headers=headers)
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["membership"] == {
+            "userId": target,
+            "role": "REVIEWER",
+            "revoked": False,
+            "revision": 1,
+        }
+        assert accepted.json()["sessionRotated"] is True
+        rotated = client.cookies.get(SESSION_COOKIE)
+        csrf = client.cookies.get("accessforge_csrf")
+        assert rotated and rotated != recipient.session_token
+        assert csrf and csrf != recipient.csrf_token
+        assert len(accepted.headers.get_list("set-cookie")) == 2
+        current = client.get("/v1/session")
+        assert current.status_code == 200
+        assert current.json()["workspaces"][0]["workspaceId"] == workspace
+        use(recipient.session_token)
+        assert client.get(path).status_code == 401
+        use(rotated)
+        assert client.get(path).json()["state"] == "ACCEPTED"
+        assert (
+            client.post(
+                path + "/accept",
+                json={"accept": True},
+                headers={CSRF_HEADER: str(csrf), "If-Match": '"1"'},
+            ).json()["code"]
+            == "PERMISSION_DENIED"
+        )
+    with workspace_connection(test_database_url, workspace) as conn:
+        denied = conn.execute(
+            "SELECT count(*) AS n FROM audit_event WHERE workspace_id=%s "
+            "AND action='MEMBERSHIP_INVITATION_ACCEPT' AND outcome='DENIED'",
+            (workspace,),
+        ).fetchone()
+        assert denied and denied["n"] == 3
+        assert conn.execute(
+            "SELECT id FROM audit_event WHERE workspace_id=%s AND "
+            "action='MEMBERSHIP_INVITATION_SESSION_ROTATED'",
+            (workspace,),
+        ).fetchone()
+
+
 def test_owner_invitation_http_readback_and_denials(
     test_database_url: str, invited: tuple[str, str, str, int, str]
 ) -> None:
