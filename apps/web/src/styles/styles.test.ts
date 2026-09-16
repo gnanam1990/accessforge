@@ -34,7 +34,7 @@ const read = (name: string): string => readFileSync(join(__dirname, name), 'utf8
 const withoutComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, '')
 
 const TOKENS = withoutComments(read('tokens.css'))
-const BASE = withoutComments(read('base.css'))
+const BASE = withoutComments(read('base.css') + '\n' + read('modern.css'))
 
 /** WCAG 2.x relative luminance. */
 const luminance = (hex: string): number => {

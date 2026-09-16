@@ -16,6 +16,7 @@ import type { JSX } from 'react'
 import type { ReactNode } from 'react'
 
 import { AccountControls } from './AccountControls'
+import { Brand } from '../components/Brand'
 import { Breadcrumbs } from './Breadcrumbs'
 import { PrimaryNavigation } from './PrimaryNavigation'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
@@ -53,7 +54,7 @@ export const AppShell = ({
       <SkipLink />
       <header className="af-header">
         <div className="af-row">
-          <span style={{ fontWeight: 700 }}>AccessForge</span>
+          <Brand />
           <WorkspaceSwitcher
             workspaces={workspaces}
             current={workspaceId}
@@ -63,7 +64,7 @@ export const AppShell = ({
         </div>
         <AccountControls email={email} onSignOut={onSignOut} />
       </header>
-      <div className="af-body">
+      <div className={`af-body${workspaceId === null ? ' af-body-no-sidebar' : ''}`}>
         {workspaceId !== null && <PrimaryNavigation workspaceId={workspaceId} narrow={narrow} />}
         <main id={MAIN_CONTENT_ID} tabIndex={-1} className="af-main af-stack">
           {banner}

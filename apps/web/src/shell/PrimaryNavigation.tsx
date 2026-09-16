@@ -17,6 +17,7 @@
 import type { JSX } from 'react'
 
 import { NavLink } from 'react-router-dom'
+import { SectionIcon } from '../components/Brand'
 
 import { WORKSPACE_ROUTES, workspacePath } from '../routes/routeMap'
 
@@ -24,13 +25,13 @@ const items = WORKSPACE_ROUTES.filter((route) => route.inPrimaryNavigation)
 
 const List = ({ workspaceId }: { readonly workspaceId: string }): JSX.Element => (
   <ul className="af-nav-list">
-    {items.map((route) => (
+    {items.map((route, index) => (
       <li key={route.path}>
         {/* `end` so the match is exact. Without it, /projects/p-1 marks the Projects entry as the
             current page while the project detail screen is the one showing, and `aria-current` is
             how a screen-reader user establishes where they are. */}
         <NavLink end to={workspacePath(workspaceId, route.path)}>
-          {route.label}
+          <SectionIcon index={index} /><span>{route.label}</span>
         </NavLink>
       </li>
     ))}
@@ -44,7 +45,7 @@ export const PrimaryNavigation = ({
   readonly workspaceId: string
   readonly narrow: boolean
 }): JSX.Element => (
-  <nav aria-label="Workspace sections">
+  <nav className="af-sidebar" aria-label="Workspace sections">
     {narrow ? (
       <details>
         <summary>Menu</summary>

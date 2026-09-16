@@ -50,11 +50,11 @@ export const SignInProviderGate = ({ children }: { readonly children: ReactNode 
   )
   if (discovery.provider === 'github') return (
     <div className="af-panel af-stack">
+      <a className="af-button af-button--primary" href="/v1/auth/github/start"
+        aria-describedby={descriptionId}>Continue with GitHub</a>
       <p id={descriptionId}>Continue to GitHub to sign in, then return to AccessForge.
         Your GitHub account must already be linked by an operator; signing in does not grant
         workspace access.</p>
-      <a className="af-button af-button--primary" href="/v1/auth/github/start"
-        aria-describedby={descriptionId}>Continue with GitHub</a>
     </div>
   )
   return <>{children}</>

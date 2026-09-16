@@ -1,0 +1,85 @@
+/* Product presentation. Existing semantic tokens, focus rings and reduced-motion rules remain authoritative. */
+.af-brand { display: inline-flex; align-items: center; gap: .6rem; font-size: 1.25rem; font-weight: 750; letter-spacing: -.045em; white-space: nowrap; }
+.af-brand-mark { width: 2rem; height: 2rem; color: var(--af-primary); }
+.af-brand-accent, .af-accent-text { color: var(--af-primary); }
+.af-section-icon { width: 1.35rem; height: 1.35rem; flex-shrink: 0; }
+.af-welcome { max-width: 90rem; margin-inline: auto; padding-inline: clamp(1.25rem, 5vw, 5rem); }
+.af-welcome-header { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding-block: 1.75rem; border-bottom: 1px solid var(--af-border); }
+.af-welcome-header nav { display: flex; align-items: center; flex-wrap: wrap; gap: 1.5rem; font-size: .875rem; }
+.af-welcome-header a { color: var(--af-foreground); text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; }
+.af-theme-button { border: 1px solid var(--af-border-strong); background: var(--af-surface); color: var(--af-foreground); padding: .65rem 1rem; border-radius: 100px; min-height: 44px; cursor: pointer; font: inherit; }
+.af-welcome-hero { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); align-items: center; gap: clamp(2rem, 6vw, 6rem); padding-block: clamp(3rem, 6vw, 6rem); }
+.af-eyebrow { font-size: .7rem; font-weight: 750; letter-spacing: .14em; color: var(--af-foreground-secondary); display: flex; align-items: center; gap: .6rem; margin-block: 0 1.25rem; }
+.af-signal-dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--af-primary); }
+.af-welcome-story { --af-text-title: clamp(2.5rem, 4.4vw, 4.5rem); }
+.af-welcome-story h1 { line-height: 1.08; letter-spacing: -.065em; margin-block: 0 1.5rem; }
+.af-hero-description { color: var(--af-foreground-secondary); max-width: 34rem; font-size: 1.0625rem; line-height: 1.8; }
+.af-text-action { display: inline-flex; min-height: 44px; align-items: center; gap: 1rem; font-weight: 650; text-underline-offset: .3em; margin-block: .5rem 1.5rem; }
+.af-evidence-map { border: 1px solid var(--af-border); border-radius: 1rem; background: var(--af-surface); padding: 1.25rem; max-width: 34rem; }
+.af-map-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; font-size: .625rem; color: var(--af-foreground-secondary); }
+.af-mono { font-family: var(--af-font-mono); letter-spacing: .05em; }
+.af-map-path { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-block: 1.25rem; }
+.af-map-path > span:not(.af-path-connector) { display: grid; gap: .2rem; }
+.af-map-path svg { color: var(--af-primary); margin-bottom: .4rem; }
+.af-map-path strong { font-size: .875rem; }
+.af-map-path small, .af-evidence-map > p { font-size: .75rem; color: var(--af-foreground-secondary); }
+.af-evidence-map > p { margin: 0; padding-top: .8rem; border-top: 1px solid var(--af-border); }
+.af-path-connector { color: var(--af-foreground-secondary); }
+.af-signin-card { background: var(--af-surface); border: 1px solid var(--af-border); border-radius: 1.5rem; padding: clamp(1.5rem, 3vw, 3rem); box-shadow: var(--af-elevation-overlay); scroll-margin-top: 2rem; }
+.af-card-symbol { display: inline-flex; padding: .9rem; border-radius: 1rem; background: var(--af-surface-sunken); color: var(--af-primary); margin-bottom: 2rem; }
+.af-card-symbol svg { width: 1.6rem; height: 1.6rem; }
+.af-signin-card h2 { font-size: clamp(1.5rem, 2.2vw, 2rem); line-height: 1.2; letter-spacing: -.04em; margin: 0; }
+.af-signin-card .af-eyebrow { margin-bottom: .75rem; }
+.af-signin-content { margin-block: 2rem; }
+.af-signin-content > .af-panel { padding: 0; border: 0; box-shadow: none; }
+.af-signin-content > .af-panel > p { font-size: .8125rem; color: var(--af-foreground-secondary); line-height: 1.7; }
+.af-signin-content .af-button { width: 100%; justify-content: center; border-radius: .65rem; min-height: 3rem; }
+.af-signin-footnote { display: flex; align-items: flex-start; gap: .75rem; padding-top: 1.25rem; border-top: 1px solid var(--af-border); color: var(--af-foreground-secondary); }
+.af-signin-footnote p { margin: 0; font-size: .75rem; }
+.af-workflow { padding-block: 2rem 4rem; border-top: 1px solid var(--af-border); }
+.af-section-heading { display: flex; justify-content: space-between; align-items: end; gap: 2rem; margin-block: 1rem 2rem; }
+.af-section-heading h2 { font-size: clamp(1.5rem, 2.2vw, 2rem); letter-spacing: -.04em; margin: 0; }
+.af-section-heading > p { max-width: 19rem; margin: 0; }
+.af-workflow-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.af-workflow-grid article { padding: 1.5rem; border: 1px solid var(--af-border); border-radius: 1rem; background: var(--af-surface); }
+.af-step-number { font-family: var(--af-font-mono); color: var(--af-primary); font-size: .8rem; }
+.af-workflow-grid h3 { font-size: 1rem; margin-block: 1.5rem .5rem; }
+.af-workflow-grid p { font-size: .875rem; color: var(--af-foreground-secondary); margin: 0; }
+.af-welcome-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid var(--af-border); padding-block: 1.75rem; color: var(--af-foreground-secondary); font-size: .75rem; }
+.af-welcome-footer .af-brand { font-size: 1rem; color: var(--af-foreground); }
+.af-welcome-footer .af-brand-mark { width: 1.5rem; height: 1.5rem; }
+.af-header { padding: 1rem 1.75rem; background: var(--af-surface); gap: 1.5rem; }
+.af-body { padding: 0; gap: 0; grid-template-columns: minmax(12rem, 15rem) minmax(0, 1fr); }
+.af-body-no-sidebar { grid-template-columns: minmax(0, 1fr); }
+.af-sidebar { padding: 1.5rem 1rem; background: var(--af-surface); border-right: 1px solid var(--af-border); }
+.af-sidebar .af-nav-list { display: grid; gap: .35rem; }
+.af-sidebar .af-nav-list a { display: flex; align-items: center; gap: .8rem; padding: .75rem 1rem; border-radius: .65rem; font-size: .875rem; }
+.af-main { padding: clamp(1.25rem, 3vw, 3rem); min-width: 0; }
+.af-main > h1 { letter-spacing: -.04em; }
+.af-main .af-panel { border-radius: 1rem; }
+.af-overview-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.af-overview-heading .af-eyebrow { margin-bottom: .5rem; }
+.af-overview-heading h1 { margin: 0; letter-spacing: -.04em; }
+.af-quick-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin-block: .5rem 1rem; }
+.af-quick-actions a { display: grid; gap: .6rem; padding: 1.5rem; border: 1px solid var(--af-border-strong); border-radius: 1rem; background: var(--af-surface); color: var(--af-foreground); text-decoration: none; }
+.af-quick-actions a:hover, .af-workspace-cards a:hover { background: var(--af-surface-sunken); }
+.af-quick-actions svg { color: var(--af-primary); margin-bottom: .5rem; }
+.af-quick-actions span { color: var(--af-foreground-secondary); font-size: .8125rem; }
+.af-workspace-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 1rem; }
+.af-workspace-cards a { padding: 2rem; border: 1px solid var(--af-border-strong); background: var(--af-surface); border-radius: 1rem; }
+@media (max-width: 900px) {
+  .af-welcome-hero { gap: 2rem; }
+  .af-welcome-story { --af-text-title: clamp(2.5rem, 4vw, 3.5rem); }
+}
+@media (max-width: 767px) {
+  .af-welcome-header { align-items: flex-start; flex-wrap: wrap; gap: .75rem; }
+  .af-welcome-header nav { gap: 1rem; }
+  .af-welcome-hero, .af-workflow-grid, .af-quick-actions { grid-template-columns: minmax(0, 1fr); }
+  .af-welcome-hero { padding-block: 2.5rem; }
+  .af-section-heading { display: block; }
+  .af-section-heading > p { margin-top: 1rem; }
+  .af-body { grid-template-columns: minmax(0, 1fr); }
+  .af-sidebar { border-right: 0; border-bottom: 1px solid var(--af-border); padding: .75rem 1.25rem; }
+  .af-header { padding: 1rem 1.25rem; }
+  .af-welcome-footer { align-items: flex-start; flex-direction: column; }
+}

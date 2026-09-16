@@ -105,7 +105,18 @@ describe('sign-in', () => {
     expect(link).toHaveAccessibleDescription(/must already be linked by an operator/)
     expect(screen.queryByLabelText(/Email address/)).not.toBeInTheDocument()
     await user.tab()
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('link', { name: 'The workflow' })).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: /appearance/ })).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('link', { name: /Enter your workspace/ })).toHaveFocus()
+    await user.tab()
     expect(link).toHaveFocus()
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Build for everyone.')
     expect(server.bodies).toEqual([])
   })
 
@@ -295,6 +306,19 @@ describe('the workspace shell', () => {
     // A breadcrumb reading a bare UUID tells the reader nothing, and reading it aloud is worse.
     expect(trail.textContent).not.toContain('1f0c9e6a')
     expect(trail.textContent).toContain('Run')
+  })
+
+  it('offers overview shortcuts only to implemented workspace routes', async () => {
+    const server = createFakeServer(MEMBER)
+    renderApp(server, ['/w/ws-alder/overview'])
+    const shortcuts = await screen.findByRole('navigation', { name: 'Workspace workflow' })
+    const links = within(shortcuts).getAllByRole('link')
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '/w/ws-alder/projects', '/w/ws-alder/settings', '/w/ws-alder/runners',
+    ])
+    await userEvent.setup().click(within(shortcuts).getByRole('link', { name: /Runner inventory/ }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Runners' })).toBeInTheDocument()
+    expect(server.bodies).toEqual([])
   })
 
   it('serves nothing for a path that is not in the route map', async () => {
