@@ -149,8 +149,11 @@ const EntitlementForm = ({
       revision,
     )
     setBusy(false)
-    // A lost response may follow a committed write. Never replay a stale revision blindly.
-    setLocked(true)
+    // Only documented input-validation refusals are safe to correct in place. Unknown 4xx,
+    // permission/session failures and revision conflicts still require explicit read-back.
+    const invalidDraft = outcome.kind === 'problem' && outcome.problem.status === 400 &&
+      ['INVALID_INPUT', 'UNEXPECTED_FIELD'].includes(outcome.problem.code)
+    setLocked(!invalidDraft)
 
     switch (outcome.kind) {
       case 'ok':
@@ -193,7 +196,9 @@ const EntitlementForm = ({
       {refusal !== null && (
         <Notice tone="problem" heading="Allowance save needs attention" headingLevel={4} live>
           <p>{refusal}</p>
-          <p>Discard this draft and read the current allowance before making another change. This does not resend the save.</p>
+          <p>{locked
+            ? 'Discard this draft and read the current allowance before making another change. This does not resend the save.'
+            : 'The server refused the input. Your draft is kept editable; correct it and explicitly save again, or discard it and read the current allowance.'}</p>
           <Button disabled={readState === 'loading'} onClick={onSaved}>Read current allowance and discard draft</Button>
         </Notice>
       )}

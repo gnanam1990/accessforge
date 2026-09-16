@@ -184,6 +184,37 @@ describe('who may change what', () => {
     expect(writes).toBe(1)
   })
 
+  it.each(['INVALID_INPUT', 'UNEXPECTED_FIELD', 'UNKNOWN_PROXY_ERROR', 'PERMISSION_DENIED'])(
+    'retains a refused draft with a conservative edit boundary: %s', async code => {
+      const user = userEvent.setup()
+      const server = createFakeServer(asRole('OWNER'))
+      let writes = 0
+      renderSettings({ fetch: async (input, init) => {
+        if (String(input).endsWith('/settings/entitlement') && init?.method === 'PUT') {
+          writes += 1
+          return new Response(JSON.stringify({ code, detail: 'Review the submitted input.' }),
+            { status: code === 'PERMISSION_DENIED' ? 403 : 400,
+              headers: { 'content-type': 'application/problem+json' } })
+        }
+        return server.fetch(input, init)
+      } })
+      await user.type(await screen.findByLabelText(/Why this limit/), 'Keep this draft')
+      await user.click(screen.getByRole('button', { name: 'Save allowance' }))
+      await screen.findByRole('heading', { name: 'Allowance save needs attention' })
+      expect(screen.getByLabelText(/Why this limit/)).toHaveValue('Keep this draft')
+      if (code === 'INVALID_INPUT' || code === 'UNEXPECTED_FIELD') {
+        expect(screen.getByRole('button', { name: 'Save allowance' })).toBeEnabled()
+        await user.type(screen.getByLabelText(/Why this limit/), ' corrected')
+        expect(writes).toBe(1)
+        await user.click(screen.getByRole('button', { name: 'Save allowance' }))
+        expect(writes).toBe(2)
+      } else {
+        expect(screen.getByRole('button', { name: 'Save allowance' })).toBeDisabled()
+        expect(writes).toBe(1)
+      }
+    },
+  )
+
   it.each(['lost-response', 'stale-revision', 'malformed-receipt', 'accepted-only'])(
     'locks an unconfirmed %s save until an explicit read, without replaying it', async (mode) => {
       const user = userEvent.setup()
