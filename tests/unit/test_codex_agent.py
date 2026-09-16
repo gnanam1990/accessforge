@@ -2,7 +2,10 @@
 
 import asyncio
 import json
+import subprocess
 import sys
+import tomllib
+from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 from typing import Any, cast
@@ -153,3 +156,37 @@ def test_schema_preserves_property_named_default_and_rejects_open_objects() -> N
     assert structured_schema(Closed)["required"] == ["default"]
     with pytest.raises(ValueError, match="closed object"):
         structured_schema(Open)
+
+
+def test_codex_diagnosis_and_repair_import_without_strands() -> None:
+    script = """
+import sys
+import importlib.abc
+class NoStrands(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'strands' or fullname.startswith('strands.'):
+            raise ImportError('Strands intentionally unavailable')
+sys.meta_path.insert(0, NoStrands())
+from accessforge_orchestrator.codex_agent import CodexStructuredAgent
+from accessforge_orchestrator.diagnosis.agent import DiagnosisWorker
+from accessforge_orchestrator.repair.worker import RepairWorker
+from accessforge_orchestrator.navigator.codex import CodexNavigator
+from accessforge_orchestrator.navigator.coordinator import NativeNavigatorSession
+from accessforge_orchestrator.navigator.operator import run_host_session
+assert not any(n == 'strands' or n.startswith('strands.') for n in sys.modules)
+"""
+    result = subprocess.run(  # noqa: S603 - fixed local interpreter and literal import probe
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=15, check=False
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_strands_is_a_historical_test_dependency_only() -> None:
+    root = Path(__file__).resolve().parents[2]
+    app = tomllib.loads((root / "apps/orchestrator/pyproject.toml").read_text())
+    workspace = tomllib.loads((root / "pyproject.toml").read_text())
+    lock = tomllib.loads((root / "uv.lock").read_text())
+    assert not any(dep.startswith("strands-agents") for dep in app["project"]["dependencies"])
+    assert "strands-agents==1.55.1" in workspace["dependency-groups"]["dev"]
+    package = next(p for p in lock["package"] if p["name"] == "accessforge-orchestrator")
+    assert not any(dep["name"] == "strands-agents" for dep in package["dependencies"])

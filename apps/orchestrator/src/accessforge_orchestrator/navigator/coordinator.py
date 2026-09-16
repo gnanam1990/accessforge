@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from threading import Event
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from accessforge_domain.canonical import digest
@@ -27,19 +27,23 @@ from accessforge_navigation_tools import (
 from accessforge_orchestrator.manual_dispatch import DispatchReference
 from accessforge_persistence import navigator_model_calls, navigator_runtime, workspace_connection
 
-from .agent import (
-    NavigatorAgent,
-    NavigatorInvocationResult,
-    NavigatorStopReason,
-    StrandsNavigator,
-    build_strands_agent,
-)
 from .checkpoints import CheckpointKind, PlanningCheckpoint
 from .codex import CodexNavigationProfile, CodexNavigator
 from .config import NavigatorModelProfile
 from .native_transport import NativeNavigatorTransport
 from .postgres import PostgresPlanningCheckpointSink
 from .projection import RetainedNavigatorTurn, load_retained_turn
+from .results import NavigatorInvocationResult, NavigatorStopReason
+
+if TYPE_CHECKING:
+    from .agent import NavigatorAgent
+
+
+def build_strands_agent(**kwargs: Any) -> NavigatorAgent:
+    """Load the retired compatibility entrypoint only on an explicit legacy path."""
+    from .agent import build_strands_agent as legacy_builder
+
+    return legacy_builder(**kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +245,8 @@ class NativeNavigatorSession:
                     authorize_invocation=authorize_codex,
                 ).run_turn(turn.projection, cancel_signal=self._fence)
             else:
+                from .agent import StrandsNavigator
+
                 outcome = await StrandsNavigator(
                     profile=self._profile, checkpoints=sink, utc_now=utc_now, agent_builder=build
                 ).run_turn(turn.projection, cancel_signal=self._fence)

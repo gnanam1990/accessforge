@@ -5,11 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
-from enum import StrEnum
 from threading import Event
-from typing import Any, Protocol
+from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
 from strands import Agent
 from strands.agent.agent_result import AgentResult
 from strands.types.agent import Limits
@@ -18,8 +16,10 @@ from accessforge_navigation_tools import NavigationGateway, NavigatorProjection
 
 from .checkpoints import CheckpointKind, PlanningCheckpoint, PlanningCheckpointSink
 from .config import NavigatorModelProfile
+from .results import NavigatorInvocationResult as NavigatorInvocationResult
+from .results import NavigatorStopReason as NavigatorStopReason
 from .runtime import ObservedBedrockModel
-from .tooling import UtcClock
+from .submission import UtcClock
 
 SYSTEM_PROMPT = """You are the AccessForge screen-reader navigator.
 You receive one sealed projection containing task intent, safe fixture-value names and actual-reader
@@ -33,24 +33,6 @@ When runtimeStartUrl is present, it instantiates the original policy's /form/FIX
 for this run, using its separately approved isolated origin for a candidate rerun. It does not
 change the policy or grant navigation, HTTP or task-success authority.
 """
-
-
-class NavigatorStopReason(StrEnum):
-    COMPLETED = "COMPLETED"
-    SDK_LIMIT = "SDK_LIMIT"
-    PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT"
-    CANCELLED = "CANCELLED"
-    CONTEXT_BUDGET_EXHAUSTED = "CONTEXT_BUDGET_EXHAUSTED"
-    PROVIDER_ERROR = "PROVIDER_ERROR"
-
-
-class NavigatorInvocationResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    stop_reason: NavigatorStopReason
-    provider_stop_reason: str | None = None
-    detail: str = ""
-    runtime_observation: dict[str, Any] | None = None
 
 
 class NavigatorAgent(Protocol):

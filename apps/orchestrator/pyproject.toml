@@ -1,7 +1,7 @@
 [project]
 name = "accessforge-orchestrator"
 version = "0.0.0"
-description = "Bounded Strands navigator and evidence diagnosis workers."
+description = "Bounded Codex navigator and evidence diagnosis workers."
 requires-python = ">=3.13,<3.14"
 dependencies = [
   "accessforge-build-worker",
@@ -12,7 +12,6 @@ dependencies = [
   "fastapi>=0.115",
   "httpx>=0.28,<0.29",
   "pydantic>=2.10",
-  "strands-agents==1.55.1",
 ]
 
 [project.scripts]

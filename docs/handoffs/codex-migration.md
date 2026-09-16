@@ -143,3 +143,34 @@ The new duplicate-completion regression failed before the guard and passes after
 Codex completions are accepted, and historical Bedrock interpretation is unchanged. The two
 runtime-evidence test modules pass all 59 cases; Ruff and strict mypy pass. This is retained
 artifact interpretation coverage, not S3/export or physical reader acceptance.
+
+### Provider-independent action submission
+
+Codex now calls `NavigationActionSubmission`, a plain Python guarded gateway with no Strands
+base class, schema registry or streaming adapter. Existing claim-before-validation, cancellation,
+durable proposal/result checkpoints and ambiguous-effect fencing are preserved. The historical
+Strands tool is an adapter over that same implementation rather than a duplicate authority path.
+Four gateway boundary tests run against both implementations. All 58 focused navigator/contract/
+coordinator cases pass, as does strict mypy on the navigator package and modified test module.
+Legacy coordinator/type imports still load Strands elsewhere; complete dependency removal remains
+pending. No provider call, actual reader execution or operating-system change was performed.
+
+The proposal adapter, diagnosis and repair workers now use a local structural admission-limit
+type rather than importing Strands for annotations. A fresh-interpreter regression explicitly
+blocks every Strands import and successfully loads all three components. Their 35 focused tests
+pass; strict mypy passes across all 68 orchestrator source files. This does not remove the
+remaining legacy navigator dependency, nor change the token limits into provider spending caps.
+
+Navigator result contracts are now provider-independent as well. Package exports and the
+coordinator load historical Strands adapters only on explicit legacy access; normal Codex
+navigator, coordinator and operator imports succeed with every Strands import blocked in a
+fresh interpreter. Historical adapter tests still pass. The five focused modules pass 77 cases,
+and strict mypy passes on 70 source/test files. Packaging still lists the SDK and needs a separate
+development-only dependency transition; this import separation is not full dependency removal.
+
+Strands is now pinned only in the workspace development dependency group for historical tests,
+not in the orchestrator runtime requirements. The lockfile was regenerated offline without
+version upgrades. A fresh frozen no-dev environment installed 51 packages without Strands and
+successfully imported the Codex planner, diagnosis, repair, coordinator and operator. A regression
+checks both project declarations and locked runtime requirements. boto3/botocore remain for
+S3-compatible evidence storage (including local MinIO); this does not enable Bedrock inference.
