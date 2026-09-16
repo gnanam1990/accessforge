@@ -184,3 +184,16 @@ and account-usage/result-admission semantics instead of an invented AWS region o
 claim. Explicit unchecked acknowledgement, linked errors, duplicate-write prevention and unknown
 request reconciliation are unchanged. All 13 consent component tests and web TypeScript checking
 pass. This uses synthetic API responses; no live consent, model call or reader startup occurred.
+
+## Retained Codex finalization and export integration
+
+A new isolated integration case creates a Codex-sealed, STOP-approved run and two explicitly
+synthetic CLI completions. Real PostgreSQL enforces one-shot consent/reservation and original
+checkpoint/action bindings; real local S3-compatible storage retains the model-runtime artifact.
+The existing completion service verifies retained bytes, records the exact Codex MODEL identity,
+replays the same evaluation, serves the human API and builds an evidence export. The overall
+outcome remains INCONCLUSIVE because this does not establish real build/reader acceptance.
+The case passes locally using a disposable non-superuser database and separate observer database;
+both databases and their temporary role were cleaned up. Existing helper assumptions were corrected
+for the additional runtime artifact, snapshot-only (not event-stream) producers, and DIAGNOSIS
+versus NAVIGATOR ledger entries. No production authority or evaluator rule was relaxed.
