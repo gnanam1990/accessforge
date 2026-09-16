@@ -17,9 +17,9 @@ and a bootstrap script is exactly where nobody looks. Every remedy is printed as
 person to read and run.
 
 **It distinguishes "not installed" from "installed and wrong" from "cannot be installed".**
-The three have different remedies, and a platform capability -- VoiceOver, NVDA, a Bedrock
-entitlement -- belongs in the third. Reporting a blocked capability as a missing dependency invites
-somebody to try to install their way out of a permissions grant that only a human can give.
+The three have different remedies, and a platform capability -- VoiceOver, NVDA, Codex OAuth
+account access -- belongs in the third. Reporting a blocked capability as a missing dependency
+invites somebody to try to install their way out of a permissions grant that only a human can give.
 """
 
 from __future__ import annotations

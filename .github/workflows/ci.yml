@@ -657,14 +657,14 @@ jobs:
               interactive desktop session.
               Status: BLOCKED. See infra/version-matrix.toml [capability.nvda].
 
-          Bedrock model invocation
-              Needs AWS credentials with model access, and separately, approval to incur
-              charges. Credentials alone are not approval.
-              Status: BLOCKED. See infra/version-matrix.toml [capability.bedrock].
+          Codex OAuth model invocation
+              Needs the pinned Codex CLI, the execution host's ChatGPT OAuth login and
+              exact model consent. CI has no account login or provider-call authority.
+              Status: BLOCKED. See infra/version-matrix.toml [capability.codex_oauth].
 
           Hosted deployment
               No cloud resource is created by any workflow in this repository. The AWS
-              configuration under infra/aws/ is PREPARED and unapplied.
+              configuration under infra/aws/ is historical, RETIRED and unapplied.
               See docs/operations/DEPLOYMENT.md.
 
           ============================================================================
@@ -679,7 +679,7 @@ jobs:
         # assertion lives in the test suite; this is the line that makes the job notice.
         run: |
           set -euo pipefail
-          for capability in voiceover nvda bedrock; do
+          for capability in voiceover nvda codex_oauth; do
             if ! grep -A3 "\[capability.$capability\]" infra/version-matrix.toml \
                  | grep -q 'status = "BLOCKED"'; then
               echo "::error::[capability.$capability] is no longer BLOCKED but this job still says it is"
