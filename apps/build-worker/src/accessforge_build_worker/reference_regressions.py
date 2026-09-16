@@ -58,7 +58,7 @@ _DB_UNUSED = "rw,noexec,nosuid,nodev,size=4096,uid=999,gid=999,mode=0700"
 _SCHEMA = """
 CREATE TABLE public.fixture_instance (
  nonce TEXT PRIMARY KEY, template_digest TEXT NOT NULL,
- variant TEXT NOT NULL CHECK (variant IN ('accessible','inaccessible')),
+ variant TEXT NOT NULL CHECK (variant IN ('accessible','inaccessible','missing-label-v1')),
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE public.service_request (

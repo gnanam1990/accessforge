@@ -138,6 +138,25 @@ def test_full_journey_creates_exactly_one_request(client: TestClient) -> None:
     assert receipt["requests"][0]["email"] == VALID_SUBMISSION["email"]
 
 
+def test_missing_label_scenario_keeps_real_validation_and_one_receipt(client: TestClient) -> None:
+    """HTTP and real DB fixture proof, not browser/reader accessibility acceptance."""
+    nonce = _new_fixture(client, "missing-label-v1")
+    page = client.get(f"/form/{nonce}")
+    assert page.status_code == 200
+    assert "SEEDED DEFECT missing-label-v1" in page.text
+    assert '<label for="full_name">' not in page.text
+    assert '<label for="email">' in page.text
+    rejected = client.post(f"/form/{nonce}", data=INVALID_SUBMISSION)
+    assert rejected.status_code == 422 and 'role="alert"' in rejected.text
+    receipt_path = f"/api/_test/receipt/{nonce}"
+    assert client.get(receipt_path).status_code == 403
+    headers = {"x-observer-token": OBSERVER}
+    assert client.get(receipt_path, headers=headers).json()["request_count"] == 0
+    assert client.post(f"/form/{nonce}", data=VALID_SUBMISSION).status_code == 201
+    assert client.post(f"/form/{nonce}", data=VALID_SUBMISSION).status_code == 409
+    assert client.get(receipt_path, headers=headers).json()["request_count"] == 1
+
+
 def test_fresh_variants_declare_one_versioned_logical_fixture(client: TestClient) -> None:
     first = client.post(
         "/api/_test/fixtures", params={"variant": "accessible"}, headers={"x-setup-token": SETUP}

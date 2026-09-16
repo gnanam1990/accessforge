@@ -17,7 +17,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS fixture_instance (
     nonce           TEXT PRIMARY KEY,
     template_digest TEXT        NOT NULL,
-    variant         TEXT        NOT NULL CHECK (variant IN ('accessible', 'inaccessible')),
+    variant         TEXT        NOT NULL
+                    CHECK (variant IN ('accessible', 'inaccessible', 'missing-label-v1')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -12,6 +12,7 @@ import re
 
 import pytest
 
+from reference_app.fixture_definition import PRESENTATION_VARIANTS
 from reference_app.templates import presentation_digest, render_form, template_digest
 from reference_app.validation import FieldError
 
@@ -82,7 +83,7 @@ def test_logical_fixture_digest_is_stable_across_presentational_variants() -> No
 
 def test_user_input_is_escaped_in_both_variants() -> None:
     injected = '"><script>alert(1)</script>'
-    for variant in ("accessible", "inaccessible"):
+    for variant in PRESENTATION_VARIANTS:
         html = render_form(
             nonce="n1",
             variant=variant,
@@ -109,3 +110,37 @@ def test_a_receipt_is_not_an_accessibility_claim() -> None:
     # Byte-identical success pages: the receipt carries no accessibility signal whatsoever, so
     # nothing downstream may read one as evidence that the journey was operable.
     assert inaccessible == accessible
+
+
+def test_missing_label_variant_is_isolated_from_error_recovery() -> None:
+    markup = _markup("missing-label-v1")
+    assert '<label for="full_name">' not in markup
+    assert '<span class="label-text">Full name</span>' in markup
+    control = re.search(r'<input id="full_name"[^>]+>', markup)
+    assert control is not None
+    assert not any(key in control.group() for key in ("aria-label", "aria-labelledby", "title="))
+    for name in ("email", "category", "description"):
+        assert f'<label for="{name}">' in markup
+    for affordance in (
+        'role="alert"',
+        'aria-live="assertive"',
+        'aria-invalid="true"',
+        'aria-describedby="email-error"',
+        ".focus()",
+    ):
+        assert affordance in markup
+    assert "SEEDED DEFECT missing-label-v1" in _render("missing-label-v1")
+    assert '<label for="full_name">Full name</label>' in _markup("accessible")
+
+
+def test_missing_label_preserves_backend_identity_and_success_receipt() -> None:
+    assert template_digest("missing-label-v1") == template_digest("accessible")
+    assert len({presentation_digest(variant) for variant in PRESENTATION_VARIANTS}) == 3
+    actual = _COMMENT.sub("", render_form(nonce="n1", variant="missing-label-v1", receipt_id="r1"))
+    control = _COMMENT.sub("", render_form(nonce="n1", variant="accessible", receipt_id="r1"))
+    assert actual == control
+
+
+def test_unknown_presentation_is_not_silently_rendered_as_a_seeded_defect() -> None:
+    with pytest.raises(ValueError):
+        render_form(nonce="n1", variant="missing-label-v2")
