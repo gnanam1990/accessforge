@@ -333,6 +333,8 @@ class ReferenceRegressions:
                 "--auth-host=scram-sha-256",
                 "--pwfile=/work/admin-password",
                 "--no-locale",
+                # SQL_ASCII returns text as bytes; str(b'inaccessible') is not a variant.
+                "--encoding=UTF8",
             )
             checked(
                 "exec",
@@ -393,6 +395,8 @@ class ReferenceRegressions:
                 ).encode(),
             )
             sql(_SCHEMA)
+            if sql("SHOW server_encoding") != "UTF8":
+                raise SandboxRefused("protected reference database must use UTF8")
             driver = create("driver", self.image, "container:" + database)
             canary = checked(
                 "exec",
