@@ -116,11 +116,13 @@ test('unsettled reader startup returns interrupted without racing cleanup or iss
 
 test('unsettled startup authorization cannot hang or start the reader on late approval', async () => {
   let approve;
+  let authority;
   const h = harness(undefined, undefined,
-    () => new Promise(resolve => { approve = resolve; }), undefined, 20);
+    signal => new Promise(resolve => { authority = signal; approve = resolve; }), undefined, 20);
   const result = await h.runner.run([{ action: 'NEXT' }]);
   assert.equal(result.status, 'INTERRUPTED');
   assert.deepEqual(h.calls, []);
+  assert.equal(authority.aborted, true);
   approve();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(h.calls, []);
@@ -215,24 +217,47 @@ test('changed physical state between actions cannot reuse the initial ready repo
 
 test('a timed-out physical probe cannot dispatch after cleanup', async () => {
   let probes = 0, release;
+  let approvals = 0;
   const { runner, calls } = harness(async () => {
     if (++probes === 3) await new Promise(resolve => { release = resolve; });
     return readyPreflight();
-  });
+  }, undefined, undefined, async () => { approvals++; });
   assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['start', 'stop']);
+  assert.equal(approvals, 0, 'late preflight must not open an abandoned approval request');
+});
+
+test('late operator action authorization cannot dispatch after candidate cleanup', async () => {
+  let release;
+  let authority;
+  const { runner, calls } = harness(readyPreflight(), undefined, async () => {},
+    async (_request, signal) => new Promise(resolve => { authority = signal; release = resolve; }));
+  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
+  assert.equal(authority.aborted, true);
   release();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(calls, ['start', 'stop']);
 });
 
-test('late operator action authorization cannot dispatch after candidate cleanup', async () => {
-  let release;
-  const { runner, calls } = harness(readyPreflight(), undefined, async () => {},
-    async () => new Promise(resolve => { release = resolve; }));
-  assert.equal((await runner.run([{ action: 'NEXT' }])).status, 'INTERRUPTED');
-  release();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(calls, ['start', 'stop']);
+test('each completed action closes its own authority without cancelling the next action', async () => {
+  const grants = [];
+  let startup;
+  const h = harness(readyPreflight(), undefined, async signal => {
+    assert.equal(signal.aborted, false);
+    startup = signal;
+  }, async (_request, signal) => {
+    assert.equal(startup.aborted, true);
+    assert.equal(signal.aborted, false);
+    assert.ok(grants.every(previous => previous.aborted));
+    grants.push(signal);
+  });
+  assert.equal((await h.runner.run([{action: 'NEXT'}, {action: 'STOP'}])).status, 'CANDIDATE_COMPLETE');
+  assert.equal(grants.length, 2);
+  assert.notEqual(grants[0], grants[1]);
+  assert.ok(grants.every(signal => signal.aborted));
+  assert.deepEqual(h.calls, ['start', 'NEXT', 'STOP']);
 });
 
 test('empty or incomplete qualification preflight never starts the reader', async () => {
