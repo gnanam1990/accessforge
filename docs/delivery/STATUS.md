@@ -2,19 +2,36 @@
 
 ## Current checkpoint — 2026-09-16
 
-Latest verified source is clean remote/local main
-`a3004d622925e721a3ff45d2e2587d7f1a65beef` (through #207).
+Latest verified remote/local main is
+`ff8ac6c838ba5c19022708839ef82353c3329fc3` (through #214).
 The first checkpoint in [EXECUTION-LEDGER.md](EXECUTION-LEDGER.md) supersedes the
-older snapshots below. #200–207 are merged after required exact-head CI and
-normal review. Native-host factory wiring, benchmark accounting/retained-byte
-inspection and signed/readable outcome consistency are implemented.
+older snapshots below. #208–214 are now merged. This includes isolated
+missing-label/focus-recovery/keyboard-trap fixture variants, the UTF-8 protected
+PostgreSQL build fix, and bounded GitHub identity transport, durable challenges
+and trusted existing-account/session bindings. #210 was included in the tested
+#211 composition; its standalone checks have also now completed successfully.
+
+At this snapshot #215 browser login and #216 provider-aware UI are open, **not
+merged**. #215's original CI failed strict typing in its new tests; corrected
+head `c5b6d215a8e97bc70af6a5e4b25ec89e5d5182a3` is awaiting CI. #216 head
+`0e8464f33bb922fbdea3b01f2f5b13bfce8dc6e0` also awaits CI. Refresh those heads
+and checks before merging; prior local passes or the original failure are not
+current merge approval. See [the identity handoff](../handoffs/github-user-login.md)
+and each pending branch for implementation details not yet on main.
 
 Still incomplete: real stale-input and focus/effect authority integration for
 the operator host; actual reader/model baseline → repair → rerun → human review;
-production identity/deployment, real GitHub App delivery, Windows qualification,
+actual hosted-identity/deployment acceptance, real GitHub App delivery, Windows qualification,
 full held-out benchmarks/pilot and final submission. C2 backend collector and
 finalizer integration are built, but do not prove physical execution or arbitrary
 external-effect coverage. Actual VoiceOver runtime testing stays paused.
+
+The last source/web ZIP remains `accessforge-ee5ccfd.zip`, based on main through
+#211, **not** the pending login/UI work or latest main. Its SHA-256 was rechecked:
+`17ae75c5d6e9d63ecf917fbbc409e1d657cfe2467c12ecec861ccf98f5d9ebe1`.
+Do not advertise it as the finished project or as actual reader/model acceptance.
+No live identity configuration, migration, deployment or reader test was performed
+to produce this checkpoint. Do not convert build/CI status into a completion percentage.
 
 ## Earlier 2026-09-16 checkpoint — historical
 
