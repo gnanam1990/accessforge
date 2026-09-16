@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import type { JSX } from 'react'
 import type { ApiOutcome } from '../api/client'
-import { createExecutionSeal, getNavigationProfile, listEnvironments, registerBuild } from '../api/resources'
+import { createExecutionSeal, getNavigationProfile, listEnvironments, listRunners, registerBuild } from '../api/resources'
 import type { Environment, JourneyVersion } from '../api/resources'
 import { useResource } from '../api/useResource'
 import { Button } from '../components/Button'
@@ -221,6 +221,10 @@ const SealForm = ({ workspaceId, projectId, journey, environments, registeredBui
         {environment.permittedEffects.map((effect) => <label key={effect}><input type="checkbox"
           checked={effects.includes(effect)} onChange={(event) => setEffects((old) => event.target.checked
             ? [...old, effect] : old.filter((value) => value !== effect))} />{effect}</label>)}</>}
+      <details><summary>Choose an enrolled runner profile</summary>
+        <RunnerProfileChoice workspaceId={workspaceId} platform={journey.platform} locked={operation.locked}
+          onChoose={(runnerProfileDigest) => setValues((old) => ({ ...old, runnerProfileDigest }))} />
+      </details>
       <details><summary>Choose the default navigation model configuration</summary>
         <NavigationProfileChoice workspaceId={workspaceId} locked={operation.locked}
           onChoose={(modelConfigDigest) => setValues((old) => ({ ...old, modelConfigDigest }))} />
@@ -256,10 +260,49 @@ const NavigationProfileChoice = ({ workspaceId, locked, onChoose }: {
     if (!valid) return <p role="alert">The server did not return a supported configuration preview. No digest was selected.</p>
     return <>
       <p>{preview.disclosure}</p>
-      <pre>{JSON.stringify(preview.profile, null, 2)}</pre>
+      <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(preview.profile, null, 2)}</pre>
       <p>Configuration SHA-256: <code>{preview.modelConfigDigest}</code></p>
       <p>Choosing this copies its digest into the draft. It does not verify runtime readiness, approve disclosure, or call a model.</p>
       <Button disabled={locked} onClick={() => { if (!locked) onChoose(preview.modelConfigDigest) }}>Use this configuration digest</Button>
+    </>
+  }}</ResourceView>
+}
+
+const RunnerProfileChoice = ({ workspaceId, platform, locked, onChoose }: {
+  readonly workspaceId: string; readonly platform: string; readonly locked: boolean
+  readonly onChoose: (digest: string) => void
+}): JSX.Element => {
+  const { client } = useSession()
+  const [selectedId, setSelectedId] = useState('')
+  const inventory = useResource((signal) => listRunners(client, workspaceId, signal), [client, workspaceId])
+  return <ResourceView resource={inventory} what="enrolled runner profiles">{(page) => {
+    const candidates = page.items.filter((runner) => runner.platform === platform && runner.revoked === false &&
+      runner.status !== 'QUARANTINED' && typeof runner.profileDigest === 'string' && /^[a-f0-9]{64}$/.test(runner.profileDigest))
+    const selected = candidates.find((runner) => runner.runnerId === selectedId)
+    return <>
+      <p>{page.readinessMeaning}</p>
+      {!page.complete && <p>This is a partial inventory. A missing runner may exist beyond this page.</p>}
+      <Button disabled={locked} onClick={inventory.reload}>Refresh runner profiles</Button>
+      {candidates.length === 0 ? <p>No non-revoked, non-quarantined {platform} profile with a recorded digest appears in this inventory.
+        Enroll the actual desktop through the operator workflow; do not invent its profile.</p> : <>
+        <FormField label="Enrolled runner profile">
+          {({ id }) => <select id={id} value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+            <option value="">Choose a recorded profile</option>
+            {candidates.map((runner) => <option key={runner.runnerId} value={runner.runnerId}>{runner.name} — {runner.status}</option>)}
+          </select>}
+        </FormField>
+        {selected && <>
+          <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(selected.profile, null, 2)}</pre>
+          <p>Profile SHA-256: <code>{selected.profileDigest}</code></p>
+          <p>Status: {selected.status}. Preflight last passed: {selected.preflightPassedAt ?? 'Never'}.
+            {selected.hasActiveLease ? ' This runner currently holds an active desktop lease.' : ''}</p>
+          <p>This selects a profile, not a specific desktop assignment. Preparation does not establish current readiness;
+            execution admission must recheck the actual runner and its evidence.</p>
+          <Button disabled={locked} onClick={() => {
+            if (!locked && selected.profileDigest !== undefined) onChoose(selected.profileDigest)
+          }}>Use this runner profile digest</Button>
+        </>}
+      </>}
     </>
   }}</ResourceView>
 }

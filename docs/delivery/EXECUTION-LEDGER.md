@@ -861,3 +861,19 @@ Nine focused parser checks, Ruff formatting/lint and strict mypy of changed Pyth
 A real-HTTP regression for invalid TTLs and non-consuming invalid enrollment is committed for CI;
 it has not been run locally. No real enrollment token was issued or reader started. The parent
 profile-preview PR's observed formatter-only CI failure was fixed on its own branch.
+
+## Enrolled runner profile selection — 2026-09-16
+
+The runner inventory now returns the stored enrollment profile digest alongside its existing
+profile/status/preflight evidence. The seal draft can explicitly select that digest from a labelled
+same-platform picker. Revoked, quarantined and missing/malformed-digest records are not offered;
+partial inventories remain visibly partial. Offline/unqualified profiles remain preparation choices
+with status and never-passed preflight displayed, not claims of execution readiness. The selected
+digest identifies a profile, not an assigned desktop. Admission must still recheck live evidence.
+Reads/refreshes and selection do not create enrollment, consent, leases, seals or runs; seal retry
+locks remain intact. Profile JSON wraps long content without changing the source data.
+
+Frontend production build, nine focused preparation UI checks, Ruff and changed-file mypy passed.
+A stored-digest/readiness API regression is committed for CI and was not run locally. No live
+desktop or production setup was performed. PR229 passed required CI and merged; local main synced
+at 7194aa1. Remaining stack gates and deployment are separate from this implementation.

@@ -7679,6 +7679,18 @@ def runner(client: TestClient, csrf: str) -> dict[str, Any]:
     return dict(enrolled.json())
 
 
+def test_runner_inventory_preserves_registered_profile_digest(
+    client: TestClient, runner: dict[str, Any]
+) -> None:
+    inventory = client.get(f"/v1/workspaces/{WS}/runners")
+    assert inventory.status_code == 200
+    recorded = next(
+        entry for entry in inventory.json()["items"] if entry["runnerId"] == runner["runnerId"]
+    )
+    assert recorded["profileDigest"] == runner["profileDigest"]
+    assert recorded["preflightPassedAt"] is None
+
+
 def test_enrollment_refuses_coercion_before_consuming_token(client: TestClient, csrf: str) -> None:
     headers = {CSRF_HEADER: csrf}
     url = f"/v1/workspaces/{WS}/runners/enrollment-tokens"
