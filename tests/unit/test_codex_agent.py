@@ -168,6 +168,9 @@ sys.meta_path.insert(0, NoStrands())
 from accessforge_orchestrator.codex_agent import CodexStructuredAgent
 from accessforge_orchestrator.diagnosis.agent import DiagnosisWorker
 from accessforge_orchestrator.repair.worker import RepairWorker
+from accessforge_orchestrator.navigator.codex import CodexNavigator
+from accessforge_orchestrator.navigator.coordinator import NativeNavigatorSession
+from accessforge_orchestrator.navigator.operator import run_host_session
 assert not any(n == 'strands' or n.startswith('strands.') for n in sys.modules)
 """
     result = subprocess.run(  # noqa: S603 - fixed local interpreter and literal import probe

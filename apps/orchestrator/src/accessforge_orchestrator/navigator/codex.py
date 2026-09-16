@@ -18,8 +18,8 @@ from accessforge_navigation_tools import NavigationGateway, NavigatorProjection,
 from accessforge_orchestrator.codex_agent import CodexStructuredAgent
 from accessforge_orchestrator.diagnosis.agent import DiagnosisAgentProfile
 
-from .agent import NavigatorInvocationResult, NavigatorStopReason
 from .checkpoints import CheckpointKind, PlanningCheckpoint, PlanningCheckpointSink
+from .results import NavigatorInvocationResult, NavigatorStopReason
 from .submission import NavigationActionSubmission, UtcClock
 
 SYSTEM_PROMPT = """You are the AccessForge screen-reader navigation planner. Return exactly one

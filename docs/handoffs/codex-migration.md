@@ -160,3 +160,10 @@ type rather than importing Strands for annotations. A fresh-interpreter regressi
 blocks every Strands import and successfully loads all three components. Their 35 focused tests
 pass; strict mypy passes across all 68 orchestrator source files. This does not remove the
 remaining legacy navigator dependency, nor change the token limits into provider spending caps.
+
+Navigator result contracts are now provider-independent as well. Package exports and the
+coordinator load historical Strands adapters only on explicit legacy access; normal Codex
+navigator, coordinator and operator imports succeed with every Strands import blocked in a
+fresh interpreter. Historical adapter tests still pass. The five focused modules pass 77 cases,
+and strict mypy passes on 70 source/test files. Packaging still lists the SDK and needs a separate
+development-only dependency transition; this import separation is not full dependency removal.
