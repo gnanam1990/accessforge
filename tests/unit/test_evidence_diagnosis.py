@@ -231,7 +231,7 @@ def test_model_schema_has_no_status_outcome_patch_or_legal_compliance_authority(
         )
 
 
-def test_actual_strands_diagnoser_has_no_tools_or_directory_loading(
+def test_codex_diagnoser_construction_does_not_load_workspace_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     marker = tmp_path / "poison-imported"
@@ -243,10 +243,8 @@ def test_actual_strands_diagnoser_has_no_tools_or_directory_loading(
     )
     monkeypatch.chdir(tmp_path)
     agent = build_diagnosis_agent(DiagnosisAgentProfile())
-    assert agent.tool_names == []
-    assert agent.load_tools_from_directory is False
-    assert agent._session_manager is None
-    assert agent.memory_manager is None
+    assert agent.model_id == "gpt-6-astra"
+    assert DiagnosisAgentProfile().provider == "codex-chatgpt"
     assert marker.exists() is False
 
 

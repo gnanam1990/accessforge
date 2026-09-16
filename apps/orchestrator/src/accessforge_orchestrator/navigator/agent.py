@@ -9,9 +9,8 @@ from enum import StrEnum
 from threading import Event
 from typing import Any, Protocol
 
-from botocore.config import Config as BotocoreConfig
 from pydantic import BaseModel, ConfigDict
-from strands import Agent, ModelRetryStrategy
+from strands import Agent
 from strands.agent.agent_result import AgentResult
 from strands.types.agent import Limits
 
@@ -20,7 +19,7 @@ from accessforge_navigation_tools import NavigationGateway, NavigatorProjection
 from .checkpoints import CheckpointKind, PlanningCheckpoint, PlanningCheckpointSink
 from .config import NavigatorModelProfile
 from .runtime import ObservedBedrockModel
-from .tooling import UtcClock, make_navigation_tool
+from .tooling import UtcClock
 
 SYSTEM_PROMPT = """You are the AccessForge screen-reader navigator.
 You receive one sealed projection containing task intent, safe fixture-value names and actual-reader
@@ -75,62 +74,9 @@ def build_strands_agent(
     cancel_fence: Event,
     utc_now: UtcClock,
 ) -> Agent:
-    """Construct a credential-minimal agent with exactly one explicit tool."""
+    """Retired production entrypoint; old evidence is not permission for new AWS calls."""
 
-    profile.assert_installed_sdk()
-    model = ObservedBedrockModel(
-        model_id=profile.model_id,
-        region_name=profile.region_name,
-        temperature=profile.temperature,
-        max_tokens=profile.provider_max_tokens,
-        # Strands owns the sole retry budget. Botocore's default/configured retry layer
-        # would multiply it without a corresponding consent reservation. Explicit config
-        # also wins over AWS_MAX_ATTEMPTS and shared-profile retry settings.
-        boto_client_config=BotocoreConfig(
-            retries={"total_max_attempts": 1, "mode": "standard"},
-            connect_timeout=min(10, profile.call_timeout_seconds),
-            read_timeout=profile.call_timeout_seconds,
-            ignore_configured_endpoint_urls=True,
-        ),
-    )
-    runtime = model.client.meta
-    if (
-        runtime.region_name != profile.region_name
-        or runtime.endpoint_url != f"https://bedrock-runtime.{profile.region_name}.amazonaws.com"
-        or runtime.config.retries != {"total_max_attempts": 1, "mode": "standard"}
-        or runtime.config.connect_timeout != min(10, profile.call_timeout_seconds)
-        or runtime.config.read_timeout != profile.call_timeout_seconds
-    ):
-        # Do not log client configuration or credentials on a mismatched runtime.
-        model.client.close()
-        raise RuntimeError("navigator provider transport differs from its bounded configuration")
-    retry = ModelRetryStrategy(
-        max_attempts=profile.model_attempts,
-        initial_delay=profile.retry_initial_delay_seconds,
-        max_delay=profile.retry_max_delay_seconds,
-    )
-    navigation_tool = make_navigation_tool(
-        gateway=gateway,
-        checkpoints=checkpoints,
-        cancel_fence=cancel_fence,
-        utc_now=utc_now,
-    )
-    return Agent(
-        name="accessforge-navigator",
-        description="Bounded actual-reader navigation planner",
-        model=model,
-        tools=[navigation_tool],
-        system_prompt=SYSTEM_PROMPT,
-        callback_handler=None,
-        conversation_manager=None,
-        load_tools_from_directory=False,
-        context_manager=False,
-        session_manager=None,
-        memory_manager=None,
-        retry_strategy=retry,
-        checkpointing=False,
-        background_tasks=False,
-    )
+    raise RuntimeError("Bedrock navigator retired; Codex navigator migration is required")
 
 
 class StrandsNavigator:

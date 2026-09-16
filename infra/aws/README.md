@@ -1,4 +1,8 @@
-# Proposed AWS configuration — **PREPARED, NOT APPLIED**
+# Historical AWS configuration — **RETIRED, NOT APPLIED**
+
+The owner retired the AWS product/deployment direction on 2026-09-16 in favor of Codex.
+The proposal below is preserved historical material, not current authorization or instructions
+to provision AWS. See `docs/handoffs/codex-migration.md` for the active transition.
 
 Status, stated before anything else because it is the only thing in this directory that a reader
 could get wrong:
