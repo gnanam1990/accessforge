@@ -947,3 +947,14 @@ Desktop build and seven focused synthetic checks passed. No real host/reader/mod
 This supersedes the older missing-candidate-factory statement, not the outstanding real private
 provisioning, independent stale-input measurement or physical acceptance requirements. Production
 factory `reference-native-provisioner.ts` already existed and was not reimplemented.
+
+## Membership lifecycle persistence — 2026-09-16
+
+Source inspection found only GET /members; the owner membership permission had no mutation path.
+The new persistence service implements revisioned exact-account grant/re-role/revoke/restore,
+workspace-serialized fresh owner checks, last-enabled-owner protection and atomic success audit.
+Migration 0073 adds membership revisions but has not been applied live. Changed Python static
+checks pass; two real-PostgreSQL lifecycle/concurrency cases are committed for CI, not locally run.
+HTTP/session/CSRF/denial handling, identity-confirmed invitations and owner UI are still required.
+See [membership handoff](../handoffs/membership-lifecycle.md). This is build work, not a live access
+grant or permission to migrate the hosted database. Do not deploy schema-0073 code before approval.
