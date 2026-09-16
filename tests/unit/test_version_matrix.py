@@ -118,3 +118,13 @@ def test_no_capability_claims_a_container_can_provide_a_screen_reader() -> None:
     """The specific false claim this product exists to refuse, checked in its own inventory."""
     for name in ("voiceover", "nvda"):
         assert MATRIX["capability"][name]["status"] == "BLOCKED"
+
+
+def test_ci_platform_report_tracks_current_capability_keys() -> None:
+    match = re.search(r"for capability in ([a-z_ ]+); do", CI)
+    assert match is not None
+    capabilities = set(match.group(1).split())
+    assert capabilities == set(MATRIX["capability"])
+    for name in capabilities:
+        assert f"[capability.{name}]" in CI
+        assert MATRIX["capability"][name]["status"] == "BLOCKED"
