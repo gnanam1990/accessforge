@@ -71,6 +71,29 @@ A real OAuth call through `RepairWorker.propose` with the synthetic complete-sou
 Codex/diagnosis/repair tests and strict checks of both modified test modules pass. New-head CI and
 the independent navigator migration remain required.
 
+## Navigator proposal/gateway slice
+
+`navigator/codex.py` now accepts one original sealed projection, requires a caller-supplied
+invocation authorization callback, waits for the completed Codex structured result, checks the
+original run identity, then submits one proposal through the existing action gateway and durable
+planning checkpoints. The instance cannot be reused, including after failure. Wrong-run output,
+revoked invocation authority, timeout, cancelled output and provider failure never reach dispatch.
+The existing Strands-derived tool wrapper is reused only for its guarded `submit` path, not as a
+model agent; removing that residual SDK coupling remains part of the full migration.
+
+Six new synthetic boundary cases plus twenty existing navigator checks pass; Ruff and strict
+mypy pass. One real Codex call with a synthetic reader projection and synthetic desktop gateway
+completed with exactly one dispatch. No actual reader ran, and no model-runtime receipt was
+created. The original attempted assertion that fixture values were absent from the model prompt
+was corrected to test exact projection equality: this policy deliberately includes approved safe
+fixture values, and this change neither filters nor expands that established projection.
+
+This slice is intentionally not selected by the production durable coordinator yet. Next:
+define the Codex-native consent/profile and observed CLI-runtime receipt (without inventing HTTP
+request IDs, provider model attestation or hard token caps), compose it into reservation, retention
+and finalization, then select this navigator in `NativeNavigatorSession`. Do not unblock actual
+reader acceptance from a synthetic gateway or a CLI connectivity result.
+
 Official references: [Codex authentication](https://developers.openai.com/codex/auth),
 [SDK integration](https://developers.openai.com/codex/sdk), and
 [app-server protocol](https://learn.chatgpt.com/docs/app-server).
