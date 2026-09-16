@@ -7,7 +7,7 @@
  */
 
 import { MemoryRouter } from 'react-router-dom'
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
@@ -46,6 +46,9 @@ describe('first workspace allowance', () => {
       if (url.endsWith('/settings/entitlement') && init?.method === 'PUT') {
         writes.push(new Headers(init.headers))
         missing = false
+        await server.fetch(input, init)
+        return new Response(JSON.stringify({ revision: 1 }),
+          { status: 201, headers: { 'content-type': 'application/json' } })
       }
       return server.fetch(input, init)
     }
@@ -64,7 +67,7 @@ describe('first workspace allowance', () => {
     expect(writes[0]?.get('if-match')?.replaceAll('"', '')).toBe('0')
     expect(server.bodies.find((entry) => entry.url.endsWith('/settings/entitlement'))?.body)
       .toMatchObject({ maxRunsPerDay: 0, maxModelTokensPerDay: 0, maxConcurrentRuns: 0 })
-    expect(screen.queryByRole('heading', { name: 'Set your first allowance' })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Set your first allowance' })).not.toBeInTheDocument())
   })
 
   it.each(['VIEWER', 'MAINTAINER'])('explains setup without giving %s a write form', async (role) => {
@@ -130,6 +133,98 @@ describe('usage', () => {
 })
 
 describe('who may change what', () => {
+  it.each([false, true])('retains a locked draft across failed recovery (initial setup: %s)', async initialSetup => {
+    const user = userEvent.setup()
+    const server = createFakeServer(asRole('OWNER'))
+    let reads = 0, writes = 0
+    let finishRead: ((response: Response) => void) | undefined
+    const unavailable = (setup = false) => new Response(JSON.stringify({ code: 'DEPENDENCY_UNAVAILABLE',
+      title: 'Read unavailable', detail: 'Cannot read now.', ...(setup ? { setupRequired: 'WORKSPACE_ENTITLEMENT' } : {}) }),
+      { status: 503, headers: { 'content-type': 'application/problem+json' } })
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/settings/entitlement') && init?.method === 'PUT') {
+        writes += 1
+        throw new TypeError('Write outcome unknown')
+      }
+      if (url.endsWith('/usage')) {
+        reads += 1
+        if (reads === 1 && initialSetup) return unavailable(true)
+        if (reads === 2) return new Promise<Response>(resolve => { finishRead = resolve })
+        if (reads >= 3) {
+          const response = await server.fetch(input, init)
+          const value = await response.json()
+          value.entitlementRevision = 4
+          value.maxConcurrentRuns = 7
+          return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
+        }
+      }
+      return server.fetch(input, init)
+    }
+    renderSettings({ fetch: fetchImpl })
+    await user.type(await screen.findByLabelText(/Why this limit/), 'Keep this unsaved decision')
+    await user.clear(screen.getByLabelText(/Concurrent runs/))
+    await user.type(screen.getByLabelText(/Concurrent runs/), '5')
+    await user.click(screen.getByRole('button', { name: 'Save allowance' }))
+    await screen.findByRole('heading', { name: 'Allowance save needs attention' })
+    await user.click(screen.getByRole('button', { name: 'Read current allowance and discard draft' }))
+    await waitFor(() => expect(reads).toBe(2))
+    expect(screen.getByLabelText(/Why this limit/)).toHaveValue('Keep this unsaved decision')
+    expect(screen.getByLabelText(/Concurrent runs/)).toHaveValue(5)
+    expect(screen.getByRole('button', { name: 'Save allowance' })).toBeDisabled()
+    await act(async () => finishRead!(unavailable()))
+    await screen.findByText(/Current allowance could not be read. Your draft is kept and locked/)
+    expect(screen.getByLabelText(/Why this limit/)).toHaveValue('Keep this unsaved decision')
+    expect(screen.getByLabelText(/Concurrent runs/)).toHaveValue(5)
+    expect(screen.getByRole('button', { name: 'Save allowance' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Read current allowance and discard draft' }))
+    await waitFor(() => expect(screen.getByLabelText(/Why this limit/)).toHaveValue(''))
+    expect(screen.getByLabelText(/Concurrent runs/)).toHaveValue(7)
+    expect(screen.getByRole('button', { name: 'Save allowance' })).toBeEnabled()
+    expect(writes).toBe(1)
+  })
+
+  it.each(['lost-response', 'stale-revision', 'malformed-receipt', 'accepted-only'])(
+    'locks an unconfirmed %s save until an explicit read, without replaying it', async (mode) => {
+      const user = userEvent.setup()
+      const server = createFakeServer(asRole('OWNER'))
+      let writes = 0
+      let reads = 0
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const url = String(input)
+        if (url.endsWith('/usage')) reads += 1
+        if (url.endsWith('/settings/entitlement') && init?.method === 'PUT') {
+          writes += 1
+          if (mode === 'lost-response') {
+            await server.fetch(input, init)
+            throw new TypeError('Response lost after commit')
+          }
+          if (mode === 'stale-revision') return new Response(JSON.stringify({
+            code: 'STALE_REVISION', title: 'Conflict', detail: 'Revision changed.',
+          }), { status: 412, headers: { 'content-type': 'application/problem+json' } })
+          return new Response(JSON.stringify(mode === 'malformed-receipt' ? null : { revision: 4 }),
+            { status: mode === 'accepted-only' ? 202 : 200,
+              headers: { 'content-type': 'application/json' } })
+        }
+        return server.fetch(input, init)
+      }
+      renderSettings({ fetch: fetchImpl })
+      await user.type(await screen.findByLabelText(/Why this limit/), 'Raise pilot allowance')
+      await user.click(screen.getByRole('button', { name: 'Save allowance' }))
+      await screen.findByRole('heading', { name: 'Allowance save needs attention' })
+      expect(screen.queryByText('The allowance was not changed')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save allowance' })).toBeDisabled()
+      await user.click(screen.getByRole('button', { name: 'Save allowance' }))
+      expect(writes).toBe(1)
+      const previousReads = reads
+      await user.click(screen.getByRole('button', { name: 'Read current allowance and discard draft' }))
+      await waitFor(() => expect(screen.getByLabelText(/Why this limit/)).toHaveValue(''))
+      expect(screen.getByRole('button', { name: 'Save allowance' })).toBeEnabled()
+      expect(reads).toBeGreaterThan(previousReads)
+      expect(writes).toBe(1)
+    },
+  )
+
   it('gives a viewer every value and no form', async () => {
     const server = createFakeServer(asRole('VIEWER'))
     renderSettings(server)
