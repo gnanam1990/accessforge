@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from accessforge_api.app import create_app
@@ -29,7 +31,7 @@ def client(test_database_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         conn.execute("TRUNCATE github_login_challenge")
         conn.execute("INSERT INTO app_user(id,email) VALUES(%s,'login@example.test')", (user,))
     bind_account(test_database_url, github_subject="123", user_id=user, operator="route-test")
-    settings = ApiSettings(
+    settings_values: dict[str, Any] = dict(
         _env_file=None,
         database_url=test_database_url,
         environment="local",
@@ -39,10 +41,10 @@ def client(test_database_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         evidence_secret_key="test-key-value",
         identity_provider="github",
         github_oauth_client_id="test-client",
-        github_oauth_client_secret="a" * 32,  # type: ignore[arg-type]
+        github_oauth_client_secret="a" * 32,
         github_oauth_redirect_uri=BASE + "/v1/auth/github/callback",
     )
-    app = create_app(settings)
+    app = create_app(ApiSettings(**settings_values))
     app.state.identity_calls = 0
 
     async def synthetic_identity(*args: object, **kwargs: object) -> GitHubSubject:
@@ -55,6 +57,11 @@ def client(test_database_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     monkeypatch.setattr("accessforge_api.routes.github_login.exchange_identity", synthetic_identity)
     with TestClient(app, base_url=BASE, follow_redirects=False) as result:
         yield result
+
+
+def _app(client: TestClient) -> FastAPI:
+    assert isinstance(client.app, FastAPI)
+    return client.app
 
 
 def _start(client: TestClient) -> tuple[str, str]:
@@ -78,7 +85,7 @@ def test_callback_commits_state_then_identity_then_audited_session(client: TestC
     assert result.headers["referrer-policy"] == "no-referrer"
     assert LOGIN_COOKIE not in client.cookies
     assert client.get("/v1/session").status_code == 200
-    assert client.app.state.identity_calls == 1  # type: ignore[union-attr]
+    assert _app(client).state.identity_calls == 1
     # Restore the exact original browser cookie, not the already-cleared jar.
     replay = client.get(
         "/v1/auth/github/callback",
@@ -86,7 +93,7 @@ def test_callback_commits_state_then_identity_then_audited_session(client: TestC
         headers={"cookie": f"{LOGIN_COOKIE}={cookie}"},
     )
     assert replay.status_code == 401
-    assert client.app.state.identity_calls == 1  # type: ignore[union-attr]
+    assert _app(client).state.identity_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -116,7 +123,7 @@ def test_callback_refuses_before_provider_on_browser_binding_failure(
     assert result.status_code == 401
     assert result.headers["cache-control"] == "no-store"
     assert "Max-Age=0" in result.headers["set-cookie"]
-    assert client.app.state.identity_calls == 0  # type: ignore[union-attr]
+    assert _app(client).state.identity_calls == 0
 
 
 def test_provider_failure_burns_state_and_redacts_details(
@@ -136,7 +143,7 @@ def test_provider_failure_burns_state_and_redacts_details(
     # ASGI's route-template telemetry must not expose query credentials.
     records = [r.message for r in caplog.records if r.name == "accessforge.telemetry"]
     assert "PRIVATE_CODE" not in "".join(records)
-    with unscoped_connection(client.app.state.config.database_url) as conn:  # type: ignore[union-attr]
+    with unscoped_connection(_app(client).state.config.database_url) as conn:
         assert conn.execute("SELECT * FROM user_session").fetchall() == []
         assert conn.execute("SELECT consumed_at FROM github_login_challenge").fetchone()[
             "consumed_at"
@@ -173,11 +180,11 @@ def test_provider_denial_consumes_without_exchange(client: TestClient) -> None:
         },
     )
     assert result.status_code == 401 and "PRIVATE_PROVIDER_DESCRIPTION" not in result.text
-    assert client.app.state.identity_calls == 0  # type: ignore[union-attr]
+    assert _app(client).state.identity_calls == 0
 
 
 def test_disabled_provider_refuses_both_routes(client: TestClient) -> None:
-    client.app.state.config.identity_provider = "none"  # type: ignore[union-attr]
+    _app(client).state.config.identity_provider = "none"
     for path in ("start", "callback"):
         response = client.get("/v1/auth/github/" + path)
         assert response.status_code == 503
@@ -185,7 +192,7 @@ def test_disabled_provider_refuses_both_routes(client: TestClient) -> None:
 
 
 def test_global_admission_limit_and_expired_cleanup(client: TestClient) -> None:
-    with unscoped_connection(client.app.state.config.database_url) as conn:  # type: ignore[union-attr]
+    with unscoped_connection(_app(client).state.config.database_url) as conn:
         conn.execute(
             "INSERT INTO github_login_challenge(state_hash,browser_hash,verifier_hash,"
             "configuration_hash,"
@@ -195,20 +202,20 @@ def test_global_admission_limit_and_expired_cleanup(client: TestClient) -> None:
     limited = client.get("/v1/auth/github/start")
     assert limited.status_code == 429 and limited.headers["retry-after"] == "60"
     assert LOGIN_COOKIE not in client.cookies
-    with unscoped_connection(client.app.state.config.database_url) as conn:  # type: ignore[union-attr]
+    with unscoped_connection(_app(client).state.config.database_url) as conn:
         conn.execute(
             "UPDATE github_login_challenge SET created_at=now()-interval '6 minutes', "
             "expires_at=now()-interval '1 minute'"
         )
     _start(client)
-    with unscoped_connection(client.app.state.config.database_url) as conn:  # type: ignore[union-attr]
+    with unscoped_connection(_app(client).state.config.database_url) as conn:
         assert conn.execute("SELECT count(*) AS n FROM github_login_challenge").fetchone() == {
             "n": 1
         }
 
 
 def test_another_replica_holding_admission_lock_refuses_without_waiting(client: TestClient) -> None:
-    with unscoped_connection(client.app.state.config.database_url) as conn:  # type: ignore[union-attr]
+    with unscoped_connection(_app(client).state.config.database_url) as conn:
         conn.execute("SELECT pg_advisory_xact_lock(713021,1)")
         result = client.get("/v1/auth/github/start")
         assert result.status_code == 429
