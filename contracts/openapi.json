@@ -587,6 +587,43 @@
       "post": {
         "description": "Top-level browser navigation, not a fetch/JSON API. Redirects to GitHub.com.",
         "operationId": "github_registration_start",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "contactEmail": {
+                    "maxLength": 254,
+                    "type": "string"
+                  },
+                  "createAccount": {
+                    "enum": [
+                      "yes"
+                    ],
+                    "type": "string"
+                  },
+                  "invitationId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "invitationWorkspace": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "invitationWorkspace",
+                  "invitationId",
+                  "contactEmail",
+                  "createAccount"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "303": {
             "description": "Successful Response"

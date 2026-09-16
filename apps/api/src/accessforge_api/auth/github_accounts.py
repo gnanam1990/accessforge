@@ -133,6 +133,9 @@ def _provision_invited(
     ).fetchone()
     if issuer is None:
         raise GitHubIdentityError("GitHub account binding refused")
+    # Global identity/session audit policies require an unscoped transaction.
+    # Clearing scope retains the workspace and invitation locks until commit.
+    conn.execute("SELECT set_config('accessforge.workspace_id', '', true)")
     # Match the existing operator provisioning lock/key and case-insensitive collision rule.
     conn.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(lower(%s), 0))", (context.contact_email,)
@@ -158,14 +161,20 @@ def _provision_invited(
         outcome="ALLOWED",
         actor_service="github-invitation",
     )
-    if (
-        conn.execute(
-            "SELECT id FROM membership_invitation WHERE workspace_id=%s AND id=%s "
-            "AND expires_at>clock_timestamp()",
-            (context.workspace_id, context.invitation_id),
-        ).fetchone()
-        is None
-    ):
+    _check_invitation_expiry(conn, context)
+
+
+def _check_invitation_expiry(
+    conn: psycopg.Connection[dict[str, Any]], context: InvitationContinuation
+) -> None:
+    conn.execute("SELECT set_config('accessforge.workspace_id', %s, true)", (context.workspace_id,))
+    row = conn.execute(
+        "SELECT id FROM membership_invitation WHERE workspace_id=%s AND id=%s "
+        "AND expires_at>clock_timestamp()",
+        (context.workspace_id, context.invitation_id),
+    ).fetchone()
+    conn.execute("SELECT set_config('accessforge.workspace_id', '', true)")
+    if row is None:
         raise GitHubIdentityError("GitHub account binding refused")
 
 
@@ -219,17 +228,8 @@ def issue_github_session(
                 actor_user=str(row["user_id"]),
                 actor_service="github-identity",
             )
-            if (
-                provisioned
-                and continuation is not None
-                and conn.execute(
-                    "SELECT id FROM membership_invitation WHERE workspace_id=%s AND id=%s "
-                    "AND expires_at>clock_timestamp()",
-                    (continuation.workspace_id, continuation.invitation_id),
-                ).fetchone()
-                is None
-            ):
-                raise GitHubIdentityError("GitHub account binding refused")
+            if provisioned and continuation is not None:
+                _check_invitation_expiry(conn, continuation)
         return session
     except (SessionError, psycopg.IntegrityError):
         raise GitHubIdentityError("GitHub account binding refused") from None

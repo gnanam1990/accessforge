@@ -112,6 +112,11 @@ describe('sign-in', () => {
     expect(screen.getByRole('link', { name: 'Continue with GitHub' })).toHaveAttribute('href', `/v1/auth/github/start?${query}`)
     expect(new FormData(form).get('contactEmail')).toBe('new@example.test')
     expect(new FormData(form).has('createAccount')).toBe(false)
+    const consent = screen.getByRole('checkbox', { name: /I agree to create/ })
+    expect(consent).toHaveAttribute('name', 'createAccount')
+    expect(consent).toHaveAttribute('value', 'yes')
+    await user.click(consent)
+    expect(new FormData(form).get('createAccount')).toBe('yes')
   })
 
   it('offers a keyboard-accessible fixed browser link for GitHub, never an email form', async () => {

@@ -12,8 +12,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from accessforge_api.app import create_app
+from accessforge_api.auth import github_accounts
 from accessforge_api.auth.github_accounts import bind_account
 from accessforge_api.auth.github_identity import GitHubIdentityError, GitHubSubject
+from accessforge_api.auth.membership import record_global_audit_event
 from accessforge_api.config import ApiSettings
 from accessforge_api.routes.github_login import LOGIN_COOKIE
 from accessforge_persistence import migrate, unscoped_connection, workspace_connection
@@ -113,6 +115,15 @@ def test_explicit_invited_signup_does_not_grant_membership(
         return GitHubSubject("457" if mode == "wrong-subject" else "456")
 
     monkeypatch.setattr("accessforge_api.routes.github_login.exchange_identity", identity)
+    audit_actions: list[str] = []
+
+    def unscoped_audit(conn: Any, **kwargs: Any) -> None:
+        # Exercise the scope invariant even when the CI database owner bypasses RLS.
+        assert conn.execute("SELECT current_workspace_id() AS scope").fetchone()["scope"] is None
+        audit_actions.append(kwargs["action"])
+        record_global_audit_event(conn, **kwargs)
+
+    monkeypatch.setattr(github_accounts, "record_global_audit_event", unscoped_audit)
     email = "LOGIN@example.test" if mode == "email-collision" else "new-reviewer@example.test"
     data = {
         "invitationWorkspace": workspace,
@@ -146,6 +157,7 @@ def test_explicit_invited_signup_does_not_grant_membership(
                 "SELECT email FROM app_user WHERE id=%s", (binding["user_id"],)
             ).fetchone() == {"email": email}
     if mode == "valid":
+        assert audit_actions == ["github_invitation.account_created", "session.issued"]
         assert client.get("/v1/session").json()["workspaces"] == []
         assert (
             client.get(f"/v1/invitation-offers/{workspace}/{invitation}").json()["state"]

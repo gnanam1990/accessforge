@@ -176,7 +176,32 @@ async def _registration_context(request: Request) -> InvitationContinuation:
     operation_id="github_registration_start",
     status_code=303,
     response_class=RedirectResponse,
-    openapi_extra={"x-accessforge-browser-navigation": True},
+    openapi_extra={
+        "x-accessforge-browser-navigation": True,
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/x-www-form-urlencoded": {
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "invitationWorkspace",
+                            "invitationId",
+                            "contactEmail",
+                            "createAccount",
+                        ],
+                        "properties": {
+                            "invitationWorkspace": {"type": "string", "format": "uuid"},
+                            "invitationId": {"type": "string", "format": "uuid"},
+                            "contactEmail": {"type": "string", "maxLength": 254},
+                            "createAccount": {"type": "string", "enum": ["yes"]},
+                        },
+                    }
+                }
+            },
+        },
+    },
 )
 async def github_login_start(request: Request) -> Response:
     """Top-level browser navigation, not a fetch/JSON API. Redirects to GitHub.com."""
