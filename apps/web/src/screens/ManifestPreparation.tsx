@@ -9,6 +9,7 @@ import { FormField } from '../components/FormField'
 import { Notice } from '../components/Notice'
 import { ResourceView } from '../components/ResourceView'
 import { membershipFor, useSession } from '../session/SessionProvider'
+import { OBSERVATION_MAX_LENGTH, parseBuildObservation, parseDirtyPaths } from './buildObservation'
 
 /** Keep identity and payload together until a write has a definitive outcome. */
 function useRecordedWrite<T>(request: (body: Record<string, unknown>, key: string) => Promise<ApiOutcome<T>>) {
@@ -88,7 +89,10 @@ const BuildRegistration = ({ workspaceId, projectId, onRegistered }: {
   readonly workspaceId: string; readonly projectId: string; readonly onRegistered: (id: string) => void
 }): JSX.Element => {
   const { client } = useSession()
-  const [values, setValues] = useState({ commitSha: '', treeDigest: '', requestedRevision: '', artifactDigest: '', dirtyPaths: '' })
+  const [values, setValues] = useState({ commitSha: '', treeDigest: '', requestedRevision: '', artifactDigest: '', dirtyPaths: '[]' })
+  const [observation, setObservation] = useState('')
+  const [importError, setImportError] = useState<string | null>(null)
+  const [imported, setImported] = useState(false)
   const [observable, setObservable] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const operation = useRecordedWrite((body, key) => registerBuild(client, workspaceId, projectId, body, key))
@@ -101,8 +105,12 @@ const BuildRegistration = ({ workspaceId, projectId, onRegistered }: {
       setError('Provide a full 40-character commit SHA, 64-character source and artifact digests, and the requested revision.')
       return
     }
+    let dirtyPaths: string[]
+    try { dirtyPaths = parseDirtyPaths(values.dirtyPaths) } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Invalid changed source paths.')
+      return
+    }
     setError(null)
-    const dirtyPaths = values.dirtyPaths.split('\n').map((path) => path.trim()).filter(Boolean)
     void operation.submit({ ...values, requestedRevision: values.requestedRevision.trim(), dirtyPaths,
       dirty: dirtyPaths.length > 0, identityObservable: observable }).then((result) => {
       if (result !== null) onRegistered(result.buildId)
@@ -113,11 +121,34 @@ const BuildRegistration = ({ workspaceId, projectId, onRegistered }: {
     {(error ?? operation.message) !== null && <p id={errorId} role="alert">{error ?? operation.message}</p>}
     <fieldset disabled={operation.locked} aria-describedby={(error ?? operation.message) !== null ? errorId : undefined}>
       <legend>Observed build inputs</legend>
+      <details><summary>Import offline observation JSON</summary>
+        <p>Paste the output of <code>accessforge_persistence.build_observation</code>.
+          Loading replaces the draft below, resets target identity confirmation, and sends nothing to the server.</p>
+        <FormField label="Offline observation JSON" {...(importError === null ? {} : { error: importError })}>
+          {({ id: fieldId, describedBy }) => <textarea id={fieldId} aria-describedby={describedBy}
+            aria-invalid={importError !== null} rows={8} value={observation}
+            onChange={(event) => { setObservation(event.target.value); setImported(false); setImportError(null) }} />}
+        </FormField>
+        <p>Maximum {OBSERVATION_MAX_LENGTH.toLocaleString('en-US')} characters. Do not include credentials.</p>
+        <Button onClick={() => {
+          if (operation.locked) return
+          try {
+            const parsed = parseBuildObservation(observation)
+            setValues({ ...parsed, dirtyPaths: JSON.stringify(parsed.dirtyPaths, null, 2) })
+            setObservable(false); setError(null); setImportError(null); setImported(true)
+          } catch (cause) {
+            setImported(false)
+            setImportError(cause instanceof Error ? cause.message : 'Invalid observation.')
+          }
+        }}>Load observation into draft</Button>
+        {importError !== null && <p role="alert">{importError}</p>}
+        {imported && <p role="status">Observation loaded into the draft. Review the inputs below, then select Record observed build to register. Nothing has been sent.</p>}
+      </details>
       {([['commitSha', 'Source commit SHA'], ['treeDigest', 'Source tree SHA-256'],
         ['requestedRevision', 'Requested source revision'], ['artifactDigest', 'Build artifact SHA-256']] as const)
         .map(([key, label]) => <Field key={key} label={label} value={values[key]}
           onChange={(value) => setValues((old) => ({ ...old, [key]: value }))} />)}
-      <FormField label="Changed source paths" hint="One per line. Leave empty only when the observed source tree is clean.">
+      <FormField label="Changed source paths" hint={'JSON array, for example ["src/form.tsx"]. Use [] only for a clean tree. Escaped newlines and spaces in filenames are preserved.'}>
         {({ id: fieldId, describedBy }) => <textarea id={fieldId} aria-describedby={describedBy}
           value={values.dirtyPaths} onChange={(event) => setValues((old) => ({ ...old, dirtyPaths: event.target.value }))} />}
       </FormField>

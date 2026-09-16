@@ -15,6 +15,15 @@ Review the observations before using them in the journey's build registration fo
 `POST /v1/workspaces/{workspace_id}/projects/{project_id}/builds` operator workflow.
 Do not copy dummy digests or arbitrary archives to make preparation succeed.
 
+In the journey page, open **Register source and build identity**, then **Import offline observation
+JSON**. Paste the command output and choose **Load observation into draft**. This validates the
+seven-field payload (up to 131,072 characters), replaces draft inputs and resets the target-identity
+checkbox without making a server write. Review the populated fields before selecting **Record
+observed build**. Invalid imports leave the existing draft intact. Changed paths use a JSON array
+so spaces, quotes and escaped newlines in actual filenames survive registration unchanged.
+Import is disabled while a registration outcome is unknown or after successful registration;
+retrying an unknown write preserves its original payload and operation key.
+
 Use a stable dedicated checkout of the actual source used for the artifact. A revision pointing
 elsewhere is refused rather than paired with the current checkout. Ignored bytes participate in
 the tree digest and therefore prevent a clean-commit claim. The artifact must be a regular file

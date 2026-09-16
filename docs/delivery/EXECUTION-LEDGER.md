@@ -818,3 +818,16 @@ No actual source/build identity from the user's production target was registered
 Sixteen focused source/observation checks passed against temporary real Git/filesystem fixtures;
 Ruff and strict mypy passed. No database fixture was selected, no full local suite ran, and no
 reader/provider call, deployment or production mutation occurred. Exact-head CI/merge remains due.
+
+## Offline observation draft import — 2026-09-16
+
+The journey build form now accepts the offline collector's seven-field JSON payload. Import validates
+field types, full digests, exact dirty/path agreement and false deployment observability before
+replacing the local draft. It makes no network write and resets the explicit target-identity
+confirmation. Invalid imports leave draft values intact; unknown registration outcomes lock import
+alongside the other fields and retain the original payload/key for retry. Changed paths are edited
+as a JSON array rather than trimmed lines, preserving spaces and newlines in filenames.
+
+Frontend production build and 20 focused parser/preparation tests passed. This is synthetic HTTP
+UI evidence, not a production registration or actual reader/model run. Required CI, merge and
+deployment remain separate. The full baseline/repair/rerun acceptance remains open.
