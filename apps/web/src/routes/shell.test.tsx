@@ -95,6 +95,30 @@ describe('the authenticated gate', () => {
 })
 
 describe('sign-in', () => {
+  it('offers explicit POST signup only with a valid invitation, without putting email in the URL', async () => {
+    const server = createFakeServer(null)
+    server.setIdentityOptions({ provider: 'github' })
+    const query = 'invitationWorkspace=11111111-1111-4111-8111-111111111111&invitationId=22222222-2222-4222-8222-222222222222'
+    renderApp(server, [`/workspaces?${query}`])
+    const email = await screen.findByLabelText(/Contact email for your new account/)
+    const user = userEvent.setup()
+    await user.type(email, 'new@example.test')
+    expect(email).toBeRequired()
+    const form = email.closest('form')!
+    expect(form).toHaveAttribute('method', 'post')
+    expect(form).toHaveAttribute('action', '/v1/auth/github/start')
+    expect(screen.getByRole('checkbox', { name: /I agree to create/ })).toBeRequired()
+    expect(screen.getByRole('checkbox', { name: /I agree to create/ })).not.toBeChecked()
+    expect(screen.getByRole('link', { name: 'Continue with GitHub' })).toHaveAttribute('href', `/v1/auth/github/start?${query}`)
+    expect(new FormData(form).get('contactEmail')).toBe('new@example.test')
+    expect(new FormData(form).has('createAccount')).toBe(false)
+    const consent = screen.getByRole('checkbox', { name: /I agree to create/ })
+    expect(consent).toHaveAttribute('name', 'createAccount')
+    expect(consent).toHaveAttribute('value', 'yes')
+    await user.click(consent)
+    expect(new FormData(form).get('createAccount')).toBe('yes')
+  })
+
   it('offers a keyboard-accessible fixed browser link for GitHub, never an email form', async () => {
     const user = userEvent.setup()
     const server = createFakeServer(null)
@@ -102,7 +126,7 @@ describe('sign-in', () => {
     renderApp(server)
     const link = await screen.findByRole('link', { name: 'Continue with GitHub' })
     expect(link).toHaveAttribute('href', '/v1/auth/github/start')
-    expect(link).toHaveAccessibleDescription(/must already be linked by an operator/)
+    expect(link).toHaveAccessibleDescription(/account is already linked/)
     expect(screen.queryByLabelText(/Email address/)).not.toBeInTheDocument()
     await user.tab()
     expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveFocus()

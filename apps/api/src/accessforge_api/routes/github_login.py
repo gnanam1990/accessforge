@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import psycopg
 from fastapi import APIRouter, Request
@@ -104,11 +105,21 @@ def _browser_secrets(request: Request) -> tuple[str, str, InvitationContinuation
     if len(values) != 1:
         raise GitHubIdentityError("GitHub login refused")
     parts = values[0].split(".")
-    if len(parts) not in (2, 4) or not all(
+    if len(parts) not in (2, 4, 5) or not all(
         re.fullmatch(r"[A-Za-z0-9_-]{43}", part) for part in parts[:2]
     ):
         raise GitHubIdentityError("GitHub login refused")
-    continuation = InvitationContinuation(parts[2], parts[3]) if len(parts) == 4 else None
+    email = None
+    if len(parts) == 5:
+        try:
+            email = base64.b64decode(
+                parts[4] + "=" * (-len(parts[4]) % 4), altchars=b"-_", validate=True
+            ).decode("utf-8")
+        except ValueError:
+            raise GitHubIdentityError("GitHub login refused") from None
+    continuation = InvitationContinuation(parts[2], parts[3], email) if len(parts) >= 4 else None
+    if continuation and continuation.cookie_suffix != "." + ".".join(parts[2:]):
+        raise GitHubIdentityError("GitHub login refused")
     return parts[0], parts[1], continuation
 
 
@@ -122,11 +133,75 @@ def _continuation(request: Request) -> InvitationContinuation | None:
     return InvitationContinuation(query["invitationWorkspace"], query["invitationId"])
 
 
+async def _registration_context(request: Request) -> InvitationContinuation:
+    if request.query_params or request.headers.get("content-type", "").split(";", 1)[0] != (
+        "application/x-www-form-urlencoded"
+    ):
+        raise GitHubIdentityError("GitHub registration refused")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 4096:
+            raise GitHubIdentityError("GitHub registration refused")
+        body.extend(chunk)
+    try:
+        pairs = parse_qsl(
+            body.decode("utf-8"),
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=4,
+            errors="strict",
+        )
+    except ValueError:
+        raise GitHubIdentityError("GitHub registration refused") from None
+    values = dict(pairs)
+    if (
+        len(pairs) != 4
+        or set(values) != {"invitationWorkspace", "invitationId", "contactEmail", "createAccount"}
+        or values["createAccount"] != "yes"
+    ):
+        raise GitHubIdentityError("GitHub registration refused")
+    return InvitationContinuation(
+        values["invitationWorkspace"], values["invitationId"], values["contactEmail"]
+    )
+
+
 @router.get(
     "/start",
     status_code=303,
     response_class=RedirectResponse,
     openapi_extra={"x-accessforge-browser-navigation": True},
+)
+@router.post(
+    "/start",
+    operation_id="github_registration_start",
+    status_code=303,
+    response_class=RedirectResponse,
+    openapi_extra={
+        "x-accessforge-browser-navigation": True,
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/x-www-form-urlencoded": {
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "invitationWorkspace",
+                            "invitationId",
+                            "contactEmail",
+                            "createAccount",
+                        ],
+                        "properties": {
+                            "invitationWorkspace": {"type": "string", "format": "uuid"},
+                            "invitationId": {"type": "string", "format": "uuid"},
+                            "contactEmail": {"type": "string", "maxLength": 254},
+                            "createAccount": {"type": "string", "enum": ["yes"]},
+                        },
+                    }
+                }
+            },
+        },
+    },
 )
 async def github_login_start(request: Request) -> Response:
     """Top-level browser navigation, not a fetch/JSON API. Redirects to GitHub.com."""
@@ -134,12 +209,16 @@ async def github_login_start(request: Request) -> Response:
         settings, config = _configuration(request)
         expected = urlsplit(config.redirect_uri)
         origin = f"https://{expected.netloc}"
-        continuation = _continuation(request)
         if (
             request.headers.get("sec-fetch-site") == "cross-site"
-            or request.headers.get("origin", origin) != origin
+            or request.headers.get("origin", "" if request.method == "POST" else origin) != origin
         ):
             raise GitHubIdentityError("GitHub login refused")
+        continuation = (
+            await _registration_context(request)
+            if request.method == "POST"
+            else _continuation(request)
+        )
         challenge = await run_in_threadpool(
             create_challenge, _database_url(settings), config, continuation=continuation
         )
@@ -210,7 +289,9 @@ async def github_login_callback(request: Request) -> Response:
         if "error" in query:
             raise GitHubIdentityError("GitHub login refused")
         identity = await exchange_identity(config, code=query["code"], code_verifier=verifier)
-        issued = await run_in_threadpool(issue_github_session, _database_url(settings), identity)
+        issued = await run_in_threadpool(
+            issue_github_session, _database_url(settings), identity, continuation=continuation
+        )
         response = RedirectResponse(
             continuation.return_path if continuation else "/", status_code=303
         )

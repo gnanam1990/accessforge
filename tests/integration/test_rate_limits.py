@@ -660,6 +660,11 @@ def test_the_session_routes_are_documented_as_uncovered(db: str, api: TestClient
     assert "429" in contract["paths"][acceptance]["post"]["responses"]
     assert f"POST {acceptance}" in uncovered
     uncovered.remove(f"POST {acceptance}")
+    # Explicit signup navigation uses the existing durable global browser-challenge admission.
+    login = "/v1/auth/github/start"
+    assert "429" in contract["paths"][login]["post"]["responses"]
+    assert f"POST {login}" in uncovered
+    uncovered.remove(f"POST {login}")
     assert uncovered == {"POST /v1/sessions", "DELETE /v1/session"}, (
         "a mutating route outside /v1/workspaces/ appeared; it is not reached by the rate limit "
         f"chokepoint in build_context and needs its own decision: {sorted(uncovered)}"
