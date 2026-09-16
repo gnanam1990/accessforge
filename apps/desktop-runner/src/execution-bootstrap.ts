@@ -10,6 +10,7 @@ import { startOwnedNavigatorExecution, type NavigatorProcessOptions } from './na
 import { createObserverProcessClosure, type ObserverProcessOptions } from './observer-process.js';
 import { FileJournal } from './journal.js';
 import { createReferenceEffectProcess, type ReferenceEffectProcessOptions } from './reference-effect-process.js';
+import { createEffectStartupAuthorization } from './effect-startup-authority.js';
 
 export type ExecutionBootstrapOptions = Omit<Parameters<typeof createGuidepupPhysicalSafariRunner>[0], 'session'> & {
   /** Independently provisioned private host configuration, never navigator fields. */
@@ -75,20 +76,16 @@ export async function runProvisionedNavigatorExecution(
       const lifetime = new AbortController();
       const cancel = () => lifetime.abort();
       const effect = createReferenceEffectProcess(independentEffectObserver, planner.reference, planner.deadlineMonotonic);
-      let ready: Promise<void> | undefined;
       planner.signal.addEventListener('abort', cancel, { once: true });
       if (planner.signal.aborted) cancel();
       // A failed worker fences the navigator/native bridge while the execution is still active.
       void effect.failure.catch(cancel);
       const observedBootstrap = { ...bootstrap,
-        readerStartup: { ...bootstrap.readerStartup, async authorize(signal: AbortSignal) {
-          await bootstrap.readerStartup.authorize(signal);
-          // createExecutionBootstrap opens the machine session before entering this callback.
-          // The callback can repeat for fresh consent, but never spawns another collector.
-          ready ??= effect.start(lifetime.signal);
-          await ready;
-          effect.assertActive();
-        } },
+        readerStartup: { ...bootstrap.readerStartup,
+          // Machine session opens first. Fresh consent may repeat; collector startup cannot.
+          authorize: createEffectStartupAuthorization(
+            signal => bootstrap.readerStartup.authorize(signal), effect, lifetime.signal),
+        },
         async authorizePhysicalAction(command: Parameters<typeof bootstrap.authorizePhysicalAction>[0]) {
           effect.assertActive();
           await bootstrap.authorizePhysicalAction(command);
