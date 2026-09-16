@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import zipfile
 from pathlib import Path
 
 import pytest
 import yaml
-from scripts.package_release import ROOT, git, package
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from package_release import ROOT, git, package  # noqa: E402
 
 
 @pytest.fixture
