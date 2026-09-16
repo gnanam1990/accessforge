@@ -13,6 +13,19 @@ from accessforge_orchestrator.navigator.config import NavigatorModelProfile
 from accessforge_persistence import execution_approvals, navigator_model_calls, projects
 
 
+def test_codex_disclosure_does_not_claim_a_bounded_provider_retry_or_spend_cap() -> None:
+    from accessforge_domain.codex_navigation import default_profile as codex_profile
+
+    disclosure = navigator_model_calls._disclosure(codex_profile())
+    assert "Codex ChatGPT OAuth" in disclosure
+    assert "consumes account usage" in disclosure
+    assert "CLI-internal retries are not measured or capped here" in disclosure
+    assert "not measured usage or a currency spending cap" in disclosure
+    legacy = navigator_model_calls._disclosure(default_profile())
+    assert "configured retries may be billable" in legacy
+    assert "Codex" not in legacy
+
+
 @pytest.mark.parametrize("action_budget", [1, 499, 500, 501, 10000])
 def test_review_scope_caps_model_calls_without_refusing_a_larger_execution_budget(
     monkeypatch: pytest.MonkeyPatch, action_budget: int

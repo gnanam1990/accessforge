@@ -28,6 +28,21 @@ class Refused(ValueError):
     """No fresh consent/turn authority; never interpret this as permission to retry a call."""
 
 
+def _disclosure(profile: dict[str, Any]) -> str:
+    if profile["provider"] == "codex-chatgpt":
+        return (
+            "Task intent, safe fixture values and retained reader announcements may be disclosed "
+            "through Codex ChatGPT OAuth. This consumes account usage. Token reservations are "
+            "result-admission holds, not measured usage or a currency spending cap. "
+            "CLI-internal retries are not measured or capped here."
+        )
+    return (
+        "Task intent, safe fixture values and retained reader announcements may be disclosed "
+        "to this provider. Calls and configured retries may be billable. "
+        "Token reservations are not measured usage or a currency spending cap."
+    )
+
+
 def _actor(conn: psycopg.Connection[Any], workspace_id: str, actor_id: str) -> None:
     row = conn.execute(
         "SELECT role FROM workspace_membership WHERE workspace_id=%s AND user_id=%s FOR SHARE",
@@ -80,9 +95,7 @@ def review_scope(
             min(approval["expires_at"], parse_rfc3339_utc(manifest["expiresAt"]))
         ),
         "billableCallAcknowledged": False,
-        "disclosure": "Task intent, safe fixture values and retained reader announcements are "
-        "sent to this provider. Model calls and configured retries may be billable. "
-        "Token reservations are not a currency spending cap.",
+        "disclosure": _disclosure(profile),
         "meaning": "PREVIEW_NOT_MODEL_CONSENT_OR_INVOCATION",
     }
 
@@ -131,9 +144,7 @@ def inspect_consent(conn: psycopg.Connection[Any], *, run_id: str) -> dict[str, 
             for call in calls
         ],
         "meaning": "STORED_MODEL_CONSENT_NOT_INVOCATION_OR_FINANCIAL_CAP",
-        "disclosure": "Approved task intent, safe fixture values and retained reader announcements "
-        "may be disclosed to this provider. Calls and configured retries may be billable. "
-        "Token reservations are not measured usage or a currency spending cap.",
+        "disclosure": _disclosure(row["model_profile"]),
     }
 
 
