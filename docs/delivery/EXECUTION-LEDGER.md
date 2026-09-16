@@ -904,3 +904,18 @@ Eleven focused parser/route-boundary checks, changed Python Ruff formatting/lint
 OpenAPI freshness passed. A real-HTTP/database regression for replay, one runner, changed-body
 refusal, token-free result storage and revoked-authority refusal is committed for required CI,
 not locally executed. No actual enrollment or provider/reader operation occurred.
+
+## Reviewed owner enrollment workflow — 2026-09-16
+
+The Runners screen now connects reviewed local desktop observations to the existing token and
+enrollment routes. Only OWNER exposes these infrastructure actions. The browser validates the closed
+macOS envelope and recomputes the profile digest before review; observation review, token issuance
+and enrollment remain separate actions. Credentials stay in component memory without display or
+browser-storage persistence. Unknown token issuance disables reissuance; unknown enrollment retains
+the exact payload/key. A matching receipt clears sensitive draft/token references and refreshes the
+inventory without discarding the success receipt. Error feedback is announced and focused.
+
+Frontend production build and focused synthetic UI/contract checks passed; real control-plane or
+desktop enrollment has not been performed. This completes a user-facing enrollment path, not
+desktop qualification, source/build setup or baseline/repair/rerun acceptance. CI/merge/deployment
+remain separate from this code change.

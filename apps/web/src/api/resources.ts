@@ -100,6 +100,14 @@ export interface RunnerInventory extends Page<Runner> {
   readonly readinessMeaning: string;
 }
 
+export const issueRunnerEnrollmentToken = (client: ApiClient, workspaceId: string):
+  Promise<ApiOutcome<{ token: string; expiresAt: string }>> =>
+  client.request(`${base(workspaceId)}/runners/enrollment-tokens`, { method: 'POST', body: { ttlSeconds: 600 } });
+
+export const enrollObservedRunner = (client: ApiClient, workspaceId: string, body: Record<string, unknown>, idempotencyKey: string):
+  Promise<ApiOutcome<{ runnerId: string; status: string; profileDigest: string }>> =>
+  client.request(`${base(workspaceId)}/runners`, { method: 'POST', body, idempotencyKey });
+
 export interface Run {
   readonly runId: string;
   readonly status: string;

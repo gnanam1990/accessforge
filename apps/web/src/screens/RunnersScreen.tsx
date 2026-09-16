@@ -27,6 +27,7 @@ import type { Runner } from '../api/resources'
 import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
+import { RunnerEnrollment } from './RunnerEnrollment'
 
 const TONE: Record<string, 'neutral' | 'progress' | 'pass' | 'fail' | 'interrupted'> = {
   OFFLINE: 'neutral',
@@ -85,6 +86,7 @@ export const RunnersScreen = (): JSX.Element => {
   return (
     <>
       <RouteHeading>Runners</RouteHeading>
+      <RunnerEnrollment workspaceId={workspaceId} onEnrolled={runners.reload} />
 
       <ResourceView resource={runners} what="the runner inventory">
         {(inventory) => (
@@ -105,9 +107,9 @@ export const RunnersScreen = (): JSX.Element => {
             {inventory.items.length === 0 ? (
               <EmptyState heading="No runner is enrolled" because="nothing-created-yet">
                 <p className="af-secondary">
-                  A runner is enrolled from the desktop it will drive, using a single-use token. It
-                  cannot be created from this screen, and a runner that has not passed a preflight
-                  cannot be given work.
+                  Collect identity on the desktop it will drive. A workspace owner can review that
+                  observation and register it with a single-use token above. Enrollment alone does
+                  not qualify the desktop, and a runner without successful preflight cannot be given work.
                 </p>
               </EmptyState>
             ) : (

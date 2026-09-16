@@ -37,3 +37,18 @@ Token issuance itself is not replayed; never create another token automatically 
 Local development checks use injected observations only. They do not establish actual host support
 or authorize startup. A native observation on the user's machine has not been performed for this
 change.
+
+## Browser enrollment
+
+A workspace owner can now open **Runners → Enroll an observed desktop**, supply a name and paste
+the complete observation envelope. **Review enrollment draft** checks the closed JSON shape and
+recomputes the canonical profile digest locally. No API mutation occurs during review. Confirm
+the current dedicated desktop identity, then explicitly issue its single-use token and separately
+choose **Enroll reviewed desktop**. The page does not expose or persist the raw token in browser
+storage. It clears draft identity and token references after receiving a matching enrollment receipt.
+
+Stay on the page while an outcome is unknown. Token issuance cannot be replayed and is not retried
+automatically; uncertain issuance requires operator reconciliation/expiry confirmation. Unconfirmed
+enrollment locks the draft and retains the same payload and operation key for an explicit retry.
+The observation is a declaration, not proof that this browser controls the desktop. Registration
+does not grant reader startup, model calls, dispatch authority or a passing preflight.
