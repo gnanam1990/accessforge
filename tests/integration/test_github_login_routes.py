@@ -16,7 +16,8 @@ from accessforge_api.auth.github_accounts import bind_account
 from accessforge_api.auth.github_identity import GitHubIdentityError, GitHubSubject
 from accessforge_api.config import ApiSettings
 from accessforge_api.routes.github_login import LOGIN_COOKIE
-from accessforge_persistence import migrate, unscoped_connection
+from accessforge_persistence import migrate, unscoped_connection, workspace_connection
+from accessforge_persistence.invitations import create_invitation
 
 pytestmark = pytest.mark.integration
 BASE = "https://app.example.test"
@@ -62,6 +63,94 @@ def client(test_database_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 def _app(client: TestClient) -> FastAPI:
     assert isinstance(client.app, FastAPI)
     return client.app
+
+
+@pytest.mark.parametrize(
+    "mode", ["valid", "wrong-subject", "expired", "revoked", "email-collision"]
+)
+def test_explicit_invited_signup_does_not_grant_membership(
+    client: TestClient,
+    test_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    workspace, invitation = str(uuid.uuid4()), str(uuid.uuid4())
+    with unscoped_connection(test_database_url) as conn:
+        owner = conn.execute(
+            "SELECT user_id FROM github_user_identity WHERE github_subject=123"
+        ).fetchone()
+        assert owner is not None
+        owner_id = str(owner["user_id"])
+        conn.execute("INSERT INTO workspace(id,name) VALUES(%s,'Signup test')", (workspace,))
+    with workspace_connection(test_database_url, workspace) as conn:
+        conn.execute(
+            "INSERT INTO workspace_membership(workspace_id,user_id,role) VALUES(%s,%s,'OWNER')",
+            (workspace, owner_id),
+        )
+        create_invitation(
+            conn,
+            workspace_id=workspace,
+            invitation_id=invitation,
+            actor_user_id=owner_id,
+            github_subject=456,
+            role="REVIEWER",
+            ttl_seconds=600,
+            reason="New reviewer",
+        )
+        if mode == "expired":
+            conn.execute(
+                "UPDATE membership_invitation SET created_at=now()-interval '3 hours', "
+                "expires_at=now()-interval '2 hours' WHERE id=%s",
+                (invitation,),
+            )
+        if mode == "revoked":
+            conn.execute(
+                "UPDATE membership_invitation SET revoked_at=now(),revision=2 WHERE id=%s",
+                (invitation,),
+            )
+
+    async def identity(*args: object, **kwargs: object) -> GitHubSubject:
+        return GitHubSubject("457" if mode == "wrong-subject" else "456")
+
+    monkeypatch.setattr("accessforge_api.routes.github_login.exchange_identity", identity)
+    email = "LOGIN@example.test" if mode == "email-collision" else "new-reviewer@example.test"
+    data = {
+        "invitationWorkspace": workspace,
+        "invitationId": invitation,
+        "contactEmail": email,
+        "createAccount": "yes",
+    }
+    # The new pre-authentication form requires same-origin browser intent.
+    assert client.post("/v1/auth/github/start", data=data).status_code == 401
+    start = client.post("/v1/auth/github/start", data=data, headers={"Origin": BASE})
+    assert start.status_code == 303
+    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+    assert email not in start.headers["location"]
+    callback = client.get("/v1/auth/github/callback", params={"state": state, "code": "fresh-code"})
+    assert callback.status_code == (303 if mode == "valid" else 401)
+    with unscoped_connection(test_database_url) as conn:
+        binding = conn.execute(
+            "SELECT user_id FROM github_user_identity WHERE github_subject=456"
+        ).fetchone()
+        if mode != "valid":
+            assert binding is None
+            assert (
+                conn.execute(
+                    "SELECT id FROM app_user WHERE email='new-reviewer@example.test'"
+                ).fetchone()
+                is None
+            )
+        else:
+            assert binding is not None
+            assert conn.execute(
+                "SELECT email FROM app_user WHERE id=%s", (binding["user_id"],)
+            ).fetchone() == {"email": email}
+    if mode == "valid":
+        assert client.get("/v1/session").json()["workspaces"] == []
+        assert (
+            client.get(f"/v1/invitation-offers/{workspace}/{invitation}").json()["state"]
+            == "PENDING"
+        )
 
 
 def _start(client: TestClient) -> tuple[str, str]:

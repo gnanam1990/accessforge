@@ -583,6 +583,111 @@
           "session"
         ],
         "x-accessforge-browser-navigation": true
+      },
+      "post": {
+        "description": "Top-level browser navigation, not a fetch/JSON API. Redirects to GitHub.com.",
+        "operationId": "github_registration_start",
+        "responses": {
+          "303": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document. `code` distinguishes two different 429s: RATE_LIMITED means too fast and returns on its own after `retryAfterSeconds`; QUOTA_EXHAUSTED means an entitlement is spent and will not return without a new one. Retrying a QUOTA_EXHAUSTED on a timer never succeeds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds after which the same request is admitted, present on RATE_LIMITED. Never zero: advising an immediate retry invites the loop the limit exists to stop. The same number appears in the body as `retryAfterSeconds`.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "An RFC7807 problem document."
+          }
+        },
+        "security": [],
+        "summary": "Github Login Start",
+        "tags": [
+          "session"
+        ],
+        "x-accessforge-browser-navigation": true
       }
     },
     "/v1/auth/options": {

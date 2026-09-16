@@ -37,7 +37,8 @@ export const OwnerInvitations = ({ workspaceId }: { readonly workspaceId: string
     <p>Prepare an offer for an exact GitHub numeric account ID, not an email or username.
       This does not send an email, create an account or grant access. Inspect a pending offer to
       share its link. The recipient must sign in with the invited GitHub account, read the offer
-      and explicitly accept it. Their account must already be provisioned.</p>
+      and explicitly accept it. New users can create an account from the invitation sign-in page
+      before accepting; email is contact metadata, not their identity.</p>
     <p>OWNER manages people, policy and infrastructure. MAINTAINER configures projects and approves
       runs/patches. REVIEWER reads evidence and records reviews. VIEWER reads evidence.</p>
     {receipt !== null && <p role="status">{receipt}</p>}

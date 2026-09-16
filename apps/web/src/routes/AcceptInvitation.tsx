@@ -79,7 +79,7 @@ export function AcceptInvitation({ initialReference = null }: {
 
   return <section className="af-stack" aria-labelledby="accept-invitation-heading">
     <h2 id="accept-invitation-heading">Have a workspace invitation?</h2>
-    <p className="af-secondary">Ask the owner for the workspace and invitation IDs. These are references, not passwords. Only the invited GitHub account can accept. Your account must already be provisioned; this does not create a new account.</p>
+    <p className="af-secondary">Ask the owner for the workspace and invitation IDs. These are references, not passwords. Only the invited GitHub account can accept. Acceptance joins your signed-in account to the workspace; it does not create another account.</p>
     <form className="af-stack" onSubmit={(event) => { event.preventDefault(); void read() }}>
       <fieldset disabled={busy || locked} className="af-stack">
         <legend>Invitation references</legend>

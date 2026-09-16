@@ -4,6 +4,7 @@ import type { JSX, ReactNode } from 'react'
 
 import { Button } from '../components/Button'
 import { Notice } from '../components/Notice'
+import { FormField } from '../components/FormField'
 import { useSession } from './SessionProvider'
 import { invitationQuery, invitationReference } from '../routes/invitationReference'
 
@@ -57,10 +58,25 @@ export const SignInProviderGate = ({ children, invitationSearch = '' }: {
       <a className="af-button af-button--primary" href={'/v1/auth/github/start' + (invitation ? `?${invitationQuery(invitation)}` : '')}
         aria-describedby={descriptionId}>Continue with GitHub</a>
       <p id={descriptionId}>Continue to GitHub to sign in, then return to AccessForge.
-        Your GitHub account must already be linked by an operator; signing in does not grant
+        Use this option if your GitHub account is already linked. Signing in does not grant
         workspace access.</p>
       {invitation && <p>Your invitation references will be kept through sign-in. You must read and
-        explicitly accept the offer afterwards; this link does not create an account or grant access.</p>}
+        explicitly accept the offer afterwards; the link alone does not create an account or grant access.</p>}
+      {invitation && <form method="post" action="/v1/auth/github/start" className="af-stack">
+        <h2>New to AccessForge?</h2>
+        <p>Create an account using this invitation. GitHub must verify the exact invited account,
+          and the offer must still be valid. Membership requires a separate acceptance after login.</p>
+        <input type="hidden" name="invitationWorkspace" value={invitation.workspaceId} />
+        <input type="hidden" name="invitationId" value={invitation.invitationId} />
+        <FormField label="Contact email for your new account" required
+          hint="Contact metadata only, not verified email ownership. This cannot link or replace an existing account, and no invitation email is sent.">
+          {({ id, describedBy }) => <input id={id} aria-describedby={describedBy} type="email"
+            name="contactEmail" autoComplete="email" maxLength={254} required />}
+        </FormField>
+        <label><input type="checkbox" name="createAccount" value="yes" required />
+          I agree to create a new account using this contact email and my verified GitHub identity.</label>
+        <Button type="submit">Create account with GitHub</Button>
+      </form>}
     </div>
   )
   return <>{children}</>
