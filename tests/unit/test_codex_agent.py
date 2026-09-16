@@ -4,6 +4,8 @@ import asyncio
 import json
 import subprocess
 import sys
+import tomllib
+from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 from typing import Any, cast
@@ -177,3 +179,14 @@ assert not any(n == 'strands' or n.startswith('strands.') for n in sys.modules)
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=15, check=False
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_strands_is_a_historical_test_dependency_only() -> None:
+    root = Path(__file__).resolve().parents[2]
+    app = tomllib.loads((root / "apps/orchestrator/pyproject.toml").read_text())
+    workspace = tomllib.loads((root / "pyproject.toml").read_text())
+    lock = tomllib.loads((root / "uv.lock").read_text())
+    assert not any(dep.startswith("strands-agents") for dep in app["project"]["dependencies"])
+    assert "strands-agents==1.55.1" in workspace["dependency-groups"]["dev"]
+    package = next(p for p in lock["package"] if p["name"] == "accessforge-orchestrator")
+    assert not any(dep["name"] == "strands-agents" for dep in package["dependencies"])

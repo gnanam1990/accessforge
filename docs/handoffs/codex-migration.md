@@ -167,3 +167,10 @@ navigator, coordinator and operator imports succeed with every Strands import bl
 fresh interpreter. Historical adapter tests still pass. The five focused modules pass 77 cases,
 and strict mypy passes on 70 source/test files. Packaging still lists the SDK and needs a separate
 development-only dependency transition; this import separation is not full dependency removal.
+
+Strands is now pinned only in the workspace development dependency group for historical tests,
+not in the orchestrator runtime requirements. The lockfile was regenerated offline without
+version upgrades. A fresh frozen no-dev environment installed 51 packages without Strands and
+successfully imported the Codex planner, diagnosis, repair, coordinator and operator. A regression
+checks both project declarations and locked runtime requirements. boto3/botocore remain for
+S3-compatible evidence storage (including local MinIO); this does not enable Bedrock inference.
