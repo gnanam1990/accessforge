@@ -99,6 +99,7 @@ const EntitlementForm = ({
   const [errors, setErrors] = useState<readonly { fieldId: string; message: string }[]>([])
   const [submissionId, setSubmissionId] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [locked, setLocked] = useState(false)
   const [refusal, setRefusal] = useState<string | null>(null)
   const fieldIds = useId()
 
@@ -110,6 +111,7 @@ const EntitlementForm = ({
 
   const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
+    if (busy || locked) return
     setSubmissionId((current2) => current2 + 1)
     setRefusal(null)
 
@@ -143,13 +145,22 @@ const EntitlementForm = ({
       revision,
     )
     setBusy(false)
+    // A lost response may follow a committed write. Never replay a stale revision blindly.
+    setLocked(true)
 
     switch (outcome.kind) {
       case 'ok':
-      case 'accepted':
+        if (outcome.value === null || typeof outcome.value !== 'object' ||
+          !Number.isSafeInteger(outcome.value.revision) || outcome.value.revision !== revision + 1) {
+          setRefusal('The save receipt could not be confirmed. Read the current allowance before making another change.')
+          break
+        }
         announce(`Allowance saved as revision ${outcome.value.revision}.`)
         setReason('')
         onSaved()
+        break
+      case 'accepted':
+        setRefusal('The server accepted the request but did not confirm a saved allowance. Read the current allowance before continuing.')
         break
       case 'problem':
         setRefusal(outcome.problem.detail)
@@ -160,6 +171,7 @@ const EntitlementForm = ({
       case 'cancelled':
       case 'stale':
       case 'unauthenticated':
+        setRefusal('The save could not be confirmed. Read the current allowance before continuing; you may need to sign in again.')
         break
     }
   }
@@ -175,12 +187,16 @@ const EntitlementForm = ({
       <ErrorSummary submissionId={submissionId} errors={errors} />
 
       {refusal !== null && (
-        <Notice tone="problem" heading="The allowance was not changed" headingLevel={4} live>
+        <Notice tone="problem" heading="Allowance save needs attention" headingLevel={4} live>
           <p>{refusal}</p>
+          <p>Discard this draft and read the current allowance before making another change. This does not resend the save.</p>
+          <Button onClick={onSaved}>Read current allowance and discard draft</Button>
         </Notice>
       )}
 
       <form onSubmit={(event) => void submit(event)} noValidate>
+        <fieldset disabled={busy || locked}>
+        <legend>Allowance limits and reason</legend>
         {Object.keys(current).map((key) => (
           <FormField key={key} id={idFor(key)} label={LIMIT_LABEL[key] ?? key}
             {...errorFor(idFor(key))} required>
@@ -221,6 +237,7 @@ const EntitlementForm = ({
         <Button type="submit" variant="primary" busy={busy}>
           Save allowance
         </Button>
+        </fieldset>
       </form>
     </div>
   )

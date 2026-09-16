@@ -947,3 +947,15 @@ Desktop build and seven focused synthetic checks passed. No real host/reader/mod
 This supersedes the older missing-candidate-factory statement, not the outstanding real private
 provisioning, independent stale-input measurement or physical acceptance requirements. Production
 factory `reference-native-provisioner.ts` already existed and was not reimplemented.
+
+## Allowance save recovery — 2026-09-16
+
+Settings no longer reports an uncertain allowance write as definitely unchanged. A save locks
+the draft until a matching next-revision receipt or an explicit current-allowance read. Lost
+responses, revision refusals, malformed receipts and accepted-only responses offer an announced
+recovery notice and a read/discard action, never an automatic write replay. Fields are also locked
+while the save is in flight. The first-allowance synthetic fixture now returns revision one.
+
+Frontend production build and 21 focused synthetic Settings checks passed. This is a frontend-only
+change based on main, independent of the pending membership migration stack. No production
+allowance was changed, no migration was run, and actual reader acceptance remains unproven.

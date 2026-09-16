@@ -46,6 +46,9 @@ describe('first workspace allowance', () => {
       if (url.endsWith('/settings/entitlement') && init?.method === 'PUT') {
         writes.push(new Headers(init.headers))
         missing = false
+        await server.fetch(input, init)
+        return new Response(JSON.stringify({ revision: 1 }),
+          { status: 201, headers: { 'content-type': 'application/json' } })
       }
       return server.fetch(input, init)
     }
@@ -130,6 +133,47 @@ describe('usage', () => {
 })
 
 describe('who may change what', () => {
+  it.each(['lost-response', 'stale-revision', 'malformed-receipt', 'accepted-only'])(
+    'locks an unconfirmed %s save until an explicit read, without replaying it', async (mode) => {
+      const user = userEvent.setup()
+      const server = createFakeServer(asRole('OWNER'))
+      let writes = 0
+      let reads = 0
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const url = String(input)
+        if (url.endsWith('/usage')) reads += 1
+        if (url.endsWith('/settings/entitlement') && init?.method === 'PUT') {
+          writes += 1
+          if (mode === 'lost-response') {
+            await server.fetch(input, init)
+            throw new TypeError('Response lost after commit')
+          }
+          if (mode === 'stale-revision') return new Response(JSON.stringify({
+            code: 'STALE_REVISION', title: 'Conflict', detail: 'Revision changed.',
+          }), { status: 412, headers: { 'content-type': 'application/problem+json' } })
+          return new Response(JSON.stringify(mode === 'malformed-receipt' ? null : { revision: 4 }),
+            { status: mode === 'accepted-only' ? 202 : 200,
+              headers: { 'content-type': 'application/json' } })
+        }
+        return server.fetch(input, init)
+      }
+      renderSettings({ fetch: fetchImpl })
+      await user.type(await screen.findByLabelText(/Why this limit/), 'Raise pilot allowance')
+      await user.click(screen.getByRole('button', { name: 'Save allowance' }))
+      await screen.findByRole('heading', { name: 'Allowance save needs attention' })
+      expect(screen.queryByText('The allowance was not changed')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save allowance' })).toBeDisabled()
+      await user.click(screen.getByRole('button', { name: 'Save allowance' }))
+      expect(writes).toBe(1)
+      const previousReads = reads
+      await user.click(screen.getByRole('button', { name: 'Read current allowance and discard draft' }))
+      expect(await screen.findByLabelText(/Why this limit/)).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Save allowance' })).toBeEnabled()
+      expect(reads).toBeGreaterThan(previousReads)
+      expect(writes).toBe(1)
+    },
+  )
+
   it('gives a viewer every value and no form', async () => {
     const server = createFakeServer(asRole('VIEWER'))
     renderSettings(server)
