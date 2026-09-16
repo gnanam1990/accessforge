@@ -25,6 +25,7 @@ from enum import StrEnum
 from typing import Any
 
 from accessforge_domain.canonical import digest
+from accessforge_domain.states import Outcome
 
 from .archive import UnsafeArchive, read_archive
 from .bundle import BUNDLE_SCHEMA_VERSION, CANONICALIZATION_VERSION, TrustLevel
@@ -424,21 +425,38 @@ def _check_identities(manifest: dict[str, Any]) -> Finding:
 
 def _check_outcome_present(document: dict[str, Any]) -> Finding:
     machine = document.get("machineOutcome", {})
+    manifest = document.get("manifest", {})
+    if not isinstance(machine, dict):
+        return Finding("outcome.frozen", CheckOutcome.FAILED, "machine outcome is not an object")
     outcome = machine.get("outcome")
-    if not outcome:
-        return Finding("outcome.frozen", CheckOutcome.FAILED, "the bundle records no outcome")
-    if not machine.get("evaluatorVersion"):
+    if not isinstance(outcome, str) or outcome not in set(Outcome):
+        return Finding("outcome.frozen", CheckOutcome.FAILED, "the bundle records no known outcome")
+    evaluator = machine.get("evaluatorVersion")
+    if not isinstance(evaluator, str) or not evaluator.strip():
         return Finding(
             "outcome.frozen",
             CheckOutcome.FAILED,
             "the outcome does not say which evaluator produced it, so a recomputation cannot be "
             "compared against it",
         )
+    if outcome != manifest.get("outcome") or evaluator != manifest.get("evaluatorVersion"):
+        return Finding(
+            "outcome.frozen",
+            CheckOutcome.FAILED,
+            "the readable outcome or evaluator differs from the signed manifest; the signature "
+            "does not attest the machine outcome shown to the reader",
+        )
+    reasons = machine.get("reasons", [])
+    if not isinstance(reasons, list) or not all(isinstance(reason, str) for reason in reasons):
+        return Finding(
+            "outcome.frozen", CheckOutcome.FAILED, "outcome reasons are not a string list"
+        )
     return Finding(
         "outcome.frozen",
         CheckOutcome.PASSED,
-        f"{outcome} from {machine['evaluatorVersion']}, with {len(machine.get('reasons', []))} "
-        "recorded reason(s)",
+        f"{outcome} from {evaluator}, matching the signed manifest. "
+        f"{len(reasons)} displayed reason(s); "
+        "reason text is not covered by this format's signature",
     )
 
 
