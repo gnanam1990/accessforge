@@ -13,6 +13,7 @@ import {
 } from '@accessforge/at-voiceover';
 import { runNativeHost } from './native-host.js';
 import { runCandidateHost } from './candidate-host.js';
+import { observeEnrollment } from './enrollment-observation.js';
 
 export const READER_UNAVAILABLE_MESSAGE =
   'accessforge-runner: the Guidepup VoiceOver adapter is implemented and wired to the durable ' +
@@ -29,12 +30,22 @@ export function main(
   return 78; // EX_CONFIG: code exists, but the real-reader capability remains unproven.
 }
 
-export async function cli(args: readonly string[], write: (line: string) => void = console.error): Promise<number> {
-  if (args.length === 0) return main(write);
+export async function cli(args: readonly string[], write: (line: string) => void = console.error,
+  environment: ProbeEnvironment = hostEnvironment(), output: (line: string) => void = console.log): Promise<number> {
+  if (args.length === 1 && args[0] === '--enrollment-observation') {
+    try {
+      output(JSON.stringify(observeEnrollment(environment)));
+      return 0;
+    } catch {
+      write('accessforge-runner: enrollment observation unavailable or changed; nothing enrolled and no reader started');
+      return 78;
+    }
+  }
+  if (args.length === 0) return main(write, environment);
   const candidate = args.length === 5 && args[0] === '--candidate-proof' &&
     args[2] === '--output-dir' && args[4] === '--allow-reader-startup';
   if (!candidate && (args.length !== 4 || args[0] !== '--native-host' || args[2] !== '--handoff-file')) {
-    write('usage: accessforge-runner [--native-host PRIVATE_OPERATOR.mjs --handoff-file NEW_PRIVATE_PATH] or --candidate-proof PRIVATE_OPERATOR.mjs --output-dir NEW_PRIVATE_DIRECTORY --allow-reader-startup');
+    write('usage: accessforge-runner --enrollment-observation or [--native-host PRIVATE_OPERATOR.mjs --handoff-file NEW_PRIVATE_PATH] or --candidate-proof PRIVATE_OPERATOR.mjs --output-dir NEW_PRIVATE_DIRECTORY --allow-reader-startup');
     return 64;
   }
   const controller = new AbortController();

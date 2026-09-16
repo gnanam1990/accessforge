@@ -877,3 +877,16 @@ Frontend production build, nine focused preparation UI checks, Ruff and changed-
 A stored-digest/readiness API regression is committed for CI and was not run locally. No live
 desktop or production setup was performed. PR229 passed required CI and merged; local main synced
 at 7194aa1. Remaining stack gates and deployment are separate from this implementation.
+
+## Read-only desktop enrollment observation — 2026-09-16
+
+Added a desktop CLI path that collects the existing observed runner profile plus OS hardware UUID
+and matching foreground/process audit-session identity. It refuses unavailable, locked, inactive
+or observed-changing desktop identity before emitting a reviewed JSON envelope. It does not start
+reader/browser processes, load executable operator configuration, probe TCC permissions, issue a
+token or contact the control plane. Output is private machine metadata, not qualification evidence.
+See the desktop-enrollment-observation handoff for the exact envelope and enrollment boundary.
+
+VoiceOver-adapter and desktop-runner TypeScript builds plus seven focused injected-observation/
+entrypoint checks passed. No actual host observation, reader action, model call, production write
+or deployment occurred. CI/merge and actual desktop qualification remain outstanding.
