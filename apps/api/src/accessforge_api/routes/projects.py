@@ -8,7 +8,9 @@ from typing import Annotated, Any
 
 import psycopg
 from fastapi import APIRouter, Depends, Request, Response, status
+from starlette.responses import JSONResponse
 
+from accessforge_api.auth.membership import record_audit_event
 from accessforge_api.dependencies import clamp_page_size, require_if_match, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_domain.authorization.roles import Permission
@@ -16,7 +18,7 @@ from accessforge_domain.canonical import digest
 from accessforge_domain.codex_navigation import default_profile
 from accessforge_domain.origins import OriginError, normalize_origin
 from accessforge_domain.timestamps import parse_rfc3339_utc
-from accessforge_persistence import execution_approvals, projects
+from accessforge_persistence import execution_approvals, memberships, projects
 from accessforge_persistence.source_intake import SourceIdentity
 
 from ._common import as_body, as_identifier, authorize, workspace_scope
@@ -167,6 +169,116 @@ def list_members(workspace_id: str, request: Request, conn: Conn) -> dict[str, A
             for r in rows
         ]
     }
+
+
+def _member_change_body(body: dict[str, Any]) -> tuple[str | None, str]:
+    roles = {"OWNER", "MAINTAINER", "REVIEWER", "VIEWER"}
+    role, reason = body.get("role"), body.get("reason")
+    if (
+        set(body) != {"role", "reason"}
+        or (role is not None and (not isinstance(role, str) or role not in roles))
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > 1000
+    ):
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT, "explicit role (or null to revoke) and reason required"
+        )
+    return role, reason.strip()
+
+
+def _member_record(
+    conn: psycopg.Connection[Any], workspace_id: str, user_id: str
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT m.role,m.revoked_at,m.revision FROM workspace_membership m "
+        "JOIN app_user u ON u.id=m.user_id WHERE m.workspace_id=%s AND m.user_id=%s "
+        "AND u.disabled_at IS NULL",
+        (workspace_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise not_found()
+    return {
+        "userId": user_id,
+        "role": str(row["role"]),
+        "revoked": row["revoked_at"] is not None,
+        "revision": int(row["revision"]),
+    }
+
+
+@router.get("/members/{user_id}")
+def read_member(
+    workspace_id: str, user_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.MEMBERSHIP_ADMINISTER)
+    as_identifier(user_id, what="member")
+    result = _member_record(conn, workspace_id, user_id)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["ETag"] = f'"{result["revision"]}"'
+    return result
+
+
+@router.put("/members/{user_id}", response_model=None)
+def update_member(
+    workspace_id: str,
+    user_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any] | JSONResponse:
+    # Authentication/CSRF/current tenant membership precede target lookup and denial audit.
+    context = authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    response.headers["Cache-Control"] = "no-store"
+    target = as_identifier(user_id, what="member")
+    try:
+        # Savepoint rolls back any attempted mutation before committing its denial audit.
+        with conn.transaction():
+            if not context.principal.permits(Permission.MEMBERSHIP_ADMINISTER):
+                raise ProblemDetail(ProblemCode.PERMISSION_DENIED, "owner membership required")
+            role, reason = _member_change_body(as_body(payload))
+            expected = require_if_match(context)
+            if expected < 1:
+                raise ProblemDetail(
+                    ProblemCode.INVALID_INPUT, "an existing membership revision is required"
+                )
+            # This route changes existing relationships only. It never grants an unknown identity.
+            _member_record(conn, workspace_id, target)
+            try:
+                memberships.change_membership(
+                    conn,
+                    workspace_id=workspace_id,
+                    actor_user_id=context.principal.user_id,
+                    target_user_id=target,
+                    role=role,
+                    expected_revision=expected,
+                    reason=reason,
+                )
+            except memberships.MembershipChangeError as exc:
+                code = (
+                    ProblemCode.STALE_REVISION
+                    if "revision changed" in str(exc)
+                    else ProblemCode.PERMISSION_DENIED
+                )
+                raise ProblemDetail(code, str(exc), request_id=context.request_id) from exc
+            result = _member_record(conn, workspace_id, target)
+    except ProblemDetail as exc:
+        record_audit_event(
+            conn,
+            workspace_id=workspace_id,
+            actor_user=context.principal.user_id,
+            action="MEMBERSHIP_ADMINISTER",
+            target_kind="workspace_membership",
+            target_id=target,
+            outcome="DENIED",
+            detail={"code": str(exc.code), "requestId": context.request_id},
+        )
+        exc.request_id = context.request_id
+        denied = exc.to_response()
+        denied.headers["Cache-Control"] = "no-store"
+        return denied
+    response.headers["ETag"] = f'"{result["revision"]}"'
+    return result
 
 
 @router.post("/projects/{project_id}/environments", status_code=status.HTTP_201_CREATED)
