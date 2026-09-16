@@ -48,14 +48,23 @@ probe = ["pg_dump", "--version"]
 [sdk.strands_agents]
 exact = "1.55.1"
 distribution = "strands-agents"
+scope = "HISTORICAL_TESTS_ONLY"
 
 [model.navigator]
+provider = "codex-chatgpt"
+model_id = "gpt-6-astra"
+cli_version = "0.154.0"
+auth_mode = "chatgpt"
+status = "PROPOSAL_SMOKE_ONLY_NOT_ACTUAL_READER_ACCEPTANCE"
+note = "Codex OAuth proposal smoke was observed; actual screen-reader end-to-end qualification remains unproven."
+
+[model.legacy_navigator]
 provider = "amazon-bedrock"
 model_id = "global.anthropic.claude-sonnet-4-6"
 region = "us-east-1"
 temperature = 0
-status = "TARGET_UNVERIFIED"
-note = "Pinned construction target only; no billable model invocation has been authorized or run."
+status = "RETIRED"
+note = "Historical test profile only. The production Bedrock factory refuses new invocations."
 
 # ------------------------------------------------------------------------------------------------
 # Platform capabilities that no version number can establish.
@@ -79,9 +88,9 @@ needs = """A Windows host with NVDA installed and its controller client availabl
 from macOS or Linux, including under virtualization that does not present a real interactive \
 desktop session."""
 
-[capability.bedrock]
+[capability.codex_oauth]
 platform = "any"
 status = "BLOCKED"
-needs = """AWS credentials with Bedrock model access in a region where the pinned model is \
-available. Invoking a model is billable, so it additionally requires explicit approval separate \
-from the credentials being present."""
+needs = """The execution host needs the pinned Codex CLI and its own ChatGPT OAuth login. \
+Verify both on that host and review exact model consent before invocation; a saved matrix or \
+successful import cannot establish current account access or actual screen-reader qualification."""
