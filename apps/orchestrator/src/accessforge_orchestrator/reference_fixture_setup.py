@@ -106,7 +106,8 @@ def _context(
     if (
         contract["templateId"] != "service-request"
         or set(reset_values) != {"variant"}
-        or reset_values["variant"] not in {"accessible", "inaccessible", "missing-label-v1"}
+        or reset_values["variant"]
+        not in {"accessible", "inaccessible", "missing-label-v1", "broken-focus-v1"}
         or digest(reset_values) != contract["resetValuesDigest"]
         or digest(observer_config) != contract["observerConfigDigest"]
         or observer_config.get("effect") != "CREATE_TEST_REQUEST"

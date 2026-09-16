@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .fixture_contract import REFERENCE_FIXTURE_DIGEST
 
-PRESENTATION_VARIANTS = ("accessible", "inaccessible", "missing-label-v1")
+PRESENTATION_VARIANTS = ("accessible", "inaccessible", "missing-label-v1", "broken-focus-v1")
 
 
 def template_digest(variant: str) -> str:

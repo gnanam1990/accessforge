@@ -138,16 +138,20 @@ def test_full_journey_creates_exactly_one_request(client: TestClient) -> None:
     assert receipt["requests"][0]["email"] == VALID_SUBMISSION["email"]
 
 
-def test_missing_label_scenario_keeps_real_validation_and_one_receipt(client: TestClient) -> None:
+@pytest.mark.parametrize("variant", ["missing-label-v1", "broken-focus-v1"])
+def test_isolated_scenario_keeps_real_validation_and_one_receipt(
+    client: TestClient, variant: str
+) -> None:
     """HTTP and real DB fixture proof, not browser/reader accessibility acceptance."""
-    nonce = _new_fixture(client, "missing-label-v1")
+    nonce = _new_fixture(client, variant)
     page = client.get(f"/form/{nonce}")
     assert page.status_code == 200
-    assert "SEEDED DEFECT missing-label-v1" in page.text
-    assert '<label for="full_name">' not in page.text
+    assert f"SEEDED DEFECT {variant}" in page.text
+    assert ('<label for="full_name">' in page.text) == (variant != "missing-label-v1")
     assert '<label for="email">' in page.text
     rejected = client.post(f"/form/{nonce}", data=INVALID_SUBMISSION)
     assert rejected.status_code == 422 and 'role="alert"' in rejected.text
+    assert (".focus()" in rejected.text) == (variant != "broken-focus-v1")
     receipt_path = f"/api/_test/receipt/{nonce}"
     assert client.get(receipt_path).status_code == 403
     headers = {"x-observer-token": OBSERVER}
