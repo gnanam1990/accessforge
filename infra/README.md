@@ -1,6 +1,8 @@
 # `infra/`
 
-Deployment preparation, the declared version matrix, and the proposed AWS configuration.
+Declared version matrix and historical deployment preparation. The owner retired AWS as the
+product target on 2026-09-16. `aws/` is preserved for provenance, not an active deployment plan.
+Codex OAuth replaces model-provider authentication, not the database, object store or web login.
 
 | Path | What it is |
 |---|---|

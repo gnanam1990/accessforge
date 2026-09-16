@@ -1,5 +1,15 @@
 # AccessForge execution ledger
 
+## Current owner override — 2026-09-16
+
+The owner chose Codex OAuth, then explicitly retired Bedrock/AWS as the product target.
+The provider-choice blocker is resolved. Finish the migration in
+`docs/handoffs/codex-migration.md`, starting with Codex diagnosis/repair and then the navigator's
+model, consent and observed-runtime contracts. Do not resume AWS calls, ask the owner to choose
+a provider again, or treat original AWS/Strands implementation instructions as the active target.
+Full actual-reader/repair/rerun/review/release scope remains. Host permissions are a separate
+acceptance prerequisite, not a reason to stop this independently authorized migration.
+
 Current planning checkpoint: 2026-09-15. This is the single continuation queue, not a release
 certificate. Original requirements remain in `specs/accessforge/`. Earlier PLAN/REMAINING tables
 and handoffs are historical evidence, not current task selectors. Refresh source and GitHub state

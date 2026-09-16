@@ -13,10 +13,10 @@ from .canonical import canonicalize, digest
 def model_profile() -> dict[str, Any]:
     """Pinned reviewed profile; changing it changes the consent digest, never silently reuses it."""
     return {
-        "sdk_version": "1.55.1",
-        "model_id": "global.anthropic.claude-sonnet-4-6",
-        "region_name": "us-east-1",
-        "provider_max_tokens": 1500,
+        "provider": "codex-chatgpt",
+        "sdk_version": "0.154.0",
+        "model_id": "gpt-6-astra",
+        "budget_semantics": "RESULT_ADMISSION_NOT_SPEND_CAP",
         "invocation_output_tokens": 2000,
         "invocation_total_tokens": 20000,
         "max_context_characters": 50000,

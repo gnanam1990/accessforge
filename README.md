@@ -2,7 +2,12 @@
 
 **Status: implemented components; actual-reader end-to-end acceptance remains incomplete.**
 
-The API, web console, runner infrastructure, Strands navigation/diagnosis/repair paths,
+**Product direction (2026-09-16): Codex, not AWS/Bedrock.** The owner retired the AWS-specific
+product target. Diagnosis and repair are migrating to local Codex with ChatGPT OAuth; navigator
+runtime/consent migration is still pending. Historical AWS specifications and evidence remain
+historical, not deployment instructions. See [migration status](docs/handoffs/codex-migration.md).
+
+The API, web console, runner infrastructure, navigation/diagnosis/repair components,
 sandboxed candidate builds, review and evidence export are implemented. Neither green CI nor
 the reference application proves a successful actual VoiceOver repair journey. VoiceOver
 qualification remains blocked; NVDA is contract-only. No production-readiness or accessibility
@@ -19,7 +24,7 @@ chatbot, or a legal-compliance certificate.
 |---|---|
 | `specs/accessforge/` | The complete product specification package (PRD, TDD, CONTRACTS, TEST-PLAN, UI-UX, SECURITY-PRIVACY, RELEASE-CHECKLIST, SOURCES, and 30 numbered build prompts). Specification only. |
 | `docs/` | Implementation-owned records produced as modules land: capability evidence, ADRs, module handoffs, and the delivery plan. |
-| `apps/` | API control plane, web console, trusted desktop runner, Strands orchestrator and isolated build worker. |
+| `apps/` | API control plane, web console, trusted desktop runner, model orchestrator and isolated build worker. |
 | `fixtures/reference-app/` | A genuinely working local service-request application with PostgreSQL persistence, used as the authorized target under test. |
 | `tests/` | Unit and integration suites. Integration runs against a real PostgreSQL server and fails rather than skips when one is absent. |
 | `packages/` | Domain, contracts, persistence, evidence, clients and assistive-technology adapters. |
@@ -36,7 +41,7 @@ flowchart TD
     User[Operator and reviewer] --> Web[Web console]
     Web --> API[API: scope, approval, sealed journeys]
     API --> DB[(PostgreSQL: identity, leases, evidence metadata)]
-    API --> Orchestrator[Orchestrator: bounded Strands agents]
+    API --> Orchestrator[Orchestrator: bounded Codex integration]
     Orchestrator --> Runner[Trusted desktop runner]
     Runner --> AT[Actual screen reader and browser]
     AT --> Target[Authorized target application]

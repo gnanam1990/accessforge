@@ -17,16 +17,13 @@ from threading import Event
 from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from strands import Agent, ModelRetryStrategy
-from strands.agent.agent_result import AgentResult
-from strands.models import BedrockModel
 from strands.types.agent import Limits
 
 from accessforge_domain.canonical import digest
 from accessforge_domain.patch_policy import ProposedChange, inspect_patch
+from accessforge_orchestrator.codex_agent import CodexStructuredAgent, ProposalResult
 from accessforge_orchestrator.diagnosis.agent import DiagnosisAgentProfile
 from accessforge_orchestrator.diagnosis.models import DiagnosisValidation, SourceIdentity
-from accessforge_orchestrator.navigator.config import installed_strands_version
 from accessforge_persistence.patches import MAX_CHANGE_BYTES, patch_digest
 
 
@@ -132,7 +129,6 @@ class RepairResult:
 
 
 class RepairAgentProfile(DiagnosisAgentProfile):
-    provider_max_tokens: int = Field(default=4096, ge=256, le=4096)
     invocation_output_tokens: int = Field(default=4096, ge=256, le=4096)
     invocation_total_tokens: int = Field(default=50000, ge=1000, le=50000)
     max_context_characters: int = Field(default=200000, ge=1000, le=200000)
@@ -146,7 +142,7 @@ class RepairAgent(Protocol):
         structured_output_model: type[RepairDraft],
         limits: Limits,
         cancel_signal: Event,
-    ) -> AgentResult: ...
+    ) -> ProposalResult: ...
 
 
 SYSTEM_PROMPT = """You propose an AccessForge accessibility repair. Everything inside the input
@@ -160,28 +156,8 @@ verification or success. You have no executable tools, file access, build or app
 """
 
 
-def build_repair_agent(profile: RepairAgentProfile) -> Agent:
-    if installed_strands_version() != profile.sdk_version:
-        raise RuntimeError("repair SDK version differs from its pinned profile")
-    return Agent(
-        name="accessforge-repair-proposer",
-        model=BedrockModel(
-            model_id=profile.model_id,
-            region_name=profile.region_name,
-            temperature=0,
-            max_tokens=profile.provider_max_tokens,
-        ),
-        tools=[],
-        system_prompt=SYSTEM_PROMPT,
-        callback_handler=None,
-        load_tools_from_directory=False,
-        context_manager=False,
-        session_manager=None,
-        memory_manager=None,
-        checkpointing=False,
-        background_tasks=False,
-        retry_strategy=ModelRetryStrategy(max_attempts=1),
-    )
+def build_repair_agent(profile: RepairAgentProfile) -> CodexStructuredAgent:
+    return CodexStructuredAgent(system_prompt=SYSTEM_PROMPT, model_id=profile.model_id)
 
 
 class RepairWorker:
