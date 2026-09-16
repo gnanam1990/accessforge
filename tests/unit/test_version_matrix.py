@@ -61,13 +61,15 @@ def test_postgres_matches_the_image_ci_runs() -> None:
     assert set(images) == {MATRIX["service"]["postgresql"]["min"]}
 
 
-def test_strands_sdk_and_model_profile_match_the_orchestrator_pins() -> None:
+def test_historical_strands_sdk_matches_development_pins() -> None:
     dependency = next(
         item
-        for item in ORCHESTRATOR["project"]["dependencies"]
+        for item in PYPROJECT["dependency-groups"]["dev"]
         if item.startswith("strands-agents==")
     )
     assert dependency == f"strands-agents=={MATRIX['sdk']['strands_agents']['exact']}"
+    assert dependency not in ORCHESTRATOR["project"]["dependencies"]
+    assert MATRIX["sdk"]["strands_agents"]["scope"] == "HISTORICAL_TESTS_ONLY"
 
     config = (
         ROOT
@@ -79,8 +81,22 @@ def test_strands_sdk_and_model_profile_match_the_orchestrator_pins() -> None:
         / "config.py"
     ).read_text(encoding="utf-8")
     assert f'PINNED_STRANDS_VERSION = "{MATRIX["sdk"]["strands_agents"]["exact"]}"' in config
-    assert MATRIX["model"]["navigator"]["model_id"] in config
-    assert MATRIX["model"]["navigator"]["region"] in config
+    assert MATRIX["model"]["legacy_navigator"]["model_id"] in config
+    assert MATRIX["model"]["legacy_navigator"]["region"] in config
+    assert MATRIX["model"]["legacy_navigator"]["status"] == "RETIRED"
+
+
+def test_active_codex_matrix_matches_runtime_and_consent_profile() -> None:
+    from accessforge_domain.codex_navigation import default_profile
+    from accessforge_orchestrator.codex_agent import CODEX_MODEL, CODEX_VERSION
+
+    model = MATRIX["model"]["navigator"]
+    profile = default_profile()
+    assert model["provider"] == profile["provider"] == "codex-chatgpt"
+    assert model["model_id"] == profile["model_id"] == CODEX_MODEL
+    assert model["cli_version"] == profile["sdk_version"] == CODEX_VERSION
+    assert model["auth_mode"] == "chatgpt"
+    assert "bedrock" not in MATRIX["capability"]
 
 
 def test_every_blocked_capability_says_what_would_unblock_it() -> None:
