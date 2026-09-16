@@ -55,6 +55,16 @@ def provision_workspace(
     try:
         with unscoped_connection(database_url) as conn:
             conn.execute("SET LOCAL statement_timeout = '5s'")
+            # Local-development login compares lower(email). Serialize this
+            # operator's case-variant creates using the same database folding.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(lower(%s), 0))", (email,))
+            if (
+                conn.execute(
+                    "SELECT 1 FROM app_user WHERE lower(email)=lower(%s)", (email,)
+                ).fetchone()
+                is not None
+            ):
+                raise WorkspaceSetupRefused("setup conflicts with existing records")
             conn.execute("INSERT INTO app_user(id,email) VALUES(%s,%s)", (user, email))
             conn.execute("INSERT INTO workspace(id,name) VALUES(%s,%s)", (workspace, name))
             record_global_audit_event(

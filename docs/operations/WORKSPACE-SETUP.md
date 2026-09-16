@@ -18,7 +18,7 @@ uv run python scripts/provision_workspace.py \
 ```
 
 The operator label is attribution, not authorization. Email is contact metadata,
-not proof of identity. Existing IDs or an exact email conflict cause refusal;
+not proof of identity. Existing IDs or a case-insensitive email conflict cause refusal;
 there is no upsert, recovery, reactivation, or automatic account linking. An audit
 failure rolls back setup. A connection/commit error can have an unknown outcome:
 inspect the retained IDs and both audit events before retrying. Do not generate new

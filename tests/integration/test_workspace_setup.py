@@ -1,6 +1,7 @@
 """Atomic operator setup and audit against PostgreSQL, not OAuth acceptance."""
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import psycopg
@@ -15,6 +16,42 @@ from accessforge_persistence import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def test_case_variant_concurrent_creates_have_only_one_owner(
+    test_database_url: str, setup_args: dict[str, str]
+) -> None:
+    second = {
+        **setup_args,
+        "user_id": str(uuid.uuid4()),
+        "workspace_id": str(uuid.uuid4()),
+        "email": setup_args["email"].upper(),
+    }
+
+    def create(args: dict[str, str]) -> bool:
+        try:
+            workspace_setup.provision_workspace(test_database_url, **args)
+            return True
+        except workspace_setup.WorkspaceSetupRefused:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(create, [setup_args, second]))
+    assert sorted(results) == [False, True]
+    with unscoped_connection(test_database_url) as conn:
+        assert (
+            len(
+                conn.execute(
+                    "SELECT id FROM app_user WHERE lower(email)=lower(%s)", (setup_args["email"],)
+                ).fetchall()
+            )
+            == 1
+        )
+        loser = second if results[0] else setup_args
+        assert (
+            conn.execute("SELECT 1 FROM workspace WHERE id=%s", (loser["workspace_id"],)).fetchone()
+            is None
+        )
 
 
 @pytest.fixture()
