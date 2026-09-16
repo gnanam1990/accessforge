@@ -209,7 +209,10 @@ describe('canonical execution decisions', () => {
 
 describe('build and manifest preparation', () => {
   const buildId = '11111111-1111-4111-8111-111111111111'
-  const setup = (unknownOnce = false) => {
+  const navigationProfile = { profile: { provider: 'codex-chatgpt', model_id: 'gpt-6-astra' },
+    modelConfigDigest: '8'.repeat(64), meaning: 'CONFIGURATION_PREVIEW_NOT_RUNTIME_EVIDENCE_OR_MODEL_CONSENT',
+    disclosure: 'Consumes account usage; not a currency spending cap.' }
+  const setup = (unknownOnce = false, preview: unknown = navigationProfile) => {
     const server = createFakeServer(MEMBER)
     server.data.journeyVersions.push(JOURNEY)
     server.data.environments.push({ environmentId: 'env-1', name: 'Authorized target',
@@ -218,6 +221,8 @@ describe('build and manifest preparation', () => {
     const writes: { path: string; body: Record<string, unknown>; headers: Headers }[] = []
     const fetchImpl: typeof fetch = async (input, init) => {
       const path = String(input)
+      if (path.endsWith('/navigation-profile')) return new Response(JSON.stringify(preview),
+        { status: 200, headers: { 'content-type': 'application/json' } })
       if (init?.method === 'POST' && (path.endsWith('/builds') || path.endsWith('/seals'))) {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
         writes.push({ path, body, headers: new Headers(init.headers) })
@@ -241,6 +246,25 @@ describe('build and manifest preparation', () => {
     fill('Requested source revision', 'main'); fill('Build artifact SHA-256', 'c'.repeat(64))
     return user
   }
+  it('previews navigation configuration before a run exists and selects only its draft digest', async () => {
+    const { writes, server } = setup()
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Choose the default navigation model configuration'))
+    await user.click(await screen.findByRole('button', { name: 'Use this configuration digest' }))
+    expect(screen.getByLabelText(/Model configuration SHA-256/)).toHaveValue(navigationProfile.modelConfigDigest)
+    expect(screen.getByText(/does not verify runtime readiness/)).toBeVisible()
+    expect(writes).toEqual([])
+    expect(server.bodies.filter((entry) => /\/(runs|approval|navigator-model-consent)$/.test(entry.url))).toEqual([])
+  })
+  it('refuses a malformed configuration preview without selecting a digest', async () => {
+    const { writes } = setup(false, null)
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Choose the default navigation model configuration'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('No digest was selected')
+    expect(screen.queryByRole('button', { name: 'Use this configuration digest' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/Model configuration SHA-256/)).toHaveValue('')
+    expect(writes).toEqual([])
+  })
   it('records observed source and seals exact frozen inputs without issuing approval or requesting a run', async () => {
     const { writes, server } = setup()
     const user = await fillBuild()

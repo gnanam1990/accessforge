@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from accessforge_api.dependencies import clamp_page_size, require_if_match, run_idempotently
 from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
 from accessforge_domain.authorization.roles import Permission
+from accessforge_domain.canonical import digest
+from accessforge_domain.codex_navigation import default_profile
 from accessforge_domain.origins import OriginError, normalize_origin
 from accessforge_domain.timestamps import parse_rfc3339_utc
 from accessforge_persistence import execution_approvals, projects
@@ -22,6 +24,28 @@ from ._common import as_body, as_identifier, authorize, workspace_scope
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["projects"])
 
 Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
+
+
+@router.get("/navigation-profile")
+def navigation_profile(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    """Preview the default navigation configuration before a run or seal exists.
+
+    This is configuration identity, not installed CLI/account readiness or model consent.
+    """
+    authorize(conn, request, workspace_id, Permission.EVIDENCE_READ)
+    profile = default_profile()
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "profile": profile,
+        "modelConfigDigest": digest(profile),
+        "meaning": "CONFIGURATION_PREVIEW_NOT_RUNTIME_EVIDENCE_OR_MODEL_CONSENT",
+        "disclosure": "This configuration uses Codex ChatGPT OAuth and consumes account usage. "
+        "Token reservations are result-admission limits, not a currency spending cap. "
+        "CLI-internal retries are not measured or capped here. "
+        "The operator must verify the actual CLI version, login and configuration separately.",
+    }
 
 
 @router.post("/projects", status_code=status.HTTP_201_CREATED)

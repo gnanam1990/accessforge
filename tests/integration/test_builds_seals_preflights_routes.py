@@ -150,6 +150,29 @@ def project(db: str) -> str:
         return project_store.create_project(conn, workspace_id=WS, name="Sealed project")
 
 
+def test_navigation_profile_preview_before_any_run(client: TestClient, db: str) -> None:
+    from accessforge_api.auth import issue_session
+    from accessforge_domain.codex_navigation import default_profile
+
+    url = f"/v1/workspaces/{WS}/navigation-profile"
+    assert client.get(url).status_code == 401
+    with workspace_connection(db, WS) as conn:
+        viewer = issue_session(conn, user_id=VIEWER)
+    client.cookies.set(SESSION_COOKIE, viewer.session_token)
+    response = client.get(url)
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.json()["profile"] == default_profile()
+    assert response.json()["modelConfigDigest"] == digest(default_profile())
+    assert (
+        response.json()["meaning"]
+        == "CONFIGURATION_PREVIEW_NOT_RUNTIME_EVIDENCE_OR_MODEL_CONSENT"
+    )
+    with workspace_connection(db, WS) as conn:
+        assert conn.execute("SELECT id FROM run").fetchone() is None
+    assert client.get(f"/v1/workspaces/{uuid.uuid4()}/navigation-profile").status_code in (403, 404)
+
+
 @pytest.fixture()
 def environment(client: TestClient, csrf: str, project: str) -> str:
     response = client.post(

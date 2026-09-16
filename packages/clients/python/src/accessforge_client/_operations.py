@@ -330,6 +330,14 @@ OPERATIONS: dict[str, Operation] = {
         mutating=False,
         authenticated=True,
     ),
+    "navigation_profile": Operation(
+        operation_id="navigation_profile",
+        method="GET",
+        path="/v1/workspaces/{workspace_id}/navigation-profile",
+        parameters=("workspace_id",),
+        mutating=False,
+        authenticated=True,
+    ),
     "get_patch": Operation(
         operation_id="get_patch",
         method="GET",
@@ -922,6 +930,7 @@ PATHS: frozenset[str] = frozenset(
         "/v1/workspaces/{workspace_id}/journeys/{journey_version_id}",
         "/v1/workspaces/{workspace_id}/journeys/{journey_version_id}/policy",
         "/v1/workspaces/{workspace_id}/members",
+        "/v1/workspaces/{workspace_id}/navigation-profile",
         "/v1/workspaces/{workspace_id}/patches/{patch_id}",
         "/v1/workspaces/{workspace_id}/patches/{patch_id}/approval",
         "/v1/workspaces/{workspace_id}/patches/{patch_id}/rejection",
