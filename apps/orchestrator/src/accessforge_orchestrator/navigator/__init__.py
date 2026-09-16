@@ -24,6 +24,7 @@ def __getattr__(name: str) -> Any:
         return getattr(tooling, name)
     raise AttributeError(name)
 
+
 __all__ = [
     "NAVIGATION_TOOL_NAME",
     "AdmittedTurnResult",
