@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { runNavigatorProcess, startOwnedNavigatorExecution } from '../dist/navigator-process.js';
 
+const profile = () => ({provider: 'codex-chatgpt', sdk_version: '0.154.0', model_id: 'gpt-6-astra',
+  budget_semantics: 'RESULT_ADMISSION_NOT_SPEND_CAP', invocation_output_tokens: 1024,
+  invocation_total_tokens: 12000, max_context_characters: 24000, call_timeout_seconds: 30});
+
 // Actual child/pipe lifecycle with an explicitly synthetic executable and native bridge. No AT,
 // provider call or database access. Child stdout/stderr deliberately contain a sentinel secret.
 function fixture(t, mode = 'good') {
@@ -36,8 +40,9 @@ fs.writeSync(4, JSON.stringify(result) + '\\n');
     async close() { calls.push('close'); },
     async finish() { calls.push('finish'); return {status: 'FINALIZING'}; } };
   const controller = new AbortController();
-  const options = { pythonExecutable: executable, environment: {ACCESSFORGE_DATABASE_URL: 'unused'},
-    reference, consentId: randomUUID(), modelProfile: {}, allowBillableModelCalls: true,
+  const options = { pythonExecutable: executable, environment: {ACCESSFORGE_DATABASE_URL: 'unused',
+    HOME: '/operator/home', PATH: '/operator/bin', CODEX_HOME: '/operator/codex'},
+    reference, consentId: randomUUID(), modelProfile: profile(), allowBillableModelCalls: true,
     deadlineMonotonic: performance.now() + 10000, signal: controller.signal,
     async closeIndependentObserver(signal) { assert.equal(signal.aborted, false); calls.push('observer-closed'); } };
   return {bridge, options, calls, controller};
@@ -74,7 +79,7 @@ test('billable approval and credential isolation are checked before physical boo
 
 test('Codex receives only explicit OAuth home and executable paths through the real child environment', {skip: process.platform === 'win32'}, async t => {
   const h = fixture(t, 'codex-env');
-  h.options.modelProfile = {provider: 'codex-chatgpt'};
+  h.options.modelProfile = profile();
   h.options.environment = {...h.options.environment, HOME: '/operator/home', PATH: '/operator/bin', CODEX_HOME: '/operator/codex'};
   assert.deepEqual(await runNavigatorProcess(h.bridge, h.options), {status: 'FINALIZING'});
 });
@@ -87,12 +92,29 @@ for (const invalid of [{}, {HOME: '/operator/home'}, {HOME: 'relative', PATH: '/
   test('Codex rejects missing paths or foreign credentials before bootstrap: ' + JSON.stringify(Object.keys(invalid)), {skip: process.platform === 'win32'}, async t => {
     const h = fixture(t);
     let bootstraps = 0;
-    h.options.modelProfile = {provider: 'codex-chatgpt'};
+    h.options.modelProfile = profile();
     h.options.environment = {ACCESSFORGE_DATABASE_URL: 'unused', ...invalid};
     await assert.rejects(startOwnedNavigatorExecution(async () => { bootstraps++; return h.bridge; }, h.options));
     assert.equal(bootstraps, 0);
   });
 }
+
+test('retired, partial, mixed and out-of-bounds profiles never enter physical bootstrap', {skip: process.platform === 'win32'}, async t => {
+  const h = fixture(t);
+  let bootstraps = 0;
+  for (const modelProfile of [null, [], {}, {provider: 'codex-chatgpt'},
+    {...profile(), provider: 'amazon-bedrock'}, {...profile(), region_name: 'us-east-1'},
+    {...profile(), sdk_version: 'other'}, {...profile(), model_id: 'other'},
+    {...profile(), budget_semantics: 'HARD_SPEND_CAP'},
+    {...profile(), call_timeout_seconds: 0.5}, {...profile(), call_timeout_seconds: 121},
+    {...profile(), invocation_total_tokens: 1000, invocation_output_tokens: 2000},
+    {...profile(), invocation_output_tokens: true}, {...profile(), max_context_characters: Infinity}]) {
+    await assert.rejects(startOwnedNavigatorExecution(async () => { bootstraps++; return h.bridge; },
+      {...h.options, modelProfile}));
+  }
+  assert.equal(bootstraps, 0);
+  assert.deepEqual(h.calls, []);
+});
 
 test('abort during observer closure cannot later finish or release', {skip: process.platform === 'win32'}, async t => {
   const h = fixture(t);
