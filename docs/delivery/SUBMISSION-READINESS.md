@@ -10,7 +10,7 @@ submission or actual-reader acceptance result.
 
 - [ ] Qualify exact actual VoiceOver host with consent and native capture evidence.
 - [ ] Provision trusted native transport and original private journal.
-- [ ] Run authorized, bounded real Strands navigation.
+- [ ] Run authorized, bounded real Codex navigation.
 - [ ] Retain and finalize genuine failed baseline with all required independent assertions.
 - [ ] Diagnose, propose and approve constrained repair; build exact candidate.
 - [ ] Independently rerun frozen journey and protected functional regressions.
@@ -22,10 +22,10 @@ be presented as the actual working reader demonstration.
 
 ## Submission artifacts
 
-- [ ] Owner selects/applies required MIT or Apache license; verify GitHub detection.
+- [ ] Owner selects/applies a license compatible with the selected event; verify GitHub detection.
 - [x] Replace obsolete foundation-only README with current implementation/limitations.
 - [x] Include architecture diagram in README, explicitly labelled intended workflow.
-- [ ] Prepare public working-demo video of at most five minutes; verify playback/access.
+- [ ] Verify the selected event's demo limits; prepare a public working-demo video and verify playback/access.
 - [ ] Prepare English description, setup/testing instructions, limitations and required IDs.
 - [ ] Disclose incorporated pre-existing work and verify participant eligibility.
 - [ ] Verify event deadline and required fields in submission account.
@@ -33,13 +33,21 @@ be presented as the actual working reader demonstration.
 - [ ] Provide free working-project access for judges throughout the judging period.
 - [ ] Submit with owner authority and retain receipt.
 
-Original event: [Agents for Humans rules](https://agentsforhumans.devpost.com/rules).
-Check current rules; this checklist does not guarantee eligibility. License choice, paid
+Historical event reference: [Agents for Humans rules](https://agentsforhumans.devpost.com/rules).
+The owner subsequently discussed a different challenge. No current target-event eligibility or
+deadline is established here; the historical event's license/video restrictions must not silently
+be carried into another submission. Verify the selected event before finalizing those choices.
+This checklist does not guarantee eligibility. License choice, paid
 model usage, physical AT startup and publication retain their respective approval boundaries.
 
 ## Full R1 beyond the first demonstrable journey
 
-Real Windows/NVDA, complete outbound GitHub App publishing/reconciliation, production identity,
-deployed isolation/operations, held-out actual-reader benchmarks, physical fault recovery,
+Real Windows/NVDA, actual scoped GitHub App publishing/reconciliation, full production identity
+and isolation/recovery acceptance, held-out actual-reader benchmarks, physical fault recovery,
 pilot evidence and final release acceptance remain open. Local code and CI provide scoped
 implementation evidence, not blanket production readiness.
+
+Hosted GitHub OAuth/owner-workspace access and a Railway control-plane/static smoke have been
+verified separately; see the dated [submission draft checkpoint](SUBMISSION-DRAFT.md#hosted-implementation-checkpoint--2026-09-16).
+They do not check off the essential working evidence above. Actual VoiceOver testing remains
+paused by the owner's latest instruction; no recording plan overrides that boundary.

@@ -1,7 +1,8 @@
 # Evidence-gated demo recording plan
 
 **Recording plan only. No video or actual-reader acceptance is claimed by this file.**
-Target length: 4 minutes 40 seconds, leaving margin below five minutes. Record only an
+Editorial target length: 4 minutes 40 seconds, not a verified limit for the owner's current
+challenge. Confirm that event's requirements before recording. Record only an
 authorized test target and consented private evidence; exclude credentials and unrelated
 desktop/account content. Use English narration or provide an English translation.
 
