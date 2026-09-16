@@ -26,13 +26,33 @@ zero-scope OAuth app rather than reuse repository-publication credentials.
 These choices follow the [GitHub OAuth web-flow documentation](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps),
 including S256 and fresh identity validation on every token exchange.
 
+## Built durable challenge boundary
+
+`auth/github_challenges.py` and migration `0071_github_login_challenge.sql`
+add five-minute database-clock challenges. State, browser secret and PKCE verifier
+are independent random values; only their hashes and a configuration digest are
+stored. The digest also binds client-secret rotation. Raw transient values are
+excluded from the challenge object's repr.
+
+Consumption owns an independent connection and commits before returning, so a
+later provider failure or outer transaction rollback cannot restore the challenge.
+It locks the row before checking the current database time: waiting for another
+transaction must not extend expiry. Concurrent consumers have only one winner.
+Wrong browser, verifier or configuration attempts cannot consume a valid record.
+Database/commit errors fail closed; do not retry an ambiguous operation.
+
+Nine focused tests exercise this boundary against disposable real PostgreSQL,
+including concurrent consumers, caller rollback, configuration drift and a
+confirmed row-lock wait across expiry. They make no provider/browser/reader calls.
+The migration is supplied, not applied to a live deployment. Browser cookie and
+route wiring remain absent: these helpers alone are not a sign-in flow.
+
 ## Required next integration — do not bypass
 
-- Create persistent short-lived OAuth challenges bound to a separate browser
-  cookie, original verifier, client/callback configuration and creation time.
-- Consume each challenge atomically before token exchange. A failed or ambiguous
-  exchange must not roll back consumption or silently retry. No callback-supplied
-  verifier or in-process-only state store is acceptable for multiple replicas.
+- Wire the durable challenges to a separate Secure/HttpOnly/SameSite=Lax browser
+  cookie carrying the original verifier and browser secret. Consume before token
+  exchange; never accept those secrets from callback query parameters. Add bounded
+  challenge creation/rate limiting and expired-row cleanup before enabling routes.
 - Bind numeric provider subjects to existing local users through a trusted
   administrative path. Do not auto-link matching email/login or grant workspace
   membership because the OAuth provider authenticated someone.
