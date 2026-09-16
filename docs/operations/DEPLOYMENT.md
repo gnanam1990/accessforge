@@ -1,13 +1,18 @@
 # Deployment
 
-## Status: local is GO. Hosted is **PREPARED**.
+## Current direction: local Codex; non-AWS hosting remains unproven
+
+The owner retired AWS/Bedrock on 2026-09-16. This guide is the active operator path;
+the original AWS proposal is historical, not a task to resume. Service startup, model
+connectivity and actual-reader acceptance are separate evidence classes.
 
 | Target | Status | What that means |
 |---|---|---|
-| Local (a developer's machine) | **GO** | The complete declared local product path runs, from a clean checkout. Commands below; results in [handoff 27](../handoffs/27.md). |
-| Hosted (AWS) | **PREPARED** | A written proposal exists in [`infra/aws/`](../../infra/aws/README.md). Nothing has been created. No AWS credential is configured in this environment and no workflow in this repository can apply it. |
-| Actual-AT execution (VoiceOver / NVDA) | **BLOCKED** | Needs a macOS host with Accessibility and Automation grants, and a Windows host with NVDA. Neither is available here. |
-| Model invocation (Bedrock) | **BLOCKED** | Needs credentials **and**, separately, approval to incur charges. Credentials alone are not approval. |
+| Local control plane | **IMPLEMENTED; fresh rehearsal required** | Historical service checks are in [handoff 27](../handoffs/27.md); they do not prove the current complete reader/repair journey. Use the commands below only against dedicated local resources. |
+| Hosted (non-AWS) | **NOT DEPLOYED** | Destination, production identity, backup/restore, capacity and operator approval remain required. Codex is the model integration, not the deployment host. |
+| AWS / Bedrock | **RETIRED** | [`infra/aws/`](../../infra/aws/README.md) preserves the old proposal. Do not provision those resources or enable Bedrock for the current product. |
+| Actual-AT execution (VoiceOver / NVDA) | **UNPROVEN** | Qualify the exact dedicated desktop, permissions and reader/browser profile. A Mac being available does not qualify it; real Windows/NVDA acceptance is also outstanding. |
+| Model integration (Codex ChatGPT OAuth) | **IMPLEMENTED; execution-host acceptance required** | Use the pinned CLI and the operator's existing login store. Exact model consent is separate from reader startup and deployment approval. See [Codex migration](../handoffs/codex-migration.md). |
 
 ---
 
@@ -31,8 +36,9 @@ It distinguishes three conditions with three different remedies:
 - `BLOCKED` — a person's action: a permissions grant, a machine, an entitlement. No package manager
   gets you out of these.
 
-Exit 0 means the local product path will run. `BLOCKED` capabilities do not fail it: the local path
-does not exercise them, and failing on them would make a correct machine look broken.
+Exit 0 means the checks covered by the doctor passed. It does not establish a working complete
+product journey. `BLOCKED` capabilities do not fail that diagnostic; inspect them separately
+before model or actual-reader execution.
 
 ### 1.2 Toolchain
 
@@ -153,28 +159,29 @@ absences rather than failures, and a permanently red X trains everyone to ignore
 
 ---
 
-## 4. Hosted deployment — the exact external changes
+## 4. Non-AWS release prerequisites — not a deployment certificate
 
-None of these has been made. Each requires explicit approval from whoever owns the account.
+No deployment destination has been selected or provisioned by these instructions. Before an
+authorized release, record the exact destination and prove:
 
-| # | Change | Billable | Reversible |
-|---|---|---|---|
-| 1 | Create a VPC with private subnets and an S3 gateway endpoint | Yes (NAT) | Yes |
-| 2 | Create an RDS PostgreSQL 17 instance, Multi-AZ, encrypted with a customer-managed KMS key | Yes | Yes, with data loss on delete |
-| 3 | Create an S3 evidence bucket: versioned, public access blocked, SSE-KMS, TLS-only | Yes | Yes |
-| 4 | Create a separate S3 backup bucket, ideally in another account | Yes | Yes |
-| 5 | Create two KMS keys (data, backups) | Yes | **Scheduled deletion only.** Deleting the backup key makes every archive sealed with it permanently unreadable. |
-| 6 | Create Secrets Manager entries for the database URL, object-store credentials and backup key | Yes | Yes |
-| 7 | Create an SQS queue and dead-letter queue | Yes | Yes |
-| 8 | Create four IAM roles from [`infra/aws/iam/`](../../infra/aws/iam/) | No | Yes |
-| 9 | Create an ECS cluster, an API service (2 tasks) and a run-once migrator task | Yes | Yes |
-| 10 | Create AWS Budgets alarms on model spend and total account spend | No | Yes |
-| 11 | **Enable Bedrock model access** | **Yes, per invocation** | Yes |
-| 12 | Provision a macOS host for VoiceOver, outside this configuration | Yes | Yes |
+1. Production identity/session configuration, HTTPS and restricted network access. Never expose
+   the local-development sign-in bypass to remote users.
+2. PostgreSQL 17 with a non-superuser, non-RLS-bypassing application role; separate migration
+   authority; a verified backup and restore into a separate target before applying live changes.
+3. Private S3-compatible evidence storage and protected backup storage, with explicit retention,
+   encryption/key recovery and restore evidence. The S3 protocol and storage libraries do not
+   require choosing AWS; local MinIO tests are not production storage qualification.
+4. Supervised API and required worker processes, health/readiness, bounded shutdown, capacity and
+   original-operation recovery. A successful release workflow creates artifacts, not a deployment.
+5. The execution host's pinned Codex CLI and operator-owned ChatGPT OAuth login, with exact
+   per-run consent. Do not extract tokens into app config or substitute AWS/API-key credentials.
+   Result-admission token holds are not a provider spending cap or a CLI-internal retry cap.
+6. Dedicated qualified macOS/VoiceOver and Windows/NVDA hosts for their declared release scopes.
+   Reader startup and OS permission changes require their own approval; containers do not supply
+   an actual interactive assistive-technology session.
+7. A real baseline, constrained repair, independent rerun, human review and verified offline
+   export, followed by a fresh operator rehearsal. Synthetic CI cannot satisfy these items.
 
-Changes 11 and 12 are separate approvals, not part of a deployment approval. Enabling Bedrock access
-is not approval to invoke a model, and provisioning a Mac is not evidence that VoiceOver can be
-driven under automation on it — that remains unverified here.
-
-**Not automated on purpose.** Nothing in this repository should be one command away from creating
-billable resources in somebody's account.
+Use the [execution ledger](../delivery/EXECUTION-LEDGER.md) for the current continuation queue.
+The [retired AWS proposal](../../infra/aws/README.md) is retained solely for provenance. No
+resource creation, live migration, model invocation or permission grant occurs from this guide.

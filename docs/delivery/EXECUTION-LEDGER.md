@@ -12,28 +12,29 @@ acceptance prerequisite, not a reason to stop this independently authorized migr
 
 ## Current continuation queue — refreshed 2026-09-16
 
-Verified remote/local main is `eac7d55c852bab7eb94794eeea8cc9be9188606a`: #186
-(Codex diagnosis/repair and Bedrock retirement), #187 (one-action Codex planner), and #188
-(Codex consent/runtime observation, database admission and finalizer binding) are merged after
-exact-head CI and normal review. Do not rebuild those slices or treat their historical pending
-notes as current.
+Verified remote/local main is `6667abf8ad074694e6978090a376a89a5f24b5a5`: #186–191
+are merged after exact-head CI and normal review. This includes Codex diagnosis/repair,
+Bedrock retirement, navigator/runtime/consent composition, provider-independent packaging,
+consent UI and retained finalization/export integration. Do not rebuild those slices or
+treat their historical pending notes as current. The retained integration uses synthetic
+CLI/desktop observations and remains INCONCLUSIVE, not actual-reader acceptance.
 
 Work in flight, not yet merged at this checkpoint:
-1. #189 head `27d165c4798030b77279320ce3f6e5de7189648f`: provider-independent
-   submission/results/limits, lazy historical adapter imports, Strands development-only packaging,
-   updated Codex version matrix and platform CI reporting. Latest Python integration CI is running.
-2. #190 head `68b4549969b271c1909c0fe5dc688d056935fa24`: closed Codex consent UI
-   validation and matching API disclosure; 13 component checks and focused backend checks pass.
-3. #191 head `f52e4233d7cbdd2e2e389f57ec47ce513af9e04d`: real disposable PostgreSQL
-   and local S3 retention → finalizer → export integration passes with two synthetic CLI/desktop
-   turns. Exact MODEL identity is retained but overall outcome remains INCONCLUSIVE. This closes
-   that backend proof gap, not physical qualification. Temporary DBs/roles and empty buckets removed.
+1. #192 head `e6f048bd48095858f26974909509a0dbaa54b502`: explicit Codex OAuth home/path
+   forwarding to the native child, with no parent environment inheritance; 19 focused tests pass.
+2. #193 branch `fix/codex-profile-before-native-start`: reject retired, partial, mixed and
+   out-of-bounds model profiles before physical bootstrap; 20 focused tests and TypeScript pass.
+   Exact-head CI is still required. Neither slice starts a reader or invokes a model in its tests.
 
 Next implementation/acceptance sequence:
-- Finish exact-head CI/review/ordered merges for #189–191 and synchronize local main.
+- Finish exact-head CI/review/ordered merges for #192–193 and synchronize local main.
 - Trace C1 from `apps/desktop-runner/src/execution-bootstrap.ts` and
   `native-start-listener.ts` through the actual private host/runtime callbacks. Do not add more
   provider adapters or re-ask the resolved provider selection.
+- Concrete C1 gap: no shipped `provisionNativeHost`/`provisionCandidateProof` implementation
+  exists outside tests. Live build and speech probes exist, but stale previous-automation input
+  measurement still depends on a trusted boolean callback. Do not hard-code that observation
+  from a desktop lock, a keyboard-layout reading or a missing process: none proves the contract.
 - Qualify the explicitly authorized dedicated VoiceOver host (E1), then execute the original
   baseline → Codex diagnosis → constrained repair → independent rerun → human review/export
   path (E2/E3). No synthetic trace or CLI smoke may populate VERIFIED_MATRICES.
@@ -96,7 +97,7 @@ its real execution is not yet proven.
 | C1 | Trusted operator host integration: `apps/desktop-runner/src/execution-bootstrap.ts`, `physical-preflight.ts`, `navigator-process.ts`; orchestrator `baseline_completion.py` | Concrete private controller configuration, transport, runtime callbacks, action authority and independent closure composed into a usable operator entrypoint | Focused composition checks; actual host run separately | None to implement; real reader/model execution needs separate consent |
 | C2 | Forbidden-effect evaluation: domain `journeys/assertions.py`, orchestrator `completion_observer.py` and finalizer | Independent effect monitor with explicit coverage boundaries and frozen predicate; authenticated retention and finalizer consumption | Positive occurrence, complete absence, interrupted coverage and unavailable-monitor cases | No external authority for scoped code; any new external effect monitoring requires its own scope |
 | E1 | Actual VoiceOver qualification: `packages/at-adapters/voiceover/src/profile.ts` | Preserve fail-closed matrix; fix only defects found in qualification | Original physical traces for exact supported host/profile; matrix currently empty | Reader startup and OS permission approval; dedicated desktop |
-| E2 | Real baseline → diagnosis → repair → independent candidate rerun | Connect any remaining C1 integration gaps without bypassing existing approval/build/evidence boundaries | Real Strands use, failed baseline, original S3 artifacts, complete finalization, constrained patch, fresh rerun and protected regressions | E1; provider credentials and explicit spend cap; exact patch/rerun approval |
+| E2 | Real baseline → diagnosis → repair → independent candidate rerun | Connect any remaining C1 integration gaps without bypassing existing approval/build/evidence boundaries | Actual Codex OAuth execution, failed baseline, original S3-compatible artifacts, complete finalization, constrained patch, fresh rerun and protected regressions | E1; execution-host Codex login and exact model consent with acknowledged account-usage semantics (admission holds are not a spending cap); exact patch/rerun approval |
 | E3 | Human review → offline export → fresh setup rehearsal | Repair concrete integration defects found in the normal operator path | Actual review, independently verified export, reload and interrupted-flow evidence | E2 and real reviewer; no invented feedback |
 | R1 | GitHub App checks/publication: orchestrator `github_*` | Finish outbound publisher and unknown-outcome reconciliation; remaining installation lifecycle and credential isolation | Actual scoped App delivery/publication | App installation/key provisioning; existing repository PR work is separately authorized |
 | R2 | Production identity and deployment: API config/auth, `infra/aws` | Production identity integration and deployment configuration gaps | Fresh install, tenant isolation, recovery and capacity evidence | Provider configuration; deployment/live migration approval |

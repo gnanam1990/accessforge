@@ -3,8 +3,9 @@
 **Status: implemented components; actual-reader end-to-end acceptance remains incomplete.**
 
 **Product direction (2026-09-16): Codex, not AWS/Bedrock.** The owner retired the AWS-specific
-product target. Diagnosis and repair are migrating to local Codex with ChatGPT OAuth; navigator
-runtime/consent migration is still pending. Historical AWS specifications and evidence remain
+product target. Diagnosis, repair and the navigator use local Codex with ChatGPT OAuth; the
+Codex consent/runtime, retention/finalizer and consent UI changes are merged. Native host
+integration and actual-reader acceptance remain incomplete. Historical AWS specifications and evidence remain
 historical, not deployment instructions. See [migration status](docs/handoffs/codex-migration.md).
 
 The API, web console, runner infrastructure, navigation/diagnosis/repair components,
@@ -67,8 +68,9 @@ STOP, runtime closure, retention and finalization. A qualified transport and ori
 journal are required; the default transport refuses before runtime provisioning. There is no
 automatic retry after an uncertain response. See [operator guidance](docs/handoffs/baseline-operator-completion.md).
 
-The GitHub integration includes local bindings, webhook receipts and publication intent/recovery
-infrastructure, not a complete outbound publisher. Production identity, deployment, real NVDA,
+The GitHub integration includes bindings, webhook receipts, publication intent/recovery and
+outbound delivery code. Actual authenticated GitHub App delivery remains unverified.
+Production identity, deployment, real NVDA,
 actual-reader benchmarks and pilot acceptance remain open.
 
 ## Release scope vocabulary
