@@ -92,7 +92,8 @@ def test_recipient_acceptance_limit_survives_missing_offer_and_replica_restart(
     with workspace_connection(test_database_url, workspace) as conn:
         assert (
             conn.execute(
-                "SELECT scope_id FROM rate_limit_bucket WHERE scope_kind='WORKSPACE' AND scope_id=%s",
+                "SELECT scope_id FROM rate_limit_bucket "
+                "WHERE scope_kind='WORKSPACE' AND scope_id=%s",
                 (workspace,),
             ).fetchone()
             is None
