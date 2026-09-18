@@ -107,3 +107,87 @@ def test_public_provider_discovery_contains_no_redirect_credentials_or_identity(
     assert response.status_code == 200 and response.json() == {"provider": provider}
     assert response.headers["cache-control"] == "no-store"
     assert app.openapi()["paths"]["/v1/auth/options"]["get"]["security"] == []
+
+
+@pytest.mark.parametrize(
+    ("accept", "destination", "html"),
+    [
+        ("text/html", "document", True),
+        ("text/html;q=0", "document", False),
+        ("text/html;q=bad", "document", False),
+        ("application/json", "document", False),
+        ("text/html", "empty", False),
+    ],
+)
+def test_login_refusal_offers_safe_browser_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    accept: str,
+    destination: str,
+    html: bool,
+) -> None:
+    monkeypatch.setattr("accessforge_api.routes.github_login._denial", lambda _: None)
+    client = TestClient(create_app(_settings()), base_url="https://app.example.test")
+    response = client.get(
+        "/v1/auth/github/callback?code=private-code&state=private-state",
+        headers={"accept": accept, "sec-fetch-dest": destination},
+    )
+    assert response.status_code == 401
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert "private-code" not in response.text and "private-state" not in response.text
+    if html:
+        assert response.headers["content-type"].startswith("text/html")
+        assert "Return to sign-in" in response.text
+        assert response.headers["x-request-id"] in response.text
+        assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+    else:
+        assert response.json()["code"] == "NOT_AUTHENTICATED"
+
+
+def test_disabled_login_browser_gets_unavailable_recovery() -> None:
+    client = TestClient(
+        create_app(
+            _settings(
+                identity_provider="none",
+                github_oauth_client_id=None,
+                github_oauth_client_secret=None,
+                github_oauth_redirect_uri=None,
+            )
+        )
+    )
+    response = client.get(
+        "/v1/auth/github/start",
+        headers={
+            "accept": "text/html",
+            "sec-fetch-dest": "document",
+        },
+    )
+    assert response.status_code == 503
+    assert "Sign-in is temporarily unavailable" in response.text
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_browser_recovery_escapes_reference_and_leaves_other_errors_unchanged() -> None:
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from accessforge_api.login_recovery import browser_login_recovery
+
+    scope = {
+        "type": "http",
+        "path": "/v1/auth/github/callback",
+        "headers": [
+            (b"accept", b"text/html"),
+            (b"sec-fetch-dest", b"document"),
+        ],
+    }
+    problem = Response("original", status_code=401)
+    result = browser_login_recovery(Request(scope), problem, "<script>alert(1)</script>")
+    assert b"<script>" not in result.body
+    assert b"&lt;script&gt;" in result.body
+    scope["path"] = "/v1/projects"
+    assert browser_login_recovery(Request(scope), problem, "id") is problem
+    scope["path"] = "/v1/auth/github/callback"
+    limited = Response("limited", status_code=429)
+    assert browser_login_recovery(Request(scope), limited, "id") is limited
