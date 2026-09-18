@@ -23,6 +23,7 @@ from .health import (
     check_schema_compatibility,
     physical_runner_note,
 )
+from .login_recovery import browser_login_recovery
 from .problems import ProblemCode, ProblemDetail
 from .routes import (
     diagnosis_requests_router,
@@ -353,8 +354,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return response
 
     @app.exception_handler(ProblemDetail)
-    def _problem(request: Request, exc: ProblemDetail) -> JSONResponse:
-        """Every refusal becomes an RFC7807 document.
+    def _problem(request: Request, exc: ProblemDetail) -> Response:
+        """Clients receive RFC7807; browser login refusals get safe recovery guidance.
 
         One handler, so no route can answer with a bare string or an unhandled exception's message.
         The exception messages in this codebase deliberately carry the specifics that help an
@@ -389,7 +390,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         correlation = request.scope.get(SCOPE_CORRELATION_ID)
         if correlation:
             exc.extra.setdefault("correlationId", str(correlation))
-        return exc.to_response()
+        return browser_login_recovery(request, exc.to_response(), str(exc.request_id))
 
     @app.exception_handler(RequestValidationError)
     def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
