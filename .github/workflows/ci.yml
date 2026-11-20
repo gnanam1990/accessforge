@@ -96,20 +96,17 @@ jobs:
           enable-cache: true
 
       - name: Start a real object store
-        # A step rather than a `services:` entry, because the MinIO image needs the `server /data`
-        # argument and a service container cannot be given a command.
-        #
-        # A real S3-compatible store, because the artifact suite has no filesystem fallback. A
-        # stand-in would pass every assertion about size limits and content types while proving none
-        # of what only a real store does -- most importantly that an object can be swapped underneath
-        # a row that still records the old digest, which is the reason `promote` re-reads the bytes.
+        # Build the published community release from its pinned upstream source. This exercises
+        # the actual S3 implementation and needs no registry credentials.
         run: |
           set -euo pipefail
-          docker run -d --name accessforge-minio -p 9000:9000 \
-            -e MINIO_ROOT_USER="$OBJECT_STORE_ACCESS_KEY" \
-            -e MINIO_ROOT_PASSWORD="$OBJECT_STORE_SECRET_KEY" \
-            quay.io/minio/minio:latest server /data
+          GOBIN="$RUNNER_TEMP/bin" CGO_ENABLED=0 go install github.com/minio/minio@v0.0.0-20251015172955-9e49d5e7a648
+          MINIO_ROOT_USER="$OBJECT_STORE_ACCESS_KEY" MINIO_ROOT_PASSWORD="$OBJECT_STORE_SECRET_KEY" \
+            "$RUNNER_TEMP/bin/minio" server --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 \
+            "$RUNNER_TEMP/minio-data" >"$RUNNER_TEMP/minio.log" 2>&1 &
+          minio_pid=$!
           for attempt in $(seq 1 30); do
+            if ! kill -0 "$minio_pid" 2>/dev/null; then break; fi
             if curl -sf "$OBJECT_STORE_ENDPOINT/minio/health/live" >/dev/null; then
               echo "object store live after ${attempt} attempt(s)"
               exit 0
@@ -117,7 +114,7 @@ jobs:
             sleep 2
           done
           echo "::error::the object store never became live"
-          docker logs accessforge-minio || true
+          cat "$RUNNER_TEMP/minio.log"
           exit 1
 
       - name: Install pinned dependencies

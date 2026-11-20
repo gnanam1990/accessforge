@@ -75,14 +75,18 @@ see below — but the refusal is a backstop. Recreating the database is the proc
 
 ## Object store for the evidence-artifact suite
 
-```bash
-colima start
-docker run -d --name accessforge-minio -p 9000:9000 -p 9001:9001 \
-  -e MINIO_ROOT_USER=accessforge -e MINIO_ROOT_PASSWORD="$(openssl rand -base64 24)" \
-  quay.io/minio/minio server /data --console-address ":9001"
-```
+Copy `.env.objectstore.example` to `.env.objectstore` and set the access key and secret there.
+Start the same pinned MinIO community release as CI in a separate terminal with Go installed.
 
-Then copy `.env.objectstore.example` to `.env.objectstore` and fill in the password you generated.
+```bash
+set -a
+. ./.env.objectstore
+set +a
+store_dir=$(mktemp -d)
+GOBIN="$store_dir/bin" CGO_ENABLED=0 go install github.com/minio/minio@v0.0.0-20251015172955-9e49d5e7a648
+MINIO_ROOT_USER="$OBJECT_STORE_ACCESS_KEY" MINIO_ROOT_PASSWORD="$OBJECT_STORE_SECRET_KEY" \
+  "$store_dir/bin/minio" server --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 "$store_dir/data"
+```
 
 **There is no filesystem fallback, and the suite fails rather than skips without a store.** A skipped
 artifact suite on a machine with no object store looks like a passing build, and SESSION-HEADER §12
