@@ -1971,3 +1971,86 @@ def retention_purge(
         (workspace_id, horizon),
     ).rowcount
     return {"draftsPurged": drafts, "attachmentsPurged": attachments}
+
+
+# --- retest and release comparison ---------------------------------------------------------------
+
+
+def _comparison_input(
+    conn: psycopg.Connection[Any], *, workspace_id: str, commission_id: str
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM td_commission WHERE id=%s AND workspace_id=%s",
+        (commission_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("commission unavailable")
+    environment: dict[str, Any] = {}
+    if row["current_brief_revision"] is not None:
+        brief = read_brief_revision(
+            conn,
+            workspace_id=workspace_id,
+            commission_id=commission_id,
+            revision=int(row["current_brief_revision"]),
+        )
+        environment = brief["environment"]
+    outcome = conn.execute(
+        "SELECT s.task_result, d.decision FROM td_assignment a "
+        "JOIN td_submission s ON s.assignment_id = a.id "
+        "LEFT JOIN td_review_decision d ON d.submission_id = s.id "
+        "WHERE a.commission_id=%s AND a.workspace_id=%s "
+        "ORDER BY s.revision DESC LIMIT 1",
+        (commission_id, workspace_id),
+    ).fetchone()
+    return {
+        "commissionId": str(row["id"]),
+        "reference": row["reference"],
+        "status": row["status"],
+        "releaseLabel": (
+            read_brief_revision(
+                conn,
+                workspace_id=workspace_id,
+                commission_id=commission_id,
+                revision=int(row["current_brief_revision"]),
+            )["releaseLabel"]
+            if row["current_brief_revision"] is not None
+            else None
+        ),
+        "defectKey": row["defect_key"],
+        "predecessorCommissionId": (
+            None if row["predecessor_commission_id"] is None
+            else str(row["predecessor_commission_id"])
+        ),
+        "environment": environment,
+        # INV-07: a commission that was never tested on this release is UNTESTED, whatever the
+        # predecessor found. Nothing inherits a pass.
+        "taskResult": None if outcome is None else outcome["task_result"],
+        "deliverableDecision": None if outcome is None else outcome["decision"],
+    }
+
+
+def compare_commissions(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    base_commission_id: str,
+    candidate_commission_id: str,
+) -> dict[str, Any]:
+    base = _comparison_input(
+        conn, workspace_id=workspace_id, commission_id=base_commission_id
+    )
+    candidate = _comparison_input(
+        conn, workspace_id=workspace_id, commission_id=candidate_commission_id
+    )
+    return domain.compare_commissions(base=base, candidate=candidate)
+
+
+def linked_retests(
+    conn: psycopg.Connection[Any], *, workspace_id: str, defect_key: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM td_commission WHERE workspace_id=%s AND defect_key=%s "
+        "ORDER BY created_at",
+        (workspace_id, defect_key),
+    ).fetchall()
+    return [_commission_view(conn, r, include_access_note=False) for r in rows]

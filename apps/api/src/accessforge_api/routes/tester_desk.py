@@ -1274,3 +1274,44 @@ def retention_purge(
     )
     response.headers["Cache-Control"] = "no-store"
     return result.response or {}
+
+
+# --- retest and release comparison -------------------------------------------------------------
+
+
+@router.get("/commissions/{commission_id}/compare")
+def compare_commissions(
+    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn,
+    against: Annotated[str | None, Query()] = None,
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
+    as_identifier(commission_id, what="commission")
+    if against is None or not against:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT, "the 'against' query parameter is required"
+        )
+    as_identifier(against, what="commission")
+    try:
+        view = td.compare_commissions(
+            conn,
+            workspace_id=workspace_id,
+            base_commission_id=commission_id,
+            candidate_commission_id=against,
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.get("/defects/{defect_key}/commissions")
+def defect_commissions(
+    workspace_id: str, defect_key: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "items": td.linked_retests(
+            conn, workspace_id=workspace_id, defect_key=defect_key
+        )
+    }
