@@ -23,7 +23,7 @@
 
 import type { JSX } from 'react'
 
-import { Link, Navigate, Route, Routes } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useParams } from 'react-router-dom'
 
 import { AnnouncerProvider } from './a11y/Announcer'
 import { RouteFocusProvider, RouteHeading } from './a11y/RouteHeading'
@@ -43,11 +43,15 @@ import { ReviewScreen } from './screens/ReviewScreen'
 import { RunScreen } from './screens/RunScreen'
 import { RunnersScreen } from './screens/RunnersScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
+import { TesterDeskScreen } from './screens/TesterDeskScreen'
+import { TesterInboxScreen } from './screens/TesterInboxScreen'
+import { TesterCaptureScreen } from './screens/TesterCaptureScreen'
+import { ClientReportsScreen } from './screens/ClientReportsScreen'
 import { SignInScreen } from './routes/SignInScreen'
 import { WorkspaceRoute } from './routes/WorkspaceRoute'
-import { WORKSPACE_ROUTES } from './routes/routeMap'
+import { WORKSPACE_ROUTES, workspaceHome } from './routes/routeMap'
 import { AppShell } from './shell/AppShell'
-import { SessionProvider, useSession } from './session/SessionProvider'
+import { SessionProvider, membershipFor, useSession } from './session/SessionProvider'
 import type { ApiClient } from './api/client'
 
 /**
@@ -69,6 +73,10 @@ const SCREENS: Readonly<Record<string, JSX.Element>> = {
   'reviews/:reviewId': <ReviewScreen />,
   'exports/:exportId': <ExportScreen />,
   settings: <SettingsScreen />,
+  'tester-desk': <TesterDeskScreen />,
+  'tester-desk/tester': <TesterInboxScreen />,
+  'tester-desk/tester/assignments/:assignmentId': <TesterCaptureScreen />,
+  'tester-desk/client': <ClientReportsScreen />,
 }
 
 const AuthenticatedRoutes = (): JSX.Element => (
@@ -76,7 +84,7 @@ const AuthenticatedRoutes = (): JSX.Element => (
     <Route path="/" element={<Navigate to="/workspaces" replace />} />
     <Route path="/workspaces" element={<WorkspacesShell />} />
     <Route path="/w/:workspaceId" element={<WorkspaceRoute />}>
-      <Route index element={<Navigate to="overview" replace />} />
+      <Route index element={<WorkspaceLanding />} />
       {WORKSPACE_ROUTES.map((route) => (
         <Route
           key={route.path}
@@ -105,6 +113,22 @@ const WorkspacesShell = (): JSX.Element => {
       <ChooseWorkspaceScreen />
     </AppShell>
   )
+}
+
+/**
+ * Where a workspace's index lands depends on how the caller may enter it.
+ *
+ * Members land on the overview, as they always have. Tester-desk participants are not members —
+ * the session names their access as TESTER or CLIENT — and the overview is a member surface the
+ * server refuses for them. Landing them there anyway would signpost a page that can never answer;
+ * their own surfaces are the tester inbox and the client report list.
+ */
+const WorkspaceLanding = (): JSX.Element => {
+  const { workspaceId = '' } = useParams()
+  const { state } = useSession()
+  const role =
+    state.status === 'authenticated' ? membershipFor(state, workspaceId)?.role : undefined
+  return <Navigate to={workspaceHome(workspaceId, role)} replace />
 }
 
 /**

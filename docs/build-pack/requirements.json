@@ -1,0 +1,355 @@
+{
+  "schemaVersion": 1,
+  "status": "SPECIFICATION_ONLY",
+  "definitions": {
+    "functional": [
+      {
+        "id": "FR-01",
+        "title": "Commission and task contracts",
+        "definition": "Implement versioned commission authoring with environment, journey, fee and deliverable rubric pinned at publication. Bind each accepted assignment to its exact immutable brief revision."
+      },
+      {
+        "id": "FR-02",
+        "title": "Tester eligibility and consent",
+        "definition": "Implement restricted enrollment, conflicts, scoped visibility, offer expiry and atomic assignment claims."
+      },
+      {
+        "id": "FR-03",
+        "title": "Accessible evidence capture",
+        "definition": "Build keyboard and reader-friendly drafts, step outcomes, permitted attachments and digest-backed uploads."
+      },
+      {
+        "id": "FR-04",
+        "title": "Submission and review",
+        "definition": "Seal revisions, validate completeness against the rubric, separate task outcome from evidence acceptance, and allow justified revision requests."
+      },
+      {
+        "id": "FR-05",
+        "title": "Compensation and reconciliation",
+        "definition": "Create the payable exactly once, implement an approved compensation adapter and reconcile uncertain results."
+      },
+      {
+        "id": "FR-06",
+        "title": "Client reporting and privacy",
+        "definition": "Project only consented evidence to a client report and implement redaction and retention operations."
+      },
+      {
+        "id": "FR-07",
+        "title": "Retest and release comparison",
+        "definition": "Link follow-up commissions by defect and compare only matching task and environment dimensions."
+      },
+      {
+        "id": "FR-08",
+        "title": "End-to-end agency pilot",
+        "definition": "Exercise a real test browser, a consenting independent tester and an agency reviewer with a restart and a redacted evidence export."
+      }
+    ],
+    "nonfunctional": [
+      {
+        "id": "NFR-01",
+        "title": "Replayable evidence",
+        "definition": "A reviewer can reproduce the outcome from the exact input revision, actor scope, persisted decision and redacted evidence reference after a process restart."
+      }
+    ],
+    "invariants": [
+      {
+        "id": "INV-01",
+        "title": "Commission and task contracts",
+        "definition": "Published briefs retain their terms for each accepted assignment."
+      },
+      {
+        "id": "INV-02",
+        "title": "Tester eligibility and consent",
+        "definition": "Only one eligible, consenting tester may claim an exclusive commission."
+      },
+      {
+        "id": "INV-03",
+        "title": "Accessible evidence capture",
+        "definition": "An unauthorized recording never enters the shared report."
+      },
+      {
+        "id": "INV-04",
+        "title": "Submission and review",
+        "definition": "A failed task can earn acceptance of complete testing work."
+      },
+      {
+        "id": "INV-05",
+        "title": "Compensation and reconciliation",
+        "definition": "One accepted assignment can create at most one external compensation intent."
+      },
+      {
+        "id": "INV-06",
+        "title": "Client reporting and privacy",
+        "definition": "Each export is bound to its audience, release and report revision."
+      },
+      {
+        "id": "INV-07",
+        "title": "Retest and release comparison",
+        "definition": "A previous finding never implicitly passes a later release."
+      },
+      {
+        "id": "INV-08",
+        "title": "End-to-end agency pilot",
+        "definition": "Automation-only evidence cannot populate a human-observed result."
+      }
+    ]
+  },
+  "tests": [
+    {
+      "id": "T-001",
+      "title": "Commission and task contracts • expected behavior",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-002",
+      "title": "Commission and task contracts • failure boundary",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-003",
+      "title": "Tester eligibility and consent • expected behavior",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-004",
+      "title": "Tester eligibility and consent • failure boundary",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-005",
+      "title": "Accessible evidence capture • expected behavior",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-006",
+      "title": "Accessible evidence capture • failure boundary",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-007",
+      "title": "Submission and review • expected behavior",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-008",
+      "title": "Submission and review • failure boundary",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-009",
+      "title": "Compensation and reconciliation • expected behavior",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-010",
+      "title": "Compensation and reconciliation • failure boundary",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-011",
+      "title": "Client reporting and privacy • expected behavior",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-012",
+      "title": "Client reporting and privacy • failure boundary",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-013",
+      "title": "Retest and release comparison • expected behavior",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-014",
+      "title": "Retest and release comparison • failure boundary",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-015",
+      "title": "End-to-end agency pilot • expected behavior",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "T-016",
+      "title": "End-to-end agency pilot • failure boundary",
+      "status": "NOT_RUN"
+    }
+  ],
+  "modules": [
+    {
+      "id": "M01",
+      "name": "Commission and task contracts",
+      "file": "prompts/M01.md",
+      "requirements": [
+        "FR-01"
+      ],
+      "nonfunctional": [
+        "NFR-01"
+      ],
+      "invariants": [
+        "INV-01"
+      ],
+      "tests": [
+        "T-001",
+        "T-002"
+      ],
+      "dependsOn": [],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "M02",
+      "name": "Tester eligibility and consent",
+      "file": "prompts/M02.md",
+      "requirements": [
+        "FR-02"
+      ],
+      "nonfunctional": [
+        "NFR-01"
+      ],
+      "invariants": [
+        "INV-02"
+      ],
+      "tests": [
+        "T-003",
+        "T-004"
+      ],
+      "dependsOn": [
+        "M01"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "M03",
+      "name": "Accessible evidence capture",
+      "file": "prompts/M03.md",
+      "requirements": [
+        "FR-03"
+      ],
+      "nonfunctional": [
+        "NFR-01"
+      ],
+      "invariants": [
+        "INV-03"
+      ],
+      "tests": [
+        "T-005",
+        "T-006"
+      ],
+      "dependsOn": [
+        "M02"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "M04",
+      "name": "Submission and review",
+      "file": "prompts/M04.md",
+      "requirements": [
+        "FR-04"
+      ],
+      "nonfunctional": [
+        "NFR-01"
+      ],
+      "invariants": [
+        "INV-04"
+      ],
+      "tests": [
+        "T-007",
+        "T-008"
+      ],
+      "dependsOn": [
+        "M03"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "M05",
+      "name": "Compensation and reconciliation",
+      "file": "prompts/M05.md",
+      "requirements": [
+        "FR-05"
+      ],
+      "nonfunctional": [
+        "NFR-01"
+      ],
+      "invariants": [
+        "INV-05"
+      ],
+      "tests": [
+        "T-009",
+        "T-010"
+      ],
+      "dependsOn": [
+        "M04"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "M06",
+      "name": "Client reporting and privacy",
+      "file": "prompts/M06.md",
+      "requirements": [
+        "FR-06"
+      ],
+      "nonfunctional": [
+        "NFR-01"
+      ],
+      "invariants": [
+        "INV-06"
+      ],
+      "tests": [
+        "T-011",
+        "T-012"
+      ],
+      "dependsOn": [
+        "M05"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "M07",
+      "name": "Retest and release comparison",
+      "file": "prompts/M07.md",
+      "requirements": [
+        "FR-07"
+      ],
+      "nonfunctional": [
+        "NFR-01"
+      ],
+      "invariants": [
+        "INV-07"
+      ],
+      "tests": [
+        "T-013",
+        "T-014"
+      ],
+      "dependsOn": [
+        "M06"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "M08",
+      "name": "End-to-end agency pilot",
+      "file": "prompts/M08.md",
+      "requirements": [
+        "FR-08"
+      ],
+      "nonfunctional": [
+        "NFR-01"
+      ],
+      "invariants": [
+        "INV-08"
+      ],
+      "tests": [
+        "T-015",
+        "T-016"
+      ],
+      "dependsOn": [
+        "M07"
+      ],
+      "status": "NOT_RUN"
+    }
+  ]
+}

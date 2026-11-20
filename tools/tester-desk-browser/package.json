@@ -1,0 +1,9 @@
+{
+  "name": "accessforge-tester-desk-browser-check",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  }
+}

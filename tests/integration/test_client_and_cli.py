@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -445,19 +446,25 @@ def test_the_cli_lists_only_operations_this_build_can_call(
 ) -> None:
     result = _cli(server, session_file, "operations")
     assert result.returncode == 0
-    assert "create_execution_grant" in result.stdout
-    # Nothing from a module that does not exist. `publish` is module 20, which needs GitHub App
-    # authorization nobody has granted; until those routes exist the CLI must not advertise them.
-    assert "publish" not in result.stdout
+    operation_ids = set(
+        re.findall(r"^[* ] ([a-z_0-9]+)\s+[A-Z]+\s+/", result.stdout, flags=re.MULTILINE)
+    )
+    assert "create_execution_grant" in operation_ids
+    # Publication of a Tester Desk offer or its consent terms is an internal workspace action.
+    # The CLI must still advertise no operation to publish code to an external repository.
+    assert {name for name in operation_ids if "publish" in name} == {
+        "publish_commission",
+        "publish_terms",
+    }
     # `patch` used to be listed here too. Modules 14 and 15 landed the proposal and verification
     # routes, so these operations are real and the CLI is right to offer them -- asserted positively
     # rather than removed, because "the list no longer mentions patches" would also pass if the
     # routes had been dropped.
-    assert "propose_patch" in result.stdout
-    assert "approve_patch" in result.stdout
-    assert "get_verification" in result.stdout
-    assert "check_supervisor_reader_startup_consent" not in result.stdout
-    assert "open_supervisor_session" not in result.stdout
+    assert "propose_patch" in operation_ids
+    assert "approve_patch" in operation_ids
+    assert "get_verification" in operation_ids
+    assert "check_supervisor_reader_startup_consent" not in operation_ids
+    assert "open_supervisor_session" not in operation_ids
 
 
 @pytest.fixture()

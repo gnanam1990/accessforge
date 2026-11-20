@@ -20,6 +20,10 @@ describe('the route table', () => {
       'reviews/:reviewId',
       'exports/:exportId',
       'settings',
+      'tester-desk',
+      'tester-desk/tester',
+      'tester-desk/tester/assignments/:assignmentId',
+      'tester-desk/client',
     ])
   })
 

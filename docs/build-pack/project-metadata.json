@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "project": "AccessForge Tester Desk",
+  "version": "1.0",
+  "status": "SPECIFICATION_ONLY",
+  "implementation": "NOT_RUN",
+  "productTests": "NOT_RUN",
+  "deployment": "NOT_RUN",
+  "marketValidation": "UNPROVEN",
+  "counts": {
+    "functional": 8,
+    "nonfunctional": 1,
+    "invariants": 8,
+    "modules": 8,
+    "testCases": 16
+  }
+}

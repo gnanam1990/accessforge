@@ -7,7 +7,12 @@
 
 import type { ApiClient, ApiOutcome } from './client'
 
-export type WorkspaceRole = 'OWNER' | 'MAINTAINER' | 'REVIEWER' | 'VIEWER'
+/**
+ * Member roles come from `workspace_membership`. `TESTER` and `CLIENT` are tester-desk access, not
+ * memberships: the session names a workspace this way when the caller holds an active tester
+ * enrollment or a client-viewer grant there, and carries no member authority with it.
+ */
+export type WorkspaceRole = 'OWNER' | 'MAINTAINER' | 'REVIEWER' | 'VIEWER' | 'TESTER' | 'CLIENT'
 
 export interface WorkspaceMembership {
   readonly workspaceId: string

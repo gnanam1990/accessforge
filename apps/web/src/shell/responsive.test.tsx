@@ -30,7 +30,7 @@ describe('the primary navigation', () => {
   it('shows every entry directly at desktop widths', () => {
     renderNav(false)
     const nav = screen.getByRole('navigation', { name: 'Workspace sections' })
-    expect(within(nav).getAllByRole('link')).toHaveLength(4)
+    expect(within(nav).getAllByRole('link')).toHaveLength(7)
   })
 
   it('collapses into a disclosure with a text label, not a glyph', async () => {
@@ -42,7 +42,7 @@ describe('the primary navigation', () => {
 
     await user.click(toggle)
     const nav = screen.getByRole('navigation', { name: 'Workspace sections' })
-    expect(within(nav).getAllByRole('link')).toHaveLength(4)
+    expect(within(nav).getAllByRole('link')).toHaveLength(7)
   })
 
   it('keeps every entry in the document even while collapsed', () => {
@@ -50,6 +50,6 @@ describe('the primary navigation', () => {
     // browser's in-page search still reach the entries.
     renderNav(true)
     const nav = screen.getByRole('navigation', { name: 'Workspace sections' })
-    expect(within(nav).getAllByRole('link', { hidden: true })).toHaveLength(4)
+    expect(within(nav).getAllByRole('link', { hidden: true })).toHaveLength(7)
   })
 })

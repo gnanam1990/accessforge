@@ -68,6 +68,20 @@ class Permission(StrEnum):
     INFRASTRUCTURE_OPERATE = "INFRASTRUCTURE_OPERATE"
     """Enroll runners, manage leases, quarantine desktops."""
 
+    COMMISSION_AUTHOR = "COMMISSION_AUTHOR"
+    """Author and publish tester-desk commission briefs. Agency-side; the tester never authors."""
+
+    COMMISSION_REVIEW = "COMMISSION_REVIEW"
+    """Accept submitted evidence or request a justified revision. Separate from authoring: the
+    person who wrote the commission is not its only possible reviewer."""
+
+    TESTER_DESK_ADMIN = "TESTER_DESK_ADMIN"
+    """Administer the tester roster, client viewer grants and consent terms. Owner only."""
+
+    COMPENSATION_RECONCILE = "COMPENSATION_RECONCILE"
+    """Reconcile payables against a provider result. Owner only: finance is a named actor, not
+    everyone who can commission work."""
+
 
 # The authoritative matrix. Listed explicitly per role rather than derived by inheritance, because
 # "maintainer gets everything a reviewer gets plus extras" is how a reviewer quietly acquires
@@ -82,12 +96,14 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.PATCH_APPROVE,
             Permission.EVIDENCE_READ,
             Permission.EVIDENCE_EXPORT,
+            Permission.COMMISSION_AUTHOR,
         }
     ),
     Role.REVIEWER: frozenset(
         {
             Permission.EVIDENCE_READ,
             Permission.PATCH_REVIEW,
+            Permission.COMMISSION_REVIEW,
         }
     ),
     Role.VIEWER: frozenset({Permission.EVIDENCE_READ}),

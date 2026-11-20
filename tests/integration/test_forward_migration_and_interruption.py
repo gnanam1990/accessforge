@@ -41,7 +41,18 @@ WS = str(uuid.UUID(int=0x2B0))
 
 #: The migration this release adds on top of the previous one. Named rather than computed, so that
 #: adding a migration without extending this test is a failure rather than a silent widening.
-NEWEST = "0074_membership_invitation.sql"
+NEWEST = "0082_tester_desk_compensation_amounts.sql"
+INVITATION_AND_TESTER_DESK = (
+    "0074_membership_invitation.sql",
+    "0075_tester_desk_commissions.sql",
+    "0076_tester_desk_enrollment_assignment.sql",
+    "0077_tester_desk_evidence.sql",
+    "0078_tester_desk_submission_review.sql",
+    "0079_tester_desk_compensation.sql",
+    "0080_tester_desk_reports.sql",
+    "0081_tester_desk_own_rows.sql",
+    NEWEST,
+)
 
 #: Every unique constraint on `evidence_artifact` covering exactly (id, workspace_id). Read from
 #: the catalog rather than by name: a migration adding a second one under a different name is
@@ -108,7 +119,7 @@ def test_invitation_migration_preserves_membership_and_starts_empty(disposable: 
             (WS, user),
         )
         before = conn.execute("SELECT * FROM workspace_membership").fetchall()
-    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == list(INVITATION_AND_TESTER_DESK)
     assert migrate(disposable) == []
     with connect(disposable) as conn:
         conn.execute("SELECT set_config('accessforge.workspace_id',%s,true)", (WS,))
@@ -148,6 +159,37 @@ def test_a_database_at_the_previous_schema_migrates_forward(disposable: str) -> 
     assert after.latest == NEWEST
 
 
+def test_compensation_upgrade_preserves_settled_amount_and_receipt(disposable: str) -> None:
+    from accessforge_persistence import tester_desk as td
+
+    from .conftest import seed_desk
+    from .test_tester_desk_compensation import _accepted_assignment
+
+    _apply_through(disposable, "0081_tester_desk_own_rows.sql")
+    desk = seed_desk(disposable)
+    _accepted_assignment(desk)
+    td.run_payable_dispatch(
+        disposable, workspace_id=desk.workspace_id, adapter=td.LocalLedgerAdapter()
+    )
+    with connect(disposable) as conn:
+        payable = conn.execute("SELECT * FROM td_payable").fetchall()
+        ledger = conn.execute("SELECT * FROM td_ledger_entry").fetchall()
+        assert len(payable) == len(ledger) == 1
+        assert payable[0]["status"] == "SETTLED"
+        assert ledger[0]["amount_minor"] == payable[0]["amount_minor"] == 2000
+        assert ledger[0]["reference"] == payable[0]["provider_reference"]
+    assert migrate(disposable) == [NEWEST]
+    assert migrate(disposable) == []
+    with connect(disposable) as conn:
+        assert conn.execute("SELECT * FROM td_payable").fetchall() == payable
+        assert conn.execute("SELECT * FROM td_ledger_entry").fetchall() == ledger
+        types = conn.execute(
+            "SELECT data_type FROM information_schema.columns WHERE table_schema='public' "
+            "AND table_name IN ('td_payable','td_ledger_entry') AND column_name='amount_minor'"
+        ).fetchall()
+        assert [r["data_type"] for r in types] == ["bigint", "bigint"]
+
+
 def test_login_challenge_upgrade_preserves_users_without_creating_login_authority(
     disposable: str,
 ) -> None:
@@ -162,7 +204,7 @@ def test_login_challenge_upgrade_preserves_users_without_creating_login_authorit
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     assert migrate(disposable) == []
     with connect(disposable) as conn:
@@ -191,7 +233,7 @@ def test_identity_upgrade_preserves_unbound_sessions(disposable: str) -> None:
     assert migrate(disposable) == [
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         after = conn.execute("SELECT * FROM user_session").fetchone()
@@ -217,7 +259,7 @@ def test_membership_revision_upgrade_preserves_roles_and_revocations(disposable:
                 (workspace, user, role, role == "VIEWER"),
             )
         before = conn.execute("SELECT * FROM workspace_membership ORDER BY user_id").fetchall()
-    assert migrate(disposable) == ["0073_membership_revision.sql", NEWEST]
+    assert migrate(disposable) == ["0073_membership_revision.sql", *INVITATION_AND_TESTER_DESK]
     assert migrate(disposable) == []
     with connect(disposable) as conn:
         conn.execute("SELECT set_config('accessforge.workspace_id',%s,true)", (workspace,))
@@ -253,7 +295,7 @@ def test_publication_intent_upgrade_does_not_consume_consent(disposable: str) ->
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT id FROM github_publication_intent").fetchall() == []
@@ -282,7 +324,7 @@ def test_publication_receipt_upgrade_does_not_invent_creation_confirmation(dispo
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM github_publication_intent").fetchall() == before
@@ -463,7 +505,7 @@ def test_dispatch_migration_does_not_invent_historical_machine_credentials(dispo
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT count(*) AS n FROM supervisor_dispatch_ticket").fetchone() == {
@@ -516,7 +558,7 @@ def test_session_migration_does_not_mint_historical_execution_authority(disposab
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute(
@@ -592,7 +634,7 @@ def test_manual_approval_migration_preserves_old_decisions_without_creating_cons
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM approval").fetchall() == before
@@ -660,7 +702,7 @@ def test_regression_migrations_effect_is_absent_before_and_present_after(
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         for table in ("candidate_regression_attempt", "candidate_regression_process"):
@@ -724,7 +766,7 @@ def test_materialization_upgrade_does_not_fabricate_historical_source(disposable
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM candidate_materialization").fetchall() == []
@@ -819,7 +861,7 @@ def test_canonical_manifest_upgrade_preserves_legacy_fingerprint_without_authori
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute(
@@ -887,7 +929,7 @@ def test_candidate_run_upgrade_adds_no_invented_run_or_lease(disposable: str) ->
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute(
@@ -969,7 +1011,7 @@ def test_endpoint_migration_adds_no_invented_binding(disposable: str) -> None:
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute("SELECT * FROM candidate_endpoint").fetchall() == []
@@ -1038,7 +1080,7 @@ def test_archive_location_upgrade_keeps_unknown_historical_locations_unbound(
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute(
@@ -1124,7 +1166,7 @@ def test_retirement_migration_preserves_legacy_upload_protocol(disposable: str) 
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute(
@@ -1227,7 +1269,7 @@ def test_nonterminal_delete_migration_prevents_orphans(disposable: str) -> None:
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         assert conn.execute("DELETE FROM workspace WHERE id = %s", (WS,)).rowcount == 1
@@ -1314,7 +1356,7 @@ def test_candidate_artifact_migration_preserves_its_constraints(disposable: str)
         "0071_github_login_challenge.sql",
         "0072_github_user_identity.sql",
         "0073_membership_revision.sql",
-        NEWEST,
+        *INVITATION_AND_TESTER_DESK,
     ]
     with connect(disposable) as conn:
         # Migration cannot invent process provenance or available bytes for an old digest.
