@@ -1,7 +1,7 @@
 {
   "project": "AccessForge Tester Desk",
   "packVersion": "1.0",
-  "testedSha": "25b4132",
+  "testedSha": "28c9aa3",
   "targetBranch": "devin/accessforge-tester-desk",
   "modules": [
     {
@@ -39,56 +39,94 @@
     {
       "id": "M03",
       "title": "Accessible evidence capture",
-      "state": "in_progress",
+      "state": "accepted",
       "owner": "devin (SWE-2 High, local)",
-      "commands": [],
-      "evidence": [],
-      "nextAction": "Build keyboard and reader-friendly drafts, step outcomes, permitted attachments and digest-backed uploads."
+      "commands": [
+        "uv run pytest tests/integration/test_tester_desk_evidence.py -q -> 5 passed (exit 0)"
+      ],
+      "evidence": [
+        "T-005 partial draft reload recovers 3 observations: test_evidence.py::test_t005_...",
+        "T-006 disallowed kinds/content types refused, no artifact: test_evidence.py::test_t006_...",
+        "sha256 computed at write, re-verified at read (NFR-01); HUMAN_MANUAL-only source (INV-08)"
+      ],
+      "nextAction": "verified at 8e7d1fd"
     },
     {
       "id": "M04",
       "title": "Submission and review",
-      "state": "pending",
-      "owner": null,
-      "commands": [],
-      "evidence": [],
-      "nextAction": "Seal revisions, validate completeness against the rubric, separate task outcome from evidence acceptance, and allow justified revision requests."
+      "state": "accepted",
+      "owner": "devin (SWE-2 High, local)",
+      "commands": [
+        "uv run pytest tests/integration/test_tester_desk_review.py -q -> 5 passed (exit 0)"
+      ],
+      "evidence": [
+        "T-007 FAILED task -> ACCEPTED evidence: test_review.py::test_t007_...",
+        "T-008 obsolete submission digest -> 409: test_review.py::test_t008_...",
+        "sealed td_submission immutable by trigger; one decision per submission"
+      ],
+      "nextAction": "verified at c0ab05f"
     },
     {
       "id": "M05",
       "title": "Compensation and reconciliation",
-      "state": "pending",
-      "owner": null,
-      "commands": [],
-      "evidence": [],
-      "nextAction": "Create the payable exactly once, implement an approved compensation adapter and reconcile uncertain results."
+      "state": "accepted",
+      "owner": "devin (SWE-2 High, local)",
+      "commands": [
+        "uv run pytest tests/integration/test_tester_desk_compensation.py -q -> 4 passed (exit 0)"
+      ],
+      "evidence": [
+        "T-009 double approval -> one payable: test_compensation.py::test_t009_...",
+        "T-010 DISPATCHED payable survives restart, never redispatched, reconciles by reference: test_t010_...",
+        "LocalLedgerAdapter is the stand-in provider; live rail is an open external gate"
+      ],
+      "nextAction": "verified at 016cb0d"
     },
     {
       "id": "M06",
       "title": "Client reporting and privacy",
-      "state": "pending",
-      "owner": null,
-      "commands": [],
-      "evidence": [],
-      "nextAction": "Project only consented evidence to a client report and implement redaction and retention operations."
+      "state": "accepted",
+      "owner": "devin (SWE-2 High, local)",
+      "commands": [
+        "uv run pytest tests/integration/test_tester_desk_reports.py -q -> 3 passed (exit 0)"
+      ],
+      "evidence": [
+        "T-011 redacted r18 report visible to granted client: test_reports.py::test_t011_...",
+        "T-012 cross-client attachment fetch -> 404: test_reports.py::test_t012_...",
+        "retention_purge drops working-set bytes; digest-bound manifests survive"
+      ],
+      "nextAction": "verified at fce9dde"
     },
     {
       "id": "M07",
       "title": "Retest and release comparison",
-      "state": "pending",
-      "owner": null,
-      "commands": [],
-      "evidence": [],
-      "nextAction": "Link follow-up commissions by defect and compare only matching task and environment dimensions."
+      "state": "accepted",
+      "owner": "devin (SWE-2 High, local)",
+      "commands": [
+        "uv run pytest tests/integration/test_tester_desk_retest.py -q -> 3 passed (exit 0)"
+      ],
+      "evidence": [
+        "T-013 r19 retest UNTESTED beside r18 FAILED: test_retest.py::test_t013_...",
+        "T-014 differing AT shows environment.* caveats: test_retest.py::test_t014_..."
+      ],
+      "nextAction": "verified at 049e969"
     },
     {
       "id": "M08",
       "title": "End-to-end agency pilot",
-      "state": "pending",
-      "owner": null,
-      "commands": [],
-      "evidence": [],
-      "nextAction": "Exercise a real test browser, a consenting independent tester and an agency reviewer with a restart and a redacted evidence export."
+      "state": "accepted-local",
+      "owner": "devin (SWE-2 High, local)",
+      "commands": [
+        "uv run pytest tests/integration/ -k tester_desk -> 32 passed, 1468 deselected (exit 0)",
+        "uv run mypy apps/api/src -> no issues in 42 source files (exit 0, CI parity)",
+        "cd apps/web && npx vitest run -> 30 files / 488 tests passed (exit 0)",
+        "npx tsc --noEmit -> new files clean; pre-existing @types/node gap in unrelated tooling files"
+      ],
+      "evidence": [
+        "T-015 UI: capture screen shows FAILED task + ACCEPTED decision + human observation (testerDesk.test.tsx)",
+        "T-016 UI+pilot: INTENT payable renders PENDING DISPATCH while ACCEPTED findings stay available",
+        "pilot test: full AF-21 scene via real API entry points incl. restart draft recovery + r19 UNTESTED retest"
+      ],
+      "nextAction": "External gates open: human tester w/ VoiceOver+Safari, live payout provider, agency test URL, real-browser E2E."
     }
   ]
 }

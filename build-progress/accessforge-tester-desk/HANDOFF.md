@@ -1,57 +1,102 @@
 # AccessForge Tester Desk · Session handoff
 
-State at `25b4132`: M01 and M02 implemented and verified against the dedicated
-local database. M03 in progress next.
+State at `28c9aa3`: all eight modules implemented and verified against the
+dedicated local database. The full AF-21 pilot journey runs end-to-end through
+real API entry points; the web surfaces are live in the app shell and covered
+by the web test suite. Nothing is pushed, no PR is open, no live external
+integration was exercised — the exact gaps are listed below.
 
 - Target repository / branch / tested SHA: accessforge-tester-desk workspace /
-  `devin/accessforge-tester-desk` / `25b4132` (tests ran on the working tree that
-  produced this commit).
-- Completed behavior and redacted evidence path:
-  - M01 commissions + immutable brief revisions: `packages/persistence/.../0075_tester_desk_commissions.sql`,
-    `packages/domain/.../tester_desk.py`, `packages/persistence/.../tester_desk.py`,
-    `apps/api/.../routes/tester_desk.py` (clients, consent terms, commissions).
-    Published brief revisions are immutable by trigger; T-001 (publish `r18`,
-    5-step checkout, reopen exact revision) and T-002 (fee edit after
-    acceptance still reads `20.00` from the pinned revision) pass.
-  - M02 eligibility + consent + atomic claim: `0076_tester_desk_enrollment_assignment.sql`,
-    enrollment/capability/conflict routes, scoped offer list with expiry,
-    `claim_offer` using `FOR UPDATE` row lock so concurrent eligible testers
-    produce exactly one winner; only the winner reads the access credentials.
-    T-003 (Safari + VoiceOver consenting tester claims) and T-004 (raced
-    claims → single winner) pass.
-  - Integration evidence: `tests/integration/test_tester_desk_commissions.py`
-    (5 tests), `tests/integration/test_tester_desk_enrollment.py` (6 tests),
-    shared fixture `tests/integration/conftest.py`.
-- Commands, exit codes and tested environment:
-  - `uv run pytest tests/integration/test_tester_desk_commissions.py tests/integration/test_tester_desk_enrollment.py -q` — 11 passed, exit 0.
-  - `uv run pytest tests/unit -q` — 2148 passed, 13 failed, exit 1. All 13
-    failures are in `test_navigator_native_transport.py` and are sandbox-only:
-    `tempfile.mkdtemp` is denied writes to `/tmp` in this exec sandbox
-    (`PermissionError: [Errno 1] Operation not permitted: '/tmp/afn-*'`).
-    Unrelated to tester-desk code; they fail identically on the intake tree.
-  - `uv run ruff check` on all new/edited files — all checks passed.
-  - `uv run python scripts/migrate.py --database-url postgresql://af_td:af_td_local@localhost:5432/af_td_dev` — applied `0075`, `0076`, exit 0.
-  - Dedicated DB namespace (existing `accessforge`/`accessforge_test` untouched):
-    role `af_td` (NOSUPERUSER NOBYPASSRLS — RLS checks are meaningful),
-    DBs `af_td_dev`, `af_td_test`.
-- Working tree or branch requiring transfer: everything is committed on
-  `devin/accessforge-tester-desk`; `build-progress/` updated in the next commit.
-- External dependencies and decisions:
-  - No live payout provider authorized — compensation will use a local ledger
-    adapter behind an explicit interface (M05), exact missing proof: signed
-    provider route + seller authority.
-  - No consenting independent human tester or real VoiceOver/Safari run —
-    capability claims in tests are fixture data only; M08 must report this
-    honestly.
-  - No agency-controlled test URL — `AF21_BRIEF.targetUrl` is a fixture.
-  - pnpm full-workspace install blocked by sandbox deny on `.vscode` paths
-    inside `xmlbuilder@15.1.1` (voiceover AT-adapter only). Filtered install
-    of `@accessforge/web` works; `pnpm --filter @accessforge/web test` 486
-    pass. `typecheck` fails on missing `@types/node` under filtered install
-    (pre-existing tooling gap, unrelated to product code).
-- First next action: M03 evidence capture — observation drafts with autosave
-  and reload recovery, per-step outcomes, permitted attachment types with
-  content digests, refusal of disallowed recording types, and the
-  screen-reader/keyboard-usable capture UI surface.
-- Next agent must reproduce:
-  `uv run pytest tests/integration/test_tester_desk_commissions.py tests/integration/test_tester_desk_enrollment.py -q` (11 pass).
+  `devin/accessforge-tester-desk` / `28c9aa3` (tests ran on the working tree
+  that produced this commit).
+
+## What exists
+
+Backend (FastAPI + psycopg + RLS), all under the `/workspaces/{id}/tester-desk`
+route prefix in `apps/api/src/accessforge_api/routes/tester_desk.py`:
+
+- M01 commissions: clients, consent terms, versioned commission authoring,
+  publish-pinned brief revisions (`td_brief_revision` immutable by trigger,
+  canonical SHA-256 digest). Migration `0075`.
+- M02 eligibility: restricted tester enrollment, capability matching, conflict
+  checks, consent acceptance, scoped offer list with expiry, `claim_offer`
+  under `FOR UPDATE` so raced claims yield exactly one winner; credentials
+  readable only by the winner. Migration `0076`.
+- M03 evidence capture: `HUMAN_MANUAL`-only observations, per-step outcomes,
+  draft upsert/recovery, attachment allowlist (kind -> content types, 8 MiB
+  cap), SHA-256 digest at write re-verified at read, disallowed recording
+  kinds refused before any artifact exists. Migration `0077`.
+- M04 submission + review: sealed `td_submission` (immutable by trigger),
+  completeness vs rubric, task outcome derived separately from deliverable
+  decision, digest-bound reviewer decision, justified revision requests,
+  obsolete-digest -> 409. Migration `0078`.
+- M05 compensation: payable created exactly once on ACCEPTED (assignment
+  unique-keyed), `PayoutAdapter` interface with `LocalLedgerAdapter` stand-in,
+  dispatch marks `DISPATCHED`/`UNKNOWN` on uncertain submit, reconcile by
+  provider reference settles once; retry never re-dispatches. Migration `0079`.
+- M06 client reporting: digest-pinned `td_report_revision` per assignment,
+  consent-scoped evidence manifest, client grants, cross-client isolation,
+  retention purge that drops bytes but keeps manifests. Migrations `0080`.
+- M07 retest + comparison: follow-up commission links predecessor by defect
+  key, comparison matches task/environment dimensions, `environment.*` caveats
+  on AT/OS/browser drift, fresh retest starts `UNTESTED` — a prior pass is
+  never inherited.
+- M08 pilot + web surfaces: full AF-21 scene in
+  `tests/integration/test_tester_desk_pilot.py`; four web screens wired into
+  the app shell — agency console (`/tester-desk`), tester inbox
+  (`/tester-desk/tester`), capture (`/tester-desk/tester/assignments/:id`),
+  client reports (`/tester-desk/client`), API client
+  `apps/web/src/api/testerDesk.ts`.
+
+## Verification (commands, exit codes)
+
+- `uv run pytest tests/integration/ -k tester_desk` — 32 passed, 1468
+  deselected, exit 0 (all module suites incl. the AF-21 pilot).
+- `uv run mypy apps/api/src` — no issues in 42 source files, exit 0 (CI parity).
+- `uv run ruff check` on all new/edited Python files — all checks passed.
+- `cd apps/web && npx vitest run` — 30 files / 488 tests passed, exit 0.
+- `cd apps/web && npx tsc --noEmit` — new tester-desk files clean; remaining
+  errors are the pre-existing `@types/node` gap from the filtered install
+  (`node:fs`, `node:path`, `process`, `__dirname` in unrelated tooling files).
+- `uv run pytest tests/unit -q` — 2148 passed, 13 failed: all 13 are
+  sandbox-only `tempfile.mkdtemp` denials in
+  `test_navigator_native_transport.py` (`/tmp` writes blocked); identical on
+  the intake tree, unrelated to this work.
+- Migrations `0075`–`0080` applied to `af_td_dev`; test suite runs against
+  `af_td_test`.
+
+## Dedicated environment
+
+- Role `af_td` (NOSUPERUSER NOBYPASSRLS); databases `af_td_dev`,
+  `af_td_test` on the running Homebrew PostgreSQL 17. Existing
+  `accessforge`/`accessforge_test` databases and roles were never touched.
+- `.env` / `.env.test` are gitignored and point only at the `af_td_*` URLs.
+- A workspace-local Postgres cluster is not possible in this sandbox
+  (`shmget` denied); the running server is used as a host with a unique
+  namespace instead.
+
+## External dependencies — exact missing proof
+
+- Live payout provider: not authorized in this run. `LocalLedgerAdapter`
+  stands in behind `PayoutAdapter`; missing proof = a signed provider route,
+  seller authority, and a real dispatch/ack exchange.
+- Independent human tester: no consenting tester ran a real
+  VoiceOver+Safari/keyboard-only session; capability claims and observations
+  in tests are fixture data only.
+- Agency-controlled test URL: `AF21_BRIEF.targetUrl` is a fixture; no real
+  checkout build exists.
+- Real-browser E2E: UI is proven through jsdom + Testing Library against the
+  real fetch client, not a driven browser at desktop/tablet/phone widths.
+- Full `pnpm install`: blocked by sandbox deny on `.vscode` paths inside
+  `xmlbuilder@15.1.1` (pulled only by the guidepup voiceover AT-adapter).
+  Filtered `pnpm --filter @accessforge/web ...` works; no temporary patch
+  was committed.
+
+## Next agent
+
+1. Reproduce: `uv run pytest tests/integration/ -k tester_desk` (32 pass) and
+   `cd apps/web && npx vitest run` (488 pass) against `af_td_test`.
+2. To close the pilot for real: wire a payout provider implementing
+   `PayoutAdapter`, run the AF-21 scene with a consenting tester on
+   VoiceOver+Safari against an agency-controlled URL, and add a browser-driven
+   E2E once a display/browser session is available.
