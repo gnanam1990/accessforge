@@ -23,7 +23,7 @@ import { ResourceView } from '../components/ResourceView'
 import { StatusBadge } from '../components/StatusBadge'
 import {
   getAssignment, getDraft, getPayable, getProgress,
-  listAttachments, listSubmissions, saveDraft, submit, uploadAttachment,
+  listAttachments, listSubmissions, mutationProblem, saveDraft, submit, uploadAttachment,
 } from '../api/testerDesk'
 import type { Attachment, Observation, Submission } from '../api/testerDesk'
 import { useResource } from '../api/useResource'
@@ -88,16 +88,12 @@ const CaptureAssignment = ({ workspaceId, assignmentId }: {
         observedAt: new Date().toISOString(),
       }))
     const outcome = await saveDraft(client, workspaceId, assignmentId, observations, baseRevision, crypto.randomUUID())
-    if (outcome.kind === 'ok' || outcome.kind === 'accepted') {
+    if (outcome.kind === 'ok') {
       setSavedRevision(outcome.value.draftRevision)
       progress.reload()
       return true
     }
-    setError(
-      outcome.kind === 'problem'
-        ? (outcome.problem.detail ?? outcome.problem.title)
-        : 'The draft could not be saved — check the connection and try again.',
-    )
+    setError(mutationProblem(outcome))
     return false
   }
 
@@ -113,9 +109,8 @@ const CaptureAssignment = ({ workspaceId, assignmentId }: {
     // that no longer matches what the tester sees. A refused save means nothing is sealed.
     if (await persistDraft()) {
       const outcome = await submit(client, workspaceId, assignmentId, crypto.randomUUID())
-      if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
-      else if (outcome.kind === 'ok' || outcome.kind === 'accepted') { announce('Submission sealed and sent to review'); submissions.reload(); assignment.reload(); payable.reload() }
-      else if (outcome.kind === 'offline') setError('Could not confirm submission. Reload to check its status.')
+      if (outcome.kind !== 'ok') setError(mutationProblem(outcome))
+      else { announce('Submission sealed and sent to review'); submissions.reload(); assignment.reload(); payable.reload() }
     }
     setBusy(null)
   }
@@ -131,7 +126,7 @@ const CaptureAssignment = ({ workspaceId, assignmentId }: {
       evidenceKind, evidenceFile.type || 'application/octet-stream',
       evidenceFile.name, btoa(binary), crypto.randomUUID(),
     )
-    if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
+    if (outcome.kind !== 'ok') setError(mutationProblem(outcome))
     else {
       announce('Evidence attached')
       setEvidenceFile(null)

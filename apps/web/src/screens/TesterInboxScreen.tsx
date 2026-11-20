@@ -19,7 +19,7 @@ import { DataTable } from '../components/DataTable'
 import { Notice } from '../components/Notice'
 import { ResourceView } from '../components/ResourceView'
 import { StatusBadge } from '../components/StatusBadge'
-import { claimOffer, listAssignments, listOffers } from '../api/testerDesk'
+import { claimOffer, listAssignments, listOffers, mutationProblem } from '../api/testerDesk'
 import type { Assignment, Offer } from '../api/testerDesk'
 import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
@@ -42,7 +42,7 @@ export const TesterInboxScreen = (): JSX.Element => {
       client, workspaceId, offer.commissionId,
       offer.brief.consentTermsVersion, crypto.randomUUID(),
     )
-    if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
+    if (outcome.kind !== 'ok') setError(mutationProblem(outcome))
     else { announce('Assignment claimed'); assignments.reload(); offers.reload() }
     setClaiming(null)
   }

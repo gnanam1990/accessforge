@@ -114,8 +114,8 @@
     },
     {
       "path": "prompts/M08.md",
-      "bytes": 1901,
-      "sha256": "55bd3fc6e8bdd859cfaf7f2645fa8b4f877548234786a485d8c785de3c4c952f"
+      "bytes": 2118,
+      "sha256": "4c1d9ac2b941d2ac824b4ef41ec010732def7419b7d95780c82d7da0d7a19c0e"
     },
     {
       "path": "requirements.json",
@@ -144,8 +144,8 @@
     },
     {
       "path": "tools/check-build-pack.mjs",
-      "bytes": 33910,
-      "sha256": "823a7ba92ce9f38a14f7a866234b7dd2a1fb1f34a4d5ff4c3328c26b848e8bb2"
+      "bytes": 33966,
+      "sha256": "53fcadf7e0e5c5b3cdea3d03309e58a37a1fcecbb5f7909eeecc27b4dba857f9"
     }
   ]
 }

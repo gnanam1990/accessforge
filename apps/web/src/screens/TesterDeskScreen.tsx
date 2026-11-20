@@ -26,7 +26,7 @@ import { Notice } from '../components/Notice'
 import { ResourceView } from '../components/ResourceView'
 import { StatusBadge } from '../components/StatusBadge'
 import {
-  decide, generateReport, listCommissions, listPayables, listReportable,
+  decide, generateReport, listCommissions, listPayables, listReportable, mutationProblem,
   publishCommission, reviewAssignment, reviewAttachmentContent, reviewQueue,
 } from '../api/testerDesk'
 import type { Commission, Observation, Payable, Submission } from '../api/testerDesk'
@@ -73,7 +73,7 @@ export const TesterDeskScreen = (): JSX.Element => {
   const publish = async (commissionId: string): Promise<void> => {
     setPublishing(commissionId); setError(null)
     const outcome = await publishCommission(client, workspaceId, commissionId, crypto.randomUUID())
-    if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
+    if (outcome.kind !== 'ok') setError(mutationProblem(outcome))
     else { announce('Commission published'); commissions.reload() }
     setPublishing(null)
   }
@@ -81,7 +81,7 @@ export const TesterDeskScreen = (): JSX.Element => {
   const makeReport = async (assignmentId: string): Promise<void> => {
     setReporting(assignmentId); setError(null)
     const outcome = await generateReport(client, workspaceId, assignmentId, crypto.randomUUID())
-    if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
+    if (outcome.kind !== 'ok') setError(mutationProblem(outcome))
     else { announce('Client report generated'); reportable.reload() }
     setReporting(null)
   }
@@ -137,17 +137,15 @@ export const TesterDeskScreen = (): JSX.Element => {
         )}</ResourceView>
       </section>
 
-      {/* Rendered only when the server answered: a refusal (a caller without COMMISSION_AUTHOR)
-          means this person was never offered generation, which is the correct UX for a control
-          that could only fail. Problems on the other sections keep their own notices. */}
-      {reportable.state.kind === 'ready' && (
+      {!(reportable.state.kind === 'problem' && reportable.state.problem.status === 403) && (
         <section aria-labelledby="td-reports">
           <h2 id="td-reports">Client reports</h2>
-          {reportable.state.value.items.length === 0 ? (
+          <ResourceView resource={reportable} what="accepted assignments">{(value) =>
+            value.items.length === 0 ? (
             <p className="af-secondary">No accepted evidence awaiting a report.</p>
           ) : (
             <div className="af-stack">
-              {reportable.state.value.items.map((r) => (
+              {value.items.map((r) => (
                 <article key={r.assignmentId} className="af-card" aria-label={`Client report for ${r.reference}`}>
                   <header><h3>{r.reference}</h3>
                     <p className="af-secondary">
@@ -173,7 +171,7 @@ export const TesterDeskScreen = (): JSX.Element => {
                 </article>
               ))}
             </div>
-          )}
+          )}</ResourceView>
         </section>
       )}
 
@@ -239,7 +237,7 @@ const ReviewCard = ({ assignmentId, reference, onDecided }: {
       submission.submissionHash, decision, justification.trim(), crypto.randomUUID(),
     )
     setBusy(false)
-    if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
+    if (outcome.kind !== 'ok') setError(mutationProblem(outcome))
     else { announce(`Review recorded: ${decision}`); onDecided(decision) }
   }
 

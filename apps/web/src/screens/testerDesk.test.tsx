@@ -243,6 +243,27 @@ it('accepted evidence lands on the durable report list and generation updates it
   expect(calls).toEqual(['decision', 'generate'])
 })
 
+it('recovers a failed report list and never announces success for an offline report write', async () => {
+  const user = userEvent.setup()
+  let reads = 0
+  mount(`/w/${WS}/tester-desk`, {
+    [`${TD}/commissions`]: () => ok({ items: [] }),
+    [`${TD}/review/queue`]: () => ok({ items: [] }),
+    [`${TD}/finance/payables`]: () => ok({ items: [] }),
+    [`${TD}/reports/ready`]: () => {
+      if (++reads === 1) throw new TypeError('network unavailable')
+      return ok({ items: [{ assignmentId: 'a-1', commissionId: 'c-1', reference: 'AF-21', latestReportRevision: null }] })
+    },
+    [`${TD}/reports/generate`]: () => { throw new TypeError('connection lost') },
+  })
+  const section = await screen.findByRole('region', { name: 'Client reports' })
+  await user.click(await within(section).findByRole('button', { name: 'Try again' }))
+  await user.click(await within(section).findByRole('button', { name: 'Generate client report' }))
+  await screen.findByText(/Could not confirm the action/)
+  expect(reads).toBe(2)
+  expect(screen.queryByText('Client report generated')).not.toBeInTheDocument()
+})
+
 it('a draft answer arriving after the tester started typing does not overwrite the edit', async () => {
   const user = userEvent.setup()
   let releaseDraft: (response: Response) => void = () => undefined

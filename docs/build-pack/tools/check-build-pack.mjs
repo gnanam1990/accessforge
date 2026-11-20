@@ -194,7 +194,7 @@ function linkDestination(raw) {
   const value = raw.trim();
   let match;
   if (value.startsWith('<')) {
-    match = value.match(/^<([^<>\n]*)>(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\)))?$/);
+    match = value.match(/^<([^<>\n]*)>(?:\s+(?:"(?:\\[^\n]|[^"\\\n])*"|'(?:\\[^\n]|[^'\\\n])*'|\([^\n]*\)))?$/);
   } else {
     let end = 0;
     while (end < value.length && !/\s/.test(value[end])) {
@@ -202,7 +202,7 @@ function linkDestination(raw) {
       end++;
     }
     const title = value.slice(end);
-    if (end && (!title || /^\s+(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\))$/.test(title))) {
+    if (end && (!title || /^\s+(?:"(?:\\[^\n]|[^"\\\n])*"|'(?:\\[^\n]|[^'\\\n])*'|\([^\n]*\))$/.test(title))) {
       match = [value, value.slice(0, end)];
     }
   }

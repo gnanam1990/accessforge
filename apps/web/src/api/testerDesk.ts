@@ -9,6 +9,18 @@ import type { ApiClient, ApiOutcome } from './client'
 
 const base = (ws: string) => `/v1/workspaces/${ws}/tester-desk`
 
+/** An uncertain write must be checked before the operator repeats it. */
+export const mutationProblem = (outcome: Exclude<ApiOutcome<unknown>, { kind: 'ok' }>): string | null => {
+  switch (outcome.kind) {
+    case 'problem': return outcome.problem.detail ?? outcome.problem.title
+    case 'offline': return 'Could not confirm the action. Reconnect and reload to check its status.'
+    case 'accepted': return 'The request was accepted for processing. Reload to check its status.'
+    case 'unauthenticated':
+    case 'cancelled':
+    case 'stale': return null
+  }
+}
+
 export interface Commission {
   readonly commissionId: string
   readonly reference: string
