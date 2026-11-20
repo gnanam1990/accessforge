@@ -121,6 +121,38 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
     heading: 'Workspace settings',
     built: true,
   },
+  {
+    path: 'tester-desk',
+    label: 'Tester Desk',
+    inPrimaryNavigation: true,
+    ownedByModule: 30,
+    heading: 'Tester Desk',
+    built: true,
+  },
+  {
+    path: 'tester-desk/tester',
+    label: 'My test work',
+    inPrimaryNavigation: true,
+    ownedByModule: 30,
+    heading: 'My test work',
+    built: true,
+  },
+  {
+    path: 'tester-desk/tester/assignments/:assignmentId',
+    label: 'Capture',
+    inPrimaryNavigation: false,
+    ownedByModule: 30,
+    heading: 'Evidence capture',
+    built: true,
+  },
+  {
+    path: 'tester-desk/client',
+    label: 'Test reports',
+    inPrimaryNavigation: true,
+    ownedByModule: 30,
+    heading: 'Client test reports',
+    built: true,
+  },
 ]
 
 export const workspacePath = (workspaceId: string, path = 'overview'): string =>

@@ -271,6 +271,9 @@ describe('the workspace shell', () => {
       'Projects',
       'Runners',
       'Settings',
+      'Tester Desk',
+      'My test work',
+      'Test reports',
     ])
 
     const switcher = screen.getByLabelText('Workspace')

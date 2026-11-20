@@ -43,6 +43,10 @@ import { ReviewScreen } from './screens/ReviewScreen'
 import { RunScreen } from './screens/RunScreen'
 import { RunnersScreen } from './screens/RunnersScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
+import { TesterDeskScreen } from './screens/TesterDeskScreen'
+import { TesterInboxScreen } from './screens/TesterInboxScreen'
+import { TesterCaptureScreen } from './screens/TesterCaptureScreen'
+import { ClientReportsScreen } from './screens/ClientReportsScreen'
 import { SignInScreen } from './routes/SignInScreen'
 import { WorkspaceRoute } from './routes/WorkspaceRoute'
 import { WORKSPACE_ROUTES } from './routes/routeMap'
@@ -69,6 +73,10 @@ const SCREENS: Readonly<Record<string, JSX.Element>> = {
   'reviews/:reviewId': <ReviewScreen />,
   'exports/:exportId': <ExportScreen />,
   settings: <SettingsScreen />,
+  'tester-desk': <TesterDeskScreen />,
+  'tester-desk/tester': <TesterInboxScreen />,
+  'tester-desk/tester/assignments/:assignmentId': <TesterCaptureScreen />,
+  'tester-desk/client': <ClientReportsScreen />,
 }
 
 const AuthenticatedRoutes = (): JSX.Element => (
