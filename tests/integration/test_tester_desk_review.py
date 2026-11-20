@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 import pytest
 
 pytestmark = pytest.mark.integration
 
-from conftest import AF21_BRIEF, Desk  # noqa: E402
+from .conftest import AF21_BRIEF, Desk  # noqa: E402
 
 
-def _obs(step: str, result: str = "PASSED") -> dict:
+def _obs(step: str, result: str = "PASSED") -> dict[str, Any]:
     return {
         "stepId": step,
         "result": result,
@@ -21,7 +22,7 @@ def _obs(step: str, result: str = "PASSED") -> dict:
     }
 
 
-def _claimed_assignment(desk: Desk) -> dict:
+def _claimed_assignment(desk: Desk) -> dict[str, Any]:
     agency = desk.client_for(desk.owner)
     created = agency.post(
         desk.path("/commissions"),
@@ -36,7 +37,9 @@ def _claimed_assignment(desk: Desk) -> dict:
         json={"consentTermsVersion": 1, "consentAccepted": True},
     )
     assert claimed.status_code == 201, claimed.text
-    return claimed.json()
+    result = claimed.json()
+    assert isinstance(result, dict)
+    return result
 
 
 def _complete_failed_journey(desk: Desk, assignment_id: str) -> None:

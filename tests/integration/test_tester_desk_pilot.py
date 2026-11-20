@@ -14,7 +14,8 @@ import pytest
 pytestmark = pytest.mark.integration
 
 from accessforge_persistence import tester_desk as td  # noqa: E402
-from conftest import AF21_BRIEF, Desk  # noqa: E402
+
+from .conftest import AF21_BRIEF, Desk  # noqa: E402
 
 
 def test_pilot_af21_full_journey(desk: Desk) -> None:

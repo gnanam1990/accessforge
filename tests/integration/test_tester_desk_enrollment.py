@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
+import httpx2
 import pytest
 from psycopg.errors import IntegrityError
 
 pytestmark = pytest.mark.integration
 
 from accessforge_persistence import workspace_connection  # noqa: E402
-from conftest import AF21_BRIEF, Desk  # noqa: E402
+
+from .conftest import AF21_BRIEF, Desk  # noqa: E402
 
 
-def _published_af21(desk: Desk) -> dict:
+def _published_af21(desk: Desk) -> dict[str, Any]:
     agency = desk.client_for(desk.owner)
     created = agency.post(
         desk.path("/commissions"),
@@ -23,10 +26,12 @@ def _published_af21(desk: Desk) -> dict:
     commission = created.json()
     published = agency.post(desk.path(f"/commissions/{commission['commissionId']}/publish"))
     assert published.status_code == 200, published.text
-    return published.json()
+    result = published.json()
+    assert isinstance(result, dict)
+    return result
 
 
-def _claim(desk: Desk, user: str, commission_id: str):
+def _claim(desk: Desk, user: str, commission_id: str) -> httpx2.Response:
     tester = desk.client_for(user)
     return tester.post(
         desk.path(f"/tester/offers/{commission_id}/claim"),

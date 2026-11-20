@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 pytestmark = pytest.mark.integration
 
-from conftest import AF21_BRIEF, Desk  # noqa: E402
+from .conftest import AF21_BRIEF, Desk  # noqa: E402
 
 
-def _create(desk: Desk, user: str, brief: dict | None = None, **over) -> dict:
+def _create(
+    desk: Desk, user: str, brief: dict[str, Any] | None = None, **over: object
+) -> dict[str, Any]:
     client = desk.client_for(user)
     body = {
         "clientId": desk.client_id,
@@ -19,7 +23,9 @@ def _create(desk: Desk, user: str, brief: dict | None = None, **over) -> dict:
     }
     created = client.post(desk.path("/commissions"), json=body)
     assert created.status_code == 201, created.text
-    return created.json()
+    result = created.json()
+    assert isinstance(result, dict)
+    return result
 
 
 def test_t001_publish_r18_and_reopen_the_exact_brief_version(desk: Desk) -> None:

@@ -16,7 +16,8 @@ import psycopg
 import pytest
 
 from accessforge_persistence import user_connection, workspace_connection  # noqa: E402
-from conftest import Desk  # noqa: E402
+
+from .conftest import Desk  # noqa: E402
 
 
 def _grant_viewer(desk: Desk, user_id: str) -> None:

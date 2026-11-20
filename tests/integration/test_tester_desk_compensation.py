@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 import pytest
 
@@ -11,10 +12,11 @@ pytestmark = pytest.mark.integration
 from accessforge_domain import tester_desk as domain  # noqa: E402
 from accessforge_persistence import tester_desk as td  # noqa: E402
 from accessforge_persistence import workspace_connection  # noqa: E402
-from conftest import AF21_BRIEF, Desk  # noqa: E402
+
+from .conftest import AF21_BRIEF, Desk  # noqa: E402
 
 
-def _obs(step: str, result: str = "PASSED") -> dict:
+def _obs(step: str, result: str = "PASSED") -> dict[str, Any]:
     return {
         "stepId": step,
         "result": result,
@@ -23,7 +25,7 @@ def _obs(step: str, result: str = "PASSED") -> dict:
     }
 
 
-def _accepted_assignment(desk: Desk) -> dict:
+def _accepted_assignment(desk: Desk) -> dict[str, Any]:
     """Claim, capture the failing journey, submit, and accept -- returns the payable."""
     agency = desk.client_for(desk.owner)
     created = agency.post(
@@ -150,7 +152,7 @@ def test_t010_dispatched_payable_never_dispatches_again(desk: Desk) -> None:
         def __init__(self) -> None:
             self.calls = 0
 
-        def dispatch(self, **kwargs) -> domain.DispatchOutcome:
+        def dispatch(self, **kwargs: object) -> domain.DispatchOutcome:
             self.calls += 1
             return domain.DispatchOutcome(status="SETTLED", provider_reference="spy:1")
 
@@ -190,7 +192,7 @@ def test_unknown_outcome_reconciles_by_original_reference(desk: Desk) -> None:
     ids = _accepted_assignment(desk)
 
     class UncertainAdapter:
-        def dispatch(self, **kwargs) -> domain.DispatchOutcome:
+        def dispatch(self, **kwargs: object) -> domain.DispatchOutcome:
             return domain.DispatchOutcome(
                 status="UNKNOWN", provider_reference="provider:ambiguous-1"
             )

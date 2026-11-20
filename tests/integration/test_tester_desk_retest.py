@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 import pytest
 
 pytestmark = pytest.mark.integration
 
-from conftest import AF21_BRIEF, Desk  # noqa: E402
+from .conftest import AF21_BRIEF, Desk  # noqa: E402
 
 R19_BRIEF = dict(AF21_BRIEF, releaseLabel="r19", releaseDigest="b" * 64)
 
 
-def _obs(step: str, result: str = "PASSED") -> dict:
+def _obs(step: str, result: str = "PASSED") -> dict[str, Any]:
     return {
         "stepId": step,
         "result": result,
@@ -22,7 +23,7 @@ def _obs(step: str, result: str = "PASSED") -> dict:
     }
 
 
-def _publish(desk: Desk, reference: str, brief: dict, **extra) -> dict:
+def _publish(desk: Desk, reference: str, brief: dict[str, Any], **extra: object) -> dict[str, Any]:
     agency = desk.client_for(desk.owner)
     created = agency.post(
         desk.path("/commissions"),
@@ -30,11 +31,12 @@ def _publish(desk: Desk, reference: str, brief: dict, **extra) -> dict:
     )
     assert created.status_code == 201, created.text
     commission = created.json()
+    assert isinstance(commission, dict)
     agency.post(desk.path(f"/commissions/{commission['commissionId']}/publish"))
     return commission
 
 
-def _accepted_af21(desk: Desk) -> dict:
+def _accepted_af21(desk: Desk) -> dict[str, Any]:
     commission = _publish(desk, "AF-21", AF21_BRIEF, defectKey="focus-trap-s4")
     tester = desk.client_for(desk.tester_user)
     aid = tester.post(
