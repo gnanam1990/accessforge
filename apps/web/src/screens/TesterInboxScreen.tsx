@@ -62,7 +62,7 @@ export const TesterInboxScreen = (): JSX.Element => {
               <article key={o.commissionId} className="af-card af-stack" aria-label={`Offer ${o.reference}`}>
                 <header><h3>{o.reference} · {o.brief.releaseLabel}</h3>
                   <p className="af-secondary">
-                    {(o.feeMinor / 100).toFixed(2)} {o.currency} ·{' '}
+                    {(o.brief.feeMinor / 100).toFixed(2)} {o.brief.currency} ·{' '}
                     {o.brief.environment.assistiveTechnology} on {o.brief.environment.browserName}{' '}
                     {o.brief.environment.browserVersion} ·{' '}
                     {o.offerExpiresAt !== null ? `expires ${o.offerExpiresAt.slice(0, 16)}` : 'no expiry'}

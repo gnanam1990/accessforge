@@ -3,7 +3,7 @@
 One command boots the real FastAPI service and the real Vite/React app on
 ephemeral loopback ports, provisions a disposable AF-21 scene through the real
 HTTP entry points, and drives a normal Chromium through the documented
-journey. 38 named checks; non-zero exit on any failure; a redacted evidence
+journey. 40 named checks; non-zero exit on any failure; a redacted evidence
 record (JSON + screenshots + Tab-path audit) lands in a timestamped directory.
 
 ## Runnable command
@@ -45,7 +45,7 @@ AF_BROWSER_ARGS="--single-process --no-sandbox" node check.mjs
 | `AF_EVIDENCE_DIR` | `evidence/<timestamp>` | where artifacts land |
 | `AF_KEEP_PROCESSES` | unset | leave API+vite running, print URLs |
 
-## What the check proves (38 checks, all through the real UI)
+## What the check proves (40 checks, all through the real UI)
 
 - TESTER signs in via the form, workspace choice lands on the tester inbox
   (not overview); CLIENT lands on the report list; ordinary member/reviewer
@@ -83,7 +83,7 @@ AF_BROWSER_ARGS="--single-process --no-sandbox" node check.mjs
 All identities are synthetic per-run (`td-browser-*-<runId>`); the database
 DSN is redacted in the record. Evidence directories are git-ignored.
 
-Latest in-sandbox run: **38/38 passed** (evidence `2026-11-20T07-34-08`).
+Latest in-sandbox run: **40/40 passed** (evidence `2026-11-20T08-47-39`).
 
 ## Product gaps found and fixed by this proof
 

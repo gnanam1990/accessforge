@@ -35,6 +35,8 @@ export interface AppShellProps {
   readonly onSwitchWorkspace: (workspaceId: string) => void
   readonly banner?: ReactNode
   readonly children: ReactNode
+  /** Scoped presentation for one product surface; only 'tester-desk' exists today. */
+  readonly surface?: 'tester-desk' | undefined
 }
 
 export const AppShell = ({
@@ -46,11 +48,12 @@ export const AppShell = ({
   onSwitchWorkspace,
   banner,
   children,
+  surface,
 }: AppShellProps): JSX.Element => {
   const narrow = useMediaQuery(NARROW_QUERY)
 
   return (
-    <div className="af-shell">
+    <div className={`af-shell${surface === 'tester-desk' ? ' af-td' : ''}`}>
       <SkipLink />
       <header className="af-header">
         <div className="af-row">

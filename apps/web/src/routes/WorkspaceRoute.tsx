@@ -54,6 +54,7 @@ export const WorkspaceRoute = (): JSX.Element => {
         const name = state.workspaces.find((w) => w.workspaceId === next)?.name ?? 'workspace'
         announce(`Switched to ${name}.`)
       }}
+      surface={pathname.includes('/tester-desk') ? 'tester-desk' : undefined}
     >
       {membership === null ? <NotFoundState /> : <Outlet />}
     </AppShell>

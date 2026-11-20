@@ -18,6 +18,7 @@ import { ApiClient } from './api/client'
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/modern.css'
+import './styles/tester-desk.css'
 
 const container = document.getElementById('root')
 if (container === null) throw new Error('the #root container is missing from index.html')

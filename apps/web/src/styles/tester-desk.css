@@ -1,0 +1,196 @@
+/*
+ * Tester Desk · scoped presentation for the participant workflow.
+ *
+ * The warm palette and editorial headings below apply only inside `.af-td`, the class
+ * `WorkspaceRoute` sets on the app shell while a `/tester-desk` route is mounted. Every other
+ * screen keeps the product's own tokens untouched, and the theme toggle still applies: the light
+ * palette is the default, the dark block mirrors tokens.css's two ways of going dark so an
+ * explicit choice wins over the system setting either way.
+ *
+ * Vocabulary (the owner's KiteBridge/KiteWorkforce language): warm paper canvas, warm card
+ * surfaces, a strong olive for the one primary action per decision, a muted brick for errors,
+ * restrained serif headings, and tabular mono figures for digests and amounts. Contrast was
+ * measured against the warm surfaces, not assumed: secondary text reaches ~6.8:1 on paper,
+ * control borders clear 3:1, and white on the olive reaches ~7.4:1.
+ *
+ * `color-scheme` stays on :root — scoped blocks only restate the values that differ.
+ */
+
+.af-td {
+  --af-background: #fef8f0;
+  --af-surface: #fffdf9;
+  --af-surface-sunken: #f4ebdc;
+  --af-foreground: #1f1a14;
+  --af-foreground-secondary: #5c5444;
+  --af-border: #e3d7c2;
+  --af-border-strong: #776a4e;
+
+  --af-primary: #485c11;
+  --af-primary-foreground: #ffffff;
+  --af-primary-hover: #3b4c0e;
+
+  --af-destructive: #a23a1a;
+  --af-destructive-foreground: #ffffff;
+  --af-destructive-hover: #82270e;
+
+  --af-status-neutral: #5c5444;
+  --af-status-progress: #2e5f8a;
+  --af-status-pass: #3f5510;
+  --af-status-fail: #a23a1a;
+  --af-status-inconclusive: #8a5a00;
+  --af-status-interrupted: #7c2d12;
+
+  /* The ring is ink against a card-colour halo: readable on paper, on cards, and on the olive
+     itself — which is where the primary action's focus has to survive. */
+  --af-focus-ring: #1f1a14;
+  --af-focus-ring-contrast: #fffdf9;
+
+  --af-elevation-overlay: 0 10px 30px rgb(31 26 20 / 16%);
+
+  /* DM Sans is named first and not bundled, the same provenance policy as Fira on :root. The
+     editorial face degrades to Georgia, which is always present. */
+  --af-font-sans: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --af-font-display: 'Crimson Text', Georgia, 'Times New Roman', serif;
+
+  /* `body` resolves the tokens before the shell exists, so the canvas, ink and UI face are
+     restated on the shell itself — it fills the viewport and is the surface users see. */
+  background: var(--af-background);
+  color: var(--af-foreground);
+  font-family: var(--af-font-sans);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .af-td {
+    --af-background: #1c1610;
+    --af-surface: #262019;
+    --af-surface-sunken: #1f1a14;
+    --af-foreground: #f4ecdd;
+    --af-foreground-secondary: #c6b89e;
+    --af-border: #4a4133;
+    --af-border-strong: #9c8b6c;
+
+    --af-primary: #a8c46b;
+    --af-primary-foreground: #1f1a14;
+    --af-primary-hover: #c0dc85;
+
+    --af-destructive: #e8927a;
+    --af-destructive-foreground: #1f1a14;
+    --af-destructive-hover: #f2ae9b;
+
+    --af-status-neutral: #c6b89e;
+    --af-status-progress: #9fc3e3;
+    --af-status-pass: #a8c46b;
+    --af-status-fail: #e8927a;
+    --af-status-inconclusive: #e0b96a;
+    --af-status-interrupted: #e3a184;
+
+    --af-focus-ring: #f4ecdd;
+    --af-focus-ring-contrast: #1c1610;
+
+    --af-elevation-overlay: 0 10px 30px rgb(0 0 0 / 55%);
+  }
+}
+
+:root[data-theme='dark'] .af-td {
+  --af-background: #1c1610;
+  --af-surface: #262019;
+  --af-surface-sunken: #1f1a14;
+  --af-foreground: #f4ecdd;
+  --af-foreground-secondary: #c6b89e;
+  --af-border: #4a4133;
+  --af-border-strong: #9c8b6c;
+
+  --af-primary: #a8c46b;
+  --af-primary-foreground: #1f1a14;
+  --af-primary-hover: #c0dc85;
+
+  --af-destructive: #e8927a;
+  --af-destructive-foreground: #1f1a14;
+  --af-destructive-hover: #f2ae9b;
+
+  --af-status-neutral: #c6b89e;
+  --af-status-progress: #9fc3e3;
+  --af-status-pass: #a8c46b;
+  --af-status-fail: #e8927a;
+  --af-status-inconclusive: #e0b96a;
+  --af-status-interrupted: #e3a184;
+
+  --af-focus-ring: #f4ecdd;
+  --af-focus-ring-contrast: #1c1610;
+
+  --af-elevation-overlay: 0 10px 30px rgb(0 0 0 / 55%);
+}
+
+/* Editorial headings: restrained, not oversized. Section labels keep the UI face — a serif on a
+   form legend or a small status line reads as decoration, not structure. */
+.af-td h1,
+.af-td h2 {
+  font-family: var(--af-font-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+/* Cards were previously unstyled articles. The warm card edge is decorative; the controls inside
+   keep `--af-border-strong`, so the 3:1 division the style audit asserts still holds. */
+.af-td .af-card {
+  background: var(--af-surface);
+  border: 1px solid var(--af-border);
+  border-radius: var(--af-radius-md);
+  padding: var(--af-space-4) var(--af-space-6);
+}
+
+.af-td .af-card > header > h3,
+.af-td .af-card > h3 {
+  font-family: var(--af-font-display);
+  font-size: 1.125rem;
+  margin: 0;
+}
+
+/* The evidence fieldset and the per-step result group are control containers, not decoration:
+   a visible boundary that does not pretend to be a control's own border. */
+.af-td .af-fieldset,
+.af-td .af-segmented {
+  border: 1px solid var(--af-border);
+  border-radius: var(--af-radius-md);
+  padding: var(--af-space-3) var(--af-space-4);
+  margin: 0;
+}
+
+.af-td .af-fieldset > legend,
+.af-td .af-segmented > legend {
+  font-size: var(--af-text-secondary-size);
+  color: var(--af-foreground-secondary);
+  padding-inline: var(--af-space-2);
+}
+
+/* The primary action carries the decision; slightly rounder, slightly heavier, and still a
+   native button. The destructive action stays brick, not olive — the two must never blur. */
+.af-td .af-button {
+  border-radius: 0.65rem;
+  font-weight: 600;
+}
+
+/* Figures and digests line up: tabular numerals in tables, amounts and hashes. */
+.af-td .af-table,
+.af-td code,
+.af-td .af-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Action rows were bare divs. Flex with wrap keeps the primary and destructive controls on one
+   line until 320px makes them stack. */
+.af-td .af-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--af-space-3);
+  align-items: center;
+}
+
+/* The decision strip on a review card is the page's reason to exist: a hairline rule above the
+   actions keeps them anchored without a boxed button bar. */
+.af-td .af-card .af-row-actions {
+  border-top: 1px solid var(--af-border);
+  padding-top: var(--af-space-3);
+}

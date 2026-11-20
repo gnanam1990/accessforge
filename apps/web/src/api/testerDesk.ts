@@ -29,11 +29,11 @@ export interface Commission {
 export interface Offer {
   readonly commissionId: string
   readonly reference: string
-  readonly feeMinor: number
-  readonly currency: string
   readonly offerExpiresAt: string | null
   readonly brief: {
     readonly releaseLabel: string
+    readonly feeMinor: number
+    readonly currency: string
     readonly taskSteps: readonly { stepId: string; title: string }[]
     readonly environment: Record<string, string>
     readonly consentTermsVersion: number

@@ -1,10 +1,11 @@
 # AccessForge Tester Desk · Session handoff
 
-State at `5435920` plus the browser-proof slice: all eight modules implemented
-and verified against the dedicated local database, and the documented browser
-journey now runs end-to-end in a real Chromium against the real FastAPI + Vite
-stack — 38/38 named checks pass. Nothing is pushed, no PR is open, no live
-external integration was exercised — the exact gaps are listed below.
+State at `5435920` plus the browser-proof and visual-pass slices: all eight
+modules implemented and verified against the dedicated local database, and the
+documented browser journey now runs end-to-end in a real Chromium against the
+real FastAPI + Vite stack — 40/40 named checks pass. Nothing is pushed, no PR
+is open, no live external integration was exercised — the exact gaps are listed
+below.
 
 - Target repository / branch: accessforge-tester-desk workspace /
   `devin/accessforge-tester-desk`
@@ -77,12 +78,25 @@ route prefix in `apps/api/src/accessforge_api/routes/tester_desk.py`:
   - 320px overflow from grid/flex `min-width:auto` — children now shrink and
     tables clip inside `.af-table-scroll`.
 
+- Visual pass (this slice): `apps/web/src/styles/tester-desk.css` restates
+  the AccessForge warm-paper vocabulary (canvas `#FEF8F0`, ink `#1F1A14`,
+  cards `#FFFDF9`, border `#E3D7C2`, olive `#485C11` primary, brick `#A23A1A`
+  error) plus a warm dark pair, scoped to `.af-td` — `WorkspaceRoute` sets it
+  via `AppShell surface="tester-desk"` only on `/tester-desk` paths. The shell
+  paints the canvas itself (`body` resolves tokens before the shell exists).
+  Editorial serif headings, mono figures, visible focus ring, readable
+  disabled state, 320px scroll-table behaviour all verified in the real
+  browser. One product gap found by this pass: offer fees rendered `NaN` —
+  `Offer.feeMinor`/`currency` actually nest under `brief`; type + screen fixed
+  and a checker assertion ("offer shows the pinned fee as readable money")
+  now guards it.
+
 ## Verification (commands, exit codes)
 
-- `node tools/tester-desk-browser/check.mjs` — **38/38 checks passed**,
+- `node tools/tester-desk-browser/check.mjs` — **40/40 checks passed**,
   exit 0 (sandbox invocation adds
   `AF_BROWSER_ARGS="--single-process --no-sandbox"`). Redacted record:
-  `tools/tester-desk-browser/evidence/2026-11-20T07-34-08/`.
+  `tools/tester-desk-browser/evidence/2026-11-20T08-47-39/`.
 - `uv run pytest tests/integration/ -k tester_desk` — 37 passed, 1468
   deselected, exit 0 (all module suites incl. the AF-21 pilot and the new
   session-scope/RLS regressions).
@@ -135,7 +149,7 @@ route prefix in `apps/api/src/accessforge_api/routes/tester_desk.py`:
 
 1. Reproduce: `uv run pytest tests/integration/ -k tester_desk` (37 pass),
    `cd apps/web && npx vitest run --maxWorkers=2` (488 pass) against
-   `af_td_test`, and `node tools/tester-desk-browser/check.mjs` (38 checks)
+   `af_td_test`, and `node tools/tester-desk-browser/check.mjs` (40 checks)
    per `BROWSER.md`.
 2. To close the pilot for real: wire a payout provider implementing
    `PayoutAdapter` and run the AF-21 scene with a consenting tester on

@@ -358,6 +358,11 @@ const main = async () => {
     const offer = page.locator('article[aria-label^="Offer AF-21"]')
     await offer.waitFor()
     record('offer card visible to enrolled tester', true)
+    record(
+      'offer shows the pinned fee as readable money',
+      await offer.getByText('20.00 USD').isVisible(),
+      (await offer.textContent())?.slice(0, 120),
+    )
     await shot(page, '02-offer')
 
     // Consent gate: claim disabled until the checkbox is ticked — by keyboard.
@@ -645,6 +650,23 @@ const main = async () => {
       join(EVIDENCE_DIR, 'tab-paths.json'),
       JSON.stringify({ desktop: deskPath, narrow320: narrowPath }, null, 2),
     )
+
+    // -- 10. the scoped dark palette still renders a legible surface ------------
+    await page.getByRole('radio', { name: 'Dark' }).check()
+    await page.waitForTimeout(300)
+    const darkRead = await page.evaluate(() => {
+      // `.af-td` paints the canvas — `body` resolves the tokens before the shell exists.
+      const shell = document.querySelector('.af-td')
+      const heading = document.querySelector('main h1')
+      return { bg: getComputedStyle(shell).backgroundColor, ink: getComputedStyle(heading).color }
+    })
+    record(
+      'explicit Dark applies the scoped dark palette',
+      darkRead.bg === 'rgb(28, 22, 16)' && darkRead.ink === 'rgb(244, 236, 221)',
+      `bg=${darkRead.bg} ink=${darkRead.ink}`,
+    )
+    await shot(page, '15-dark-inbox')
+    await page.getByRole('radio', { name: 'System' }).check()
   } catch (error) {
     record('browser journey completed', false, String(error).slice(0, 300))
     await shot(page, 'zz-failure').catch(() => {})
