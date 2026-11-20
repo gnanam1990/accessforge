@@ -100,6 +100,11 @@ class Desk:
 @pytest.fixture
 def desk(test_database_url: str) -> Desk:
     migrate(test_database_url)
+    return seed_desk(test_database_url)
+
+
+def seed_desk(test_database_url: str) -> Desk:
+    """Seed participants on an already migrated database, including upgrade drill snapshots."""
     workspace, owner, maintainer, reviewer, finance = (str(uuid4()) for _ in range(5))
     client_user, other_client_user = str(uuid4()), str(uuid4())
     tester_user, tester2_user, outsider = (str(uuid4()) for _ in range(3))
