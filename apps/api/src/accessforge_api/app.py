@@ -43,6 +43,7 @@ from .routes import (
     session_router,
     settings_router,
     stream_router,
+    tester_desk_router,
 )
 from .routes.github_login import LOGIN_PATHS, protect_response
 from .routes.github_login import router as github_login_router
@@ -437,6 +438,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         patches_router,
         exports_router,
         stream_router,
+        tester_desk_router,
     ):
         app.include_router(router)
 

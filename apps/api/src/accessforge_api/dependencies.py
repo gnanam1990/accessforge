@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 import psycopg
 from fastapi import Request
@@ -310,9 +310,25 @@ class IdempotentOutcome:
     response: dict[str, Any] | None
 
 
+class IdempotentCaller(Protocol):
+    """The fields `run_idempotently` actually consumes.
+
+    Tester-desk tester and client actors are not workspace members, so they resolve a different
+    context than `RequestContext`; this protocol is what lets both shapes share the idempotency
+    machinery without pretending a tester holds a membership role.
+    """
+
+    @property
+    def principal(self) -> Any: ...  # must expose `.user_id`
+
+    workspace_id: str
+    request_id: str
+    idempotency_key: str | None
+
+
 def run_idempotently(
     conn: psycopg.Connection[dict[str, Any]],
-    context: RequestContext,
+    context: IdempotentCaller,
     *,
     route: str,
     body: dict[str, Any],

@@ -27,6 +27,7 @@ from .schedules import router as schedules_router
 from .session import router as session_router
 from .settings import router as settings_router
 from .stream import router as stream_router
+from .tester_desk import router as tester_desk_router
 
 __all__ = [
     "diagnosis_requests_router",
@@ -46,4 +47,5 @@ __all__ = [
     "settings_router",
     "session_router",
     "stream_router",
+    "tester_desk_router",
 ]

@@ -43,8 +43,13 @@ EXPECTED: dict[Role, set[Permission]] = {
         Permission.PATCH_APPROVE,
         Permission.EVIDENCE_READ,
         Permission.EVIDENCE_EXPORT,
+        Permission.COMMISSION_AUTHOR,
     },
-    Role.REVIEWER: {Permission.EVIDENCE_READ, Permission.PATCH_REVIEW},
+    Role.REVIEWER: {
+        Permission.EVIDENCE_READ,
+        Permission.PATCH_REVIEW,
+        Permission.COMMISSION_REVIEW,
+    },
     Role.VIEWER: {Permission.EVIDENCE_READ},
 }
 
@@ -139,6 +144,10 @@ def test_the_permission_vocabulary_has_not_silently_grown() -> None:
         "EVIDENCE_EXPORT",
         "GITHUB_PUBLISH_APPROVE",
         "INFRASTRUCTURE_OPERATE",
+        "COMMISSION_AUTHOR",
+        "COMMISSION_REVIEW",
+        "TESTER_DESK_ADMIN",
+        "COMPENSATION_RECONCILE",
     }
 
 

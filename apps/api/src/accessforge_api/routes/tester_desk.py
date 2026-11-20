@@ -1,0 +1,658 @@
+"""Tester Desk routes: the commercial retest surface.
+
+Three audiences share one prefix but not one authority source:
+
+* **Agency side** (``/commissions``, ``/clients``, ``/consent-terms``, ``/submissions``,
+  ``/payables``, ``/reports``) resolves workspace membership and a named permission, exactly like
+  every other route in this service.
+* **Tester side** (``/tester/...``) resolves the session, then a *tester roster enrollment* in this
+  workspace. Testers are deliberately not workspace members: membership would grant the
+  accessibility product's evidence, which a consenting contractor must never see by default.
+* **Client side** (``/client/...``) resolves the session, then a *client viewer grant* bound to the
+  commission's client identity. Reports exist only per issued, redacted revision.
+
+All three honour the same CSRF, idempotency and rate-limit plumbing; only the authority lookup
+differs.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Annotated, Any
+
+import psycopg
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+
+from accessforge_api.auth import CSRF_HEADER, SESSION_COOKIE, verify_csrf
+from accessforge_api.auth.sessions import resolve_session
+from accessforge_api.dependencies import (
+    enforce_write_rate_limit,
+    run_idempotently,
+)
+from accessforge_api.problems import ProblemCode, ProblemDetail, not_found
+from accessforge_api.routes._common import (
+    as_body,
+    as_identifier,
+    authorize,
+    workspace_scope,
+)
+from accessforge_domain.authorization.roles import Permission
+from accessforge_domain.tester_desk import BriefError
+from accessforge_persistence import tester_desk as td
+
+router = APIRouter(prefix="/v1/workspaces/{workspace_id}/tester-desk", tags=["tester-desk"])
+Conn = Annotated[psycopg.Connection[Any], Depends(workspace_scope, scope="function")]
+
+
+def _request_id(request: Request) -> str:
+    from accessforge_api.telemetry import resolve_request_id
+
+    return resolve_request_id(request)
+
+
+@dataclass(frozen=True, slots=True)
+class _Actor:
+    """A person acting through a tester-desk grant rather than workspace membership."""
+
+    user_id: str
+    workspace_id: str
+    session_id: str
+
+    def permits(self, permission: Permission) -> bool:  # noqa: ARG002
+        """Grant-based actors hold no workspace permissions by construction."""
+        return False
+
+
+@dataclass(frozen=True, slots=True)
+class ActorContext:
+    """The tester/client counterpart of `RequestContext` (see `IdempotentCaller`)."""
+
+    principal: _Actor
+    workspace_id: str
+    request_id: str
+    idempotency_key: str | None
+    if_match: int | None
+
+
+def _resolve_session_for_actor(
+    conn: psycopg.Connection[Any], request: Request
+) -> tuple[Any, str]:
+    request_id = _request_id(request)
+    try:
+        session = resolve_session(conn, session_token=request.cookies.get(SESSION_COOKIE))
+    except Exception as exc:
+        raise ProblemDetail(
+            ProblemCode.NOT_AUTHENTICATED, str(exc), request_id=request_id
+        ) from exc
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        try:
+            verify_csrf(
+                session, method=request.method, csrf_token=request.headers.get(CSRF_HEADER)
+            )
+        except Exception as exc:
+            raise ProblemDetail(
+                ProblemCode.CSRF_REQUIRED, str(exc), request_id=request_id
+            ) from exc
+    return session, request_id
+
+
+def tester_context(
+    conn: psycopg.Connection[Any],
+    request: Request,
+    workspace_id: str,
+) -> tuple[ActorContext, dict[str, Any]]:
+    """Resolve a roster-enrolled tester for this workspace, or refuse.
+
+    Authentication and CSRF are identical to `build_context`; authority then comes from the
+    roster row, not membership. A signed-in person with no enrollment gets 404 for the same reason
+    a non-member gets 404 on workspace routes: the roster's existence is not public information.
+    """
+    session, request_id = _resolve_session_for_actor(conn, request)
+    enrollment = td.enrollment_for_user(
+        conn, workspace_id=workspace_id, user_id=session.user_id
+    )
+    if enrollment is None:
+        raise not_found()
+    enforce_write_rate_limit(
+        request,
+        principal_id=session.user_id,
+        workspace_id=workspace_id,
+        request_id=request_id,
+    )
+    context = ActorContext(
+        principal=_Actor(
+            user_id=session.user_id,
+            workspace_id=workspace_id,
+            session_id=session.session_id,
+        ),
+        workspace_id=workspace_id,
+        request_id=request_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        if_match=None,
+    )
+    return context, enrollment
+
+
+def client_context(
+    conn: psycopg.Connection[Any],
+    request: Request,
+    workspace_id: str,
+) -> tuple[ActorContext, list[str]]:
+    """Resolve a signed-in person holding at least one client viewer grant here.
+
+    Returns the context and the granted client ids; report routes then check the report's client
+    is among them, so a viewer of one client sees nothing of another (INV-06).
+    """
+    session, request_id = _resolve_session_for_actor(conn, request)
+    grants = td.client_grant_for_user(conn, workspace_id=workspace_id, user_id=session.user_id)
+    if not grants:
+        raise not_found()
+    context = ActorContext(
+        principal=_Actor(
+            user_id=session.user_id,
+            workspace_id=workspace_id,
+            session_id=session.session_id,
+        ),
+        workspace_id=workspace_id,
+        request_id=request_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        if_match=None,
+    )
+    return context, grants
+
+
+def _refused(exc: Exception) -> ProblemDetail:
+    return ProblemDetail(ProblemCode.CONFLICT, str(exc))
+
+
+# --- clients -------------------------------------------------------------------------------------
+
+
+@router.post("/clients", status_code=status.HTTP_201_CREATED)
+def create_client(
+    workspace_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    authorize(
+        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
+        body=body, allowed_fields=frozenset({"name"}),
+    )
+    try:
+        view = td.create_client(conn, workspace_id=workspace_id, name=body.get("name"))
+    except td.CommissionError as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.get("/clients")
+def list_clients(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.TESTER_DESK_ADMIN)
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": td.list_clients(conn, workspace_id=workspace_id)}
+
+
+@router.post("/clients/{client_id}/viewers", status_code=status.HTTP_201_CREATED)
+def grant_viewer(
+    workspace_id: str, client_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
+        body=body, allowed_fields=frozenset({"userId"}),
+    )
+    as_identifier(client_id, what="client")
+    try:
+        view = td.grant_client_viewer(
+            conn,
+            workspace_id=workspace_id,
+            client_id=client_id,
+            user_id=body.get("userId", ""),
+            granted_by=context.principal.user_id,
+        )
+    except td.CommissionError as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.delete("/clients/{client_id}/viewers/{user_id}")
+def revoke_viewer(
+    workspace_id: str, client_id: str, user_id: str, request: Request, response: Response,
+    conn: Conn,
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.TESTER_DESK_ADMIN)
+    as_identifier(client_id, what="client")
+    as_identifier(user_id, what="user")
+    try:
+        view = td.revoke_client_viewer(
+            conn, workspace_id=workspace_id, client_id=client_id, user_id=user_id
+        )
+    except td.CommissionError as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+# --- consent terms --------------------------------------------------------------------------------
+
+
+@router.post("/consent-terms", status_code=status.HTTP_201_CREATED)
+def publish_terms(
+    workspace_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
+        body=body, allowed_fields=frozenset({"body"}),
+    )
+    try:
+        view = td.publish_consent_terms(
+            conn,
+            workspace_id=workspace_id,
+            body=body.get("body", ""),
+            actor_id=context.principal.user_id,
+        )
+    except td.CommissionError as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.get("/consent-terms")
+def read_terms(
+    workspace_id: str, request: Request, response: Response, conn: Conn,
+    version: Annotated[int | None, Query(ge=1)] = None,
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.TESTER_DESK_ADMIN)
+    terms = td.consent_terms(conn, workspace_id=workspace_id, version=version)
+    if terms is None:
+        raise not_found()
+    response.headers["Cache-Control"] = "no-store"
+    return terms
+
+
+# --- commissions ------------------------------------------------------------
+
+
+_COMMISSION_FIELDS = frozenset(
+    {
+        "clientId",
+        "reference",
+        "defectKey",
+        "predecessorCommissionId",
+        "offerExpiresAt",
+        "brief",
+    }
+)
+
+_BRIEF_FIELDS = frozenset(
+    {
+        "releaseLabel",
+        "releaseDigest",
+        "targetUrl",
+        "accessNote",
+        "taskSteps",
+        "environment",
+        "rubric",
+        "permittedEvidence",
+        "feeMinor",
+        "currency",
+        "consentTermsVersion",
+        "deadline",
+    }
+)
+
+
+def _extract_brief(body: dict[str, Any]) -> dict[str, Any]:
+    brief = body.get("brief")
+    if not isinstance(brief, dict):
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "a brief object is required")
+    unexpected = sorted(set(brief) - _BRIEF_FIELDS)
+    if unexpected:
+        raise ProblemDetail(
+            ProblemCode.UNEXPECTED_FIELD,
+            f"the brief contains fields this route does not accept: {', '.join(unexpected)}",
+        )
+    return {
+        "release_label": brief.get("releaseLabel"),
+        "release_digest": brief.get("releaseDigest"),
+        "target_url": brief.get("targetUrl"),
+        "task_steps": brief.get("taskSteps"),
+        "environment": brief.get("environment"),
+        "rubric": brief.get("rubric"),
+        "permitted_evidence": brief.get("permittedEvidence"),
+        "fee_minor": brief.get("feeMinor"),
+        "currency": brief.get("currency"),
+        "consent_terms_version": brief.get("consentTermsVersion"),
+        "deadline": brief.get("deadline"),
+        "accessNote": brief.get("accessNote"),
+    }
+
+
+@router.post("/commissions", status_code=status.HTTP_201_CREATED)
+def create_commission(
+    workspace_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.COMMISSION_AUTHOR,
+        body=body, allowed_fields=_COMMISSION_FIELDS,
+    )
+    brief = _extract_brief(body)
+    try:
+        view = td.create_commission(
+            conn,
+            workspace_id=workspace_id,
+            actor_id=context.principal.user_id,
+            client_id=body.get("clientId", ""),
+            reference=body.get("reference", ""),
+            brief=brief,
+            defect_key=body.get("defectKey"),
+            predecessor_commission_id=body.get("predecessorCommissionId"),
+            offer_expires_at=body.get("offerExpiresAt"),
+        )
+    except BriefError as exc:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, str(exc)) from exc
+    except (td.CommissionError, td.EnrollmentError) as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.get("/commissions")
+def list_commissions(
+    workspace_id: str, request: Request, response: Response, conn: Conn,
+    status: Annotated[str | None, Query()] = None,
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
+    td.expire_offers(conn, workspace_id=workspace_id)
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": td.list_commissions(conn, workspace_id=workspace_id, status=status)}
+
+
+@router.get("/commissions/{commission_id}")
+def read_commission(
+    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
+    as_identifier(commission_id, what="commission")
+    try:
+        view = td.read_commission(
+            conn, workspace_id=workspace_id, commission_id=commission_id
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.get("/commissions/{commission_id}/briefs/{revision}")
+def read_brief(
+    workspace_id: str, commission_id: str, revision: int, request: Request,
+    response: Response, conn: Conn,
+) -> dict[str, Any]:
+    """Reopen the exact pinned brief version (T-001)."""
+    authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
+    as_identifier(commission_id, what="commission")
+    try:
+        view = td.read_brief_revision(
+            conn,
+            workspace_id=workspace_id,
+            commission_id=commission_id,
+            revision=revision,
+            include_access_note=True,
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.post("/commissions/{commission_id}/revisions", status_code=status.HTTP_201_CREATED)
+def author_revision(
+    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.COMMISSION_AUTHOR,
+        body=body, allowed_fields=frozenset({"brief"}),
+    )
+    as_identifier(commission_id, what="commission")
+    brief = _extract_brief(body)
+    try:
+        view = td.author_brief_revision(
+            conn,
+            workspace_id=workspace_id,
+            commission_id=commission_id,
+            actor_id=context.principal.user_id,
+            brief=brief,
+        )
+    except LookupError:
+        raise not_found() from None
+    except BriefError as exc:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, str(exc)) from exc
+    except (td.CommissionError, td.EnrollmentError) as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.post("/commissions/{commission_id}/publish")
+def publish_commission(
+    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
+    as_identifier(commission_id, what="commission")
+    try:
+        view = td.publish_commission(
+            conn, workspace_id=workspace_id, commission_id=commission_id
+        )
+    except LookupError:
+        raise not_found() from None
+    except td.CommissionError as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+# --- tester roster (agency side) ------------------------------------------------------------------
+
+
+@router.post("/testers", status_code=status.HTTP_201_CREATED)
+def enroll_tester(
+    workspace_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
+        body=body,
+        allowed_fields=frozenset(
+            {"userId", "displayName", "capabilities", "payoutReference", "conflicts"}
+        ),
+    )
+    try:
+        view = td.enroll_tester(
+            conn,
+            workspace_id=workspace_id,
+            actor_id=context.principal.user_id,
+            user_id=body.get("userId", ""),
+            display_name=body.get("displayName", ""),
+            capabilities=body.get("capabilities") or {},
+            payout_reference=body.get("payoutReference"),
+            conflicts=body.get("conflicts"),
+        )
+    except (td.EnrollmentError, BriefError, ValueError) as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.get("/testers")
+def list_testers(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.TESTER_DESK_ADMIN)
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": td.list_testers(conn, workspace_id=workspace_id)}
+
+
+@router.post("/testers/{tester_id}/status")
+def change_tester_status(
+    workspace_id: str, tester_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    authorize(
+        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
+        body=body, allowed_fields=frozenset({"status", "reason"}),
+    )
+    as_identifier(tester_id, what="tester")
+    try:
+        view = td.set_tester_status(
+            conn,
+            workspace_id=workspace_id,
+            tester_id=tester_id,
+            status=body.get("status", ""),
+            reason=body.get("reason", ""),
+        )
+    except LookupError:
+        raise not_found() from None
+    except td.EnrollmentError as exc:
+        raise _refused(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+# --- tester side: offers, claims and assignments ----------------------------------------------
+
+
+@router.get("/tester/offers")
+def tester_offers(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": td.offers_for_tester(conn, workspace_id=workspace_id,
+                                          enrollment=enrollment)}
+
+
+@router.get("/tester/offers/{commission_id}")
+def tester_offer_detail(
+    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(commission_id, what="commission")
+    offers = td.offers_for_tester(conn, workspace_id=workspace_id, enrollment=enrollment)
+    offer = next((o for o in offers if o["commissionId"] == commission_id), None)
+    if offer is None:
+        raise not_found()
+    terms = td.consent_terms(
+        conn,
+        workspace_id=workspace_id,
+        version=offer["brief"]["consentTermsVersion"],
+    )
+    offer["consentTerms"] = terms
+    response.headers["Cache-Control"] = "no-store"
+    return offer
+
+
+@router.post("/tester/offers/{commission_id}/claim", status_code=status.HTTP_201_CREATED)
+def claim_offer(
+    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(commission_id, what="commission")
+    unexpected = sorted(set(body) - {"consentTermsVersion", "consentAccepted"})
+    if unexpected:
+        raise ProblemDetail(
+            ProblemCode.UNEXPECTED_FIELD,
+            f"the request body contains fields this route does not accept: "
+            f"{', '.join(unexpected)}",
+        )
+
+    def perform() -> dict[str, Any]:
+        try:
+            return td.claim_offer(
+                conn,
+                workspace_id=workspace_id,
+                commission_id=commission_id,
+                enrollment=enrollment,
+                consent_terms_version=body.get("consentTermsVersion"),
+                consent_accepted=body.get("consentAccepted"),
+            )
+        except LookupError:
+            raise not_found() from None
+        except td.EnrollmentError as exc:
+            raise _refused(exc) from exc
+
+    result = run_idempotently(
+        conn,
+        context,
+        route=f"POST /tester-desk/tester/offers/{commission_id}/claim",
+        body=body,
+        perform=perform,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result.response or {}
+
+
+@router.get("/tester/assignments")
+def tester_assignments(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "items": td.assignments_for_tester(
+            conn, workspace_id=workspace_id, tester_id=enrollment["testerId"]
+        )
+    }
+
+
+@router.get("/tester/assignments/{assignment_id}")
+def tester_assignment(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    try:
+        view = td.assignment_for_tester(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            tester_id=enrollment["testerId"],
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.post("/tester/assignments/{assignment_id}/withdraw")
+def withdraw_assignment(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    try:
+        view = td.withdraw_assignment(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            tester_id=enrollment["testerId"],
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
