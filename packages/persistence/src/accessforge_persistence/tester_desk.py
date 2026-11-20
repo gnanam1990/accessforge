@@ -11,6 +11,7 @@ reads as an integrity failure rather than as quietly wrong terms.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -30,8 +31,9 @@ class EnrollmentError(ValueError):
     """A tester-enrollment or claim operation was refused."""
 
 
-class EvidenceError(ValueError):
-    """An observation, attachment or submission operation was refused."""
+# One error class shared with the domain so routes catch refusals raised on
+# either side of the boundary.
+EvidenceError = domain.EvidenceError
 
 
 class ReviewError(ValueError):
@@ -910,3 +912,273 @@ def withdraw_assignment(
             (row["commission_id"],),
         )
     return read_assignment(conn, workspace_id=workspace_id, assignment_id=assignment_id)
+
+
+# --- evidence capture: observation drafts and attachments ---------------------------------------
+
+
+def _lock_assignment_for_capture(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment_id: str,
+    tester_id: str,
+) -> dict[str, Any]:
+    """Fetch the owning tester's live assignment row for evidence writes.
+
+    Only an ``ACTIVE`` assignment accepts drafts or attachments; once a submission is sealed the
+    state machine moves the row past ACTIVE and capture closes. A foreign tester or a stale id is
+    a plain ``LookupError`` -- the row's existence is not disclosed (INV-03).
+    """
+    row = conn.execute(
+        "SELECT * FROM td_assignment WHERE id=%s AND workspace_id=%s AND tester_id=%s FOR UPDATE",
+        (assignment_id, workspace_id, tester_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("assignment unavailable")
+    if row["status"] != "ACTIVE":
+        raise EvidenceError(
+            f"assignment is {row['status'].lower().replace('_', ' ')}; evidence capture is closed"
+        )
+    return row
+
+
+def _draft_view(row: dict[str, Any] | None, *, assignment_id: str) -> dict[str, Any]:
+    if row is None:
+        return {"assignmentId": assignment_id, "draftRevision": 0,
+                "observations": [], "updatedAt": None}
+    return {
+        "assignmentId": str(row["assignment_id"]),
+        "draftRevision": int(row["draft_revision"]),
+        "observations": row["observations"],
+        "updatedAt": to_rfc3339_utc(row["updated_at"]),
+    }
+
+
+def read_draft(
+    conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM td_observation_draft WHERE assignment_id=%s AND workspace_id=%s",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    return _draft_view(row, assignment_id=assignment_id)
+
+
+def save_draft(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment_id: str,
+    tester_id: str,
+    observations: Any,
+    base_revision: int | None = None,
+) -> dict[str, Any]:
+    """Autosave one capture draft. Partial drafts are first-class: the tester can reload later
+    and recover exactly what was stored (T-005).
+
+    ``base_revision`` is optimistic concurrency for a tester running two capture sessions: a stale
+    writer gets a conflict instead of silently overwriting the newer autosave.
+    """
+    assignment = _lock_assignment_for_capture(
+        conn, workspace_id=workspace_id, assignment_id=assignment_id, tester_id=tester_id
+    )
+    brief = read_brief_revision(
+        conn,
+        workspace_id=workspace_id,
+        commission_id=str(assignment["commission_id"]),
+        revision=int(assignment["brief_revision"]),
+    )
+    step_ids = {s["stepId"] for s in brief["taskSteps"]}
+    cleaned = domain.validate_observations(observations, step_ids=step_ids)
+
+    existing = conn.execute(
+        "SELECT draft_revision FROM td_observation_draft "
+        "WHERE assignment_id=%s AND workspace_id=%s",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    current = 0 if existing is None else int(existing["draft_revision"])
+    if base_revision is not None and base_revision != current:
+        raise EvidenceError(
+            f"draft has moved to revision {current}; reload before writing over it"
+        )
+    conn.execute(
+        "INSERT INTO td_observation_draft "
+        "(assignment_id, workspace_id, tester_id, observations, draft_revision, updated_at) "
+        "VALUES (%s,%s,%s,%s,1,clock_timestamp()) "
+        "ON CONFLICT (assignment_id) DO UPDATE SET "
+        "observations=EXCLUDED.observations, "
+        "draft_revision=td_observation_draft.draft_revision + 1, "
+        "updated_at=clock_timestamp()",
+        (assignment_id, workspace_id, tester_id, Jsonb(cleaned)),
+    )
+    return read_draft(conn, workspace_id=workspace_id, assignment_id=assignment_id)
+
+
+def add_attachment(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment_id: str,
+    tester_id: str,
+    kind: Any,
+    content_type: Any,
+    filename: Any,
+    content: bytes,
+) -> dict[str, Any]:
+    """Store one digest-backed attachment after the evidence gate passes.
+
+    The sha256 is computed here from the persisted bytes -- an artifact's digest is a property of
+    its content, not a claim the client made. A duplicate upload (same assignment, same digest)
+    returns the existing row so a retried upload stays idempotent.
+    """
+    assignment = _lock_assignment_for_capture(
+        conn, workspace_id=workspace_id, assignment_id=assignment_id, tester_id=tester_id
+    )
+    brief = read_brief_revision(
+        conn,
+        workspace_id=workspace_id,
+        commission_id=str(assignment["commission_id"]),
+        revision=int(assignment["brief_revision"]),
+    )
+    evidence_kind, normalized_type = domain.assert_attachment_permitted(
+        kind=kind,
+        content_type=content_type,
+        permitted_evidence=brief["permittedEvidence"],
+        byte_size=len(content),
+    )
+    if not isinstance(filename, str) or not filename.strip():
+        raise EvidenceError("attachment filename is required")
+    digest_hex = hashlib.sha256(content).hexdigest()
+    attachment_id = uuid.uuid4()
+    row = conn.execute(
+        "INSERT INTO td_evidence_attachment "
+        "(id, workspace_id, assignment_id, tester_id, kind, content_type, filename, sha256, "
+        "byte_size, content) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT (assignment_id, sha256) DO NOTHING "
+        "RETURNING *",
+        (
+            attachment_id,
+            workspace_id,
+            assignment_id,
+            tester_id,
+            evidence_kind.value,
+            normalized_type,
+            filename.strip()[:200],
+            digest_hex,
+            len(content),
+            content,
+        ),
+    ).fetchone()
+    if row is None:  # identical bytes already attached to this assignment
+        row = conn.execute(
+            "SELECT * FROM td_evidence_attachment "
+            "WHERE assignment_id=%s AND workspace_id=%s AND sha256=%s",
+            (assignment_id, workspace_id, digest_hex),
+        ).fetchone()
+    return _attachment_view(row)
+
+
+def _attachment_view(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "attachmentId": str(row["id"]),
+        "assignmentId": str(row["assignment_id"]),
+        "kind": row["kind"],
+        "contentType": row["content_type"],
+        "filename": row["filename"],
+        "sha256": row["sha256"],
+        "byteSize": int(row["byte_size"]),
+        "createdAt": to_rfc3339_utc(row["created_at"]),
+    }
+
+
+def list_attachments(
+    conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM td_evidence_attachment WHERE assignment_id=%s AND workspace_id=%s "
+        "ORDER BY created_at, id",
+        (assignment_id, workspace_id),
+    ).fetchall()
+    return [_attachment_view(r) for r in rows]
+
+
+def read_attachment(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment_id: str,
+    attachment_id: str,
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM td_evidence_attachment WHERE id=%s AND assignment_id=%s "
+        "AND workspace_id=%s",
+        (attachment_id, assignment_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("attachment unavailable")
+    return _attachment_view(row)
+
+
+def attachment_content(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment_id: str,
+    attachment_id: str,
+) -> dict[str, Any]:
+    """Metadata plus the persisted bytes. Recomputes the digest at read time so a corrupted row
+    answers as an integrity failure rather than quietly wrong evidence (NFR-01)."""
+    row = conn.execute(
+        "SELECT * FROM td_evidence_attachment WHERE id=%s AND assignment_id=%s "
+        "AND workspace_id=%s",
+        (attachment_id, assignment_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("attachment unavailable")
+    content = bytes(row["content"])
+    actual = hashlib.sha256(content).hexdigest()
+    if actual != row["sha256"]:
+        raise EvidenceError(
+            f"attachment {attachment_id} failed its digest check and cannot be served"
+        )
+    view = _attachment_view(row)
+    view["content"] = content
+    return view
+
+
+def evidence_progress(
+    conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str
+) -> dict[str, Any]:
+    """Rubric completeness for one assignment: what still blocks a submittable deliverable."""
+    row = conn.execute(
+        "SELECT * FROM td_assignment WHERE id=%s AND workspace_id=%s",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("assignment unavailable")
+    brief = read_brief_revision(
+        conn,
+        workspace_id=workspace_id,
+        commission_id=str(row["commission_id"]),
+        revision=int(row["brief_revision"]),
+    )
+    draft = read_draft(conn, workspace_id=workspace_id, assignment_id=assignment_id)
+    kinds = {a["kind"] for a in list_attachments(conn, workspace_id=workspace_id,
+                                               assignment_id=assignment_id)}
+    observations = {o["stepId"]: o["result"] for o in draft["observations"]}
+    missing = domain.rubric_completeness(
+        step_ids=[s["stepId"] for s in brief["taskSteps"]],
+        observations=observations,
+        attachment_kinds=kinds,
+        rubric=brief["rubric"],
+        permitted_evidence=brief["permittedEvidence"],
+    )
+    return {
+        "assignmentId": assignment_id,
+        "taskResult": domain.derive_task_result(observations, rubric=brief["rubric"]).value,
+        "missing": missing,
+        "submittable": not missing,
+        "draftRevision": draft["draftRevision"],
+    }

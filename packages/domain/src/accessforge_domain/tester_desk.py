@@ -32,6 +32,10 @@ class EligibilityError(ValueError):
     """A tester cannot claim this commission. The message says exactly which term failed."""
 
 
+class EvidenceError(ValueError):
+    """An observation or attachment violates the capture contract. Refused before persistence."""
+
+
 class StepResult(StrEnum):
     PASSED = "PASSED"
     FAILED = "FAILED"
@@ -320,6 +324,107 @@ def rubric_completeness(
         elif kind not in attachment_kinds:
             missing.append(f"no permitted {kind} attachment is present")
     return missing
+
+
+def validate_observations(
+    observations: Any, *, step_ids: set[str]
+) -> list[dict[str, Any]]:
+    """One observation row per recorded step, human-attested only.
+
+    Every entry must name a step the brief defines, a closed-vocabulary result, and
+    ``source == HUMAN_MANUAL`` -- the only source the evidence contract recognises (INV-08).
+    Notes are free text the tester wrote; unknown fields are refused rather than dropped so a
+    client cannot smuggle data the schema does not describe.
+    """
+    if not isinstance(observations, list):
+        raise EvidenceError("observations must be a list")
+    seen: set[str] = set()
+    cleaned: list[dict[str, Any]] = []
+    for i, entry in enumerate(observations):
+        if not isinstance(entry, dict):
+            raise EvidenceError(f"observation {i} must be an object")
+        unknown = set(entry) - {"stepId", "result", "notes", "source", "observedAt"}
+        if unknown:
+            raise EvidenceError(
+                f"observation {i} carries fields the capture contract does not accept: "
+                f"{', '.join(sorted(unknown))}"
+            )
+        step_id = entry.get("stepId")
+        if not isinstance(step_id, str) or step_id not in step_ids:
+            raise EvidenceError(f"observation {i} names a step the brief does not define")
+        if step_id in seen:
+            raise EvidenceError(f"step {step_id} is recorded twice")
+        seen.add(step_id)
+        result = entry.get("result")
+        if result not in {r.value for r in StepResult}:
+            raise EvidenceError(
+                f"observation for step {step_id} must be one of "
+                f"{', '.join(r.value for r in StepResult)}"
+            )
+        if entry.get("source") != ObservationSource.HUMAN_MANUAL.value:
+            raise EvidenceError(
+                f"observation for step {step_id} must attest "
+                f"{ObservationSource.HUMAN_MANUAL.value}; automation-produced records "
+                "cannot populate a human-observed result"
+            )
+        notes = entry.get("notes")
+        if notes is not None and not isinstance(notes, str):
+            raise EvidenceError(f"observation notes for step {step_id} must be text")
+        observed_at = entry.get("observedAt")
+        if observed_at is not None and not isinstance(observed_at, str):
+            raise EvidenceError(f"observation timestamp for step {step_id} must be text")
+        cleaned.append(
+            {
+                "stepId": step_id,
+                "result": result,
+                "notes": notes,
+                "source": ObservationSource.HUMAN_MANUAL.value,
+                "observedAt": observed_at,
+            }
+        )
+    return cleaned
+
+
+def assert_attachment_permitted(
+    *,
+    kind: Any,
+    content_type: Any,
+    permitted_evidence: list[str],
+    byte_size: int,
+) -> tuple[EvidenceKind, str]:
+    """Gate every attachment at the boundary before any bytes are stored.
+
+    A kind must be a recognised evidence kind, must not sit on the never-permitted list, must be
+    whitelisted by the brief's ``permittedEvidence``, and its content type must be on the kind's
+    allowlist. Anything else raises ``EvidenceError`` and the caller must refuse without creating
+    an artifact (T-006, INV-03).
+    """
+    if not isinstance(kind, str):
+        raise EvidenceError("attachment kind is required")
+    if kind in NEVER_PERMITTED_KINDS:
+        raise EvidenceError(f"{kind} attachments are never permitted on a tester-desk commission")
+    try:
+        evidence_kind = EvidenceKind(kind)
+    except ValueError:
+        raise EvidenceError(f"attachment kind {kind!r} is not a recognised evidence kind") from None
+    if evidence_kind.value not in permitted_evidence:
+        raise EvidenceError(
+            f"the brief does not permit {evidence_kind.value} evidence; permitted kinds are "
+            f"{', '.join(permitted_evidence)}"
+        )
+    if not isinstance(content_type, str) or not content_type:
+        raise EvidenceError("attachment content type is required")
+    content_type = content_type.split(";", 1)[0].strip().lower()
+    if content_type not in ALLOWED_CONTENT_TYPES[evidence_kind]:
+        raise EvidenceError(
+            f"{evidence_kind.value} evidence must be one of "
+            f"{', '.join(sorted(ALLOWED_CONTENT_TYPES[evidence_kind]))}, not {content_type!r}"
+        )
+    if byte_size <= 0 or byte_size > MAX_ATTACHMENT_BYTES:
+        raise EvidenceError(
+            f"attachment exceeds the {MAX_ATTACHMENT_BYTES} byte evidence limit or is empty"
+        )
+    return evidence_kind, content_type
 
 
 # --- eligibility and consent -------------------------------------------------------------------

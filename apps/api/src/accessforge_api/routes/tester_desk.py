@@ -17,6 +17,7 @@ differs.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -651,6 +652,207 @@ def withdraw_assignment(
             workspace_id=workspace_id,
             assignment_id=assignment_id,
             tester_id=enrollment["testerId"],
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+# --- tester side: evidence capture ------------------------------------------------
+
+
+@router.get("/tester/assignments/{assignment_id}/draft")
+def tester_draft(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    try:
+        td.assignment_for_tester(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            tester_id=enrollment["testerId"],
+        )
+        view = td.read_draft(conn, workspace_id=workspace_id, assignment_id=assignment_id)
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.put("/tester/assignments/{assignment_id}/draft")
+def save_draft(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    unexpected = sorted(set(body) - {"observations", "baseRevision"})
+    if unexpected:
+        raise ProblemDetail(
+            ProblemCode.UNEXPECTED_FIELD,
+            f"the request body contains fields this route does not accept: "
+            f"{', '.join(unexpected)}",
+        )
+
+    def perform() -> dict[str, Any]:
+        try:
+            return td.save_draft(
+                conn,
+                workspace_id=workspace_id,
+                assignment_id=assignment_id,
+                tester_id=enrollment["testerId"],
+                observations=body.get("observations"),
+                base_revision=body.get("baseRevision"),
+            )
+        except LookupError:
+            raise not_found() from None
+        except td.EvidenceError as exc:
+            raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
+
+    result = run_idempotently(
+        conn,
+        context,
+        route=f"PUT /tester-desk/tester/assignments/{assignment_id}/draft",
+        body=body,
+        perform=perform,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result.response or {}
+
+
+@router.post(
+    "/tester/assignments/{assignment_id}/attachments",
+    status_code=status.HTTP_201_CREATED,
+)
+def upload_attachment(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    unexpected = sorted(set(body) - {"kind", "contentType", "filename", "contentBase64"})
+    if unexpected:
+        raise ProblemDetail(
+            ProblemCode.UNEXPECTED_FIELD,
+            f"the request body contains fields this route does not accept: "
+            f"{', '.join(unexpected)}",
+        )
+    encoded = body.get("contentBase64")
+    if not isinstance(encoded, str):
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "contentBase64 must be base64 text")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except ValueError:
+        raise ProblemDetail(
+            ProblemCode.INVALID_INPUT, "contentBase64 is not valid base64"
+        ) from None
+
+    def perform() -> dict[str, Any]:
+        try:
+            return td.add_attachment(
+                conn,
+                workspace_id=workspace_id,
+                assignment_id=assignment_id,
+                tester_id=enrollment["testerId"],
+                kind=body.get("kind"),
+                content_type=body.get("contentType"),
+                filename=body.get("filename"),
+                content=content,
+            )
+        except LookupError:
+            raise not_found() from None
+        except td.EvidenceError as exc:
+            raise ProblemDetail(ProblemCode.INVALID_INPUT, str(exc)) from exc
+
+    result = run_idempotently(
+        conn,
+        context,
+        route=f"POST /tester-desk/tester/assignments/{assignment_id}/attachments",
+        body=body,
+        perform=perform,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result.response or {}
+
+
+@router.get("/tester/assignments/{assignment_id}/attachments")
+def list_attachments(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    try:
+        td.assignment_for_tester(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            tester_id=enrollment["testerId"],
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "items": td.list_attachments(
+            conn, workspace_id=workspace_id, assignment_id=assignment_id
+        )
+    }
+
+
+@router.get("/tester/assignments/{assignment_id}/attachments/{attachment_id}/content")
+def attachment_content(
+    workspace_id: str, assignment_id: str, attachment_id: str,
+    request: Request, response: Response, conn: Conn,
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    as_identifier(attachment_id, what="attachment")
+    try:
+        td.assignment_for_tester(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            tester_id=enrollment["testerId"],
+        )
+        view = td.attachment_content(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            attachment_id=attachment_id,
+        )
+    except LookupError:
+        raise not_found() from None
+    except td.EvidenceError as exc:
+        raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "attachmentId": view["attachmentId"],
+        "contentType": view["contentType"],
+        "filename": view["filename"],
+        "sha256": view["sha256"],
+        "contentBase64": base64.b64encode(view["content"]).decode("ascii"),
+    }
+
+
+@router.get("/tester/assignments/{assignment_id}/progress")
+def assignment_progress(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    try:
+        td.assignment_for_tester(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            tester_id=enrollment["testerId"],
+        )
+        view = td.evidence_progress(
+            conn, workspace_id=workspace_id, assignment_id=assignment_id
         )
     except LookupError:
         raise not_found() from None
