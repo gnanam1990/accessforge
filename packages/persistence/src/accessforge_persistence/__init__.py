@@ -246,9 +246,12 @@ def user_connection(
     """A connection that identifies the acting user but no workspace.
 
     This exists for exactly one job: letting a signed-in person enumerate **their own**
-    memberships, which is what a post-login workspace picker needs. Only the
-    `workspace_membership` policy consults the user scope, and only to match `user_id`; every other
-    workspace-scoped table stays invisible, so identifying a user is not a general-purpose bypass.
+    workspace access, which is what a post-login workspace picker needs. Only three policies
+    consult the user scope, and only to match `user_id`: `workspace_membership`, plus the
+    SELECT-only `own_row_select` policies on `td_tester` and `td_client_viewer` (migration 0081 —
+    read-only so the session can name tester-desk workspaces; writes stay workspace-scoped).
+    Every other workspace-scoped table stays invisible, so identifying a user is not a
+    general-purpose bypass.
 
     Writes still require a workspace scope. Reading your own memberships is safe; granting one is
     not.

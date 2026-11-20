@@ -225,17 +225,49 @@ def read_session(request: Request) -> dict[str, Any]:
             """,
             (session.user_id,),
         ).fetchall()
+        # Tester-desk participants are deliberately not members: tester authority is the td_tester
+        # row, client read access is the td_client_viewer grant. The workspaces those rows open are
+        # still answers to "which workspaces you may enter" — the session must name them, or the app
+        # routes them to not-found. Membership rows win on overlap: the member role is truer.
+        tester_rows = conn.execute(
+            """
+            SELECT t.workspace_id, w.name
+            FROM td_tester t
+            JOIN workspace w ON w.id = t.workspace_id
+            WHERE t.user_id = %s AND t.status = 'ACTIVE'
+            """,
+            (session.user_id,),
+        ).fetchall()
+        viewer_rows = conn.execute(
+            """
+            SELECT DISTINCT cv.workspace_id, w.name
+            FROM td_client_viewer cv
+            JOIN workspace w ON w.id = cv.workspace_id
+            WHERE cv.user_id = %s AND cv.revoked_at IS NULL
+            """,
+            (session.user_id,),
+        ).fetchall()
+
+    workspaces = {
+        str(r["workspace_id"]): {"name": str(r["name"]), "role": str(r["role"])} for r in rows
+    }
+    for r in tester_rows:
+        workspaces.setdefault(
+            str(r["workspace_id"]), {"name": str(r["name"]), "role": "TESTER"}
+        )
+    for r in viewer_rows:
+        workspaces.setdefault(
+            str(r["workspace_id"]), {"name": str(r["name"]), "role": "CLIENT"}
+        )
 
     return {
         "userId": session.user_id,
         "email": str(user["email"]),
         "workspaces": [
-            {
-                "workspaceId": str(r["workspace_id"]),
-                "name": str(r["name"]),
-                "role": str(r["role"]),
-            }
-            for r in rows
+            {"workspaceId": workspace_id, **entry}
+            for workspace_id, entry in sorted(
+                workspaces.items(), key=lambda item: (item[1]["name"], item[0])
+            )
         ],
     }
 

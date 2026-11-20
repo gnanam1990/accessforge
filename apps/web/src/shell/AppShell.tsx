@@ -65,7 +65,13 @@ export const AppShell = ({
         <AccountControls email={email} onSignOut={onSignOut} />
       </header>
       <div className={`af-body${workspaceId === null ? ' af-body-no-sidebar' : ''}`}>
-        {workspaceId !== null && <PrimaryNavigation workspaceId={workspaceId} narrow={narrow} />}
+        {workspaceId !== null && (
+          <PrimaryNavigation
+            workspaceId={workspaceId}
+            role={workspaces.find((w) => w.workspaceId === workspaceId)?.role}
+            narrow={narrow}
+          />
+        )}
         <main id={MAIN_CONTENT_ID} tabIndex={-1} className="af-main af-stack">
           {banner}
           {children}

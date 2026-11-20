@@ -20,12 +20,27 @@ import { NavLink } from 'react-router-dom'
 import { SectionIcon } from '../components/Brand'
 
 import { WORKSPACE_ROUTES, workspacePath } from '../routes/routeMap'
+import type { WorkspaceRole } from '../api/session'
 
-const items = WORKSPACE_ROUTES.filter((route) => route.inPrimaryNavigation)
+/**
+ * What the sidebar lists depends on how the caller may enter the workspace. Members see every
+ * section; a tester-desk participant (the session carries TESTER or CLIENT, not a member role)
+ * sees only the surfaces their authority can answer — every other section would render refusals
+ * dressed up as navigation.
+ */
+const itemsFor = (role: WorkspaceRole | undefined) =>
+  WORKSPACE_ROUTES.filter((route) => route.inPrimaryNavigation).filter((route) => {
+    if (role === 'TESTER') return route.path.startsWith('tester-desk/tester')
+    if (role === 'CLIENT') return route.path === 'tester-desk/client'
+    return true
+  })
 
-const List = ({ workspaceId }: { readonly workspaceId: string }): JSX.Element => (
+const List = ({ workspaceId, role }: {
+  readonly workspaceId: string
+  readonly role: WorkspaceRole | undefined
+}): JSX.Element => (
   <ul className="af-nav-list">
-    {items.map((route, index) => (
+    {itemsFor(role).map((route, index) => (
       <li key={route.path}>
         {/* `end` so the match is exact. Without it, /projects/p-1 marks the Projects entry as the
             current page while the project detail screen is the one showing, and `aria-current` is
@@ -40,19 +55,21 @@ const List = ({ workspaceId }: { readonly workspaceId: string }): JSX.Element =>
 
 export const PrimaryNavigation = ({
   workspaceId,
+  role,
   narrow,
 }: {
   readonly workspaceId: string
+  readonly role?: WorkspaceRole | undefined
   readonly narrow: boolean
 }): JSX.Element => (
   <nav className="af-sidebar" aria-label="Workspace sections">
     {narrow ? (
       <details>
         <summary>Menu</summary>
-        <List workspaceId={workspaceId} />
+        <List workspaceId={workspaceId} role={role} />
       </details>
     ) : (
-      <List workspaceId={workspaceId} />
+      <List workspaceId={workspaceId} role={role} />
     )}
   </nav>
 )
