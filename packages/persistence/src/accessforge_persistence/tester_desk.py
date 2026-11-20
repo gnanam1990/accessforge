@@ -1182,3 +1182,272 @@ def evidence_progress(
         "submittable": not missing,
         "draftRevision": draft["draftRevision"],
     }
+
+
+# --- submission and review -------------------------------------------------------
+
+
+def _submission_view(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "submissionId": str(row["id"]),
+        "assignmentId": str(row["assignment_id"]),
+        "revision": int(row["revision"]),
+        "submissionHash": row["submission_hash"],
+        "taskResult": row["task_result"],
+        "observations": row["observations"],
+        "attachmentManifest": row["attachment_manifest"],
+        "sealedAt": to_rfc3339_utc(row["sealed_at"]),
+    }
+
+
+def submit_assignment(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment_id: str,
+    tester_id: str,
+) -> dict[str, Any]:
+    """Seal the current draft + attachment manifest into an immutable submission.
+
+    The rubric must be satisfied at seal time: missing steps or required evidence kinds are a
+    refusal listing the gaps, not a partial submission. The digest covers observations and the
+    attachment manifest, so the reviewer's decision can bind to exactly this evidence set.
+    """
+    assignment = conn.execute(
+        "SELECT * FROM td_assignment WHERE id=%s AND workspace_id=%s AND tester_id=%s FOR UPDATE",
+        (assignment_id, workspace_id, tester_id),
+    ).fetchone()
+    if assignment is None:
+        raise LookupError("assignment unavailable")
+    if assignment["status"] != "ACTIVE":
+        raise ReviewError(
+            f"assignment is {assignment['status'].lower().replace('_', ' ')}; "
+            "only an active assignment can be submitted"
+        )
+    brief = read_brief_revision(
+        conn,
+        workspace_id=workspace_id,
+        commission_id=str(assignment["commission_id"]),
+        revision=int(assignment["brief_revision"]),
+    )
+    draft = read_draft(conn, workspace_id=workspace_id, assignment_id=assignment_id)
+    attachments = list_attachments(
+        conn, workspace_id=workspace_id, assignment_id=assignment_id
+    )
+    observations = {o["stepId"]: o["result"] for o in draft["observations"]}
+    missing = domain.rubric_completeness(
+        step_ids=[s["stepId"] for s in brief["taskSteps"]],
+        observations=observations,
+        attachment_kinds={a["kind"] for a in attachments},
+        rubric=brief["rubric"],
+        permitted_evidence=brief["permittedEvidence"],
+    )
+    if missing:
+        raise ReviewError("submission is incomplete: " + "; ".join(missing))
+
+    manifest = [
+        {
+            "attachmentId": a["attachmentId"],
+            "kind": a["kind"],
+            "sha256": a["sha256"],
+            "contentType": a["contentType"],
+            "filename": a["filename"],
+        }
+        for a in attachments
+    ]
+    revision_row = conn.execute(
+        "SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM td_submission "
+        "WHERE assignment_id=%s AND workspace_id=%s",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    revision = int(revision_row["next"])
+    submission_hash = domain.compute_brief_hash(
+        {
+            "assignmentId": assignment_id,
+            "briefHash": brief["briefHash"],
+            "revision": revision,
+            "observations": draft["observations"],
+            "attachments": manifest,
+        }
+    )
+    task_result = domain.derive_task_result(observations, rubric=brief["rubric"]).value
+    submission_id = uuid.uuid4()
+    row = conn.execute(
+        "INSERT INTO td_submission "
+        "(id, workspace_id, assignment_id, revision, submission_hash, task_result, "
+        "observations, attachment_manifest) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        (
+            submission_id,
+            workspace_id,
+            assignment_id,
+            revision,
+            submission_hash,
+            task_result,
+            Jsonb(draft["observations"]),
+            Jsonb(manifest),
+        ),
+    ).fetchone()
+    conn.execute(
+        "UPDATE td_assignment SET status='UNDER_REVIEW' WHERE id=%s", (assignment_id,)
+    )
+    conn.execute(
+        "UPDATE td_commission SET status='IN_REVIEW' WHERE id=%s "
+        "AND status IN ('ASSIGNED','NEEDS_REVISION')",
+        (assignment["commission_id"],),
+    )
+    return _submission_view(row)
+
+
+def list_submissions(
+    conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM td_submission WHERE assignment_id=%s AND workspace_id=%s "
+        "ORDER BY revision",
+        (assignment_id, workspace_id),
+    ).fetchall()
+    views = [_submission_view(r) for r in rows]
+    for view in views:
+        decision = conn.execute(
+            "SELECT * FROM td_review_decision WHERE submission_id=%s AND workspace_id=%s",
+            (view["submissionId"], workspace_id),
+        ).fetchone()
+        view["decision"] = _decision_view(decision) if decision else None
+    return views
+
+
+def latest_submission(
+    conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM td_submission WHERE assignment_id=%s AND workspace_id=%s "
+        "ORDER BY revision DESC LIMIT 1",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    return None if row is None else _submission_view(row)
+
+
+def _decision_view(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "decisionId": str(row["id"]),
+        "submissionId": str(row["submission_id"]),
+        "submissionHash": row["submission_hash"],
+        "decision": row["decision"],
+        "justification": row["justification"],
+        "decidedBy": str(row["decided_by"]),
+        "decidedAt": to_rfc3339_utc(row["decided_at"]),
+    }
+
+
+def review_queue(
+    conn: psycopg.Connection[Any], *, workspace_id: str
+) -> list[dict[str, Any]]:
+    """Assignments awaiting a reviewer decision, newest first."""
+    rows = conn.execute(
+        "SELECT a.*, c.reference FROM td_assignment a "
+        "JOIN td_commission c ON c.id = a.commission_id AND c.workspace_id = a.workspace_id "
+        "WHERE a.workspace_id=%s AND a.status='UNDER_REVIEW' ORDER BY a.claimed_at DESC",
+        (workspace_id,),
+    ).fetchall()
+    return [
+        {
+            "assignmentId": str(r["id"]),
+            "commissionId": str(r["commission_id"]),
+            "reference": r["reference"],
+            "testerId": str(r["tester_id"]),
+            "briefRevision": int(r["brief_revision"]),
+            "latestSubmission": (
+                latest_submission(
+                    conn, workspace_id=workspace_id, assignment_id=str(r["id"])
+                )
+            ),
+        }
+        for r in rows
+    ]
+
+
+def decide_submission(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment_id: str,
+    submission_hash: Any,
+    decision: Any,
+    justification: Any,
+    decided_by: str,
+) -> dict[str, Any]:
+    """Record a reviewer's decision bound to a submission digest.
+
+    The digest must match the assignment's *latest* sealed submission -- approving an obsolete
+    revision is a conflict (T-008), because the evidence the reviewer looked at is no longer the
+    evidence of record. A second decision on an already-decided submission is likewise a
+    conflict; the tester revises by sealing a new revision.
+    """
+    assignment = conn.execute(
+        "SELECT * FROM td_assignment WHERE id=%s AND workspace_id=%s FOR UPDATE",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    if assignment is None:
+        raise LookupError("assignment unavailable")
+    if assignment["status"] != "UNDER_REVIEW":
+        raise ReviewError(
+            f"assignment is {assignment['status'].lower().replace('_', ' ')}; "
+            "nothing awaits review"
+        )
+    latest = latest_submission(
+        conn, workspace_id=workspace_id, assignment_id=assignment_id
+    )
+    if latest is None:
+        raise ReviewError("assignment has no sealed submission")
+    if submission_hash != latest["submissionHash"]:
+        raise ReviewError(
+            "submission digest is obsolete: the tester has sealed a newer revision "
+            f"({latest['submissionHash'][:12]}…); review that instead"
+        )
+    if decision == "ACCEPTED":
+        decision_value = "ACCEPTED"
+    elif decision == "NEEDS_REVISION":
+        decision_value = "NEEDS_REVISION"
+    else:
+        raise ReviewError("decision must be ACCEPTED or NEEDS_REVISION")
+    if not isinstance(justification, str) or not justification.strip():
+        raise ReviewError("a justification is required for every review decision")
+
+    try:
+        row = conn.execute(
+            "INSERT INTO td_review_decision "
+            "(id, workspace_id, submission_id, submission_hash, assignment_id, decision, "
+            "justification, decided_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+            (
+                uuid.uuid4(),
+                workspace_id,
+                latest["submissionId"],
+                latest["submissionHash"],
+                assignment_id,
+                decision_value,
+                justification.strip(),
+                decided_by,
+            ),
+        ).fetchone()
+    except psycopg.errors.UniqueViolation as exc:
+        raise ReviewError("this submission already carries a decision") from exc
+
+    if decision_value == "ACCEPTED":
+        conn.execute(
+            "UPDATE td_assignment SET status='COMPLETED' WHERE id=%s", (assignment_id,)
+        )
+        conn.execute(
+            "UPDATE td_commission SET status='ACCEPTED' WHERE id=%s",
+            (assignment["commission_id"],),
+        )
+    else:
+        conn.execute(
+            "UPDATE td_assignment SET status='ACTIVE' WHERE id=%s", (assignment_id,)
+        )
+        conn.execute(
+            "UPDATE td_commission SET status='NEEDS_REVISION' WHERE id=%s",
+            (assignment["commission_id"],),
+        )
+    return _decision_view(row)

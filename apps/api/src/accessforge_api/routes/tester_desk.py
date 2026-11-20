@@ -858,3 +858,179 @@ def assignment_progress(
         raise not_found() from None
     response.headers["Cache-Control"] = "no-store"
     return view
+
+
+@router.post("/tester/assignments/{assignment_id}/submit")
+def submit_assignment(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    if body:
+        raise ProblemDetail(
+            ProblemCode.UNEXPECTED_FIELD,
+            "the request body contains fields this route does not accept: "
+            + ", ".join(sorted(body)),
+        )
+
+    def perform() -> dict[str, Any]:
+        try:
+            return td.submit_assignment(
+                conn,
+                workspace_id=workspace_id,
+                assignment_id=assignment_id,
+                tester_id=enrollment["testerId"],
+            )
+        except LookupError:
+            raise not_found() from None
+        except td.ReviewError as exc:
+            raise _refused(exc) from exc
+
+    result = run_idempotently(
+        conn,
+        context,
+        route=f"POST /tester-desk/tester/assignments/{assignment_id}/submit",
+        body=body,
+        perform=perform,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result.response or {}
+
+
+@router.get("/tester/assignments/{assignment_id}/submissions")
+def tester_submissions(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    try:
+        td.assignment_for_tester(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            tester_id=enrollment["testerId"],
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "items": td.list_submissions(
+            conn, workspace_id=workspace_id, assignment_id=assignment_id
+        )
+    }
+
+
+# --- agency review ----------------------------------------------------------------------------
+
+
+_REVIEW_DECISION_FIELDS = frozenset({"submissionDigest", "decision", "justification"})
+
+
+@router.get("/review/queue")
+def review_queue(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_REVIEW)
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": td.review_queue(conn, workspace_id=workspace_id)}
+
+
+@router.get("/review/assignments/{assignment_id}")
+def review_assignment(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_REVIEW)
+    as_identifier(assignment_id, what="assignment")
+    try:
+        view = td.read_assignment(
+            conn, workspace_id=workspace_id, assignment_id=assignment_id
+        )
+    except LookupError:
+        raise not_found() from None
+    view.pop("brief", None) or None
+    # The brief (including its access note) stays scoped to the owner; the reviewer works from
+    # the sealed submission. Attach the pinned public terms minus the access note.
+    brief = td.read_brief_revision(
+        conn,
+        workspace_id=workspace_id,
+        commission_id=view["commissionId"],
+        revision=view["briefRevision"],
+        include_access_note=False,
+    )
+    view["brief"] = brief
+    view["submissions"] = td.list_submissions(
+        conn, workspace_id=workspace_id, assignment_id=assignment_id
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.get("/review/assignments/{assignment_id}/attachments/{attachment_id}/content")
+def review_attachment_content(
+    workspace_id: str, assignment_id: str, attachment_id: str,
+    request: Request, response: Response, conn: Conn,
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_REVIEW)
+    as_identifier(assignment_id, what="assignment")
+    as_identifier(attachment_id, what="attachment")
+    try:
+        view = td.attachment_content(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            attachment_id=attachment_id,
+        )
+    except LookupError:
+        raise not_found() from None
+    except td.EvidenceError as exc:
+        raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "attachmentId": view["attachmentId"],
+        "kind": view["kind"],
+        "contentType": view["contentType"],
+        "filename": view["filename"],
+        "sha256": view["sha256"],
+        "contentBase64": base64.b64encode(view["content"]).decode("ascii"),
+    }
+
+
+@router.post("/review/assignments/{assignment_id}/decision")
+def review_decision(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.COMMISSION_REVIEW,
+        body=body, allowed_fields=_REVIEW_DECISION_FIELDS,
+    )
+    as_identifier(assignment_id, what="assignment")
+
+    def perform() -> dict[str, Any]:
+        try:
+            return td.decide_submission(
+                conn,
+                workspace_id=workspace_id,
+                assignment_id=assignment_id,
+                submission_hash=body.get("submissionDigest"),
+                decision=body.get("decision"),
+                justification=body.get("justification"),
+                decided_by=context.principal.user_id,
+            )
+        except LookupError:
+            raise not_found() from None
+        except td.ReviewError as exc:
+            raise _refused(exc) from exc
+
+    result = run_idempotently(
+        conn,
+        context,
+        route=f"POST /tester-desk/review/assignments/{assignment_id}/decision",
+        body=body,
+        perform=perform,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result.response or {}
