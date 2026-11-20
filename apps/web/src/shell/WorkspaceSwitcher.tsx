@@ -19,7 +19,7 @@ import type { JSX } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import type { WorkspaceMembership } from '../api/session'
-import { workspacePath } from '../routes/routeMap'
+import { workspaceHome } from '../routes/routeMap'
 
 export interface WorkspaceSwitcherProps {
   readonly workspaces: readonly WorkspaceMembership[]
@@ -45,10 +45,12 @@ export const WorkspaceSwitcher = ({
           const next = event.target.value
           if (next === '' || next === current) return
           onSwitch(next)
-          // Straight to the workspace's own overview rather than the equivalent path in the new
-          // workspace. The same path in another tenant is a different resource, and following it
-          // would produce a 404 that looks like the switch failed.
-          void navigate(workspacePath(next), { replace: false })
+          // Straight to the caller's landing surface in the new workspace rather than the
+          // equivalent path in it. The same path in another tenant is a different resource —
+          // and for a TESTER or CLIENT the member overview is a page the server refuses —
+          // so following it would produce a refusal that looks like the switch failed.
+          const role = workspaces.find((w) => w.workspaceId === next)?.role
+          void navigate(workspaceHome(next, role), { replace: false })
         }}
       >
         {current === null && <option value="">Choose a workspace</option>}

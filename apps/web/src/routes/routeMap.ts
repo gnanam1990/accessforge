@@ -17,6 +17,8 @@
  * both go into browser history, into a referrer header, and into a screenshot.
  */
 
+import type { WorkspaceRole } from '../api/session'
+
 export interface RouteDefinition {
   /** Relative to `/w/:workspaceId`. */
   readonly path: string
@@ -157,6 +159,20 @@ export const WORKSPACE_ROUTES: readonly RouteDefinition[] = [
 
 export const workspacePath = (workspaceId: string, path = 'overview'): string =>
   `/w/${encodeURIComponent(workspaceId)}/${path}`
+
+/**
+ * Where a person entering this workspace actually lands.
+ *
+ * Tester-desk participants are not members — the session names their access TESTER or CLIENT and
+ * carries no member authority, so the member overview is a page the server refuses for them. This
+ * is the one place that decides, so the workspace chooser, the switcher and the index route cannot
+ * disagree about where a participant belongs.
+ */
+export const workspaceHome = (workspaceId: string, role?: WorkspaceRole): string =>
+  workspacePath(
+    workspaceId,
+    role === 'TESTER' ? 'tester-desk/tester' : role === 'CLIENT' ? 'tester-desk/client' : 'overview',
+  )
 
 export interface Crumb {
   readonly label: string

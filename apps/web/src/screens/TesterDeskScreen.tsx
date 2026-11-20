@@ -26,10 +26,10 @@ import { Notice } from '../components/Notice'
 import { ResourceView } from '../components/ResourceView'
 import { StatusBadge } from '../components/StatusBadge'
 import {
-  decide, generateReport, listCommissions, listPayables, publishCommission,
-  reviewAssignment, reviewQueue,
+  decide, generateReport, listCommissions, listPayables, listReportable,
+  publishCommission, reviewAssignment, reviewAttachmentContent, reviewQueue,
 } from '../api/testerDesk'
-import type { Commission, Payable, Submission } from '../api/testerDesk'
+import type { Commission, Observation, Payable, Submission } from '../api/testerDesk'
 import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
@@ -64,6 +64,11 @@ export const TesterDeskScreen = (): JSX.Element => {
   const [publishing, setPublishing] = useState<string | null>(null)
   const [reporting, setReporting] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // An accepted assignment leaves the review queue, so the follow-up a decision enables —
+  // generating the client report — has to live somewhere the card's removal cannot take it.
+  // `reports/ready` is the server's own list of those assignments; a caller without
+  // COMMISSION_AUTHOR gets a refusal there, which the section below honours by not existing.
+  const reportable = useResource((s) => listReportable(client, workspaceId, s), [client, workspaceId])
 
   const publish = async (commissionId: string): Promise<void> => {
     setPublishing(commissionId); setError(null)
@@ -77,7 +82,7 @@ export const TesterDeskScreen = (): JSX.Element => {
     setReporting(assignmentId); setError(null)
     const outcome = await generateReport(client, workspaceId, assignmentId, crypto.randomUUID())
     if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
-    else announce('Client report generated')
+    else { announce('Client report generated'); reportable.reload() }
     setReporting(null)
   }
 
@@ -123,12 +128,54 @@ export const TesterDeskScreen = (): JSX.Element => {
             : value.items.map((item) => (
               <ReviewCard key={item.assignmentId}
                 assignmentId={item.assignmentId} reference={item.reference}
-                onDecided={() => { queue.reload(); payables.reload(); commissions.reload() }}
-                onReport={(aid) => void makeReport(aid)} reporting={reporting === item.assignmentId}
+                onDecided={(decision) => {
+                  if (decision === 'ACCEPTED') reportable.reload()
+                  queue.reload(); payables.reload(); commissions.reload()
+                }}
               />
             ))
         )}</ResourceView>
       </section>
+
+      {/* Rendered only when the server answered: a refusal (a caller without COMMISSION_AUTHOR)
+          means this person was never offered generation, which is the correct UX for a control
+          that could only fail. Problems on the other sections keep their own notices. */}
+      {reportable.state.kind === 'ready' && (
+        <section aria-labelledby="td-reports">
+          <h2 id="td-reports">Client reports</h2>
+          {reportable.state.value.items.length === 0 ? (
+            <p className="af-secondary">No accepted evidence awaiting a report.</p>
+          ) : (
+            <div className="af-stack">
+              {reportable.state.value.items.map((r) => (
+                <article key={r.assignmentId} className="af-card" aria-label={`Client report for ${r.reference}`}>
+                  <header><h3>{r.reference}</h3>
+                    <p className="af-secondary">
+                      Evidence accepted.{' '}
+                      {r.latestReportRevision === null
+                        ? 'No report generated yet.'
+                        : `Report r${r.latestReportRevision} generated.`}
+                    </p>
+                  </header>
+                  <div className="af-row-actions">
+                    {r.latestReportRevision !== null && (
+                      <StatusBadge tone="pass" kind="Client report">
+                        {`REPORT r${r.latestReportRevision} GENERATED`}
+                      </StatusBadge>
+                    )}
+                    <Button
+                      variant={r.latestReportRevision === null ? 'primary' : 'secondary'}
+                      busy={reporting === r.assignmentId}
+                      onClick={() => void makeReport(r.assignmentId)}>
+                      {r.latestReportRevision === null ? 'Generate client report' : 'Regenerate client report'}
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section aria-labelledby="td-payables">
         <h2 id="td-payables">Payables</h2>
@@ -160,9 +207,9 @@ export const TesterDeskScreen = (): JSX.Element => {
   )
 }
 
-const ReviewCard = ({ assignmentId, reference, onDecided, onReport, reporting }: {
+const ReviewCard = ({ assignmentId, reference, onDecided }: {
   assignmentId: string; reference: string
-  onDecided: () => void; onReport: (assignmentId: string) => void; reporting: boolean
+  onDecided: (decision: 'ACCEPTED' | 'NEEDS_REVISION') => void
 }): JSX.Element => {
   const workspaceId = useWorkspaceId()
   const { client } = useSession()
@@ -173,10 +220,16 @@ const ReviewCard = ({ assignmentId, reference, onDecided, onReport, reporting }:
   )
   const [justification, setJustification] = useState('')
   const [busy, setBusy] = useState(false)
+  const [downloading, setDownloading] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const submission = detail.state.kind === 'ready'
     ? detail.state.value.submissions[detail.state.value.submissions.length - 1] ?? null
     : null
+
+  const stepTitle = (stepId: string): string =>
+    detail.state.kind === 'ready'
+      ? detail.state.value.brief?.taskSteps.find((s) => s.stepId === stepId)?.title ?? stepId
+      : stepId
 
   const send = async (decision: 'ACCEPTED' | 'NEEDS_REVISION'): Promise<void> => {
     if (submission === null || justification.trim() === '') return
@@ -187,7 +240,29 @@ const ReviewCard = ({ assignmentId, reference, onDecided, onReport, reporting }:
     )
     setBusy(false)
     if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
-    else { announce(`Review recorded: ${decision}`); onDecided() }
+    else { announce(`Review recorded: ${decision}`); onDecided(decision) }
+  }
+
+  const download = async (attachmentId: string): Promise<void> => {
+    setDownloading(attachmentId); setError(null)
+    const outcome = await reviewAttachmentContent(client, workspaceId, assignmentId, attachmentId)
+    setDownloading(null)
+    if (outcome.kind === 'problem') {
+      setError(outcome.problem.detail ?? outcome.problem.title)
+      return
+    }
+    if (outcome.kind !== 'ok' && outcome.kind !== 'accepted') {
+      setError('The evidence could not be fetched — check the connection and try again.')
+      return
+    }
+    const value = outcome.value
+    const bytes = Uint8Array.from(atob(value.contentBase64), (ch) => ch.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: value.contentType }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = value.filename
+    anchor.click()
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -204,6 +279,41 @@ const ReviewCard = ({ assignmentId, reference, onDecided, onReport, reporting }:
       {error !== null && <Notice tone="problem" heading="Decision refused" headingLevel={4}><p>{error}</p></Notice>}
       {submission !== null && (
         <>
+          {/* The sealed evidence the decision binds to. A reviewer deciding without the
+              observations and the manifest in front of them is signing a hash sight-unseen. */}
+          <DataTable<Observation>
+            caption={`Sealed observations for ${reference}`}
+            rows={[...submission.observations]}
+            rowKey={(o) => o.stepId}
+            columns={[
+              { key: 's', header: 'Step', isRowHeader: true, cell: (o) => stepTitle(o.stepId) },
+              {
+                key: 'r', header: 'Result',
+                cell: (o) => <StatusBadge tone={RESULT_TONE[o.result] ?? 'neutral'} kind="Step result">{o.result}</StatusBadge>,
+              },
+              { key: 'n', header: 'Notes', cell: (o) => o.notes ?? '—' },
+            ]}
+          />
+          {submission.attachmentManifest.length > 0 && (
+            <DataTable<Submission['attachmentManifest'][number]>
+              caption={`Sealed evidence manifest for ${reference}`}
+              rows={[...submission.attachmentManifest]}
+              rowKey={(m) => m.attachmentId}
+              columns={[
+                { key: 'k', header: 'Kind', isRowHeader: true, cell: (m) => <StatusBadge tone="neutral" kind="Evidence kind">{m.kind}</StatusBadge> },
+                { key: 'h', header: 'Digest', cell: (m) => <code>{m.sha256.slice(0, 12)}…</code> },
+                {
+                  key: 'a', header: 'Evidence',
+                  cell: (m) => (
+                    <Button busy={downloading === m.attachmentId}
+                      onClick={() => void download(m.attachmentId)}>
+                      View evidence
+                    </Button>
+                  ),
+                },
+              ]}
+            />
+          )}
           <FormField id={`j-${assignmentId}`} label="Justification" required>
             {({ id, describedBy, invalid }) => (
               <input id={id} value={justification} aria-describedby={describedBy}
@@ -220,9 +330,6 @@ const ReviewCard = ({ assignmentId, reference, onDecided, onReport, reporting }:
           </div>
         </>
       )}
-      <div className="af-row-actions">
-        <Button busy={reporting} onClick={() => onReport(assignmentId)}>Generate client report</Button>
-      </div>
     </article>
   )
 }

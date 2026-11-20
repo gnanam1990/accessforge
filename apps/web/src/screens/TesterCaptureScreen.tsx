@@ -10,7 +10,7 @@
  * tester's intent explicit and announces it); submit seals a revision and moves it to review.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { useParams } from 'react-router-dom'
 
@@ -52,22 +52,33 @@ export const TesterCaptureScreen = (): JSX.Element => {
   const [error, setError] = useState<string | null>(null)
   const [evidenceKind, setEvidenceKind] = useState('')
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null)
+  // Set on the first edit. A delayed draft GET that resolves afterwards must not replace what
+  // the tester has already typed — the revision is still adopted, so the next save's
+  // optimistic-concurrency base stays honest.
+  const editedRef = useRef(false)
+
+  const patchRow = (stepId: string, next: { result: Result | ''; notes: string }): void => {
+    editedRef.current = true
+    setRows((current) => ({ ...current, [stepId]: next }))
+  }
 
   // Hydrate the form from the persisted draft — a reload recovers exactly what was stored (T-005).
   useEffect(() => {
     if (draft.state.kind !== 'ready') return
+    setBaseRevision(draft.state.value.draftRevision)
+    if (editedRef.current) return
     const next: typeof rows = {}
     for (const o of draft.state.value.observations) {
       next[o.stepId] = { result: o.result, notes: o.notes ?? '' }
     }
     setRows(next)
-    setBaseRevision(draft.state.value.draftRevision)
   }, [draft.state.kind === 'ready' ? draft.state.value : null]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const steps = assignment.state.kind === 'ready' ? assignment.state.value.brief?.taskSteps ?? [] : []
 
-  const save = async (): Promise<void> => {
-    setBusy('save'); setError(null)
+  // The write every save/submit path shares. Returns whether the draft now holds what is on
+  // screen — the seal must never bind anything older than the rows the tester is looking at.
+  const persistDraft = async (): Promise<boolean> => {
     const observations: Observation[] = Object.entries(rows)
       .filter(([, r]) => r.result !== '')
       .map(([stepId, r]) => ({
@@ -77,20 +88,34 @@ export const TesterCaptureScreen = (): JSX.Element => {
         observedAt: new Date().toISOString(),
       }))
     const outcome = await saveDraft(client, workspaceId, assignmentId, observations, baseRevision, crypto.randomUUID())
-    if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
-    else if (outcome.kind === 'ok' || outcome.kind === 'accepted') {
-      announce('Draft saved')
-      setBaseRevision((outcome as { value: { draftRevision: number } }).value.draftRevision)
+    if (outcome.kind === 'ok' || outcome.kind === 'accepted') {
+      setBaseRevision(outcome.value.draftRevision)
       progress.reload()
+      return true
     }
+    setError(
+      outcome.kind === 'problem'
+        ? (outcome.problem.detail ?? outcome.problem.title)
+        : 'The draft could not be saved — check the connection and try again.',
+    )
+    return false
+  }
+
+  const save = async (): Promise<void> => {
+    setBusy('save'); setError(null)
+    if (await persistDraft()) announce('Draft saved')
     setBusy(null)
   }
 
   const doSubmit = async (): Promise<void> => {
     setBusy('submit'); setError(null)
-    const outcome = await submit(client, workspaceId, assignmentId, crypto.randomUUID())
-    if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
-    else { announce('Submission sealed and sent to review'); submissions.reload(); assignment.reload(); payable.reload() }
+    // Save the current rows first: sealing the previously stored draft would sign off evidence
+    // that no longer matches what the tester sees. A refused save means nothing is sealed.
+    if (await persistDraft()) {
+      const outcome = await submit(client, workspaceId, assignmentId, crypto.randomUUID())
+      if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
+      else { announce('Submission sealed and sent to review'); submissions.reload(); assignment.reload(); payable.reload() }
+    }
     setBusy(null)
   }
 
@@ -154,7 +179,7 @@ export const TesterCaptureScreen = (): JSX.Element => {
                           <label key={r}>
                             <input type="radio" name={`res-${s.stepId}`} value={r}
                               checked={rows[s.stepId]?.result === r}
-                              onChange={() => setRows({ ...rows, [s.stepId]: { result: r, notes: rows[s.stepId]?.notes ?? '' } })} />
+                              onChange={() => patchRow(s.stepId, { result: r, notes: rows[s.stepId]?.notes ?? '' })} />
                             {' '}{r}
                           </label>
                         ))}
@@ -166,7 +191,7 @@ export const TesterCaptureScreen = (): JSX.Element => {
                     cell: (s) => (
                       <input aria-label={`Notes for ${s.title}`}
                         value={rows[s.stepId]?.notes ?? ''}
-                        onChange={(e) => setRows({ ...rows, [s.stepId]: { result: rows[s.stepId]?.result ?? '', notes: e.target.value } })} />
+                        onChange={(e) => patchRow(s.stepId, { result: rows[s.stepId]?.result ?? '', notes: e.target.value })} />
                     ),
                   },
                 ]}

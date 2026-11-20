@@ -17,7 +17,7 @@ import { Link, useLocation } from 'react-router-dom'
 
 import { RouteHeading } from '../a11y/RouteHeading'
 import { EmptyState } from '../components/states'
-import { workspacePath } from './routeMap'
+import { workspaceHome } from './routeMap'
 import { useSession } from '../session/SessionProvider'
 import { AcceptInvitation } from './AcceptInvitation'
 import { invitationReference } from './invitationReference'
@@ -43,7 +43,7 @@ export const ChooseWorkspaceScreen = (): JSX.Element => {
           <ul className="af-nav-list af-workspace-cards">
             {workspaces.map((workspace) => (
               <li key={workspace.workspaceId}>
-                <Link to={workspacePath(workspace.workspaceId)}>
+                <Link to={workspaceHome(workspace.workspaceId, workspace.role)}>
                   {workspace.name}
                   <span className="af-secondary"> · {workspace.role.toLowerCase()}</span>
                 </Link>

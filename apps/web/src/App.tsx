@@ -49,7 +49,7 @@ import { TesterCaptureScreen } from './screens/TesterCaptureScreen'
 import { ClientReportsScreen } from './screens/ClientReportsScreen'
 import { SignInScreen } from './routes/SignInScreen'
 import { WorkspaceRoute } from './routes/WorkspaceRoute'
-import { WORKSPACE_ROUTES } from './routes/routeMap'
+import { WORKSPACE_ROUTES, workspaceHome } from './routes/routeMap'
 import { AppShell } from './shell/AppShell'
 import { SessionProvider, membershipFor, useSession } from './session/SessionProvider'
 import type { ApiClient } from './api/client'
@@ -128,9 +128,7 @@ const WorkspaceLanding = (): JSX.Element => {
   const { state } = useSession()
   const role =
     state.status === 'authenticated' ? membershipFor(state, workspaceId)?.role : undefined
-  const target =
-    role === 'TESTER' ? 'tester-desk/tester' : role === 'CLIENT' ? 'tester-desk/client' : 'overview'
-  return <Navigate to={target} replace />
+  return <Navigate to={workspaceHome(workspaceId, role)} replace />
 }
 
 /**

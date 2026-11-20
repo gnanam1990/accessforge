@@ -205,19 +205,6 @@ const apiSignIn = async (apiBase, email) => {
 const apiGet = async (apiBase, path, session) =>
   fetch(`${apiBase}${path}`, { headers: { cookie: session.cookie } })
 
-const apiPost = async (apiBase, path, session, body) => {
-  const res = await fetch(`${apiBase}${path}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      cookie: session.cookie,
-      'x-csrf-token': session.csrf,
-    },
-    body: JSON.stringify(body),
-  })
-  return res
-}
-
 const main = async () => {
   mkdirSync(EVIDENCE_DIR, { recursive: true })
   const apiPort = Number(process.env.AF_API_PORT) || (await freePort())
@@ -510,6 +497,8 @@ const main = async () => {
     const reviewCard = page.locator('article[aria-label="Review AF-21"]')
     await reviewCard.waitFor()
     record('review queue shows the sealed submission', true)
+    await reviewCard.getByText(/Keyboard focus traps in the shipping frame/).waitFor()
+    record('reviewer can read sealed step notes before deciding', true)
     await shot(page, '09-review-queue')
 
     await reviewCard.getByLabel('Justification').fill(
@@ -522,8 +511,6 @@ const main = async () => {
     await reviewCard.waitFor({ state: 'detached', timeout: 15000 })
     record('accepted evidence removes the card from the review queue', true)
 
-    // The client report is an agency action (COMMISSION_AUTHOR): generated
-    // through the real API with the owner's session, then read by the client.
     const ownerSession = await apiSignIn(apiBase, scene.emails.owner)
     const payablesRes = await apiGet(
       apiBase,
@@ -559,16 +546,14 @@ const main = async () => {
     )
     await shot(page, '10b-tester-decision')
 
-    // The client report is an agency action (COMMISSION_AUTHOR): generated
-    // through the real API with the owner's session, then read by the client.
-    const reportRes = await apiPost(
-      apiBase,
-      `/v1/workspaces/${ws}/tester-desk/reports/generate`,
-      ownerSession,
-      { assignmentId },
-    )
-    record('client report generated through the API', reportRes.status === 201,
-      `HTTP ${reportRes.status}`)
+    await signOut(page)
+    await signIn(page, scene.emails.owner)
+    await page.goto(deskUrl, { waitUntil: 'domcontentloaded' })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    const reportAction = page.getByRole('article', { name: 'Client report for AF-21' })
+    await reportAction.getByRole('button', { name: 'Generate client report', exact: true }).click()
+    await reportAction.getByText('REPORT r1 GENERATED', { exact: true }).waitFor()
+    record('owner generates a client report after revisiting the agency desk', true)
 
     await signOut(page)
     await signIn(page, scene.emails.client)
@@ -583,7 +568,7 @@ const main = async () => {
     await reportCard.waitFor()
     await reportCard.getByRole('button', { name: 'Show findings' }).click()
     const clientHtml = await page.content()
-    const protectedFields = ['local-ledger', 'Taylor Tester', scene.emails.tester, 'desk-demo']
+    const protectedFields = ['local-ledger', 'Taylor Tester', scene.emails.tester, 'desk-demo', 'Keyboard focus traps in the shipping frame']
     const leaked = protectedFields.filter((f) => clientHtml.includes(f))
     record('client sees the rendered r18 report', true)
     record(

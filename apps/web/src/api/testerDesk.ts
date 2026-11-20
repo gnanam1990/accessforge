@@ -148,6 +148,14 @@ export const reviewAssignment = (c: ApiClient, ws: string, assignmentId: string,
   c.request<Assignment & { submissions: Submission[] }>(
     `${base(ws)}/review/assignments/${assignmentId}`, { signal })
 
+export const reviewAttachmentContent = (
+  c: ApiClient, ws: string, assignmentId: string, attachmentId: string,
+) =>
+  c.request<{
+    attachmentId: string; kind: string; contentType: string
+    filename: string; sha256: string; contentBase64: string
+  }>(`${base(ws)}/review/assignments/${assignmentId}/attachments/${attachmentId}/content`)
+
 export const decide = (
   c: ApiClient, ws: string, assignmentId: string,
   submissionDigest: string, decision: 'ACCEPTED' | 'NEEDS_REVISION', justification: string, key: string,
@@ -157,6 +165,16 @@ export const decide = (
     body: { submissionDigest, decision, justification },
     idempotencyKey: key,
   })
+
+export interface ReportableAssignment {
+  readonly assignmentId: string
+  readonly commissionId: string
+  readonly reference: string
+  readonly latestReportRevision: number | null
+}
+
+export const listReportable = (c: ApiClient, ws: string, signal: AbortSignal) =>
+  c.request<{ items: ReportableAssignment[] }>(`${base(ws)}/reports/ready`, { signal })
 
 export const generateReport = (c: ApiClient, ws: string, assignmentId: string, key: string) =>
   c.request<Report>(`${base(ws)}/reports/generate`, {
