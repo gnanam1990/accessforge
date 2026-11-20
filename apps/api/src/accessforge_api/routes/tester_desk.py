@@ -181,7 +181,7 @@ def create_client(
         body=body, allowed_fields=frozenset({"name"}),
     )
     try:
-        view = td.create_client(conn, workspace_id=workspace_id, name=body.get("name"))
+        view = td.create_client(conn, workspace_id=workspace_id, name=str(body.get("name") or ""))
     except td.CommissionError as exc:
         raise _refused(exc) from exc
     response.headers["Cache-Control"] = "no-store"

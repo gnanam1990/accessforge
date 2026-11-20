@@ -77,6 +77,7 @@ def create_client(
             "WHERE workspace_id=%s AND name=%s",
             (workspace_id, name.strip()),
         ).fetchone()
+    assert row is not None
     return _client_view(row)
 
 
@@ -180,6 +181,7 @@ def publish_consent_terms(
         "SELECT coalesce(max(version),0)+1 AS v FROM td_consent_terms WHERE workspace_id=%s",
         (workspace_id,),
     ).fetchone()
+    assert row is not None
     version = int(row["v"])
     conn.execute(
         "INSERT INTO td_consent_terms (workspace_id, version, body, created_by) "
@@ -419,6 +421,7 @@ def author_brief_revision(
         "SELECT coalesce(max(revision),0)+1 AS v FROM td_brief_revision WHERE commission_id=%s",
         (commission_id,),
     ).fetchone()
+    assert row is not None
     revision = int(row["v"])
     _insert_brief_revision(
         conn,
@@ -635,6 +638,7 @@ def enroll_tester(
             "SELECT * FROM td_tester WHERE workspace_id=%s AND user_id=%s",
             (workspace_id, user_id),
         ).fetchone()
+    assert row is not None
     return _tester_view(row)
 
 
@@ -930,7 +934,7 @@ def _lock_assignment_for_capture(
     state machine moves the row past ACTIVE and capture closes. A foreign tester or a stale id is
     a plain ``LookupError`` -- the row's existence is not disclosed (INV-03).
     """
-    row = conn.execute(
+    row: dict[str, Any] | None = conn.execute(
         "SELECT * FROM td_assignment WHERE id=%s AND workspace_id=%s AND tester_id=%s FOR UPDATE",
         (assignment_id, workspace_id, tester_id),
     ).fetchone()
@@ -1077,6 +1081,7 @@ def add_attachment(
             "WHERE assignment_id=%s AND workspace_id=%s AND sha256=%s",
             (assignment_id, workspace_id, digest_hex),
         ).fetchone()
+    assert row is not None
     return _attachment_view(row)
 
 
@@ -1260,6 +1265,7 @@ def submit_assignment(
         "WHERE assignment_id=%s AND workspace_id=%s",
         (assignment_id, workspace_id),
     ).fetchone()
+    assert revision_row is not None
     revision = int(revision_row["next"])
     submission_hash = domain.compute_brief_hash(
         {
@@ -1288,6 +1294,7 @@ def submit_assignment(
             Jsonb(manifest),
         ),
     ).fetchone()
+    assert row is not None
     conn.execute(
         "UPDATE td_assignment SET status='UNDER_REVIEW' WHERE id=%s", (assignment_id,)
     )
@@ -1433,6 +1440,7 @@ def decide_submission(
         ).fetchone()
     except psycopg.errors.UniqueViolation as exc:
         raise ReviewError("this submission already carries a decision") from exc
+    assert row is not None
 
     if decision_value == "ACCEPTED":
         conn.execute(
@@ -1481,6 +1489,7 @@ def _create_payable_for_acceptance(
         "SELECT * FROM td_tester WHERE id=%s AND workspace_id=%s",
         (assignment["tester_id"], workspace_id),
     ).fetchone()
+    assert tester is not None
     payable_id = uuid.uuid4()
     row = conn.execute(
         "INSERT INTO td_payable "
@@ -1497,6 +1506,7 @@ def _create_payable_for_acceptance(
             tester["payout_reference"],
         ),
     ).fetchone()
+    assert row is not None
     return _payable_view(row)
 
 
@@ -1637,6 +1647,7 @@ def reconcile_payable(
         "settled_at=clock_timestamp() WHERE id=%s RETURNING *",
         (provider_reference.strip(), payable_id),
     ).fetchone()
+    assert updated is not None
     return _payable_view(updated)
 
 
@@ -1681,7 +1692,8 @@ def payout_workspace_id(conn: psycopg.Connection[Any]) -> str:
     row = conn.execute(
         "SELECT current_setting('accessforge.workspace_id', true) AS ws"
     ).fetchone()
-    return row["ws"]
+    assert row is not None
+    return str(row["ws"])
 
 
 def run_payable_dispatch(
@@ -1765,6 +1777,7 @@ def generate_report(
         "SELECT * FROM td_commission WHERE id=%s AND workspace_id=%s",
         (assignment["commission_id"], workspace_id),
     ).fetchone()
+    assert commission is not None
     submission = latest_submission(
         conn, workspace_id=workspace_id, assignment_id=assignment_id
     )
@@ -1829,6 +1842,7 @@ def generate_report(
         "WHERE assignment_id=%s AND workspace_id=%s",
         (assignment_id, workspace_id),
     ).fetchone()
+    assert revision_row is not None
     revision = int(revision_row["next"])
     row = conn.execute(
         "INSERT INTO td_report_revision "
@@ -1858,6 +1872,7 @@ def generate_report(
             generated_by,
         ),
     ).fetchone()
+    assert row is not None
     return _report_view(row)
 
 

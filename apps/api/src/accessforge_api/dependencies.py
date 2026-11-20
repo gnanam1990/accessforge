@@ -321,9 +321,14 @@ class IdempotentCaller(Protocol):
     @property
     def principal(self) -> Any: ...  # must expose `.user_id`
 
-    workspace_id: str
-    request_id: str
-    idempotency_key: str | None
+    @property
+    def workspace_id(self) -> str: ...
+
+    @property
+    def request_id(self) -> str: ...
+
+    @property
+    def idempotency_key(self) -> str | None: ...
 
 
 def run_idempotently(
