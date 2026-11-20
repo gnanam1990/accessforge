@@ -540,6 +540,7 @@ const main = async () => {
       await page.getByText('Focus-trap evidence is digest-bound').isVisible(),
     )
     const testerPending = page.getByText('PENDING DISPATCH')
+    await testerPending.waitFor()
     record(
       'tester sees the payable as PENDING DISPATCH, not a settled claim',
       await testerPending.isVisible(),
@@ -552,7 +553,7 @@ const main = async () => {
     await page.reload({ waitUntil: 'domcontentloaded' })
     const reportAction = page.getByRole('article', { name: 'Client report for AF-21' })
     await reportAction.getByRole('button', { name: 'Generate client report', exact: true }).click()
-    await reportAction.getByText('REPORT r1 GENERATED', { exact: true }).waitFor()
+    await reportAction.getByText('Evidence accepted. Report r1 generated.', { exact: true }).waitFor()
     record('owner generates a client report after revisiting the agency desk', true)
 
     await signOut(page)
