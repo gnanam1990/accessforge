@@ -1168,6 +1168,21 @@ def attachment_content(
     return view
 
 
+def review_attachment_content(
+    conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str, attachment_id: str
+) -> dict[str, Any]:
+    sealed = conn.execute(
+        "SELECT 1 FROM td_submission WHERE workspace_id=%s AND assignment_id=%s "
+        "AND attachment_manifest @> %s LIMIT 1",
+        (workspace_id, assignment_id, Jsonb([{"attachmentId": attachment_id}])),
+    ).fetchone()
+    if sealed is None:
+        raise LookupError("attachment unavailable")
+    return attachment_content(
+        conn, workspace_id=workspace_id, assignment_id=assignment_id, attachment_id=attachment_id
+    )
+
+
 def evidence_progress(
     conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str
 ) -> dict[str, Any]:

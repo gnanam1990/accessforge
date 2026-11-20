@@ -275,6 +275,9 @@ it('a draft answer arriving after the tester started typing does not overwrite t
   await user.click(screen.getByRole('button', { name: 'Save draft' }))
   await waitFor(() => expect(puts).toHaveLength(1))
   expect(puts[0]!.baseRevision).toBe(7)
+  expect(puts[0]).toMatchObject({
+    observations: [expect.objectContaining({ stepId: 's1', result: 'PASSED', notes: 'typed while the draft was in flight' })],
+  })
   expect(notes).toHaveValue('typed while the draft was in flight')
 })
 

@@ -10,7 +10,7 @@
  * tester's intent explicit and announces it); submit seals a revision and moves it to review.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { JSX } from 'react'
 import { useParams } from 'react-router-dom'
 
@@ -37,6 +37,14 @@ const RESULT_TONE = { PASSED: 'pass', FAILED: 'fail', UNREACHABLE: 'fail', INCON
 export const TesterCaptureScreen = (): JSX.Element => {
   const workspaceId = useWorkspaceId()
   const { assignmentId = '' } = useParams()
+  return <CaptureAssignment key={`${workspaceId}/${assignmentId}`} workspaceId={workspaceId} assignmentId={assignmentId} />
+}
+
+type DraftRow = { result: Result | ''; notes: string }
+
+const CaptureAssignment = ({ workspaceId, assignmentId }: {
+  workspaceId: string; assignmentId: string
+}): JSX.Element => {
   const { client } = useSession()
   const { announce } = useAnnouncer()
   const assignment = useResource((s) => getAssignment(client, workspaceId, assignmentId, s), [client, workspaceId, assignmentId])
@@ -46,39 +54,31 @@ export const TesterCaptureScreen = (): JSX.Element => {
   const attachments = useResource((s) => listAttachments(client, workspaceId, assignmentId, s), [client, workspaceId, assignmentId])
   const payable = useResource((s) => getPayable(client, workspaceId, assignmentId, s), [client, workspaceId, assignmentId])
 
-  const [rows, setRows] = useState<Record<string, { result: Result | ''; notes: string }>>({})
-  const [baseRevision, setBaseRevision] = useState(0)
+  const [edits, setEdits] = useState<Record<string, Partial<DraftRow>>>({})
+  const [savedRevision, setSavedRevision] = useState<number | null>(null)
   const [busy, setBusy] = useState<'save' | 'submit' | 'attach' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [evidenceKind, setEvidenceKind] = useState('')
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null)
-  // Set on the first edit. A delayed draft GET that resolves afterwards must not replace what
-  // the tester has already typed — the revision is still adopted, so the next save's
-  // optimistic-concurrency base stays honest.
-  const editedRef = useRef(false)
-
-  const patchRow = (stepId: string, next: { result: Result | ''; notes: string }): void => {
-    editedRef.current = true
-    setRows((current) => ({ ...current, [stepId]: next }))
+  const persisted = draft.state.kind === 'ready' ? draft.state.value : null
+  const baseRevision = savedRevision ?? persisted?.draftRevision
+  const rows: Record<string, DraftRow> = {}
+  for (const observation of persisted?.observations ?? []) {
+    rows[observation.stepId] = { result: observation.result, notes: observation.notes ?? '' }
   }
-
-  // Hydrate the form from the persisted draft — a reload recovers exactly what was stored (T-005).
-  useEffect(() => {
-    if (draft.state.kind !== 'ready') return
-    setBaseRevision(draft.state.value.draftRevision)
-    if (editedRef.current) return
-    const next: typeof rows = {}
-    for (const o of draft.state.value.observations) {
-      next[o.stepId] = { result: o.result, notes: o.notes ?? '' }
-    }
-    setRows(next)
-  }, [draft.state.kind === 'ready' ? draft.state.value : null]) // eslint-disable-line react-hooks/exhaustive-deps
+  for (const [id, edit] of Object.entries(edits)) {
+    rows[id] = { ...(rows[id] ?? { result: '', notes: '' }), ...edit }
+  }
+  const patchRow = (id: string, edit: Partial<DraftRow>): void => {
+    setEdits((current) => ({ ...current, [id]: { ...current[id], ...edit } }))
+  }
 
   const steps = assignment.state.kind === 'ready' ? assignment.state.value.brief?.taskSteps ?? [] : []
 
   // The write every save/submit path shares. Returns whether the draft now holds what is on
   // screen — the seal must never bind anything older than the rows the tester is looking at.
   const persistDraft = async (): Promise<boolean> => {
+    if (baseRevision === undefined) return false
     const observations: Observation[] = Object.entries(rows)
       .filter(([, r]) => r.result !== '')
       .map(([stepId, r]) => ({
@@ -89,7 +89,7 @@ export const TesterCaptureScreen = (): JSX.Element => {
       }))
     const outcome = await saveDraft(client, workspaceId, assignmentId, observations, baseRevision, crypto.randomUUID())
     if (outcome.kind === 'ok' || outcome.kind === 'accepted') {
-      setBaseRevision(outcome.value.draftRevision)
+      setSavedRevision(outcome.value.draftRevision)
       progress.reload()
       return true
     }
@@ -114,7 +114,8 @@ export const TesterCaptureScreen = (): JSX.Element => {
     if (await persistDraft()) {
       const outcome = await submit(client, workspaceId, assignmentId, crypto.randomUUID())
       if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
-      else { announce('Submission sealed and sent to review'); submissions.reload(); assignment.reload(); payable.reload() }
+      else if (outcome.kind === 'ok' || outcome.kind === 'accepted') { announce('Submission sealed and sent to review'); submissions.reload(); assignment.reload(); payable.reload() }
+      else if (outcome.kind === 'offline') setError('Could not confirm submission. Reload to check its status.')
     }
     setBusy(null)
   }
@@ -155,6 +156,7 @@ export const TesterCaptureScreen = (): JSX.Element => {
           </header>
           {error !== null && <Notice tone="problem" heading="Refused" headingLevel={2}><p>{error}</p></Notice>}
 
+          <ResourceView resource={draft} what="the saved observations">{() => null}</ResourceView>
           <ResourceView resource={progress} what="rubric progress">{(p) => (
             p.missing.length > 0 && isActive ? (
               <Notice tone="warning" heading="Not yet submittable" headingLevel={2}>
@@ -174,12 +176,12 @@ export const TesterCaptureScreen = (): JSX.Element => {
                   {
                     key: 'r', header: 'Result',
                     cell: (s) => (
-                      <fieldset className="af-segmented" aria-label={`Result for ${s.title}`}>
+                      <fieldset disabled={busy === 'submit'} className="af-segmented" aria-label={`Result for ${s.title}`}>
                         {RESULTS.map((r) => (
                           <label key={r}>
                             <input type="radio" name={`res-${s.stepId}`} value={r}
                               checked={rows[s.stepId]?.result === r}
-                              onChange={() => patchRow(s.stepId, { result: r, notes: rows[s.stepId]?.notes ?? '' })} />
+                              onChange={() => patchRow(s.stepId, { result: r })} />
                             {' '}{r}
                           </label>
                         ))}
@@ -189,20 +191,20 @@ export const TesterCaptureScreen = (): JSX.Element => {
                   {
                     key: 'n', header: 'Notes',
                     cell: (s) => (
-                      <input aria-label={`Notes for ${s.title}`}
+                      <input disabled={busy === 'submit'} aria-label={`Notes for ${s.title}`}
                         value={rows[s.stepId]?.notes ?? ''}
-                        onChange={(e) => patchRow(s.stepId, { result: rows[s.stepId]?.result ?? '', notes: e.target.value })} />
+                        onChange={(e) => patchRow(s.stepId, { notes: e.target.value })} />
                     ),
                   },
                 ]}
                 rows={steps}
               />
               <div className="af-row-actions">
-                <Button variant="primary" busy={busy === 'save'} onClick={() => void save()}>Save draft</Button>
-                <Button variant="destructive" busy={busy === 'submit'} onClick={() => void doSubmit()}>Seal and submit for review</Button>
+                <Button variant="primary" busy={busy === 'save'} disabled={busy !== null || persisted === null} onClick={() => void save()}>Save draft</Button>
+                <Button variant="destructive" busy={busy === 'submit'} disabled={busy !== null || persisted === null} onClick={() => void doSubmit()}>Seal and submit for review</Button>
               </div>
 
-              <fieldset className="af-fieldset">
+              <fieldset className="af-fieldset" disabled={busy !== null}>
                 <legend>Attach evidence</legend>
                 <label>
                   Evidence kind{' '}

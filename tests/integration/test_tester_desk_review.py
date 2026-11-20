@@ -77,6 +77,12 @@ def test_t007_failed_task_earns_evidence_acceptance(desk: Desk) -> None:
     tester = desk.client_for(desk.tester_user)
     reviewer = desk.client_for(desk.reviewer)
 
+    aid = assignment["assignmentId"]
+    attachments = tester.get(desk.path(f"/tester/assignments/{aid}/attachments")).json()["items"]
+    content_path = desk.path(
+        f"/review/assignments/{aid}/attachments/{attachments[0]['attachmentId']}/content"
+    )
+    assert reviewer.get(content_path).status_code == 404
     submitted = tester.post(
         desk.path(f"/tester/assignments/{assignment['assignmentId']}/submit"), json={}
     )
@@ -85,6 +91,10 @@ def test_t007_failed_task_earns_evidence_acceptance(desk: Desk) -> None:
     assert submission["taskResult"] == "FAILED"
     assert submission["revision"] == 1
     assert len(submission["attachmentManifest"]) == 1
+
+    fetched = reviewer.get(content_path)
+    assert fetched.status_code == 200
+    assert fetched.json()["sha256"] == submission["attachmentManifest"][0]["sha256"]
 
     # The reviewer sees the work in the queue and can open the sealed evidence.
     queue = reviewer.get(desk.path("/review/queue"))

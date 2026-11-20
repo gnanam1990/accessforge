@@ -1069,7 +1069,7 @@ def review_attachment_content(
     as_identifier(assignment_id, what="assignment")
     as_identifier(attachment_id, what="attachment")
     try:
-        view = td.attachment_content(
+        view = td.review_attachment_content(
             conn,
             workspace_id=workspace_id,
             assignment_id=assignment_id,
