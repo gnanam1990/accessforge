@@ -1,0 +1,80 @@
+{
+  "project": "AccessForge Tester Desk",
+  "packVersion": "1.0",
+  "testedSha": null,
+  "targetBranch": null,
+  "modules": [
+    {
+      "id": "M01",
+      "title": "Commission and task contracts",
+      "state": "pending",
+      "owner": null,
+      "commands": [],
+      "evidence": [],
+      "nextAction": "Implement versioned commission authoring with environment, journey, fee and deliverable rubric pinned at publication. Bind each accepted assignment to its exact immutable brief revision."
+    },
+    {
+      "id": "M02",
+      "title": "Tester eligibility and consent",
+      "state": "pending",
+      "owner": null,
+      "commands": [],
+      "evidence": [],
+      "nextAction": "Implement restricted enrollment, conflicts, scoped visibility, offer expiry and atomic assignment claims."
+    },
+    {
+      "id": "M03",
+      "title": "Accessible evidence capture",
+      "state": "pending",
+      "owner": null,
+      "commands": [],
+      "evidence": [],
+      "nextAction": "Build keyboard and reader-friendly drafts, step outcomes, permitted attachments and digest-backed uploads."
+    },
+    {
+      "id": "M04",
+      "title": "Submission and review",
+      "state": "pending",
+      "owner": null,
+      "commands": [],
+      "evidence": [],
+      "nextAction": "Seal revisions, validate completeness against the rubric, separate task outcome from evidence acceptance, and allow justified revision requests."
+    },
+    {
+      "id": "M05",
+      "title": "Compensation and reconciliation",
+      "state": "pending",
+      "owner": null,
+      "commands": [],
+      "evidence": [],
+      "nextAction": "Create the payable exactly once, implement an approved compensation adapter and reconcile uncertain results."
+    },
+    {
+      "id": "M06",
+      "title": "Client reporting and privacy",
+      "state": "pending",
+      "owner": null,
+      "commands": [],
+      "evidence": [],
+      "nextAction": "Project only consented evidence to a client report and implement redaction and retention operations."
+    },
+    {
+      "id": "M07",
+      "title": "Retest and release comparison",
+      "state": "pending",
+      "owner": null,
+      "commands": [],
+      "evidence": [],
+      "nextAction": "Link follow-up commissions by defect and compare only matching task and environment dimensions."
+    },
+    {
+      "id": "M08",
+      "title": "End-to-end agency pilot",
+      "state": "pending",
+      "owner": null,
+      "commands": [],
+      "evidence": [],
+      "nextAction": "Exercise a real test browser, a consenting independent tester and an agency reviewer with a restart and a redacted evidence export."
+    }
+  ]
+}
