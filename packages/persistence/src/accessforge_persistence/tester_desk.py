@@ -1731,3 +1731,243 @@ def run_payable_dispatch(
         if len(claimed) < limit:
             break
     return results
+
+
+# --- client reporting and privacy --------------------------------------------------------------
+
+
+def generate_report(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment_id: str,
+    generated_by: str,
+) -> dict[str, Any]:
+    """Project the accepted submission into a client-bound, redacted report revision.
+
+    Only consented evidence may appear: observations the tester sealed plus the attachment
+    manifest. The projection drops every field the client has no business seeing -- tester
+    identity, payout route, access credentials, original filenames -- and binds the body to
+    the audience, release and revision under a digest (INV-06).
+    """
+    assignment = conn.execute(
+        "SELECT * FROM td_assignment WHERE id=%s AND workspace_id=%s FOR SHARE",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    if assignment is None:
+        raise LookupError("assignment unavailable")
+    if assignment["status"] != "COMPLETED":
+        raise ReportError(
+            "a report exists only for accepted evidence; the assignment is "
+            f"{assignment['status'].lower().replace('_', ' ')}"
+        )
+    commission = conn.execute(
+        "SELECT * FROM td_commission WHERE id=%s AND workspace_id=%s",
+        (assignment["commission_id"], workspace_id),
+    ).fetchone()
+    submission = latest_submission(
+        conn, workspace_id=workspace_id, assignment_id=assignment_id
+    )
+    if submission is None:
+        raise ReportError("the assignment has no sealed submission")
+    accepted = conn.execute(
+        "SELECT 1 FROM td_review_decision WHERE submission_id=%s AND workspace_id=%s "
+        "AND decision='ACCEPTED'",
+        (submission["submissionId"], workspace_id),
+    ).fetchone()
+    if accepted is None:
+        raise ReportError("the latest submission was never accepted")
+    brief = read_brief_revision(
+        conn,
+        workspace_id=workspace_id,
+        commission_id=str(assignment["commission_id"]),
+        revision=int(assignment["brief_revision"]),
+    )
+    step_titles = {s["stepId"]: s["title"] for s in brief["taskSteps"]}
+    manifest = []
+    for i, entry in enumerate(submission["attachmentManifest"]):
+        manifest.append(
+            {
+                "attachmentId": entry["attachmentId"],
+                "handle": f"attachment-{i + 1}",
+                "kind": entry["kind"],
+                "sha256": entry["sha256"],
+                "byteSize": next(
+                    (
+                        a["byteSize"]
+                        for a in list_attachments(
+                            conn, workspace_id=workspace_id, assignment_id=assignment_id
+                        )
+                        if a["attachmentId"] == entry["attachmentId"]
+                    ),
+                    None,
+                ),
+                "contentType": entry["contentType"],
+            }
+        )
+    body = {
+        "releaseLabel": brief["releaseLabel"],
+        "releaseDigest": brief["releaseDigest"],
+        "environment": brief["environment"],
+        "taskResult": submission["taskResult"],
+        "submissionHash": submission["submissionHash"],
+        "consentTermsVersion": int(assignment["consent_terms_version"]),
+        "observations": [
+            {
+                "stepId": o["stepId"],
+                "stepTitle": step_titles.get(o["stepId"]),
+                "result": o["result"],
+                "notes": o.get("notes"),
+            }
+            for o in submission["observations"]
+        ],
+        "attachments": manifest,
+        "tester": {"role": "independent tester"},
+    }
+    revision_row = conn.execute(
+        "SELECT COALESCE(MAX(revision),0)+1 AS next FROM td_report_revision "
+        "WHERE assignment_id=%s AND workspace_id=%s",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    revision = int(revision_row["next"])
+    row = conn.execute(
+        "INSERT INTO td_report_revision "
+        "(id, workspace_id, client_id, commission_id, assignment_id, submission_id, "
+        "release_label, release_digest, revision, audience, body, report_hash, generated_by) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'CLIENT',%s,%s,%s) RETURNING *",
+        (
+            uuid.uuid4(),
+            workspace_id,
+            commission["client_id"],
+            assignment["commission_id"],
+            assignment_id,
+            submission["submissionId"],
+            brief["releaseLabel"],
+            brief["releaseDigest"],
+            revision,
+            Jsonb(body),
+            domain.compute_brief_hash(
+                {
+                    "audience": "CLIENT",
+                    "releaseLabel": brief["releaseLabel"],
+                    "releaseDigest": brief["releaseDigest"],
+                    "revision": revision,
+                    "body": body,
+                }
+            ),
+            generated_by,
+        ),
+    ).fetchone()
+    return _report_view(row)
+
+
+def _report_view(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "reportId": str(row["id"]),
+        "clientId": str(row["client_id"]),
+        "commissionId": str(row["commission_id"]),
+        "assignmentId": str(row["assignment_id"]),
+        "submissionId": str(row["submission_id"]),
+        "releaseLabel": row["release_label"],
+        "releaseDigest": row["release_digest"],
+        "revision": int(row["revision"]),
+        "audience": row["audience"],
+        "body": row["body"],
+        "reportHash": row["report_hash"],
+        "generatedAt": to_rfc3339_utc(row["generated_at"]),
+    }
+
+
+def reports_for_client(
+    conn: psycopg.Connection[Any], *, workspace_id: str, client_ids: list[str]
+) -> list[dict[str, Any]]:
+    """Latest report revision per assignment, for exactly the clients this identity holds."""
+    if not client_ids:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT ON (assignment_id) * FROM td_report_revision "
+        "WHERE workspace_id=%s AND client_id = ANY(%s::uuid[]) "
+        "ORDER BY assignment_id, revision DESC",
+        (workspace_id, client_ids),
+    ).fetchall()
+    return [_report_view(r) for r in rows]
+
+
+def read_report_for_client(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    report_id: str,
+    user_id: str,
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM td_report_revision WHERE id=%s AND workspace_id=%s",
+        (report_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("report unavailable")
+    require_client_viewer(
+        conn, workspace_id=workspace_id, client_id=str(row["client_id"]), user_id=user_id
+    )
+    return _report_view(row)
+
+
+def client_report_attachment(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    report_id: str,
+    attachment_id: str,
+    user_id: str,
+) -> dict[str, Any]:
+    """A client viewer may fetch only an attachment the report's manifest names (T-012).
+
+    The manifest is part of the digest-bound body, so an attachment that is not in it -- or a
+    report belonging to a different client -- is simply absent: same 404 either way.
+    """
+    report = read_report_for_client(
+        conn, workspace_id=workspace_id, report_id=report_id, user_id=user_id
+    )
+    in_manifest = any(
+        a["attachmentId"] == attachment_id for a in report["body"]["attachments"]
+    )
+    if not in_manifest:
+        raise LookupError("attachment unavailable")
+    return attachment_content(
+        conn,
+        workspace_id=workspace_id,
+        assignment_id=report["assignmentId"],
+        attachment_id=attachment_id,
+    )
+
+
+def retention_purge(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    before: datetime | None = None,
+) -> dict[str, int]:
+    """Retention operation: drop capture working-set data for terminal assignments.
+
+    Drafts and raw attachment bytes are working artifacts; once an assignment reaches a terminal
+    state the sealed submission's digest-bound manifest remains the evidence of record, and the
+    bytes are the part a retention policy is allowed to destroy. Reports are untouched.
+    """
+    horizon = before or datetime.now(UTC)
+    drafts = conn.execute(
+        "DELETE FROM td_observation_draft d WHERE d.workspace_id=%s AND EXISTS ("
+        "  SELECT 1 FROM td_assignment a WHERE a.id=d.assignment_id "
+        "  AND a.workspace_id=d.workspace_id "
+        "  AND a.status IN ('COMPLETED','WITHDRAWN','EXPIRED') AND a.claimed_at < %s"
+        ")",
+        (workspace_id, horizon),
+    ).rowcount
+    attachments = conn.execute(
+        "DELETE FROM td_evidence_attachment e WHERE e.workspace_id=%s AND EXISTS ("
+        "  SELECT 1 FROM td_assignment a WHERE a.id=e.assignment_id "
+        "  AND a.workspace_id=e.workspace_id "
+        "  AND a.status IN ('COMPLETED','WITHDRAWN','EXPIRED') AND a.claimed_at < %s"
+        ")",
+        (workspace_id, horizon),
+    ).rowcount
+    return {"draftsPurged": drafts, "attachmentsPurged": attachments}

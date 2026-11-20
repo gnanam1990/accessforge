@@ -39,6 +39,7 @@ from accessforge_api.routes._common import (
 )
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.tester_desk import BriefError
+from accessforge_domain.timestamps import parse_rfc3339_utc
 from accessforge_persistence import tester_desk as td
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/tester-desk", tags=["tester-desk"])
@@ -1135,3 +1136,141 @@ def tester_payable(
             "createdAt": payable["createdAt"],
         }
     }
+
+
+# --- client reports and retention --------------------------------------------------------------
+
+
+@router.post("/reports/generate", status_code=status.HTTP_201_CREATED)
+def generate_report(
+    workspace_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.COMMISSION_AUTHOR,
+        body=body, allowed_fields=frozenset({"assignmentId"}),
+    )
+    as_identifier(str(body.get("assignmentId", "")), what="assignment")
+
+    def perform() -> dict[str, Any]:
+        try:
+            return td.generate_report(
+                conn,
+                workspace_id=workspace_id,
+                assignment_id=str(body["assignmentId"]),
+                generated_by=context.principal.user_id,
+            )
+        except LookupError:
+            raise not_found() from None
+        except td.ReportError as exc:
+            raise _refused(exc) from exc
+
+    result = run_idempotently(
+        conn,
+        context,
+        route="POST /tester-desk/reports/generate",
+        body=body,
+        perform=perform,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result.response or {}
+
+
+@router.get("/client/reports")
+def client_reports(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    _, grants = client_context(conn, request, workspace_id)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "items": td.reports_for_client(
+            conn, workspace_id=workspace_id, client_ids=grants
+        )
+    }
+
+
+@router.get("/client/reports/{report_id}")
+def client_report(
+    workspace_id: str, report_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    context, _ = client_context(conn, request, workspace_id)
+    as_identifier(report_id, what="report")
+    try:
+        view = td.read_report_for_client(
+            conn,
+            workspace_id=workspace_id,
+            report_id=report_id,
+            user_id=context.principal.user_id,
+        )
+    except LookupError:
+        raise not_found() from None
+    except td.ReportError:
+        # A grant that doesn't cover this report reads exactly like a missing one.
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.get("/client/reports/{report_id}/attachments/{attachment_id}/content")
+def client_report_attachment(
+    workspace_id: str, report_id: str, attachment_id: str,
+    request: Request, response: Response, conn: Conn,
+) -> dict[str, Any]:
+    context, _ = client_context(conn, request, workspace_id)
+    as_identifier(report_id, what="report")
+    as_identifier(attachment_id, what="attachment")
+    try:
+        view = td.client_report_attachment(
+            conn,
+            workspace_id=workspace_id,
+            report_id=report_id,
+            attachment_id=attachment_id,
+            user_id=context.principal.user_id,
+        )
+    except LookupError:
+        raise not_found() from None
+    except (td.ReportError, td.EvidenceError) as exc:
+        if isinstance(exc, td.ReportError):
+            raise not_found() from None
+        raise ProblemDetail(ProblemCode.CONFLICT, str(exc)) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "attachmentId": view["attachmentId"],
+        "kind": view["kind"],
+        "contentType": view["contentType"],
+        "sha256": view["sha256"],
+        "contentBase64": base64.b64encode(view["content"]).decode("ascii"),
+    }
+
+
+@router.post("/retention/purge")
+def retention_purge(
+    workspace_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
+        body=body, allowed_fields=frozenset({"before"}),
+    )
+    before = body.get("before")
+    moment = None
+    if before is not None:
+        try:
+            moment = parse_rfc3339_utc(before, field="before")
+        except Exception as exc:
+            raise ProblemDetail(ProblemCode.INVALID_INPUT, str(exc)) from exc
+
+    def perform() -> dict[str, Any]:
+        return td.retention_purge(conn, workspace_id=workspace_id, before=moment)
+
+    result = run_idempotently(
+        conn,
+        context,
+        route="POST /tester-desk/retention/purge",
+        body=body,
+        perform=perform,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result.response or {}
