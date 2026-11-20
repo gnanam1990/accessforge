@@ -30,6 +30,11 @@ build/
 .cache/
 coverage/
 
+# Workspace-local tooling for this checkout (uv cache, local cluster data/logs)
+.uv-cache/
+.pgdata/
+.pgdata-server.log
+
 # OS
 .DS_Store
 
