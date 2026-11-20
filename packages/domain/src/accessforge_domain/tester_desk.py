@@ -17,8 +17,9 @@ Two separations the product depends on:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from .canonical import digest
 from .timestamps import parse_rfc3339_utc
@@ -527,3 +528,55 @@ def _comparison_row(commission: dict[str, Any]) -> dict[str, Any]:
         "deliverableDecision": commission.get("deliverableDecision"),
         "environment": commission.get("environment"),
     }
+
+
+# --- compensation ----------------------------------------------------------------
+
+
+class PayableStatus(StrEnum):
+    """The payable lifecycle. DISPATCHED and UNKNOWN are both stop-states for automation:
+
+    either the adapter was invoked (and the process may have died mid-flight) or it reported an
+    uncertain outcome. Neither is ever retried automatically -- a second dispatch could pay twice
+    (INV-05), so both wait for reconcile-by-reference.
+    """
+
+    INTENT = "INTENT"
+    DISPATCHED = "DISPATCHED"
+    UNKNOWN = "UNKNOWN"
+    SETTLED = "SETTLED"
+    CANCELLED = "CANCELLED"
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchOutcome:
+    """What the adapter knows after ``dispatch`` returns.
+
+    ``SETTLED`` carries the provider's authoritative reference. ``UNKNOWN`` means the provider
+    may or may not have acted -- a reference is included when the provider issued one, so the
+    payable can be reconciled later rather than retried blind.
+    """
+
+    status: str  # "SETTLED" or "UNKNOWN"
+    provider_reference: str | None
+
+
+class CompensationAdapter(Protocol):
+    """The seam between an accepted deliverable and money moving.
+
+    Implementations receive the payable's persisted terms (never re-looked-up amounts) and must
+    not retry internally: one ``dispatch`` call is one provider attempt, and an uncertain answer
+    comes back as ``UNKNOWN`` instead of an exception the worker might misread as "not sent".
+    """
+
+    def dispatch(
+        self,
+        *,
+        payable_id: str,
+        amount_minor: int,
+        currency: str,
+        payout_reference: str,
+        idempotency_key: str,
+        conn: Any = None,
+    ) -> DispatchOutcome:
+        ...

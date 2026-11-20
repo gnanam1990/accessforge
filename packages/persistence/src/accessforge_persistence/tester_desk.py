@@ -1442,6 +1442,9 @@ def decide_submission(
             "UPDATE td_commission SET status='ACCEPTED' WHERE id=%s",
             (assignment["commission_id"],),
         )
+        _create_payable_for_acceptance(
+            conn, workspace_id=workspace_id, assignment=assignment
+        )
     else:
         conn.execute(
             "UPDATE td_assignment SET status='ACTIVE' WHERE id=%s", (assignment_id,)
@@ -1451,3 +1454,280 @@ def decide_submission(
             (assignment["commission_id"],),
         )
     return _decision_view(row)
+
+
+# --- compensation ---------------------------------------------------------------
+
+
+def _create_payable_for_acceptance(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    assignment: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the compensation intent in the same transaction that accepts the evidence.
+
+    The amount, currency and payout destination come from the pinned brief revision and the
+    enrollment record -- never from the request. ``UNIQUE (assignment_id)`` makes INV-05 a
+    constraint: a second intent for the same accepted assignment cannot exist.
+    """
+    brief = read_brief_revision(
+        conn,
+        workspace_id=workspace_id,
+        commission_id=str(assignment["commission_id"]),
+        revision=int(assignment["brief_revision"]),
+    )
+    tester = conn.execute(
+        "SELECT * FROM td_tester WHERE id=%s AND workspace_id=%s",
+        (assignment["tester_id"], workspace_id),
+    ).fetchone()
+    payable_id = uuid.uuid4()
+    row = conn.execute(
+        "INSERT INTO td_payable "
+        "(id, workspace_id, assignment_id, tester_id, commission_id, amount_minor, currency, "
+        "payout_reference) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        (
+            payable_id,
+            workspace_id,
+            assignment["id"],
+            assignment["tester_id"],
+            assignment["commission_id"],
+            brief["feeMinor"],
+            brief["currency"],
+            tester["payout_reference"],
+        ),
+    ).fetchone()
+    return _payable_view(row)
+
+
+def _payable_view(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "payableId": str(row["id"]),
+        "assignmentId": str(row["assignment_id"]),
+        "testerId": str(row["tester_id"]),
+        "commissionId": str(row["commission_id"]),
+        "amountMinor": int(row["amount_minor"]),
+        "currency": row["currency"],
+        "payoutReference": row["payout_reference"],
+        "status": row["status"],
+        "providerReference": row["provider_reference"],
+        "dispatchAttempts": int(row["dispatch_attempts"]),
+        "createdAt": to_rfc3339_utc(row["created_at"]),
+        "dispatchedAt": (
+            None if row["dispatched_at"] is None else to_rfc3339_utc(row["dispatched_at"])
+        ),
+        "settledAt": None if row["settled_at"] is None else to_rfc3339_utc(row["settled_at"]),
+    }
+
+
+def list_payables(
+    conn: psycopg.Connection[Any], *, workspace_id: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM td_payable WHERE workspace_id=%s ORDER BY created_at DESC LIMIT 200",
+        (workspace_id,),
+    ).fetchall()
+    return [_payable_view(r) for r in rows]
+
+
+def read_payable(
+    conn: psycopg.Connection[Any], *, workspace_id: str, payable_id: str
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM td_payable WHERE id=%s AND workspace_id=%s",
+        (payable_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("payable unavailable")
+    return _payable_view(row)
+
+
+def payable_for_assignment(
+    conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM td_payable WHERE assignment_id=%s AND workspace_id=%s",
+        (assignment_id, workspace_id),
+    ).fetchone()
+    return None if row is None else _payable_view(row)
+
+
+def claim_intent_payables(
+    conn: psycopg.Connection[Any], *, workspace_id: str, limit: int = 10
+) -> list[dict[str, Any]]:
+    """Mark INTENT payables DISPATCHED in this transaction (the caller commits before invoking
+    the adapter, so a crash cannot resurrect them as unseen intents).
+
+    Only ``INTENT`` rows are claimed -- ``DISPATCHED`` means the adapter was already invoked and
+    a second invocation could pay twice (T-010).
+    """
+    rows = conn.execute(
+        "UPDATE td_payable SET status='DISPATCHED', dispatched_at=clock_timestamp(), "
+        "dispatch_attempts=dispatch_attempts+1 "
+        "WHERE id IN ("
+        "  SELECT id FROM td_payable WHERE workspace_id=%s AND status='INTENT' "
+        "  ORDER BY created_at LIMIT %s FOR UPDATE SKIP LOCKED"
+        ") RETURNING *",
+        (workspace_id, limit),
+    ).fetchall()
+    return [_payable_view(r) for r in rows]
+
+
+def record_dispatch_outcome(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    payable_id: str,
+    outcome: domain.DispatchOutcome,
+) -> dict[str, Any]:
+    """Apply the adapter's answer to a DISPATCHED payable. Runs in a fresh transaction after the
+    adapter call, so a mid-call crash leaves the payable DISPATCHED rather than INTENT."""
+    if outcome.status not in ("SETTLED", "UNKNOWN"):
+        raise CompensationError(f"adapter returned an unrecognised status {outcome.status!r}")
+    row = conn.execute(
+        "UPDATE td_payable SET status=%s, provider_reference=%s, "
+        "settled_at=CASE WHEN %s='SETTLED' THEN clock_timestamp() ELSE settled_at END "
+        "WHERE id=%s AND workspace_id=%s AND status='DISPATCHED' RETURNING *",
+        (outcome.status, outcome.provider_reference, outcome.status, payable_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise CompensationError(
+            "payable is not awaiting an outcome (already settled or never dispatched)"
+        )
+    return _payable_view(row)
+
+
+def reconcile_payable(
+    conn: psycopg.Connection[Any],
+    *,
+    workspace_id: str,
+    payable_id: str,
+    provider_reference: Any,
+    amount_minor: Any,
+) -> dict[str, Any]:
+    """Close a DISPATCHED or UNKNOWN payable against the provider's record.
+
+    Reconciliation matches the original provider reference, the exact amount and the payable's
+    scope (the assignment it was minted for). Any mismatch is a refusal, never a silent settle.
+    """
+    row = conn.execute(
+        "SELECT * FROM td_payable WHERE id=%s AND workspace_id=%s FOR UPDATE",
+        (payable_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        raise LookupError("payable unavailable")
+    if row["status"] in ("SETTLED", "CANCELLED"):
+        raise CompensationError(f"payable is already {row['status'].lower()}")
+    if row["status"] == "INTENT":
+        raise CompensationError("payable has not been dispatched yet")
+    if row["provider_reference"] is not None and row["provider_reference"] != provider_reference:
+        raise CompensationError(
+            "provider reference does not match the dispatched intent; refusing to settle "
+            "against a different provider record"
+        )
+    if not isinstance(provider_reference, str) or not provider_reference.strip():
+        raise CompensationError("a provider reference is required to reconcile")
+    if amount_minor != int(row["amount_minor"]):
+        raise CompensationError(
+            f"reconciled amount {amount_minor!r} does not match the payable's "
+            f"{row['amount_minor']} minor units"
+        )
+    updated = conn.execute(
+        "UPDATE td_payable SET status='SETTLED', provider_reference=%s, "
+        "settled_at=clock_timestamp() WHERE id=%s RETURNING *",
+        (provider_reference.strip(), payable_id),
+    ).fetchone()
+    return _payable_view(updated)
+
+
+class LocalLedgerAdapter:
+    """The stand-in compensation provider: writes the workspace's own ledger table.
+
+    Same contract a real rail would satisfy -- persisted intent in, provider reference out,
+    no retries -- so swapping in a live adapter changes this class, not the payable flow.
+    The reference format ``ledger:<payable_id>`` is what reconcile matches against.
+    """
+
+    def dispatch(
+        self,
+        *,
+        payable_id: str,
+        amount_minor: int,
+        currency: str,
+        payout_reference: str,
+        idempotency_key: str,
+        conn: Any = None,
+    ) -> domain.DispatchOutcome:
+        if conn is None:
+            raise CompensationError("the local ledger adapter needs a scoped connection")
+        reference = f"ledger:{payable_id}:{idempotency_key[:12]}"
+        conn.execute(
+            "INSERT INTO td_ledger_entry (id, workspace_id, payable_id, reference, "
+            "amount_minor, currency) VALUES (%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (payable_id) DO NOTHING",
+            (
+                uuid.uuid4(),
+                payout_workspace_id(conn),
+                payable_id,
+                reference,
+                amount_minor,
+                currency,
+            ),
+        )
+        return domain.DispatchOutcome(status="SETTLED", provider_reference=reference)
+
+
+def payout_workspace_id(conn: psycopg.Connection[Any]) -> str:
+    row = conn.execute(
+        "SELECT current_setting('accessforge.workspace_id', true) AS ws"
+    ).fetchone()
+    return row["ws"]
+
+
+def run_payable_dispatch(
+    database_url: str,
+    *,
+    workspace_id: str,
+    adapter: domain.CompensationAdapter,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Worker entry point: claim intents, dispatch each through the adapter, record outcomes.
+
+    Phases are deliberately separate transactions. The claim commits DISPATCHED *before* the
+    adapter is invoked, so a worker killed mid-call leaves a provable stuck payable instead of
+    a resurrected intent that a restart would pay twice (T-010).
+    """
+    from accessforge_persistence import workspace_connection
+
+    results: list[dict[str, Any]] = []
+    while True:
+        with workspace_connection(database_url, workspace_id) as conn:
+            claimed = claim_intent_payables(conn, workspace_id=workspace_id, limit=limit)
+        if not claimed:
+            break
+        for payable in claimed:
+            try:
+                with workspace_connection(database_url, workspace_id) as conn:
+                    outcome = adapter.dispatch(
+                        payable_id=payable["payableId"],
+                        amount_minor=payable["amountMinor"],
+                        currency=payable["currency"],
+                        payout_reference=payable["payoutReference"],
+                        idempotency_key=payable["payableId"],
+                        conn=conn,
+                    )
+                    results.append(
+                        record_dispatch_outcome(
+                            conn,
+                            workspace_id=workspace_id,
+                            payable_id=payable["payableId"],
+                            outcome=outcome,
+                        )
+                    )
+            except Exception:
+                # The adapter call did not complete. The payable stays DISPATCHED: it may have
+                # paid, so automation must never touch it again (INV-05).
+                results.append(payable)
+        if len(claimed) < limit:
+            break
+    return results

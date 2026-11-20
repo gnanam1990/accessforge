@@ -1034,3 +1034,104 @@ def review_decision(
     )
     response.headers["Cache-Control"] = "no-store"
     return result.response or {}
+
+
+# --- compensation ----------------------------------------------------------------------------
+
+
+_RECONCILE_FIELDS = frozenset({"providerReference", "amountMinor"})
+
+
+@router.get("/finance/payables")
+def list_payables(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMPENSATION_RECONCILE)
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": td.list_payables(conn, workspace_id=workspace_id)}
+
+
+@router.get("/finance/payables/{payable_id}")
+def read_payable(
+    workspace_id: str, payable_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMPENSATION_RECONCILE)
+    as_identifier(payable_id, what="payable")
+    try:
+        view = td.read_payable(
+            conn, workspace_id=workspace_id, payable_id=payable_id
+        )
+    except LookupError:
+        raise not_found() from None
+    response.headers["Cache-Control"] = "no-store"
+    return view
+
+
+@router.post("/finance/payables/{payable_id}/reconcile")
+def reconcile_payable(
+    workspace_id: str, payable_id: str, request: Request, response: Response, conn: Conn,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = as_body(payload)
+    context = authorize(
+        conn, request, workspace_id, Permission.COMPENSATION_RECONCILE,
+        body=body, allowed_fields=_RECONCILE_FIELDS,
+    )
+    as_identifier(payable_id, what="payable")
+
+    def perform() -> dict[str, Any]:
+        try:
+            return td.reconcile_payable(
+                conn,
+                workspace_id=workspace_id,
+                payable_id=payable_id,
+                provider_reference=body.get("providerReference"),
+                amount_minor=body.get("amountMinor"),
+            )
+        except LookupError:
+            raise not_found() from None
+        except td.CompensationError as exc:
+            raise _refused(exc) from exc
+
+    result = run_idempotently(
+        conn,
+        context,
+        route=f"POST /tester-desk/finance/payables/{payable_id}/reconcile",
+        body=body,
+        perform=perform,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result.response or {}
+
+
+@router.get("/tester/assignments/{assignment_id}/payable")
+def tester_payable(
+    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    """The owning tester can see their payable's lifecycle state -- never its provider plumbing."""
+    _, enrollment = tester_context(conn, request, workspace_id)
+    as_identifier(assignment_id, what="assignment")
+    try:
+        td.assignment_for_tester(
+            conn,
+            workspace_id=workspace_id,
+            assignment_id=assignment_id,
+            tester_id=enrollment["testerId"],
+        )
+    except LookupError:
+        raise not_found() from None
+    payable = td.payable_for_assignment(
+        conn, workspace_id=workspace_id, assignment_id=assignment_id
+    )
+    response.headers["Cache-Control"] = "no-store"
+    if payable is None:
+        return {"payable": None}
+    return {
+        "payable": {
+            "payableId": payable["payableId"],
+            "amountMinor": payable["amountMinor"],
+            "currency": payable["currency"],
+            "status": payable["status"],
+            "createdAt": payable["createdAt"],
+        }
+    }
