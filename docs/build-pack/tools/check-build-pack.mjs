@@ -192,8 +192,20 @@ function markdown(source, name, check) {
 
 function linkDestination(raw) {
   const value = raw.trim();
-  const match = value.startsWith('<') ? value.match(/^<([^<>\n]*)>(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\)))?$/)
-    : value.match(/^((?:\\.|[^\s])+?)(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\)))?$/);
+  let match;
+  if (value.startsWith('<')) {
+    match = value.match(/^<([^<>\n]*)>(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\)))?$/);
+  } else {
+    let end = 0;
+    while (end < value.length && !/\s/.test(value[end])) {
+      if (value[end] === '\\' && end + 1 < value.length && !/[\r\n]/.test(value[end + 1])) end++;
+      end++;
+    }
+    const title = value.slice(end);
+    if (end && (!title || /^\s+(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\))$/.test(title))) {
+      match = [value, value.slice(0, end)];
+    }
+  }
   if (!match) throw new Error(`Unsupported or malformed link destination: ${value.slice(0, 100)}`);
   return match[1].replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, '$1');
 }

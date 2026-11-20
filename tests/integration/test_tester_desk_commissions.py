@@ -162,3 +162,16 @@ def test_reopening_after_restart_returns_identical_terms(desk: Desk) -> None:
         desk.path(f"/commissions/{commission['commissionId']}/briefs/1")
     ).json()
     assert again == first
+
+
+@pytest.mark.parametrize(
+    "rubric", [{"requiredStepIds": []}, {"requiredEvidenceKinds": ["SCREENSHOT"]}]
+)
+def test_refuses_unsatisfiable_or_empty_rubric(desk: Desk, rubric: dict[str, Any]) -> None:
+    brief = {**AF21_BRIEF, "permittedEvidence": ["NOTE"], "rubric": rubric}
+    agency = desk.client_for(desk.owner)
+    response = agency.post(
+        desk.path("/commissions"),
+        json={"clientId": desk.client_id, "reference": "invalid-rubric", "brief": brief},
+    )
+    assert response.status_code == 400

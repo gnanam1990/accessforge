@@ -39,7 +39,7 @@ from accessforge_api.routes._common import (
 )
 from accessforge_domain.authorization.roles import Permission
 from accessforge_domain.tester_desk import BriefError
-from accessforge_domain.timestamps import parse_rfc3339_utc
+from accessforge_domain.timestamps import TimestampError, parse_rfc3339_utc
 from accessforge_persistence import tester_desk as td
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/tester-desk", tags=["tester-desk"])
@@ -488,12 +488,32 @@ def author_revision(
 
 @router.post("/commissions/{commission_id}/publish")
 def publish_commission(
-    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn
+    workspace_id: str,
+    commission_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
     as_identifier(commission_id, what="commission")
+    body = payload or {}
+    if set(body) - {"offerExpiresAt"}:
+        raise ProblemDetail(ProblemCode.UNEXPECTED_FIELD, "publish accepts only offerExpiresAt")
     try:
-        view = td.publish_commission(conn, workspace_id=workspace_id, commission_id=commission_id)
+        expiration = (
+            parse_rfc3339_utc(body["offerExpiresAt"], field="offerExpiresAt")
+            if "offerExpiresAt" in body
+            else None
+        )
+        view = td.publish_commission(
+            conn,
+            workspace_id=workspace_id,
+            commission_id=commission_id,
+            offer_expires_at=expiration,
+        )
+    except TimestampError as exc:
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, str(exc)) from exc
     except LookupError:
         raise not_found() from None
     except td.CommissionError as exc:
@@ -1225,6 +1245,15 @@ def tester_payable(
 
 
 # --- client reports and retention --------------------------------------------------------------
+
+
+@router.get("/reports/ready")
+def reportable_assignments(
+    workspace_id: str, request: Request, response: Response, conn: Conn
+) -> dict[str, Any]:
+    authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": td.reportable_assignments(conn, workspace_id=workspace_id)}
 
 
 @router.post("/reports/generate", status_code=status.HTTP_201_CREATED)

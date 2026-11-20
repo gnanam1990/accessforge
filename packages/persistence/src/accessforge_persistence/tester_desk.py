@@ -455,11 +455,13 @@ def publish_commission(
     *,
     workspace_id: str,
     commission_id: str,
+    offer_expires_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Freeze the latest brief revision and open the offer to eligible testers."""
     _require_uuid(commission_id, "commission")
     commission = conn.execute(
-        "SELECT status FROM td_commission WHERE id=%s AND workspace_id=%s FOR UPDATE",
+        "SELECT status, offer_expires_at FROM td_commission "
+        "WHERE id=%s AND workspace_id=%s FOR UPDATE",
         (commission_id, workspace_id),
     ).fetchone()
     if commission is None:
@@ -468,6 +470,11 @@ def publish_commission(
         raise CommissionError(
             f"commission is {commission['status']}; only a draft or an expired offer publishes"
         )
+    expiration = (
+        offer_expires_at if offer_expires_at is not None else commission["offer_expires_at"]
+    )
+    if expiration is not None and expiration <= datetime.now(UTC):
+        raise CommissionError("publish requires a future offer expiration")
     latest = conn.execute(
         "SELECT revision FROM td_brief_revision WHERE commission_id=%s "
         "ORDER BY revision DESC LIMIT 1",
@@ -476,8 +483,9 @@ def publish_commission(
     if latest is None:  # unreachable: creation always writes revision 1
         raise CommissionError("commission has no brief to publish")
     conn.execute(
-        "UPDATE td_commission SET status='OPEN', current_brief_revision=%s WHERE id=%s",
-        (int(latest["revision"]), commission_id),
+        "UPDATE td_commission SET status='OPEN', current_brief_revision=%s, "
+        "offer_expires_at=%s WHERE id=%s",
+        (int(latest["revision"]), expiration, commission_id),
     )
     return read_commission(conn, workspace_id=workspace_id, commission_id=commission_id)
 
@@ -917,8 +925,9 @@ def withdraw_assignment(
     if row["status"] == "ACTIVE":
         conn.execute("UPDATE td_assignment SET status='WITHDRAWN' WHERE id=%s", (assignment_id,))
         conn.execute(
-            "UPDATE td_commission SET status='OPEN' WHERE id=%s AND status='ASSIGNED' "
-            "AND (offer_expires_at IS NULL OR offer_expires_at > clock_timestamp())",
+            "UPDATE td_commission SET status=CASE WHEN offer_expires_at <= clock_timestamp() "
+            "THEN 'EXPIRED' ELSE 'OPEN' END WHERE id=%s "
+            "AND status IN ('ASSIGNED','NEEDS_REVISION')",
             (row["commission_id"],),
         )
     return read_assignment(conn, workspace_id=workspace_id, assignment_id=assignment_id)
@@ -1484,7 +1493,8 @@ def _create_payable_for_acceptance(
     row = conn.execute(
         "INSERT INTO td_payable "
         "(id, workspace_id, assignment_id, tester_id, commission_id, amount_minor, currency, "
-        "payout_reference) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "payout_reference,status,settled_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+        "CASE WHEN %s THEN clock_timestamp() END) RETURNING *",
         (
             payable_id,
             workspace_id,
@@ -1494,6 +1504,8 @@ def _create_payable_for_acceptance(
             brief["feeMinor"],
             brief["currency"],
             tester["payout_reference"],
+            "SETTLED" if brief["feeMinor"] == 0 else "INTENT",
+            brief["feeMinor"] == 0,
         ),
     ).fetchone()
     assert row is not None
@@ -1625,11 +1637,18 @@ def reconcile_payable(
         )
     if not isinstance(provider_reference, str) or not provider_reference.strip():
         raise CompensationError("a provider reference is required to reconcile")
-    if amount_minor != int(row["amount_minor"]):
+    if type(amount_minor) is not int or amount_minor != int(row["amount_minor"]):
         raise CompensationError(
             f"reconciled amount {amount_minor!r} does not match the payable's "
             f"{row['amount_minor']} minor units"
         )
+    receipt = conn.execute(
+        "SELECT 1 FROM td_ledger_entry WHERE workspace_id=%s AND payable_id=%s "
+        "AND reference=%s AND amount_minor=%s AND currency=%s",
+        (workspace_id, payable_id, provider_reference.strip(), amount_minor, row["currency"]),
+    ).fetchone()
+    if receipt is None:
+        raise CompensationError("no confirmed ledger receipt matches this payable")
     updated = conn.execute(
         "UPDATE td_payable SET status='SETTLED', provider_reference=%s, "
         "settled_at=clock_timestamp() WHERE id=%s RETURNING *",
@@ -1698,40 +1717,61 @@ def run_payable_dispatch(
     from accessforge_persistence import workspace_connection
 
     results: list[dict[str, Any]] = []
-    while True:
+    for _ in range(limit):
         with workspace_connection(database_url, workspace_id) as conn:
-            claimed = claim_intent_payables(conn, workspace_id=workspace_id, limit=limit)
+            claimed = claim_intent_payables(conn, workspace_id=workspace_id, limit=1)
         if not claimed:
             break
-        for payable in claimed:
-            try:
-                with workspace_connection(database_url, workspace_id) as conn:
-                    outcome = adapter.dispatch(
+        payable = claimed[0]
+        try:
+            with workspace_connection(database_url, workspace_id) as conn:
+                outcome = adapter.dispatch(
+                    payable_id=payable["payableId"],
+                    amount_minor=payable["amountMinor"],
+                    currency=payable["currency"],
+                    payout_reference=payable["payoutReference"],
+                    idempotency_key=payable["payableId"],
+                    conn=conn,
+                )
+                results.append(
+                    record_dispatch_outcome(
+                        conn,
+                        workspace_id=workspace_id,
                         payable_id=payable["payableId"],
-                        amount_minor=payable["amountMinor"],
-                        currency=payable["currency"],
-                        payout_reference=payable["payoutReference"],
-                        idempotency_key=payable["payableId"],
-                        conn=conn,
+                        outcome=outcome,
                     )
-                    results.append(
-                        record_dispatch_outcome(
-                            conn,
-                            workspace_id=workspace_id,
-                            payable_id=payable["payableId"],
-                            outcome=outcome,
-                        )
-                    )
-            except Exception:
-                # The adapter call did not complete. The payable stays DISPATCHED: it may have
-                # paid, so automation must never touch it again (INV-05).
-                results.append(payable)
-        if len(claimed) < limit:
-            break
+                )
+        except Exception:
+            # The adapter call did not complete. The payable stays DISPATCHED: it may have
+            # paid, so automation must never touch it again (INV-05).
+            results.append(payable)
     return results
 
 
 # --- client reporting and privacy --------------------------------------------------------------
+
+
+def reportable_assignments(
+    conn: psycopg.Connection[Any], *, workspace_id: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT a.id, a.commission_id, c.reference, "
+        "(SELECT MAX(r.revision) FROM td_report_revision r "
+        " WHERE r.workspace_id=a.workspace_id AND r.assignment_id=a.id) AS latest_revision "
+        "FROM td_assignment a JOIN td_commission c "
+        "ON c.id=a.commission_id AND c.workspace_id=a.workspace_id "
+        "WHERE a.workspace_id=%s AND a.status='COMPLETED' ORDER BY a.claimed_at DESC, a.id",
+        (workspace_id,),
+    ).fetchall()
+    return [
+        {
+            "assignmentId": str(row["id"]),
+            "commissionId": str(row["commission_id"]),
+            "reference": row["reference"],
+            "latestReportRevision": row["latest_revision"],
+        }
+        for row in rows
+    ]
 
 
 def generate_report(
@@ -1749,7 +1789,7 @@ def generate_report(
     the audience, release and revision under a digest (INV-06).
     """
     assignment = conn.execute(
-        "SELECT * FROM td_assignment WHERE id=%s AND workspace_id=%s FOR SHARE",
+        "SELECT * FROM td_assignment WHERE id=%s AND workspace_id=%s FOR UPDATE",
         (assignment_id, workspace_id),
     ).fetchone()
     if assignment is None:
@@ -1814,7 +1854,7 @@ def generate_report(
                 "stepId": o["stepId"],
                 "stepTitle": step_titles.get(o["stepId"]),
                 "result": o["result"],
-                "notes": o.get("notes"),
+                "notes": None,
             }
             for o in submission["observations"]
         ],
@@ -1861,6 +1901,20 @@ def generate_report(
 
 
 def _report_view(row: dict[str, Any]) -> dict[str, Any]:
+    body = row["body"]
+    report_hash = row["report_hash"]
+    if any(o.get("notes") is not None for o in body["observations"]):
+        # Historical revisions retain their sealed source. Hash the redacted client projection.
+        body = {**body, "observations": [{**o, "notes": None} for o in body["observations"]]}
+        report_hash = domain.compute_brief_hash(
+            {
+                "audience": row["audience"],
+                "releaseLabel": row["release_label"],
+                "releaseDigest": row["release_digest"],
+                "revision": int(row["revision"]),
+                "body": body,
+            }
+        )
     return {
         "reportId": str(row["id"]),
         "clientId": str(row["client_id"]),
@@ -1871,8 +1925,8 @@ def _report_view(row: dict[str, Any]) -> dict[str, Any]:
         "releaseDigest": row["release_digest"],
         "revision": int(row["revision"]),
         "audience": row["audience"],
-        "body": row["body"],
-        "reportHash": row["report_hash"],
+        "body": body,
+        "reportHash": report_hash,
         "generatedAt": to_rfc3339_utc(row["generated_at"]),
     }
 
@@ -1992,10 +2046,11 @@ def _comparison_input(
         )
         environment = brief["environment"]
     outcome = conn.execute(
-        "SELECT s.task_result, d.decision FROM td_assignment a "
+        "SELECT s.task_result, d.decision FROM ("
+        "SELECT id FROM td_assignment WHERE commission_id=%s AND workspace_id=%s "
+        "AND status NOT IN ('WITHDRAWN','EXPIRED') ORDER BY claimed_at DESC, id DESC LIMIT 1) a "
         "JOIN td_submission s ON s.assignment_id = a.id "
         "LEFT JOIN td_review_decision d ON d.submission_id = s.id "
-        "WHERE a.commission_id=%s AND a.workspace_id=%s "
         "ORDER BY s.revision DESC LIMIT 1",
         (commission_id, workspace_id),
     ).fetchone()

@@ -25,12 +25,16 @@ def _obs(step: str, result: str = "PASSED") -> dict[str, Any]:
     }
 
 
-def _accepted_assignment(desk: Desk) -> dict[str, Any]:
+def _accepted_assignment(desk: Desk, reference: str = "AF-21", fee: int = 2000) -> dict[str, Any]:
     """Claim, capture the failing journey, submit, and accept -- returns the payable."""
     agency = desk.client_for(desk.owner)
     created = agency.post(
         desk.path("/commissions"),
-        json={"clientId": desk.client_id, "reference": "AF-21", "brief": AF21_BRIEF},
+        json={
+            "clientId": desk.client_id,
+            "reference": reference,
+            "brief": {**AF21_BRIEF, "feeMinor": fee},
+        },
     )
     commission = created.json()
     agency.post(desk.path(f"/commissions/{commission['commissionId']}/publish"))
@@ -142,47 +146,61 @@ def test_t010_dispatched_payable_never_dispatches_again(desk: Desk) -> None:
         if p["assignmentId"] == ids["assignmentId"]
     ][0]
 
-    # Phase one of the worker commits DISPATCHED; the "process" then dies -- the adapter is
-    # never invoked, which is precisely the post-dispatch kill the scenario describes.
-    with workspace_connection(desk.database_url, desk.workspace_id) as conn:
-        claimed = td.claim_intent_payables(conn, workspace_id=desk.workspace_id)
-    assert [c["payableId"] for c in claimed] == [payable["payableId"]]
+    second = _accepted_assignment(desk, "AF-next", 2**31)
+    real = td.LocalLedgerAdapter()
 
-    class SpyAdapter:
-        def __init__(self) -> None:
-            self.calls = 0
+    class CrashAfterPayout:
+        def dispatch(self, **kwargs: Any) -> domain.DispatchOutcome:
+            # The provider commits its own transaction before the worker can record the result.
+            with workspace_connection(desk.database_url, desk.workspace_id) as provider:
+                real.dispatch(**{**kwargs, "conn": provider})
+            raise SystemExit("interrupted after provider commit")
 
-        def dispatch(self, **kwargs: object) -> domain.DispatchOutcome:
-            self.calls += 1
-            return domain.DispatchOutcome(status="SETTLED", provider_reference="spy:1")
-
-    spy = SpyAdapter()
-    td.run_payable_dispatch(desk.database_url, workspace_id=desk.workspace_id, adapter=spy)
-    assert spy.calls == 0  # nothing in INTENT: the stuck payable is not retried
-
+    with pytest.raises(SystemExit):
+        td.run_payable_dispatch(
+            desk.database_url, workspace_id=desk.workspace_id, adapter=CrashAfterPayout()
+        )
+    rows = finance.get(desk.path("/finance/payables")).json()["items"]
+    assert (
+        next(p for p in rows if p["assignmentId"] == second["assignmentId"])["status"] == "INTENT"
+    )
+    processed = td.run_payable_dispatch(
+        desk.database_url, workspace_id=desk.workspace_id, adapter=real
+    )
+    assert [p["assignmentId"] for p in processed] == [second["assignmentId"]]
+    with workspace_connection(desk.database_url, desk.workspace_id) as provider:
+        receipts = provider.execute(
+            "SELECT reference FROM td_ledger_entry WHERE payable_id=%s", (payable["payableId"],)
+        ).fetchall()
+    assert len(receipts) == 1
+    reference = receipts[0]["reference"]
     stuck = finance.get(desk.path(f"/finance/payables/{payable['payableId']}")).json()
-    assert stuck["status"] == "DISPATCHED"
-    assert stuck["dispatchAttempts"] == 1
+    assert stuck["status"] == "DISPATCHED" and stuck["dispatchAttempts"] == 1
+    invented = finance.post(
+        desk.path(f"/finance/payables/{payable['payableId']}/reconcile"),
+        json={"providerReference": "unverified", "amountMinor": 2000},
+    )
+    assert invented.status_code == 409
 
     # Reconcile requires the provider reference and the exact amount.
     wrong_amount = finance.post(
         desk.path(f"/finance/payables/{payable['payableId']}/reconcile"),
-        json={"providerReference": "ledger:local-1", "amountMinor": 2001},
+        json={"providerReference": reference, "amountMinor": 2001},
     )
     assert wrong_amount.status_code == 409
 
     settled = finance.post(
         desk.path(f"/finance/payables/{payable['payableId']}/reconcile"),
-        json={"providerReference": "ledger:local-1", "amountMinor": 2000},
+        json={"providerReference": reference, "amountMinor": 2000},
     )
     assert settled.status_code == 200, settled.text
     assert settled.json()["status"] == "SETTLED"
-    assert settled.json()["providerReference"] == "ledger:local-1"
+    assert settled.json()["providerReference"] == reference
 
     # Settled is terminal: reconcile cannot move it again.
     again = finance.post(
         desk.path(f"/finance/payables/{payable['payableId']}/reconcile"),
-        json={"providerReference": "ledger:local-1", "amountMinor": 2000},
+        json={"providerReference": reference, "amountMinor": 2000},
     )
     assert again.status_code == 409
 
@@ -221,8 +239,7 @@ def test_unknown_outcome_reconciles_by_original_reference(desk: Desk) -> None:
         desk.path(f"/finance/payables/{payable['payableId']}/reconcile"),
         json={"providerReference": "provider:ambiguous-1", "amountMinor": 2000},
     )
-    assert ok.status_code == 200
-    assert ok.json()["status"] == "SETTLED"
+    assert ok.status_code == 409  # a reference alone does not prove settlement
 
 
 def test_payables_are_not_visible_to_reviewers_or_testers_of_other_assignments(
@@ -233,3 +250,20 @@ def test_payables_are_not_visible_to_reviewers_or_testers_of_other_assignments(
     assert reviewer.get(desk.path("/finance/payables")).status_code in (403, 404)
     other_tester = desk.client_for(desk.tester2_user)
     assert other_tester.get(desk.path("/finance/payables")).status_code in (403, 404)
+
+
+def test_zero_fee_acceptance_has_no_transfer(desk: Desk) -> None:
+    assignment = _accepted_assignment(desk, fee=0)
+    finance = desk.client_for(desk.finance)
+    row = next(
+        p
+        for p in finance.get(desk.path("/finance/payables")).json()["items"]
+        if p["assignmentId"] == assignment["assignmentId"]
+    )
+    assert (row["status"], row["amountMinor"], row["dispatchAttempts"]) == ("SETTLED", 0, 0)
+    assert (
+        td.run_payable_dispatch(
+            desk.database_url, workspace_id=desk.workspace_id, adapter=td.LocalLedgerAdapter()
+        )
+        == []
+    )

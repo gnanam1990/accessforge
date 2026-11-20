@@ -144,8 +144,8 @@
     },
     {
       "path": "tools/check-build-pack.mjs",
-      "bytes": 33599,
-      "sha256": "befab469d23feaf4b77abb8554dbecd94a2095ef6470c1d6dc70d4c042caa9dc"
+      "bytes": 33910,
+      "sha256": "823a7ba92ce9f38a14f7a866234b7dd2a1fb1f34a4d5ff4c3328c26b848e8bb2"
     }
   ]
 }

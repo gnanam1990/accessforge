@@ -235,3 +235,22 @@ def test_withdrawal_releases_the_claim(desk: Desk) -> None:
     # The slot is released: a second eligible tester can now claim.
     claimed2 = _claim(desk, desk.tester2_user, commission["commissionId"])
     assert claimed2.status_code == 201, claimed2.text
+
+
+def test_withdraw_after_offer_window_and_republish(desk: Desk) -> None:
+    commission = _published_af21(desk)
+    cid = commission["commissionId"]
+    claimed = _claim(desk, desk.tester_user, cid)
+    aid = claimed.json()["assignmentId"]
+    with workspace_connection(desk.database_url, desk.workspace_id) as conn:
+        conn.execute(
+            "UPDATE td_commission SET offer_expires_at=clock_timestamp() WHERE id=%s", (cid,)
+        )
+    tester = desk.client_for(desk.tester_user)
+    assert tester.post(desk.path(f"/tester/assignments/{aid}/withdraw")).status_code == 200
+    owner = desk.client_for(desk.owner)
+    assert owner.get(desk.path(f"/commissions/{cid}")).json()["status"] == "EXPIRED"
+    publish = desk.path(f"/commissions/{cid}/publish")
+    assert owner.post(publish).status_code == 409
+    assert owner.post(publish, json={"offerExpiresAt": "2099-04-01T00:00:00Z"}).status_code == 200
+    assert _claim(desk, desk.tester2_user, cid).status_code == 201

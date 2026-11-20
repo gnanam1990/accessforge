@@ -101,6 +101,7 @@ def test_t011_client_reads_redacted_observation_for_r18(desk: Desk) -> None:
     assert len(items) == 1 and items[0]["reportId"] == report["reportId"]
 
     body = items[0]["body"]
+    assert all(o.get("notes") is None for o in body["observations"])
     assert body["taskResult"] == "FAILED"
     results = {o["stepId"]: o["result"] for o in body["observations"]}
     assert results["s4"] == "FAILED" and results["s5"] == "UNREACHABLE"
@@ -185,3 +186,30 @@ def test_report_only_exists_for_accepted_work_and_retention_removes_bytes(
         )
     )
     assert gone.status_code == 404
+
+
+def test_author_can_resume_reporting_after_acceptance(desk: Desk) -> None:
+    agency = desk.client_for(desk.owner)
+    path = desk.path("/reports/ready")
+    assert agency.get(path).json() == {"items": []}
+    ids = _accepted(desk)
+    expected = {
+        "assignmentId": ids["assignmentId"],
+        "commissionId": ids["commissionId"],
+        "reference": "AF-21",
+        "latestReportRevision": None,
+    }
+    ready = agency.get(path)
+    assert ready.headers["cache-control"] == "no-store"
+    assert ready.json()["items"] == [expected]
+    assert desk.client_for(desk.reviewer).get(path).status_code == 403
+    assert desk.client_for(desk.client_user).get(path).status_code == 404
+    _grant(desk, desk.client_id, desk.client_user)
+    for user in (desk.client_user, desk.tester_user):
+        assert desk.client_for(user).get(path).status_code in (403, 404)
+    for revision in (1, 2):
+        generated = agency.post(
+            desk.path("/reports/generate"), json={"assignmentId": ids["assignmentId"]}
+        )
+        assert generated.status_code == 201, generated.text
+        assert agency.get(path).json()["items"] == [{**expected, "latestReportRevision": revision}]

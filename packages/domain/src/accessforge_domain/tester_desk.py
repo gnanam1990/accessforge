@@ -188,6 +188,8 @@ def validate_rubric(rubric: Any, *, step_ids: set[str]) -> dict[str, Any]:
         required_ids = sorted(set(required))
     else:
         raise BriefError("rubric.requiredStepIds must be a list of step ids")
+    if not required_ids:
+        raise BriefError("at least one required step must be specified")
     evidence = rubric.get("requiredEvidenceKinds", [])
     if not isinstance(evidence, list) or not all(isinstance(k, str) for k in evidence):
         raise BriefError("rubric.requiredEvidenceKinds must be a list of evidence kinds")
@@ -245,21 +247,23 @@ def brief_document(
     """
     if deadline is not None:
         parse_rfc3339_utc(deadline, field="deadline")
+    steps = validate_task_steps(task_steps)
+    normalized_rubric = validate_rubric(rubric, step_ids={step["stepId"] for step in steps})
+    permitted = validate_permitted_evidence(permitted_evidence)
+    if not set(normalized_rubric["requiredEvidenceKinds"]).issubset(permitted):
+        raise BriefError("required evidence must also be permitted by the brief")
     return {
         "consentTermsVersion": validate_consent_terms_version(consent_terms_version),
         "currency": validate_currency(currency),
         "deadline": deadline,
         "environment": validate_environment(environment),
         "feeMinor": validate_fee_minor(fee_minor),
-        "permittedEvidence": validate_permitted_evidence(permitted_evidence),
+        "permittedEvidence": permitted,
         "releaseDigest": validate_release_digest(release_digest),
         "releaseLabel": _validate_label(release_label),
-        "rubric": validate_rubric(
-            rubric,
-            step_ids={s["stepId"] for s in validate_task_steps(task_steps)},
-        ),
+        "rubric": normalized_rubric,
         "targetUrl": _validate_url(target_url),
-        "taskSteps": validate_task_steps(task_steps),
+        "taskSteps": steps,
     }
 
 
@@ -295,7 +299,7 @@ def derive_task_result(observations: dict[str, str], *, rubric: dict[str, Any]) 
     results = [observations.get(step_id) for step_id in required]
     if any(r in (StepResult.FAILED.value, StepResult.UNREACHABLE.value) for r in results):
         return TaskResult.FAILED
-    if all(r == StepResult.PASSED.value for r in results):
+    if results and all(r == StepResult.PASSED.value for r in results):
         return TaskResult.PASSED
     return TaskResult.INCONCLUSIVE
 

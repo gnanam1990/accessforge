@@ -1080,6 +1080,14 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     mutating: true,
     authenticated: true,
   },
+  'reportable_assignments': {
+    operationId: 'reportable_assignments',
+    method: 'GET',
+    path: '/v1/workspaces/{workspace_id}/tester-desk/reports/ready',
+    parameters: ['workspace_id'],
+    mutating: false,
+    authenticated: true,
+  },
   'retention_purge': {
     operationId: 'retention_purge',
     method: 'POST',
@@ -1408,6 +1416,7 @@ export const PATHS: readonly string[] = [
   '/v1/workspaces/{workspace_id}/tester-desk/finance/payables/{payable_id}',
   '/v1/workspaces/{workspace_id}/tester-desk/finance/payables/{payable_id}/reconcile',
   '/v1/workspaces/{workspace_id}/tester-desk/reports/generate',
+  '/v1/workspaces/{workspace_id}/tester-desk/reports/ready',
   '/v1/workspaces/{workspace_id}/tester-desk/retention/purge',
   '/v1/workspaces/{workspace_id}/tester-desk/review/assignments/{assignment_id}',
   '/v1/workspaces/{workspace_id}/tester-desk/review/assignments/{assignment_id}/attachments/{attachment_id}/content',

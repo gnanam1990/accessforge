@@ -1106,6 +1106,14 @@ OPERATIONS: dict[str, Operation] = {
         mutating=True,
         authenticated=True,
     ),
+    "reportable_assignments": Operation(
+        operation_id="reportable_assignments",
+        method="GET",
+        path="/v1/workspaces/{workspace_id}/tester-desk/reports/ready",
+        parameters=("workspace_id",),
+        mutating=False,
+        authenticated=True,
+    ),
     "retention_purge": Operation(
         operation_id="retention_purge",
         method="POST",
@@ -1436,6 +1444,7 @@ PATHS: frozenset[str] = frozenset(
         "/v1/workspaces/{workspace_id}/tester-desk/finance/payables/{payable_id}",
         "/v1/workspaces/{workspace_id}/tester-desk/finance/payables/{payable_id}/reconcile",
         "/v1/workspaces/{workspace_id}/tester-desk/reports/generate",
+        "/v1/workspaces/{workspace_id}/tester-desk/reports/ready",
         "/v1/workspaces/{workspace_id}/tester-desk/retention/purge",
         "/v1/workspaces/{workspace_id}/tester-desk/review/assignments/{assignment_id}",
         "/v1/workspaces/{workspace_id}/tester-desk/review/assignments/{assignment_id}/attachments/{attachment_id}/content",
