@@ -285,9 +285,7 @@ def compute_brief_hash(document: dict[str, Any]) -> str:
 # --- outcomes ---------------------------------------------------------------------------------
 
 
-def derive_task_result(
-    observations: dict[str, str], *, rubric: dict[str, Any]
-) -> TaskResult:
+def derive_task_result(observations: dict[str, str], *, rubric: dict[str, Any]) -> TaskResult:
     """The tested task's outcome, derived only from step observations.
 
     Complete-and-failed is a real result: the product broke, and the tester reported it. The value
@@ -327,9 +325,7 @@ def rubric_completeness(
     return missing
 
 
-def validate_observations(
-    observations: Any, *, step_ids: set[str]
-) -> list[dict[str, Any]]:
+def validate_observations(observations: Any, *, step_ids: set[str]) -> list[dict[str, Any]]:
     """One observation row per recorded step, human-attested only.
 
     Every entry must name a step the brief defines, a closed-vocabulary result, and
@@ -500,8 +496,10 @@ def compare_commissions(
                 "comparable"
             )
     if base.get("releaseLabel") == candidate.get("releaseLabel"):
-        caveats.append("both commissions pin the same release; a same-release comparison is a "
-                       "rerun, not a retest of a fix")
+        caveats.append(
+            "both commissions pin the same release; a same-release comparison is a "
+            "rerun, not a retest of a fix"
+        )
     if base.get("defectKey") and base.get("defectKey") == candidate.get("defectKey"):
         link = "SAME_DEFECT_RETEST"
     elif base.get("predecessorCommissionId") == candidate.get("commissionId") or candidate.get(
@@ -510,8 +508,9 @@ def compare_commissions(
         link = "LINKED_RETEST"
     else:
         link = "UNRELATED"
-        caveats.append("commissions are not linked by defect or predecessor; comparison is "
-                       "informational only")
+        caveats.append(
+            "commissions are not linked by defect or predecessor; comparison is informational only"
+        )
     return {
         "link": link,
         "caveats": caveats,
@@ -578,5 +577,4 @@ class CompensationAdapter(Protocol):
         payout_reference: str,
         idempotency_key: str,
         conn: Any = None,
-    ) -> DispatchOutcome:
-        ...
+    ) -> DispatchOutcome: ...

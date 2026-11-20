@@ -104,9 +104,7 @@ def desk(test_database_url: str) -> Desk:
     client_user, other_client_user = str(uuid4()), str(uuid4())
     tester_user, tester2_user, outsider = (str(uuid4()) for _ in range(3))
     with unscoped_connection(test_database_url) as conn:
-        conn.execute(
-            "INSERT INTO workspace(id,name) VALUES (%s,'Tester Desk test')", (workspace,)
-        )
+        conn.execute("INSERT INTO workspace(id,name) VALUES (%s,'Tester Desk test')", (workspace,))
         # Emails are globally unique in app_user, so they carry the run's suffix.
         for user, email in (
             (owner, f"lead+{workspace[:8]}@agency.example.test"),

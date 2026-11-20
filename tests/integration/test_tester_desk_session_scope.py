@@ -21,9 +21,7 @@ from conftest import Desk  # noqa: E402
 
 def _grant_viewer(desk: Desk, user_id: str) -> None:
     owner = desk.client_for(desk.owner)
-    granted = owner.post(
-        desk.path(f"/clients/{desk.client_id}/viewers"), json={"userId": user_id}
-    )
+    granted = owner.post(desk.path(f"/clients/{desk.client_id}/viewers"), json={"userId": user_id})
     assert granted.status_code == 201, granted.text
 
 
@@ -47,14 +45,10 @@ def test_session_names_tester_and_client_workspaces(desk: Desk) -> None:
     outsider = desk.client_for(desk.outsider_user)
     session = outsider.get("/v1/session")
     assert session.status_code == 200
-    assert all(
-        w["workspaceId"] != desk.workspace_id for w in session.json()["workspaces"]
-    )
+    assert all(w["workspaceId"] != desk.workspace_id for w in session.json()["workspaces"])
 
 
-def test_session_prefers_membership_over_tester_access(
-    desk: Desk, test_database_url: str
-) -> None:
+def test_session_prefers_membership_over_tester_access(desk: Desk, test_database_url: str) -> None:
     """A user who is both a member and a tester keeps the member role."""
     with workspace_connection(test_database_url, desk.workspace_id) as conn:
         conn.execute(

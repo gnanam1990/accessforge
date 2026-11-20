@@ -144,9 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     base = f"/v1/workspaces/{workspace}/tester-desk"
     terms = post(f"{base}/consent-terms", {"body": CONSENT_BODY}, 201)
     client = post(f"{base}/clients", {"name": "Client Co"}, 201)
-    post(
-        f"{base}/clients/{client['clientId']}/viewers", {"userId": ids["client"]}, 201
-    )
+    post(f"{base}/clients/{client['clientId']}/viewers", {"userId": ids["client"]}, 201)
     commission = post(
         f"{base}/commissions",
         {"clientId": client["clientId"], "reference": "AF-21", "brief": AF21_BRIEF},

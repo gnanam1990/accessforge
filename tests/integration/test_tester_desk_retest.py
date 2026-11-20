@@ -45,8 +45,11 @@ def _accepted_af21(desk: Desk) -> dict:
         desk.path(f"/tester/assignments/{aid}/draft"),
         json={
             "observations": [
-                _obs("s1"), _obs("s2"), _obs("s3"),
-                _obs("s4", "FAILED"), _obs("s5", "UNREACHABLE"),
+                _obs("s1"),
+                _obs("s2"),
+                _obs("s3"),
+                _obs("s4", "FAILED"),
+                _obs("s5", "UNREACHABLE"),
             ],
             "baseRevision": 0,
         },
@@ -60,9 +63,7 @@ def _accepted_af21(desk: Desk) -> dict:
             "contentBase64": base64.b64encode(b'{"e":1}').decode(),
         },
     )
-    submitted = tester.post(
-        desk.path(f"/tester/assignments/{aid}/submit"), json={}
-    )
+    submitted = tester.post(desk.path(f"/tester/assignments/{aid}/submit"), json={})
     desk.client_for(desk.reviewer).post(
         desk.path(f"/review/assignments/{aid}/decision"),
         json={

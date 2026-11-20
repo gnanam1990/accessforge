@@ -30,9 +30,7 @@ def _claimed_assignment(desk: Desk) -> dict:
     )
     assert created.status_code == 201, created.text
     commission = created.json()
-    published = agency.post(
-        desk.path(f"/commissions/{commission['commissionId']}/publish")
-    )
+    published = agency.post(desk.path(f"/commissions/{commission['commissionId']}/publish"))
     assert published.status_code == 200, published.text
     tester = desk.client_for(desk.tester_user)
     claimed = tester.post(
@@ -162,9 +160,7 @@ def test_permitted_attachment_round_trips_with_verified_digest(desk: Desk) -> No
     assert base64.b64decode(fetched.json()["contentBase64"]) == content
 
     # Progress reflects the rubric: no observations yet, so the draft blocks submit.
-    progress = tester.get(
-        desk.path(f"/tester/assignments/{assignment['assignmentId']}/progress")
-    )
+    progress = tester.get(desk.path(f"/tester/assignments/{assignment['assignmentId']}/progress"))
     assert progress.status_code == 200
     body = progress.json()
     assert body["submittable"] is False
@@ -184,9 +180,7 @@ def test_evidence_is_scoped_to_the_owning_tester(desk: Desk) -> None:
     # Another enrolled tester never claimed this assignment: no visibility at all.
     for resp in (other.get(draft_path), other.get(attach_path)):
         assert resp.status_code == 404
-    refused_write = other.put(
-        draft_path, json={"observations": [_obs("s1")], "baseRevision": 0}
-    )
+    refused_write = other.put(draft_path, json={"observations": [_obs("s1")], "baseRevision": 0})
     assert refused_write.status_code == 404
 
     # An unenrolled user is refused at the tester boundary entirely.
@@ -200,8 +194,6 @@ def test_observations_reject_automation_source(desk: Desk) -> None:
     draft_path = desk.path(f"/tester/assignments/{assignment['assignmentId']}/draft")
     bad = dict(_obs("s1"))
     bad["source"] = "TOOL_GENERATED"
-    refused = tester.put(
-        draft_path, json={"observations": [bad], "baseRevision": 0}
-    )
+    refused = tester.put(draft_path, json={"observations": [bad], "baseRevision": 0})
     assert refused.status_code == 409
     assert tester.get(draft_path).json()["observations"] == []

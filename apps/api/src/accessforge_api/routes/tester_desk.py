@@ -76,25 +76,17 @@ class ActorContext:
     if_match: int | None
 
 
-def _resolve_session_for_actor(
-    conn: psycopg.Connection[Any], request: Request
-) -> tuple[Any, str]:
+def _resolve_session_for_actor(conn: psycopg.Connection[Any], request: Request) -> tuple[Any, str]:
     request_id = _request_id(request)
     try:
         session = resolve_session(conn, session_token=request.cookies.get(SESSION_COOKIE))
     except Exception as exc:
-        raise ProblemDetail(
-            ProblemCode.NOT_AUTHENTICATED, str(exc), request_id=request_id
-        ) from exc
+        raise ProblemDetail(ProblemCode.NOT_AUTHENTICATED, str(exc), request_id=request_id) from exc
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         try:
-            verify_csrf(
-                session, method=request.method, csrf_token=request.headers.get(CSRF_HEADER)
-            )
+            verify_csrf(session, method=request.method, csrf_token=request.headers.get(CSRF_HEADER))
         except Exception as exc:
-            raise ProblemDetail(
-                ProblemCode.CSRF_REQUIRED, str(exc), request_id=request_id
-            ) from exc
+            raise ProblemDetail(ProblemCode.CSRF_REQUIRED, str(exc), request_id=request_id) from exc
     return session, request_id
 
 
@@ -110,9 +102,7 @@ def tester_context(
     a non-member gets 404 on workspace routes: the roster's existence is not public information.
     """
     session, request_id = _resolve_session_for_actor(conn, request)
-    enrollment = td.enrollment_for_user(
-        conn, workspace_id=workspace_id, user_id=session.user_id
-    )
+    enrollment = td.enrollment_for_user(conn, workspace_id=workspace_id, user_id=session.user_id)
     if enrollment is None:
         raise not_found()
     enforce_write_rate_limit(
@@ -172,13 +162,20 @@ def _refused(exc: Exception) -> ProblemDetail:
 
 @router.post("/clients", status_code=status.HTTP_201_CREATED)
 def create_client(
-    workspace_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     authorize(
-        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
-        body=body, allowed_fields=frozenset({"name"}),
+        conn,
+        request,
+        workspace_id,
+        Permission.TESTER_DESK_ADMIN,
+        body=body,
+        allowed_fields=frozenset({"name"}),
     )
     try:
         view = td.create_client(conn, workspace_id=workspace_id, name=str(body.get("name") or ""))
@@ -199,13 +196,21 @@ def list_clients(
 
 @router.post("/clients/{client_id}/viewers", status_code=status.HTTP_201_CREATED)
 def grant_viewer(
-    workspace_id: str, client_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    client_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
-        body=body, allowed_fields=frozenset({"userId"}),
+        conn,
+        request,
+        workspace_id,
+        Permission.TESTER_DESK_ADMIN,
+        body=body,
+        allowed_fields=frozenset({"userId"}),
     )
     as_identifier(client_id, what="client")
     try:
@@ -224,7 +229,11 @@ def grant_viewer(
 
 @router.delete("/clients/{client_id}/viewers/{user_id}")
 def revoke_viewer(
-    workspace_id: str, client_id: str, user_id: str, request: Request, response: Response,
+    workspace_id: str,
+    client_id: str,
+    user_id: str,
+    request: Request,
+    response: Response,
     conn: Conn,
 ) -> dict[str, Any]:
     authorize(conn, request, workspace_id, Permission.TESTER_DESK_ADMIN)
@@ -245,13 +254,20 @@ def revoke_viewer(
 
 @router.post("/consent-terms", status_code=status.HTTP_201_CREATED)
 def publish_terms(
-    workspace_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
-        body=body, allowed_fields=frozenset({"body"}),
+        conn,
+        request,
+        workspace_id,
+        Permission.TESTER_DESK_ADMIN,
+        body=body,
+        allowed_fields=frozenset({"body"}),
     )
     try:
         view = td.publish_consent_terms(
@@ -268,7 +284,10 @@ def publish_terms(
 
 @router.get("/consent-terms")
 def read_terms(
-    workspace_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     version: Annotated[int | None, Query(ge=1)] = None,
 ) -> dict[str, Any]:
     authorize(conn, request, workspace_id, Permission.TESTER_DESK_ADMIN)
@@ -339,13 +358,20 @@ def _extract_brief(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/commissions", status_code=status.HTTP_201_CREATED)
 def create_commission(
-    workspace_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.COMMISSION_AUTHOR,
-        body=body, allowed_fields=_COMMISSION_FIELDS,
+        conn,
+        request,
+        workspace_id,
+        Permission.COMMISSION_AUTHOR,
+        body=body,
+        allowed_fields=_COMMISSION_FIELDS,
     )
     brief = _extract_brief(body)
     try:
@@ -370,7 +396,10 @@ def create_commission(
 
 @router.get("/commissions")
 def list_commissions(
-    workspace_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     status: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
     authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
@@ -386,9 +415,7 @@ def read_commission(
     authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
     as_identifier(commission_id, what="commission")
     try:
-        view = td.read_commission(
-            conn, workspace_id=workspace_id, commission_id=commission_id
-        )
+        view = td.read_commission(conn, workspace_id=workspace_id, commission_id=commission_id)
     except LookupError:
         raise not_found() from None
     response.headers["Cache-Control"] = "no-store"
@@ -397,8 +424,12 @@ def read_commission(
 
 @router.get("/commissions/{commission_id}/briefs/{revision}")
 def read_brief(
-    workspace_id: str, commission_id: str, revision: int, request: Request,
-    response: Response, conn: Conn,
+    workspace_id: str,
+    commission_id: str,
+    revision: int,
+    request: Request,
+    response: Response,
+    conn: Conn,
 ) -> dict[str, Any]:
     """Reopen the exact pinned brief version (T-001)."""
     authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
@@ -419,13 +450,21 @@ def read_brief(
 
 @router.post("/commissions/{commission_id}/revisions", status_code=status.HTTP_201_CREATED)
 def author_revision(
-    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    commission_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.COMMISSION_AUTHOR,
-        body=body, allowed_fields=frozenset({"brief"}),
+        conn,
+        request,
+        workspace_id,
+        Permission.COMMISSION_AUTHOR,
+        body=body,
+        allowed_fields=frozenset({"brief"}),
     )
     as_identifier(commission_id, what="commission")
     brief = _extract_brief(body)
@@ -454,9 +493,7 @@ def publish_commission(
     authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
     as_identifier(commission_id, what="commission")
     try:
-        view = td.publish_commission(
-            conn, workspace_id=workspace_id, commission_id=commission_id
-        )
+        view = td.publish_commission(conn, workspace_id=workspace_id, commission_id=commission_id)
     except LookupError:
         raise not_found() from None
     except td.CommissionError as exc:
@@ -470,12 +507,18 @@ def publish_commission(
 
 @router.post("/testers", status_code=status.HTTP_201_CREATED)
 def enroll_tester(
-    workspace_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
+        conn,
+        request,
+        workspace_id,
+        Permission.TESTER_DESK_ADMIN,
         body=body,
         allowed_fields=frozenset(
             {"userId", "displayName", "capabilities", "payoutReference", "conflicts"}
@@ -509,13 +552,21 @@ def list_testers(
 
 @router.post("/testers/{tester_id}/status")
 def change_tester_status(
-    workspace_id: str, tester_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    tester_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     authorize(
-        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
-        body=body, allowed_fields=frozenset({"status", "reason"}),
+        conn,
+        request,
+        workspace_id,
+        Permission.TESTER_DESK_ADMIN,
+        body=body,
+        allowed_fields=frozenset({"status", "reason"}),
     )
     as_identifier(tester_id, what="tester")
     try:
@@ -577,7 +628,11 @@ def tester_offer_detail(
 
 @router.post("/tester/offers/{commission_id}/claim", status_code=status.HTTP_201_CREATED)
 def claim_offer(
-    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    commission_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
@@ -587,8 +642,7 @@ def claim_offer(
     if unexpected:
         raise ProblemDetail(
             ProblemCode.UNEXPECTED_FIELD,
-            f"the request body contains fields this route does not accept: "
-            f"{', '.join(unexpected)}",
+            f"the request body contains fields this route does not accept: {', '.join(unexpected)}",
         )
 
     def perform() -> dict[str, Any]:
@@ -693,7 +747,11 @@ def tester_draft(
 
 @router.put("/tester/assignments/{assignment_id}/draft")
 def save_draft(
-    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    assignment_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
@@ -703,8 +761,7 @@ def save_draft(
     if unexpected:
         raise ProblemDetail(
             ProblemCode.UNEXPECTED_FIELD,
-            f"the request body contains fields this route does not accept: "
-            f"{', '.join(unexpected)}",
+            f"the request body contains fields this route does not accept: {', '.join(unexpected)}",
         )
 
     def perform() -> dict[str, Any]:
@@ -738,7 +795,11 @@ def save_draft(
     status_code=status.HTTP_201_CREATED,
 )
 def upload_attachment(
-    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    assignment_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
@@ -748,8 +809,7 @@ def upload_attachment(
     if unexpected:
         raise ProblemDetail(
             ProblemCode.UNEXPECTED_FIELD,
-            f"the request body contains fields this route does not accept: "
-            f"{', '.join(unexpected)}",
+            f"the request body contains fields this route does not accept: {', '.join(unexpected)}",
         )
     encoded = body.get("contentBase64")
     if not isinstance(encoded, str):
@@ -806,16 +866,18 @@ def list_attachments(
         raise not_found() from None
     response.headers["Cache-Control"] = "no-store"
     return {
-        "items": td.list_attachments(
-            conn, workspace_id=workspace_id, assignment_id=assignment_id
-        )
+        "items": td.list_attachments(conn, workspace_id=workspace_id, assignment_id=assignment_id)
     }
 
 
 @router.get("/tester/assignments/{assignment_id}/attachments/{attachment_id}/content")
 def attachment_content(
-    workspace_id: str, assignment_id: str, attachment_id: str,
-    request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    assignment_id: str,
+    attachment_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
 ) -> dict[str, Any]:
     _, enrollment = tester_context(conn, request, workspace_id)
     as_identifier(assignment_id, what="assignment")
@@ -860,9 +922,7 @@ def assignment_progress(
             assignment_id=assignment_id,
             tester_id=enrollment["testerId"],
         )
-        view = td.evidence_progress(
-            conn, workspace_id=workspace_id, assignment_id=assignment_id
-        )
+        view = td.evidence_progress(conn, workspace_id=workspace_id, assignment_id=assignment_id)
     except LookupError:
         raise not_found() from None
     response.headers["Cache-Control"] = "no-store"
@@ -871,7 +931,11 @@ def assignment_progress(
 
 @router.post("/tester/assignments/{assignment_id}/submit")
 def submit_assignment(
-    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    assignment_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
@@ -925,9 +989,7 @@ def tester_submissions(
         raise not_found() from None
     response.headers["Cache-Control"] = "no-store"
     return {
-        "items": td.list_submissions(
-            conn, workspace_id=workspace_id, assignment_id=assignment_id
-        )
+        "items": td.list_submissions(conn, workspace_id=workspace_id, assignment_id=assignment_id)
     }
 
 
@@ -953,9 +1015,7 @@ def review_assignment(
     authorize(conn, request, workspace_id, Permission.COMMISSION_REVIEW)
     as_identifier(assignment_id, what="assignment")
     try:
-        view = td.read_assignment(
-            conn, workspace_id=workspace_id, assignment_id=assignment_id
-        )
+        view = td.read_assignment(conn, workspace_id=workspace_id, assignment_id=assignment_id)
     except LookupError:
         raise not_found() from None
     view.pop("brief", None) or None
@@ -978,8 +1038,12 @@ def review_assignment(
 
 @router.get("/review/assignments/{assignment_id}/attachments/{attachment_id}/content")
 def review_attachment_content(
-    workspace_id: str, assignment_id: str, attachment_id: str,
-    request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    assignment_id: str,
+    attachment_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
 ) -> dict[str, Any]:
     authorize(conn, request, workspace_id, Permission.COMMISSION_REVIEW)
     as_identifier(assignment_id, what="assignment")
@@ -1008,13 +1072,21 @@ def review_attachment_content(
 
 @router.post("/review/assignments/{assignment_id}/decision")
 def review_decision(
-    workspace_id: str, assignment_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    assignment_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.COMMISSION_REVIEW,
-        body=body, allowed_fields=_REVIEW_DECISION_FIELDS,
+        conn,
+        request,
+        workspace_id,
+        Permission.COMMISSION_REVIEW,
+        body=body,
+        allowed_fields=_REVIEW_DECISION_FIELDS,
     )
     as_identifier(assignment_id, what="assignment")
 
@@ -1067,9 +1139,7 @@ def read_payable(
     authorize(conn, request, workspace_id, Permission.COMPENSATION_RECONCILE)
     as_identifier(payable_id, what="payable")
     try:
-        view = td.read_payable(
-            conn, workspace_id=workspace_id, payable_id=payable_id
-        )
+        view = td.read_payable(conn, workspace_id=workspace_id, payable_id=payable_id)
     except LookupError:
         raise not_found() from None
     response.headers["Cache-Control"] = "no-store"
@@ -1078,13 +1148,21 @@ def read_payable(
 
 @router.post("/finance/payables/{payable_id}/reconcile")
 def reconcile_payable(
-    workspace_id: str, payable_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    payable_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.COMPENSATION_RECONCILE,
-        body=body, allowed_fields=_RECONCILE_FIELDS,
+        conn,
+        request,
+        workspace_id,
+        Permission.COMPENSATION_RECONCILE,
+        body=body,
+        allowed_fields=_RECONCILE_FIELDS,
     )
     as_identifier(payable_id, what="payable")
 
@@ -1151,13 +1229,20 @@ def tester_payable(
 
 @router.post("/reports/generate", status_code=status.HTTP_201_CREATED)
 def generate_report(
-    workspace_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.COMMISSION_AUTHOR,
-        body=body, allowed_fields=frozenset({"assignmentId"}),
+        conn,
+        request,
+        workspace_id,
+        Permission.COMMISSION_AUTHOR,
+        body=body,
+        allowed_fields=frozenset({"assignmentId"}),
     )
     as_identifier(str(body.get("assignmentId", "")), what="assignment")
 
@@ -1191,11 +1276,7 @@ def client_reports(
 ) -> dict[str, Any]:
     _, grants = client_context(conn, request, workspace_id)
     response.headers["Cache-Control"] = "no-store"
-    return {
-        "items": td.reports_for_client(
-            conn, workspace_id=workspace_id, client_ids=grants
-        )
-    }
+    return {"items": td.reports_for_client(conn, workspace_id=workspace_id, client_ids=grants)}
 
 
 @router.get("/client/reports/{report_id}")
@@ -1222,8 +1303,12 @@ def client_report(
 
 @router.get("/client/reports/{report_id}/attachments/{attachment_id}/content")
 def client_report_attachment(
-    workspace_id: str, report_id: str, attachment_id: str,
-    request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    report_id: str,
+    attachment_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
 ) -> dict[str, Any]:
     context, _ = client_context(conn, request, workspace_id)
     as_identifier(report_id, what="report")
@@ -1254,13 +1339,20 @@ def client_report_attachment(
 
 @router.post("/retention/purge")
 def retention_purge(
-    workspace_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     body = as_body(payload)
     context = authorize(
-        conn, request, workspace_id, Permission.TESTER_DESK_ADMIN,
-        body=body, allowed_fields=frozenset({"before"}),
+        conn,
+        request,
+        workspace_id,
+        Permission.TESTER_DESK_ADMIN,
+        body=body,
+        allowed_fields=frozenset({"before"}),
     )
     before = body.get("before")
     moment = None
@@ -1289,15 +1381,17 @@ def retention_purge(
 
 @router.get("/commissions/{commission_id}/compare")
 def compare_commissions(
-    workspace_id: str, commission_id: str, request: Request, response: Response, conn: Conn,
+    workspace_id: str,
+    commission_id: str,
+    request: Request,
+    response: Response,
+    conn: Conn,
     against: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
     authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
     as_identifier(commission_id, what="commission")
     if against is None or not against:
-        raise ProblemDetail(
-            ProblemCode.INVALID_INPUT, "the 'against' query parameter is required"
-        )
+        raise ProblemDetail(ProblemCode.INVALID_INPUT, "the 'against' query parameter is required")
     as_identifier(against, what="commission")
     try:
         view = td.compare_commissions(
@@ -1318,8 +1412,4 @@ def defect_commissions(
 ) -> dict[str, Any]:
     authorize(conn, request, workspace_id, Permission.COMMISSION_AUTHOR)
     response.headers["Cache-Control"] = "no-store"
-    return {
-        "items": td.linked_retests(
-            conn, workspace_id=workspace_id, defect_key=defect_key
-        )
-    }
+    return {"items": td.linked_retests(conn, workspace_id=workspace_id, defect_key=defect_key)}

@@ -29,16 +29,12 @@ def test_t001_publish_r18_and_reopen_the_exact_brief_version(desk: Desk) -> None
     assert commission["status"] == "DRAFT"
     assert commission["currentBriefRevision"] is None
 
-    published = agency.post(
-        desk.path(f"/commissions/{commission['commissionId']}/publish")
-    )
+    published = agency.post(desk.path(f"/commissions/{commission['commissionId']}/publish"))
     assert published.status_code == 200, published.text
     assert published.json()["status"] == "OPEN"
     assert published.json()["currentBriefRevision"] == 1
 
-    reopened = agency.get(
-        desk.path(f"/commissions/{commission['commissionId']}/briefs/1")
-    )
+    reopened = agency.get(desk.path(f"/commissions/{commission['commissionId']}/briefs/1"))
     assert reopened.status_code == 200
     brief = reopened.json()
     assert brief["revision"] == 1
@@ -77,9 +73,12 @@ def test_draft_reauthoring_then_reopen_keeps_revision_1(desk: Desk) -> None:
     assert revised.json()["feeMinor"] == 2500
 
     agency.post(desk.path(f"/commissions/{commission['commissionId']}/publish"))
-    assert agency.get(
-        desk.path(f"/commissions/{commission['commissionId']}")
-    ).json()["currentBriefRevision"] == 2
+    assert (
+        agency.get(desk.path(f"/commissions/{commission['commissionId']}")).json()[
+            "currentBriefRevision"
+        ]
+        == 2
+    )
 
     first = agency.get(desk.path(f"/commissions/{commission['commissionId']}/briefs/1"))
     assert first.status_code == 200 and first.json()["feeMinor"] == 2000
@@ -99,10 +98,13 @@ def test_commission_authorization_boundaries(desk: Desk) -> None:
     assert created.json()["code"] == "PERMISSION_DENIED"
 
     outsider = desk.client_for(desk.outsider_user)
-    assert outsider.post(
-        desk.path("/commissions"),
-        json={"clientId": desk.client_id, "reference": "AF-98", "brief": AF21_BRIEF},
-    ).status_code == 404
+    assert (
+        outsider.post(
+            desk.path("/commissions"),
+            json={"clientId": desk.client_id, "reference": "AF-98", "brief": AF21_BRIEF},
+        ).status_code
+        == 404
+    )
 
     maintainer = desk.client_for(desk.maintainer)
     made = maintainer.post(

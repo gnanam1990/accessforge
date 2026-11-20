@@ -252,13 +252,9 @@ def read_session(request: Request) -> dict[str, Any]:
         str(r["workspace_id"]): {"name": str(r["name"]), "role": str(r["role"])} for r in rows
     }
     for r in tester_rows:
-        workspaces.setdefault(
-            str(r["workspace_id"]), {"name": str(r["name"]), "role": "TESTER"}
-        )
+        workspaces.setdefault(str(r["workspace_id"]), {"name": str(r["name"]), "role": "TESTER"})
     for r in viewer_rows:
-        workspaces.setdefault(
-            str(r["workspace_id"]), {"name": str(r["name"]), "role": "CLIENT"}
-        )
+        workspaces.setdefault(str(r["workspace_id"]), {"name": str(r["name"]), "role": "CLIENT"})
 
     return {
         "userId": session.user_id,

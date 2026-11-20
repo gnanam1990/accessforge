@@ -59,9 +59,7 @@ def _require_uuid(value: str, what: str) -> str:
 # --- clients and viewers -----------------------------------------------------------------------
 
 
-def create_client(
-    conn: psycopg.Connection[Any], *, workspace_id: str, name: str
-) -> dict[str, Any]:
+def create_client(conn: psycopg.Connection[Any], *, workspace_id: str, name: str) -> dict[str, Any]:
     if not isinstance(name, str) or not (1 <= len(name.strip()) <= 200):
         raise CommissionError("client name must be 1-200 characters")
     client_id = str(uuid.uuid4())
@@ -73,8 +71,7 @@ def create_client(
     ).fetchone()
     if row is None:
         row = conn.execute(
-            "SELECT id, name, created_at FROM td_client "
-            "WHERE workspace_id=%s AND name=%s",
+            "SELECT id, name, created_at FROM td_client WHERE workspace_id=%s AND name=%s",
             (workspace_id, name.strip()),
         ).fetchone()
     assert row is not None
@@ -107,14 +104,20 @@ def grant_client_viewer(
 ) -> dict[str, Any]:
     _require_uuid(client_id, "client")
     _require_uuid(user_id, "user")
-    if conn.execute(
-        "SELECT id FROM td_client WHERE id=%s AND workspace_id=%s FOR SHARE",
-        (client_id, workspace_id),
-    ).fetchone() is None:
+    if (
+        conn.execute(
+            "SELECT id FROM td_client WHERE id=%s AND workspace_id=%s FOR SHARE",
+            (client_id, workspace_id),
+        ).fetchone()
+        is None
+    ):
         raise CommissionError("client unavailable")
-    if conn.execute(
-        "SELECT id FROM app_user WHERE id=%s AND disabled_at IS NULL", (user_id,)
-    ).fetchone() is None:
+    if (
+        conn.execute(
+            "SELECT id FROM app_user WHERE id=%s AND disabled_at IS NULL", (user_id,)
+        ).fetchone()
+        is None
+    ):
         raise CommissionError("user account unavailable")
     conn.execute(
         "INSERT INTO td_client_viewer (workspace_id, client_id, user_id, granted_by) "
@@ -150,11 +153,14 @@ def require_client_viewer(
     client_id: str,
     user_id: str,
 ) -> None:
-    if conn.execute(
-        "SELECT 1 FROM td_client_viewer WHERE workspace_id=%s AND client_id=%s AND user_id=%s "
-        "AND revoked_at IS NULL",
-        (workspace_id, client_id, user_id),
-    ).fetchone() is None:
+    if (
+        conn.execute(
+            "SELECT 1 FROM td_client_viewer WHERE workspace_id=%s AND client_id=%s AND user_id=%s "
+            "AND revoked_at IS NULL",
+            (workspace_id, client_id, user_id),
+        ).fetchone()
+        is None
+    ):
         raise ReportError("no client report access for this identity")
 
 
@@ -280,17 +286,21 @@ def create_commission(
     _require_uuid(client_id, "client")
     domain.validate_reference(reference)
     access_note = brief.get("accessNote")
-    document = domain.brief_document(
-        **{k: v for k, v in brief.items() if k != "accessNote"}
-    )
-    if conn.execute(
-        "SELECT id FROM td_client WHERE id=%s AND workspace_id=%s", (client_id, workspace_id)
-    ).fetchone() is None:
+    document = domain.brief_document(**{k: v for k, v in brief.items() if k != "accessNote"})
+    if (
+        conn.execute(
+            "SELECT id FROM td_client WHERE id=%s AND workspace_id=%s", (client_id, workspace_id)
+        ).fetchone()
+        is None
+    ):
         raise CommissionError("client unavailable")
-    if conn.execute(
-        "SELECT 1 FROM td_consent_terms WHERE workspace_id=%s AND version=%s",
-        (workspace_id, document["consentTermsVersion"]),
-    ).fetchone() is None:
+    if (
+        conn.execute(
+            "SELECT 1 FROM td_consent_terms WHERE workspace_id=%s AND version=%s",
+            (workspace_id, document["consentTermsVersion"]),
+        ).fetchone()
+        is None
+    ):
         raise CommissionError(
             f"consent terms version {document['consentTermsVersion']} is not published"
         )
@@ -323,9 +333,7 @@ def create_commission(
             ),
         )
     except psycopg.errors.UniqueViolation as exc:
-        raise CommissionError(
-            f"reference {reference!r} is already used in this workspace"
-        ) from exc
+        raise CommissionError(f"reference {reference!r} is already used in this workspace") from exc
     _insert_brief_revision(
         conn,
         workspace_id=workspace_id,
@@ -407,13 +415,14 @@ def author_brief_revision(
             "open a linked retest commission to change released terms"
         )
     access_note = brief.get("accessNote")
-    document = domain.brief_document(
-        **{k: v for k, v in brief.items() if k != "accessNote"}
-    )
-    if conn.execute(
-        "SELECT 1 FROM td_consent_terms WHERE workspace_id=%s AND version=%s",
-        (workspace_id, document["consentTermsVersion"]),
-    ).fetchone() is None:
+    document = domain.brief_document(**{k: v for k, v in brief.items() if k != "accessNote"})
+    if (
+        conn.execute(
+            "SELECT 1 FROM td_consent_terms WHERE workspace_id=%s AND version=%s",
+            (workspace_id, document["consentTermsVersion"]),
+        ).fetchone()
+        is None
+    ):
         raise CommissionError(
             f"consent terms version {document['consentTermsVersion']} is not published"
         )
@@ -467,8 +476,7 @@ def publish_commission(
     if latest is None:  # unreachable: creation always writes revision 1
         raise CommissionError("commission has no brief to publish")
     conn.execute(
-        "UPDATE td_commission SET status='OPEN', current_brief_revision=%s "
-        "WHERE id=%s",
+        "UPDATE td_commission SET status='OPEN', current_brief_revision=%s WHERE id=%s",
         (int(latest["revision"]), commission_id),
     )
     return read_commission(conn, workspace_id=workspace_id, commission_id=commission_id)
@@ -517,14 +525,14 @@ def _commission_view(
         "reference": row["reference"],
         "defectKey": row["defect_key"],
         "predecessorCommissionId": (
-            None if row["predecessor_commission_id"] is None
+            None
+            if row["predecessor_commission_id"] is None
             else str(row["predecessor_commission_id"])
         ),
         "status": row["status"],
         "currentBriefRevision": row["current_brief_revision"],
         "offerExpiresAt": (
-            None if row["offer_expires_at"] is None
-            else to_rfc3339_utc(row["offer_expires_at"])
+            None if row["offer_expires_at"] is None else to_rfc3339_utc(row["offer_expires_at"])
         ),
         "createdBy": str(row["created_by"]),
         "createdAt": to_rfc3339_utc(row["created_at"]),
@@ -558,9 +566,7 @@ def list_commissions(
             "ORDER BY created_at DESC LIMIT 200",
             (workspace_id, status),
         ).fetchall()
-    return [
-        _commission_view(conn, r, include_access_note=False) for r in rows
-    ]
+    return [_commission_view(conn, r, include_access_note=False) for r in rows]
 
 
 def expire_offers(conn: psycopg.Connection[Any], *, workspace_id: str) -> int:
@@ -610,9 +616,12 @@ def enroll_tester(
     declared = conflicts or []
     if not isinstance(declared, list) or not all(isinstance(c, str) for c in declared):
         raise EnrollmentError("conflicts must be a list of strings")
-    if conn.execute(
-        "SELECT id FROM app_user WHERE id=%s AND disabled_at IS NULL", (user_id,)
-    ).fetchone() is None:
+    if (
+        conn.execute(
+            "SELECT id FROM app_user WHERE id=%s AND disabled_at IS NULL", (user_id,)
+        ).fetchone()
+        is None
+    ):
         raise EnrollmentError("user account unavailable")
     tester_id = str(uuid.uuid4())
     row = conn.execute(
@@ -767,10 +776,9 @@ def claim_offer(
     ).fetchone()
     if brief_row is None:
         raise EnrollmentError("commission has no open brief")
-    expired = (
-        commission["offer_expires_at"] is not None
-        and commission["offer_expires_at"] <= datetime.now(UTC)
-    )
+    expired = commission["offer_expires_at"] is not None and commission[
+        "offer_expires_at"
+    ] <= datetime.now(UTC)
     conflicts = set(enrollment.get("conflicts") or [])
     try:
         domain.assert_eligible(
@@ -907,9 +915,7 @@ def withdraw_assignment(
     if row is None:
         raise LookupError("assignment unavailable")
     if row["status"] == "ACTIVE":
-        conn.execute(
-            "UPDATE td_assignment SET status='WITHDRAWN' WHERE id=%s", (assignment_id,)
-        )
+        conn.execute("UPDATE td_assignment SET status='WITHDRAWN' WHERE id=%s", (assignment_id,))
         conn.execute(
             "UPDATE td_commission SET status='OPEN' WHERE id=%s AND status='ASSIGNED' "
             "AND (offer_expires_at IS NULL OR offer_expires_at > clock_timestamp())",
@@ -949,8 +955,12 @@ def _lock_assignment_for_capture(
 
 def _draft_view(row: dict[str, Any] | None, *, assignment_id: str) -> dict[str, Any]:
     if row is None:
-        return {"assignmentId": assignment_id, "draftRevision": 0,
-                "observations": [], "updatedAt": None}
+        return {
+            "assignmentId": assignment_id,
+            "draftRevision": 0,
+            "observations": [],
+            "updatedAt": None,
+        }
     return {
         "assignmentId": str(row["assignment_id"]),
         "draftRevision": int(row["draft_revision"]),
@@ -1003,9 +1013,7 @@ def save_draft(
     ).fetchone()
     current = 0 if existing is None else int(existing["draft_revision"])
     if base_revision is not None and base_revision != current:
-        raise EvidenceError(
-            f"draft has moved to revision {current}; reload before writing over it"
-        )
+        raise EvidenceError(f"draft has moved to revision {current}; reload before writing over it")
     conn.execute(
         "INSERT INTO td_observation_draft "
         "(assignment_id, workspace_id, tester_id, observations, draft_revision, updated_at) "
@@ -1117,8 +1125,7 @@ def read_attachment(
     attachment_id: str,
 ) -> dict[str, Any]:
     row = conn.execute(
-        "SELECT * FROM td_evidence_attachment WHERE id=%s AND assignment_id=%s "
-        "AND workspace_id=%s",
+        "SELECT * FROM td_evidence_attachment WHERE id=%s AND assignment_id=%s AND workspace_id=%s",
         (attachment_id, assignment_id, workspace_id),
     ).fetchone()
     if row is None:
@@ -1136,8 +1143,7 @@ def attachment_content(
     """Metadata plus the persisted bytes. Recomputes the digest at read time so a corrupted row
     answers as an integrity failure rather than quietly wrong evidence (NFR-01)."""
     row = conn.execute(
-        "SELECT * FROM td_evidence_attachment WHERE id=%s AND assignment_id=%s "
-        "AND workspace_id=%s",
+        "SELECT * FROM td_evidence_attachment WHERE id=%s AND assignment_id=%s AND workspace_id=%s",
         (attachment_id, assignment_id, workspace_id),
     ).fetchone()
     if row is None:
@@ -1170,8 +1176,10 @@ def evidence_progress(
         revision=int(row["brief_revision"]),
     )
     draft = read_draft(conn, workspace_id=workspace_id, assignment_id=assignment_id)
-    kinds = {a["kind"] for a in list_attachments(conn, workspace_id=workspace_id,
-                                               assignment_id=assignment_id)}
+    kinds = {
+        a["kind"]
+        for a in list_attachments(conn, workspace_id=workspace_id, assignment_id=assignment_id)
+    }
     observations = {o["stepId"]: o["result"] for o in draft["observations"]}
     missing = domain.rubric_completeness(
         step_ids=[s["stepId"] for s in brief["taskSteps"]],
@@ -1236,9 +1244,7 @@ def submit_assignment(
         revision=int(assignment["brief_revision"]),
     )
     draft = read_draft(conn, workspace_id=workspace_id, assignment_id=assignment_id)
-    attachments = list_attachments(
-        conn, workspace_id=workspace_id, assignment_id=assignment_id
-    )
+    attachments = list_attachments(conn, workspace_id=workspace_id, assignment_id=assignment_id)
     observations = {o["stepId"]: o["result"] for o in draft["observations"]}
     missing = domain.rubric_completeness(
         step_ids=[s["stepId"] for s in brief["taskSteps"]],
@@ -1295,9 +1301,7 @@ def submit_assignment(
         ),
     ).fetchone()
     assert row is not None
-    conn.execute(
-        "UPDATE td_assignment SET status='UNDER_REVIEW' WHERE id=%s", (assignment_id,)
-    )
+    conn.execute("UPDATE td_assignment SET status='UNDER_REVIEW' WHERE id=%s", (assignment_id,))
     conn.execute(
         "UPDATE td_commission SET status='IN_REVIEW' WHERE id=%s "
         "AND status IN ('ASSIGNED','NEEDS_REVISION')",
@@ -1310,8 +1314,7 @@ def list_submissions(
     conn: psycopg.Connection[Any], *, workspace_id: str, assignment_id: str
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM td_submission WHERE assignment_id=%s AND workspace_id=%s "
-        "ORDER BY revision",
+        "SELECT * FROM td_submission WHERE assignment_id=%s AND workspace_id=%s ORDER BY revision",
         (assignment_id, workspace_id),
     ).fetchall()
     views = [_submission_view(r) for r in rows]
@@ -1347,9 +1350,7 @@ def _decision_view(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def review_queue(
-    conn: psycopg.Connection[Any], *, workspace_id: str
-) -> list[dict[str, Any]]:
+def review_queue(conn: psycopg.Connection[Any], *, workspace_id: str) -> list[dict[str, Any]]:
     """Assignments awaiting a reviewer decision, newest first."""
     rows = conn.execute(
         "SELECT a.*, c.reference FROM td_assignment a "
@@ -1365,9 +1366,7 @@ def review_queue(
             "testerId": str(r["tester_id"]),
             "briefRevision": int(r["brief_revision"]),
             "latestSubmission": (
-                latest_submission(
-                    conn, workspace_id=workspace_id, assignment_id=str(r["id"])
-                )
+                latest_submission(conn, workspace_id=workspace_id, assignment_id=str(r["id"]))
             ),
         }
         for r in rows
@@ -1399,12 +1398,9 @@ def decide_submission(
         raise LookupError("assignment unavailable")
     if assignment["status"] != "UNDER_REVIEW":
         raise ReviewError(
-            f"assignment is {assignment['status'].lower().replace('_', ' ')}; "
-            "nothing awaits review"
+            f"assignment is {assignment['status'].lower().replace('_', ' ')}; nothing awaits review"
         )
-    latest = latest_submission(
-        conn, workspace_id=workspace_id, assignment_id=assignment_id
-    )
+    latest = latest_submission(conn, workspace_id=workspace_id, assignment_id=assignment_id)
     if latest is None:
         raise ReviewError("assignment has no sealed submission")
     if submission_hash != latest["submissionHash"]:
@@ -1443,20 +1439,14 @@ def decide_submission(
     assert row is not None
 
     if decision_value == "ACCEPTED":
-        conn.execute(
-            "UPDATE td_assignment SET status='COMPLETED' WHERE id=%s", (assignment_id,)
-        )
+        conn.execute("UPDATE td_assignment SET status='COMPLETED' WHERE id=%s", (assignment_id,))
         conn.execute(
             "UPDATE td_commission SET status='ACCEPTED' WHERE id=%s",
             (assignment["commission_id"],),
         )
-        _create_payable_for_acceptance(
-            conn, workspace_id=workspace_id, assignment=assignment
-        )
+        _create_payable_for_acceptance(conn, workspace_id=workspace_id, assignment=assignment)
     else:
-        conn.execute(
-            "UPDATE td_assignment SET status='ACTIVE' WHERE id=%s", (assignment_id,)
-        )
+        conn.execute("UPDATE td_assignment SET status='ACTIVE' WHERE id=%s", (assignment_id,))
         conn.execute(
             "UPDATE td_commission SET status='NEEDS_REVISION' WHERE id=%s",
             (assignment["commission_id"],),
@@ -1530,9 +1520,7 @@ def _payable_view(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_payables(
-    conn: psycopg.Connection[Any], *, workspace_id: str
-) -> list[dict[str, Any]]:
+def list_payables(conn: psycopg.Connection[Any], *, workspace_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM td_payable WHERE workspace_id=%s ORDER BY created_at DESC LIMIT 200",
         (workspace_id,),
@@ -1689,9 +1677,7 @@ class LocalLedgerAdapter:
 
 
 def payout_workspace_id(conn: psycopg.Connection[Any]) -> str:
-    row = conn.execute(
-        "SELECT current_setting('accessforge.workspace_id', true) AS ws"
-    ).fetchone()
+    row = conn.execute("SELECT current_setting('accessforge.workspace_id', true) AS ws").fetchone()
     assert row is not None
     return str(row["ws"])
 
@@ -1778,9 +1764,7 @@ def generate_report(
         (assignment["commission_id"], workspace_id),
     ).fetchone()
     assert commission is not None
-    submission = latest_submission(
-        conn, workspace_id=workspace_id, assignment_id=assignment_id
-    )
+    submission = latest_submission(conn, workspace_id=workspace_id, assignment_id=assignment_id)
     if submission is None:
         raise ReportError("the assignment has no sealed submission")
     accepted = conn.execute(
@@ -1943,9 +1927,7 @@ def client_report_attachment(
     report = read_report_for_client(
         conn, workspace_id=workspace_id, report_id=report_id, user_id=user_id
     )
-    in_manifest = any(
-        a["attachmentId"] == attachment_id for a in report["body"]["attachments"]
-    )
+    in_manifest = any(a["attachmentId"] == attachment_id for a in report["body"]["attachments"])
     if not in_manifest:
         raise LookupError("attachment unavailable")
     return attachment_content(
@@ -2033,7 +2015,8 @@ def _comparison_input(
         ),
         "defectKey": row["defect_key"],
         "predecessorCommissionId": (
-            None if row["predecessor_commission_id"] is None
+            None
+            if row["predecessor_commission_id"] is None
             else str(row["predecessor_commission_id"])
         ),
         "environment": environment,
@@ -2051,9 +2034,7 @@ def compare_commissions(
     base_commission_id: str,
     candidate_commission_id: str,
 ) -> dict[str, Any]:
-    base = _comparison_input(
-        conn, workspace_id=workspace_id, commission_id=base_commission_id
-    )
+    base = _comparison_input(conn, workspace_id=workspace_id, commission_id=base_commission_id)
     candidate = _comparison_input(
         conn, workspace_id=workspace_id, commission_id=candidate_commission_id
     )
@@ -2064,8 +2045,7 @@ def linked_retests(
     conn: psycopg.Connection[Any], *, workspace_id: str, defect_key: str
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM td_commission WHERE workspace_id=%s AND defect_key=%s "
-        "ORDER BY created_at",
+        "SELECT * FROM td_commission WHERE workspace_id=%s AND defect_key=%s ORDER BY created_at",
         (workspace_id, defect_key),
     ).fetchall()
     return [_commission_view(conn, r, include_access_note=False) for r in rows]

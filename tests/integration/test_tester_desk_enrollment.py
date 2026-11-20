@@ -21,9 +21,7 @@ def _published_af21(desk: Desk) -> dict:
     )
     assert created.status_code == 201, created.text
     commission = created.json()
-    published = agency.post(
-        desk.path(f"/commissions/{commission['commissionId']}/publish")
-    )
+    published = agency.post(desk.path(f"/commissions/{commission['commissionId']}/publish"))
     assert published.status_code == 200, published.text
     return published.json()
 
@@ -48,9 +46,7 @@ def test_t003_consenting_matching_tester_receives_the_assignment(desk: Desk) -> 
     # The list pins the consent text too: a tester cannot be asked to accept
     # terms the inbox never shows them.
     listed = next(
-        o
-        for o in offers.json()["items"]
-        if o["commissionId"] == commission["commissionId"]
+        o for o in offers.json()["items"] if o["commissionId"] == commission["commissionId"]
     )
     assert listed["consentTerms"]["version"] == 1
     assert "consent" in listed["consentTerms"]["body"].lower()
@@ -73,9 +69,7 @@ def test_t003_consenting_matching_tester_receives_the_assignment(desk: Desk) -> 
     assert assignment["brief"]["accessNote"] == AF21_BRIEF["accessNote"]
 
     mine = tester.get(desk.path("/tester/assignments"))
-    assert any(
-        a["assignmentId"] == assignment["assignmentId"] for a in mine.json()["items"]
-    )
+    assert any(a["assignmentId"] == assignment["assignmentId"] for a in mine.json()["items"])
 
 
 def test_t004_race_two_claims_only_the_winner_reads_credentials(desk: Desk) -> None:
@@ -86,14 +80,10 @@ def test_t004_race_two_claims_only_the_winner_reads_credentials(desk: Desk) -> N
         return _claim(desk, user, commission["commissionId"]).status_code
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(
-            pool.map(claim_as, [desk.tester_user, desk.tester2_user])
-        )
+        results = list(pool.map(claim_as, [desk.tester_user, desk.tester2_user]))
     assert sorted(results) == [201, 409], results
 
-    winner_user = (
-        desk.tester_user if results[0] == 201 else desk.tester2_user
-    )
+    winner_user = desk.tester_user if results[0] == 201 else desk.tester2_user
     loser_user = desk.tester2_user if winner_user == desk.tester_user else desk.tester_user
 
     winner = desk.client_for(winner_user)
@@ -109,10 +99,7 @@ def test_t004_race_two_claims_only_the_winner_reads_credentials(desk: Desk) -> N
     # A guessed assignment id yields nothing: not the credentials, not the record.
     assert loser.get(desk.path(f"/tester/assignments/{assignment_id}")).status_code == 404
     # And the offer is gone from the loser's scoped view entirely.
-    assert (
-        loser.get(desk.path(f"/tester/offers/{commission['commissionId']}")).status_code
-        == 404
-    )
+    assert loser.get(desk.path(f"/tester/offers/{commission['commissionId']}")).status_code == 404
 
 
 def test_t002_pinned_terms_survive_attempted_change(desk: Desk) -> None:
@@ -142,9 +129,7 @@ def test_t002_pinned_terms_survive_attempted_change(desk: Desk) -> None:
 
     # Re-read after the attempts: the pinned brief still says 20.00 USD.
     winner = desk.client_for(desk.tester_user)
-    reread = winner.get(
-        desk.path(f"/tester/assignments/{assignment['assignmentId']}")
-    )
+    reread = winner.get(desk.path(f"/tester/assignments/{assignment['assignmentId']}"))
     assert reread.json()["brief"]["feeMinor"] == 2000
     assert reread.json()["brief"]["currency"] == "USD"
     assert reread.json()["brief"]["briefHash"] == assignment["briefHash"]

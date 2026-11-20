@@ -14,7 +14,6 @@ import pytest
 pytestmark = pytest.mark.integration
 
 from accessforge_persistence import tester_desk as td  # noqa: E402
-from accessforge_persistence import workspace_connection  # noqa: E402
 from conftest import AF21_BRIEF, Desk  # noqa: E402
 
 
@@ -27,8 +26,12 @@ def test_pilot_af21_full_journey(desk: Desk) -> None:
     # 1. Agency commissions AF-21: r18, five-step checkout, 20.00 USD.
     created = agency.post(
         desk.path("/commissions"),
-        json={"clientId": desk.client_id, "reference": "AF-21", "brief": AF21_BRIEF,
-              "defectKey": "focus-trap-s4"},
+        json={
+            "clientId": desk.client_id,
+            "reference": "AF-21",
+            "brief": AF21_BRIEF,
+            "defectKey": "focus-trap-s4",
+        },
     )
     assert created.status_code == 201, created.text
     commission = created.json()
@@ -51,8 +54,13 @@ def test_pilot_af21_full_journey(desk: Desk) -> None:
 
     # 3. Tester performs the journey: step four traps focus, step five unreachable.
     obs = [
-        {"stepId": s, "result": r, "notes": n, "source": "HUMAN_MANUAL",
-         "observedAt": "2026-11-20T10:00:00Z"}
+        {
+            "stepId": s,
+            "result": r,
+            "notes": n,
+            "source": "HUMAN_MANUAL",
+            "observedAt": "2026-11-20T10:00:00Z",
+        }
         for s, r, n in [
             ("s1", "PASSED", "opened fine"),
             ("s2", "PASSED", "contact form ok"),
@@ -68,16 +76,18 @@ def test_pilot_af21_full_journey(desk: Desk) -> None:
     assert saved.status_code == 200
 
     # Restart/recovery: a brand-new session recovers the exact draft (NFR-01).
-    resumed = desk.client_for(desk.tester_user).get(
-        desk.path(f"/tester/assignments/{aid}/draft"))
+    resumed = desk.client_for(desk.tester_user).get(desk.path(f"/tester/assignments/{aid}/draft"))
     assert len(resumed.json()["observations"]) == 5
 
     trace = b'{"events":[{"step":"s4","action":"focus","result":"trap"}]}'
     uploaded = tester.post(
         desk.path(f"/tester/assignments/{aid}/attachments"),
-        json={"kind": "ACTION_TRACE", "contentType": "application/json",
-              "filename": "focus-trace.json",
-              "contentBase64": base64.b64encode(trace).decode()},
+        json={
+            "kind": "ACTION_TRACE",
+            "contentType": "application/json",
+            "filename": "focus-trace.json",
+            "contentBase64": base64.b64encode(trace).decode(),
+        },
     )
     assert uploaded.status_code == 201
 
@@ -89,16 +99,19 @@ def test_pilot_af21_full_journey(desk: Desk) -> None:
     # 5. Agency reviewer accepts the evidence (failed task still earns acceptance).
     decision = reviewer.post(
         desk.path(f"/review/assignments/{aid}/decision"),
-        json={"submissionDigest": submitted.json()["submissionHash"],
-              "decision": "ACCEPTED",
-              "justification": "complete, readable evidence of the s4 focus trap"},
+        json={
+            "submissionDigest": submitted.json()["submissionHash"],
+            "decision": "ACCEPTED",
+            "justification": "complete, readable evidence of the s4 focus trap",
+        },
     )
     assert decision.status_code == 200
 
     # 6. Payable minted exactly once -- then the "payout adapter is disconnected":
     #    no dispatch runs, so the payable stays INTENT while accepted work remains visible.
     payable = [
-        p for p in finance.get(desk.path("/finance/payables")).json()["items"]
+        p
+        for p in finance.get(desk.path("/finance/payables")).json()["items"]
         if p["assignmentId"] == aid
     ][0]
     assert payable["status"] == "INTENT"
@@ -108,10 +121,10 @@ def test_pilot_af21_full_journey(desk: Desk) -> None:
     assert report.status_code == 201, report.text
     report_id = report.json()["reportId"]
     granted = agency.post(
-        desk.path(f"/clients/{desk.client_id}/viewers"), json={"userId": desk.client_user})
+        desk.path(f"/clients/{desk.client_id}/viewers"), json={"userId": desk.client_user}
+    )
     assert granted.status_code == 201
-    client_view = desk.client_for(desk.client_user).get(
-        desk.path(f"/client/reports/{report_id}"))
+    client_view = desk.client_for(desk.client_user).get(desk.path(f"/client/reports/{report_id}"))
     assert client_view.status_code == 200
     assert client_view.json()["body"]["taskResult"] == "FAILED"
     # The payable is still pending -- disconnect left accepted findings fully available (T-016).
@@ -120,22 +133,29 @@ def test_pilot_af21_full_journey(desk: Desk) -> None:
 
     # 7. Adapter reconnects: dispatch settles exactly once through the local ledger.
     results = td.run_payable_dispatch(
-        desk.database_url, workspace_id=desk.workspace_id,
+        desk.database_url,
+        workspace_id=desk.workspace_id,
         adapter=td.LocalLedgerAdapter(),
     )
     ours = [r for r in results if r.get("assignmentId") == aid]
     assert len(ours) == 1 and ours[0]["status"] == "SETTLED"
-    assert td.run_payable_dispatch(
-        desk.database_url, workspace_id=desk.workspace_id,
-        adapter=td.LocalLedgerAdapter()) == []
+    assert (
+        td.run_payable_dispatch(
+            desk.database_url, workspace_id=desk.workspace_id, adapter=td.LocalLedgerAdapter()
+        )
+        == []
+    )
 
     # 8. Follow-up release r19 gets a fresh linked retest -- nothing inherits r18's verdict.
     r19 = agency.post(
         desk.path("/commissions"),
-        json={"clientId": desk.client_id, "reference": "AF-22",
-              "brief": dict(AF21_BRIEF, releaseLabel="r19", releaseDigest="b" * 64),
-              "defectKey": "focus-trap-s4",
-              "predecessorCommissionId": commission["commissionId"]},
+        json={
+            "clientId": desk.client_id,
+            "reference": "AF-22",
+            "brief": dict(AF21_BRIEF, releaseLabel="r19", releaseDigest="b" * 64),
+            "defectKey": "focus-trap-s4",
+            "predecessorCommissionId": commission["commissionId"],
+        },
     )
     assert r19.status_code == 201
     agency.post(desk.path(f"/commissions/{r19.json()['commissionId']}/publish"))

@@ -39,8 +39,11 @@ def _accepted(desk: Desk) -> dict:
         desk.path(f"/tester/assignments/{aid}/draft"),
         json={
             "observations": [
-                _obs("s1"), _obs("s2"), _obs("s3"),
-                _obs("s4", "FAILED"), _obs("s5", "UNREACHABLE"),
+                _obs("s1"),
+                _obs("s2"),
+                _obs("s3"),
+                _obs("s4", "FAILED"),
+                _obs("s5", "UNREACHABLE"),
             ],
             "baseRevision": 0,
         },
@@ -54,9 +57,7 @@ def _accepted(desk: Desk) -> dict:
             "contentBase64": base64.b64encode(b'{"focus":["s4-trap"]}').decode(),
         },
     )
-    submitted = tester.post(
-        desk.path(f"/tester/assignments/{aid}/submit"), json={}
-    )
+    submitted = tester.post(desk.path(f"/tester/assignments/{aid}/submit"), json={})
     desk.client_for(desk.reviewer).post(
         desk.path(f"/review/assignments/{aid}/decision"),
         json={
@@ -74,9 +75,7 @@ def _accepted(desk: Desk) -> dict:
 
 def _grant(desk: Desk, client_id: str, user_id: str) -> None:
     agency = desk.client_for(desk.owner)
-    granted = agency.post(
-        desk.path(f"/clients/{client_id}/viewers"), json={"userId": user_id}
-    )
+    granted = agency.post(desk.path(f"/clients/{client_id}/viewers"), json={"userId": user_id})
     assert granted.status_code == 201, granted.text
 
 
@@ -136,18 +135,14 @@ def test_t012_other_client_identity_cannot_fetch_attachment(desk: Desk) -> None:
 
     report_path = desk.path(f"/client/reports/{report['reportId']}")
     assert other.get(report_path).status_code == 404
-    attachment = other.get(
-        f"{report_path}/attachments/{ids['attachmentId']}/content"
-    )
+    attachment = other.get(f"{report_path}/attachments/{ids['attachmentId']}/content")
     assert attachment.status_code == 404
     # Their own grant works; the report list only shows their client's reports.
     assert other.get(desk.path("/client/reports")).json()["items"] == []
 
     # The granted client fetches the bytes and the digest verifies.
     client = desk.client_for(desk.client_user)
-    fetched = client.get(
-        f"{report_path}/attachments/{ids['attachmentId']}/content"
-    )
+    fetched = client.get(f"{report_path}/attachments/{ids['attachmentId']}/content")
     assert fetched.status_code == 200
     assert base64.b64decode(fetched.json()["contentBase64"]) == b'{"focus":["s4-trap"]}'
     # The original filename is redacted from the client response.
@@ -185,8 +180,7 @@ def test_report_only_exists_for_accepted_work_and_retention_removes_bytes(
     assert len(reports) == 1
     gone = client.get(
         desk.path(
-            f"/client/reports/{reports[0]['reportId']}"
-            f"/attachments/{ids['attachmentId']}/content"
+            f"/client/reports/{reports[0]['reportId']}/attachments/{ids['attachmentId']}/content"
         )
     )
     assert gone.status_code == 404

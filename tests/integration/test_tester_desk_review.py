@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 
 import pytest
 
@@ -139,8 +138,11 @@ def test_t008_obsolete_submission_digest_conflicts(desk: Desk) -> None:
         desk.path(f"/tester/assignments/{assignment['assignmentId']}/draft"),
         json={
             "observations": [
-                _obs("s1"), _obs("s2"), _obs("s3"),
-                _obs("s4", "FAILED"), _obs("s5", "UNREACHABLE"),
+                _obs("s1"),
+                _obs("s2"),
+                _obs("s3"),
+                _obs("s4", "FAILED"),
+                _obs("s5", "UNREACHABLE"),
             ],
             "baseRevision": 1,
         },
@@ -243,9 +245,7 @@ def test_review_requires_the_review_role(desk: Desk) -> None:
     assignment = _claimed_assignment(desk)
     _complete_failed_journey(desk, assignment["assignmentId"])
     tester = desk.client_for(desk.tester_user)
-    tester.post(
-        desk.path(f"/tester/assignments/{assignment['assignmentId']}/submit"), json={}
-    )
+    tester.post(desk.path(f"/tester/assignments/{assignment['assignmentId']}/submit"), json={})
     # The tester who owns the work is not a reviewer.
     own_queue = tester.get(desk.path("/review/queue"))
     assert own_queue.status_code in (403, 404)
@@ -260,8 +260,7 @@ def test_review_requires_the_review_role(desk: Desk) -> None:
     )
     denied = tester.get(
         desk.path(
-            f"/review/assignments/{assignment['assignmentId']}"
-            f"/attachments/{attachment_id}/content"
+            f"/review/assignments/{assignment['assignmentId']}/attachments/{attachment_id}/content"
         )
     )
     assert denied.status_code in (403, 404)

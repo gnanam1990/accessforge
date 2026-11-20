@@ -42,8 +42,11 @@ def _accepted_assignment(desk: Desk) -> dict:
         desk.path(f"/tester/assignments/{assignment_id}/draft"),
         json={
             "observations": [
-                _obs("s1"), _obs("s2"), _obs("s3"),
-                _obs("s4", "FAILED"), _obs("s5", "UNREACHABLE"),
+                _obs("s1"),
+                _obs("s2"),
+                _obs("s3"),
+                _obs("s4", "FAILED"),
+                _obs("s5", "UNREACHABLE"),
             ],
             "baseRevision": 0,
         },
@@ -57,9 +60,7 @@ def _accepted_assignment(desk: Desk) -> dict:
             "contentBase64": base64.b64encode(b'{"e":1}').decode(),
         },
     )
-    submitted = tester.post(
-        desk.path(f"/tester/assignments/{assignment_id}/submit"), json={}
-    )
+    submitted = tester.post(desk.path(f"/tester/assignments/{assignment_id}/submit"), json={})
     assert submitted.status_code == 200
     reviewer = desk.client_for(desk.reviewer)
     decision = reviewer.post(
@@ -154,9 +155,7 @@ def test_t010_dispatched_payable_never_dispatches_again(desk: Desk) -> None:
             return domain.DispatchOutcome(status="SETTLED", provider_reference="spy:1")
 
     spy = SpyAdapter()
-    td.run_payable_dispatch(
-        desk.database_url, workspace_id=desk.workspace_id, adapter=spy
-    )
+    td.run_payable_dispatch(desk.database_url, workspace_id=desk.workspace_id, adapter=spy)
     assert spy.calls == 0  # nothing in INTENT: the stuck payable is not retried
 
     stuck = finance.get(desk.path(f"/finance/payables/{payable['payableId']}")).json()
