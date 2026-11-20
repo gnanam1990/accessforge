@@ -1,7 +1,7 @@
 {
   "project": "AccessForge Tester Desk",
   "packVersion": "1.0",
-  "testedSha": "28c9aa3",
+  "testedSha": "5435920",
   "targetBranch": "devin/accessforge-tester-desk",
   "modules": [
     {
@@ -116,17 +116,20 @@
       "state": "accepted-local",
       "owner": "devin (SWE-2 High, local)",
       "commands": [
-        "uv run pytest tests/integration/ -k tester_desk -> 32 passed, 1468 deselected (exit 0)",
+        "uv run pytest tests/integration/ -k tester_desk -> 37 passed, 1468 deselected (exit 0)",
         "uv run mypy apps/api/src -> no issues in 42 source files (exit 0, CI parity)",
-        "cd apps/web && npx vitest run -> 30 files / 488 tests passed (exit 0)",
-        "npx tsc --noEmit -> new files clean; pre-existing @types/node gap in unrelated tooling files"
+        "cd apps/web && npx vitest run --maxWorkers=2 -> 30 files / 488 tests passed (exit 0; bounded workers, see BROWSER.md)",
+        "npx tsc --noEmit -> new files clean; pre-existing @types/node gap in unrelated tooling files",
+        "node tools/tester-desk-browser/check.mjs -> 38/38 checks passed (exit 0; sandbox adds AF_BROWSER_ARGS=\"--single-process --no-sandbox\")"
       ],
       "evidence": [
         "T-015 UI: capture screen shows FAILED task + ACCEPTED decision + human observation (testerDesk.test.tsx)",
         "T-016 UI+pilot: INTENT payable renders PENDING DISPATCH while ACCEPTED findings stay available",
-        "pilot test: full AF-21 scene via real API entry points incl. restart draft recovery + r19 UNTESTED retest"
+        "pilot test: full AF-21 scene via real API entry points incl. restart draft recovery + r19 UNTESTED retest",
+        "real-browser proof: tools/tester-desk-browser/check.mjs, 38 checks; redacted run record at tools/tester-desk-browser/evidence/2026-11-20T07-34-08/",
+        "browser-found product fixes: session role union + own-row SELECT RLS (0081), role-aware workspace landing + nav filtering, consent terms pinned in offer list, evidence-attachment UI, 320px reflow fix"
       ],
-      "nextAction": "External gates open: human tester w/ VoiceOver+Safari, live payout provider, agency test URL, real-browser E2E."
+      "nextAction": "External gates open: human tester w/ VoiceOver+Safari, live payout provider, agency test URL. Browser proof: replay node check.mjs on host per BROWSER.md."
     }
   ]
 }

@@ -37,6 +37,8 @@ export interface Offer {
     readonly taskSteps: readonly { stepId: string; title: string }[]
     readonly environment: Record<string, string>
     readonly consentTermsVersion: number
+    readonly permittedEvidence: readonly string[]
+    readonly rubric: { requiredEvidenceKinds?: readonly string[] }
   }
   readonly consentTerms?: { body: string }
 }
@@ -78,6 +80,17 @@ export interface Submission {
     readonly decision: 'ACCEPTED' | 'NEEDS_REVISION'
     readonly justification: string
   } | null
+}
+
+export interface Attachment {
+  readonly attachmentId: string
+  readonly assignmentId: string
+  readonly kind: string
+  readonly contentType: string
+  readonly filename: string
+  readonly sha256: string
+  readonly byteSize: number
+  readonly createdAt: string
 }
 
 export interface Payable {
@@ -192,6 +205,19 @@ export const listSubmissions = (c: ApiClient, ws: string, assignmentId: string, 
 export const submit = (c: ApiClient, ws: string, assignmentId: string, key: string) =>
   c.request<Submission>(`${base(ws)}/tester/assignments/${assignmentId}/submit`, {
     method: 'POST', body: {}, idempotencyKey: key,
+  })
+
+export const listAttachments = (c: ApiClient, ws: string, assignmentId: string, signal: AbortSignal) =>
+  c.request<{ items: Attachment[] }>(`${base(ws)}/tester/assignments/${assignmentId}/attachments`, { signal })
+
+export const uploadAttachment = (
+  c: ApiClient, ws: string, assignmentId: string,
+  kind: string, contentType: string, filename: string, contentBase64: string, key: string,
+) =>
+  c.request<Attachment>(`${base(ws)}/tester/assignments/${assignmentId}/attachments`, {
+    method: 'POST',
+    body: { kind, contentType, filename, contentBase64 },
+    idempotencyKey: key,
   })
 
 export const getPayable = (c: ApiClient, ws: string, assignmentId: string, signal: AbortSignal) =>

@@ -543,8 +543,16 @@ def tester_offers(
 ) -> dict[str, Any]:
     _, enrollment = tester_context(conn, request, workspace_id)
     response.headers["Cache-Control"] = "no-store"
-    return {"items": td.offers_for_tester(conn, workspace_id=workspace_id,
-                                          enrollment=enrollment)}
+    items = td.offers_for_tester(conn, workspace_id=workspace_id, enrollment=enrollment)
+    for offer in items:
+        # Pin the terms text on every offer: a tester cannot be asked to accept
+        # consent the inbox never shows them.
+        offer["consentTerms"] = td.consent_terms(
+            conn,
+            workspace_id=workspace_id,
+            version=offer["brief"]["consentTermsVersion"],
+        )
+    return {"items": items}
 
 
 @router.get("/tester/offers/{commission_id}")

@@ -139,14 +139,27 @@ const shot = async (page, name) => {
 }
 
 const signIn = async (page, email) => {
-  // A real sign-in through the form, not a cookie transplant.
+  // A real sign-in through the form, not a cookie transplant. Wait for the session POST to land
+  // and for the signed-in chrome to render: a following page.goto can cancel an in-flight POST
+  // and leave the app showing the sign-in form again.
   await page.getByLabel('Email address').fill(email)
+  const created = page.waitForResponse(
+    (r) => r.url().includes('/v1/sessions') && r.request().method() === 'POST' && r.status() === 201,
+    { timeout: 20000 },
+  )
   await page.getByRole('button', { name: 'Sign in' }).press('Enter')
+  await created
+  await page.getByRole('button', { name: 'Sign out' }).waitFor({ timeout: 20000 })
 }
 
 const signOut = async (page) => {
+  const ended = page.waitForResponse(
+    (r) => r.url().includes('/v1/sessions') && r.request().method() === 'DELETE',
+    { timeout: 20000 },
+  )
   await page.getByRole('button', { name: 'Sign out' }).click()
-  await page.getByLabel('Email address').waitFor({ timeout: 15000 })
+  await ended.catch(() => {})
+  await page.getByLabel('Email address').waitFor({ timeout: 20000 })
 }
 
 /** Walk Tab from the top of the page, recording the focus path. */
@@ -188,6 +201,9 @@ const apiSignIn = async (apiBase, email) => {
   const csrf = /accessforge_csrf=([^;]+)/.exec(cookie)?.[1] ?? ''
   return { cookie, csrf }
 }
+
+const apiGet = async (apiBase, path, session) =>
+  fetch(`${apiBase}${path}`, { headers: { cookie: session.cookie } })
 
 const apiPost = async (apiBase, path, session, body) => {
   const res = await fetch(`${apiBase}${path}`, {
@@ -348,6 +364,10 @@ const main = async () => {
     const claimButton = page.getByRole('button', { name: 'Claim this assignment' })
     record('claim disabled before consent', await claimButton.isDisabled())
     await offer.locator('details > summary').click()
+    record(
+      'pinned consent terms are readable before accepting',
+      (await offer.locator('details').textContent())?.includes('declared assistive') === true,
+    )
     const consentBox = page.getByRole('checkbox', {
       name: 'I read and accept the consent terms for this assignment',
     })
@@ -415,11 +435,44 @@ const main = async () => {
     record('unreachable step also persists', await s5after.isChecked())
     await shot(page, '06-draft-restored')
 
-    // -- 5. 320px keyboard accessibility ---------------------------------------
+    // -- 5. attach the required ACTION_TRACE evidence through the UI -----------
+    const tracePath = join(EVIDENCE_DIR, 'action-trace.json')
+    writeFileSync(tracePath, JSON.stringify({
+      kind: 'keyboard-action-trace',
+      release: 'r18',
+      steps: [
+        { stepId: 's4', event: 'focus-trap', detail: 'Tab cycled inside the shipping iframe' },
+        { stepId: 's5', event: 'unreachable', detail: 'no forward keyboard path' },
+      ],
+    }))
+    await page.getByLabel('Evidence kind').selectOption('ACTION_TRACE')
+    await page.getByLabel('Evidence file').setInputFiles(tracePath)
+    await page.getByRole('button', { name: 'Attach evidence' }).click()
+    const traceRow = page.getByRole('row', { name: /action-trace\.json/ })
+    await traceRow.waitFor()
+    record('ACTION_TRACE evidence attaches via UI', await traceRow.isVisible())
+    await shot(page, '06b-evidence-attached')
+
+    // -- 6. 320px keyboard accessibility ---------------------------------------
     await page.setViewportSize({ width: 320, height: 800 })
     await page.waitForTimeout(300)
+    const offenders = await page.evaluate(() => {
+      const limit = document.documentElement.clientWidth
+      const hits = []
+      for (const el of document.querySelectorAll('body *')) {
+        const r = el.getBoundingClientRect()
+        if (r.right > limit + 1 || r.left < -1) {
+          hits.push(
+            `${el.tagName.toLowerCase()}${el.className ? '.' + String(el.className).split(' ').join('.') : ''}` +
+            ` right=${Math.round(r.right)} left=${Math.round(r.left)}`,
+          )
+        }
+      }
+      return hits.slice(0, 12)
+    })
     const narrowWidth = await page.evaluate(() => document.scrollingElement.scrollWidth)
-    record('320px has no document-level horizontal overflow', narrowWidth <= 320, `scrollWidth=${narrowWidth}`)
+    record('320px has no document-level horizontal overflow', narrowWidth <= 320,
+      `scrollWidth=${narrowWidth}` + (offenders.length > 0 ? ` offenders=${offenders.join(' ;; ')}` : ''))
     narrowPath = await tabWalk(page, 40)
     const reachedSave = narrowPath.some((d) => d?.includes('Save draft'))
     const reachedSubmit = narrowPath.some((d) => d?.includes('Seal and submit'))
@@ -458,20 +511,51 @@ const main = async () => {
       'Focus-trap evidence is digest-bound and matches the defect; task failure stands.',
     )
     await reviewCard.getByRole('button', { name: 'Accept evidence' }).click()
-    // The card leaves the queue once decided; the payable appears immediately.
-    await reviewCard.waitFor({ state: 'detached', timeout: 15000 }).catch(() => {})
-    const payablesSection = page.locator('section[aria-labelledby="td-payables"]')
-    const pending = payablesSection.getByText('PENDING DISPATCH')
-    await pending.waitFor()
-    record(
-      'accepted evidence created exactly one payable, honestly PENDING DISPATCH',
-      await pending.isVisible(),
-    )
-    await shot(page, '10-accepted-payable-pending')
+    // The card leaves the queue once decided. The reviewer role deliberately
+    // cannot see finance: the payable is verified where it is meant to be
+    // visible — the tester's own compensation section.
+    await reviewCard.waitFor({ state: 'detached', timeout: 15000 })
+    record('accepted evidence removes the card from the review queue', true)
 
     // The client report is an agency action (COMMISSION_AUTHOR): generated
     // through the real API with the owner's session, then read by the client.
     const ownerSession = await apiSignIn(apiBase, scene.emails.owner)
+    const payablesRes = await apiGet(
+      apiBase,
+      `/v1/workspaces/${ws}/tester-desk/finance/payables`,
+      ownerSession,
+    )
+    const payablesBody = await payablesRes.json()
+    const pendingPayables = (payablesBody.items ?? []).filter(
+      (p) => p.status === 'INTENT',
+    )
+    record(
+      'accepted evidence created exactly one payable, honestly PENDING DISPATCH',
+      payablesRes.status === 200 && pendingPayables.length === 1,
+      `HTTP ${payablesRes.status} intent=${pendingPayables.length}`,
+    )
+    await shot(page, '10-accepted-queue-cleared')
+
+    // The tester reads the review outcome on their own capture surface.
+    await signOut(page)
+    await signIn(page, scene.emails.tester)
+    await page.goto(`${webBase}/w/${ws}/tester-desk/tester/assignments/${assignmentId}`,
+      { waitUntil: 'domcontentloaded' })
+    const acceptedBadge = page.getByText('ACCEPTED')
+    await acceptedBadge.first().waitFor()
+    record(
+      'tester sees the ACCEPTED decision with the reviewer justification',
+      await page.getByText('Focus-trap evidence is digest-bound').isVisible(),
+    )
+    const testerPending = page.getByText('PENDING DISPATCH')
+    record(
+      'tester sees the payable as PENDING DISPATCH, not a settled claim',
+      await testerPending.isVisible(),
+    )
+    await shot(page, '10b-tester-decision')
+
+    // The client report is an agency action (COMMISSION_AUTHOR): generated
+    // through the real API with the owner's session, then read by the client.
     const reportRes = await apiPost(
       apiBase,
       `/v1/workspaces/${ws}/tester-desk/reports/generate`,
@@ -535,11 +619,15 @@ const main = async () => {
     await page.goto(deskUrl, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(1200)
     const testerDenied = await page
-      .getByText(/do not have permission|Not available|not permitted/i)
+      .getByText(/do not have permission|Not available|not permitted|Not found|no such resource/i)
       .first()
       .isVisible()
       .catch(() => false)
-    record('direct agency-console URL still refuses the tester', testerDenied)
+    const agencyDataVisible = (await page.locator('article[aria-label^="Review "]').count()) > 0 ||
+      (await page.locator('article[aria-label^="Commission "]').count()) > 0
+    record('direct agency-console URL still refuses the tester',
+      testerDenied && !agencyDataVisible,
+      `refusal visible=${testerDenied} agency cards=${agencyDataVisible}`)
     await shot(page, '14-tester-agency-refused')
 
     // -- 9. desktop keyboard audit ---------------------------------------------
@@ -601,7 +689,7 @@ const main = async () => {
   }
 
   const failed = results.filter((r) => !r.ok)
-  log(`done: ${passed}/${results.length} checks passed`)
+  log(`done: ${results.length - failed.length}/${results.length} checks passed`)
   if (failed.length > 0) {
     for (const f of failed) console.error(`FAIL ${f.name}: ${f.detail}`)
     process.exitCode = 1

@@ -68,6 +68,13 @@ it('T-015: capture screen shows the human observation and BOTH outcome fields', 
       assignmentId: 'a-1', draftRevision: 3, observations: submission.observations, updatedAt: '2026-11-20T10:05:00Z',
     }),
     [`${TD}/tester/assignments/a-1/submissions`]: () => ok({ items: [submission] }),
+    [`${TD}/tester/assignments/a-1/attachments`]: () => ok({
+      items: [{
+        attachmentId: 'att-1', assignmentId: 'a-1', kind: 'ACTION_TRACE',
+        contentType: 'application/json', filename: 'action-trace.json',
+        sha256: 'ab'.repeat(32), byteSize: 512, createdAt: '2026-11-20T10:30:00Z',
+      }],
+    }),
     [`${TD}/tester/assignments/a-1/progress`]: () => ok({ submittable: true, missing: [], taskResult: 'FAILED', draftRevision: 3 }),
     [`${TD}/tester/assignments/a-1/payable`]: () => ok({
       payable: { payableId: 'p-1', amountMinor: 2000, currency: 'USD', status: 'SETTLED', createdAt: '2026-11-20T11:05:00Z' },
@@ -81,6 +88,11 @@ it('T-015: capture screen shows the human observation and BOTH outcome fields', 
   expect(within(row).getByText('FAILED')).toBeInTheDocument()
   expect(within(row).getByText('ACCEPTED')).toBeInTheDocument()
   expect(within(row).getByText('complete evidence of the trap')).toBeInTheDocument()
+
+  // The digest-backed attachment manifest renders beside the outcome fields.
+  const evidence = await screen.findByRole('table', { name: /digest-backed evidence/i })
+  expect(within(evidence).getByText('action-trace.json')).toBeInTheDocument()
+  expect(within(evidence).getByText('ACTION_TRACE')).toBeInTheDocument()
 
   // Payable is settled and shows the pinned fee (amount and currency are split text nodes).
   expect(

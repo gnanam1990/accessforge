@@ -23,9 +23,9 @@ import { ResourceView } from '../components/ResourceView'
 import { StatusBadge } from '../components/StatusBadge'
 import {
   getAssignment, getDraft, getPayable, getProgress,
-  listSubmissions, saveDraft, submit,
+  listAttachments, listSubmissions, saveDraft, submit, uploadAttachment,
 } from '../api/testerDesk'
-import type { Observation, Submission } from '../api/testerDesk'
+import type { Attachment, Observation, Submission } from '../api/testerDesk'
 import { useResource } from '../api/useResource'
 import { useSession } from '../session/SessionProvider'
 import { useWorkspaceId } from './useWorkspaceId'
@@ -43,12 +43,15 @@ export const TesterCaptureScreen = (): JSX.Element => {
   const draft = useResource((s) => getDraft(client, workspaceId, assignmentId, s), [client, workspaceId, assignmentId])
   const progress = useResource((s) => getProgress(client, workspaceId, assignmentId, s), [client, workspaceId, assignmentId])
   const submissions = useResource((s) => listSubmissions(client, workspaceId, assignmentId, s), [client, workspaceId, assignmentId])
+  const attachments = useResource((s) => listAttachments(client, workspaceId, assignmentId, s), [client, workspaceId, assignmentId])
   const payable = useResource((s) => getPayable(client, workspaceId, assignmentId, s), [client, workspaceId, assignmentId])
 
   const [rows, setRows] = useState<Record<string, { result: Result | ''; notes: string }>>({})
   const [baseRevision, setBaseRevision] = useState(0)
-  const [busy, setBusy] = useState<'save' | 'submit' | null>(null)
+  const [busy, setBusy] = useState<'save' | 'submit' | 'attach' | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [evidenceKind, setEvidenceKind] = useState('')
+  const [evidenceFile, setEvidenceFile] = useState<File | null>(null)
 
   // Hydrate the form from the persisted draft — a reload recovers exactly what was stored (T-005).
   useEffect(() => {
@@ -88,6 +91,27 @@ export const TesterCaptureScreen = (): JSX.Element => {
     const outcome = await submit(client, workspaceId, assignmentId, crypto.randomUUID())
     if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
     else { announce('Submission sealed and sent to review'); submissions.reload(); assignment.reload(); payable.reload() }
+    setBusy(null)
+  }
+
+  const doAttach = async (): Promise<void> => {
+    if (evidenceFile === null || evidenceKind === '') return
+    setBusy('attach'); setError(null)
+    const bytes = new Uint8Array(await evidenceFile.arrayBuffer())
+    let binary = ''
+    for (const b of bytes) binary += String.fromCharCode(b)
+    const outcome = await uploadAttachment(
+      client, workspaceId, assignmentId,
+      evidenceKind, evidenceFile.type || 'application/octet-stream',
+      evidenceFile.name, btoa(binary), crypto.randomUUID(),
+    )
+    if (outcome.kind === 'problem') setError(outcome.problem.detail ?? outcome.problem.title)
+    else {
+      announce('Evidence attached')
+      setEvidenceFile(null)
+      attachments.reload()
+      progress.reload()
+    }
     setBusy(null)
   }
 
@@ -152,8 +176,51 @@ export const TesterCaptureScreen = (): JSX.Element => {
                 <Button variant="primary" busy={busy === 'save'} onClick={() => void save()}>Save draft</Button>
                 <Button variant="destructive" busy={busy === 'submit'} onClick={() => void doSubmit()}>Seal and submit for review</Button>
               </div>
+
+              <fieldset className="af-fieldset">
+                <legend>Attach evidence</legend>
+                <label>
+                  Evidence kind{' '}
+                  <select aria-label="Evidence kind" value={evidenceKind}
+                    onChange={(e) => setEvidenceKind(e.target.value)}>
+                    <option value="">Choose…</option>
+                    {(a.brief?.permittedEvidence ?? []).map((k) => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                </label>
+                {' '}
+                <label>
+                  File{' '}
+                  <input type="file" aria-label="Evidence file"
+                    onChange={(e) => setEvidenceFile(e.target.files?.[0] ?? null)} />
+                </label>
+                {' '}
+                <Button variant="primary" busy={busy === 'attach'}
+                  disabled={evidenceFile === null || evidenceKind === ''}
+                  onClick={() => void doAttach()}>
+                  Attach evidence
+                </Button>
+              </fieldset>
             </section>
           ) : null}
+
+          <section aria-labelledby="cap-ev">
+            <h2 id="cap-ev">Evidence attachments</h2>
+            <ResourceView resource={attachments} what="evidence attachments">{(v) => (
+              v.items.length === 0 ? <p className="af-secondary">Nothing attached yet.</p> : (
+                <DataTable<Attachment>
+                  caption="Digest-backed evidence attached to the current draft"
+                  rowKey={(a) => a.attachmentId}
+                  columns={[
+                    { key: 'f', header: 'File', isRowHeader: true, cell: (a) => a.filename },
+                    { key: 'k', header: 'Kind', cell: (a) => <StatusBadge tone="neutral" kind="Evidence kind">{a.kind}</StatusBadge> },
+                    { key: 's', header: 'Bytes', cell: (a) => String(a.byteSize) },
+                    { key: 'h', header: 'Digest', cell: (a) => <code>{a.sha256.slice(0, 12)}…</code> },
+                  ]}
+                  rows={v.items}
+                />
+              )
+            )}</ResourceView>
+          </section>
 
           <section aria-labelledby="cap-subs">
             <h2 id="cap-subs">Submissions and outcomes</h2>

@@ -1,14 +1,18 @@
 # AccessForge Tester Desk · Session handoff
 
-State at `28c9aa3`: all eight modules implemented and verified against the
-dedicated local database. The full AF-21 pilot journey runs end-to-end through
-real API entry points; the web surfaces are live in the app shell and covered
-by the web test suite. Nothing is pushed, no PR is open, no live external
-integration was exercised — the exact gaps are listed below.
+State at `5435920` plus the browser-proof slice: all eight modules implemented
+and verified against the dedicated local database, and the documented browser
+journey now runs end-to-end in a real Chromium against the real FastAPI + Vite
+stack — 38/38 named checks pass. Nothing is pushed, no PR is open, no live
+external integration was exercised — the exact gaps are listed below.
 
-- Target repository / branch / tested SHA: accessforge-tester-desk workspace /
-  `devin/accessforge-tester-desk` / `28c9aa3` (tests ran on the working tree
-  that produced this commit).
+- Target repository / branch: accessforge-tester-desk workspace /
+  `devin/accessforge-tester-desk`
+- Tested SHA: `5435920` (product code); the browser-proof slice on top was
+  verified on the working tree this commit records.
+- Browser proof: `node tools/tester-desk-browser/check.mjs` — see
+  `build-progress/accessforge-tester-desk/BROWSER.md` for setup, env vars and
+  the redacted evidence record.
 
 ## What exists
 
@@ -48,21 +52,58 @@ route prefix in `apps/api/src/accessforge_api/routes/tester_desk.py`:
   client reports (`/tester-desk/client`), API client
   `apps/web/src/api/testerDesk.ts`.
 
+- M09 browser proof (this slice): `tools/tester-desk-browser/` holds a
+  portable check — `provision.py` builds a disposable AF-21 scene through the
+  real HTTP entry points; `check.mjs` boots API+Vite on ephemeral ports and
+  drives Chromium through sign-in → consent-gated claim → keyboard capture →
+  evidence attach → draft-reload persistence → sealed submit → reviewer
+  decision → payable + client report → permission refusals → 320px + desktop
+  Tab audits. Five real product gaps found by the browser run were fixed in
+  the product, not patched around:
+
+  - Non-member testers / client viewers could never reach their surfaces:
+    `GET /v1/session` only listed `workspace_membership` rows. Now unions
+    active `td_tester` (role TESTER) and `td_client_viewer` (role CLIENT)
+    rows; member role wins on overlap. RLS gained SELECT-only own-row
+    policies (migration `0081`) — writes stay workspace-scoped.
+  - Workspace index sent every role to overview and the nav showed member
+    routes a participant cannot answer. Landing now routes TESTER→inbox,
+    CLIENT→reports, members→overview; navigation filters by role.
+  - The offer list omitted the consent body a tester must attest to — now
+    pinned onto each offer item.
+  - The capture screen had no attachment control, so a rubric requiring
+    `ACTION_TRACE` could never be satisfied through the UI — an upload
+    section + digest manifest table now exists.
+  - 320px overflow from grid/flex `min-width:auto` — children now shrink and
+    tables clip inside `.af-table-scroll`.
+
 ## Verification (commands, exit codes)
 
-- `uv run pytest tests/integration/ -k tester_desk` — 32 passed, 1468
-  deselected, exit 0 (all module suites incl. the AF-21 pilot).
+- `node tools/tester-desk-browser/check.mjs` — **38/38 checks passed**,
+  exit 0 (sandbox invocation adds
+  `AF_BROWSER_ARGS="--single-process --no-sandbox"`). Redacted record:
+  `tools/tester-desk-browser/evidence/2026-11-20T07-34-08/`.
+- `uv run pytest tests/integration/ -k tester_desk` — 37 passed, 1468
+  deselected, exit 0 (all module suites incl. the AF-21 pilot and the new
+  session-scope/RLS regressions).
 - `uv run mypy apps/api/src` — no issues in 42 source files, exit 0 (CI parity).
 - `uv run ruff check` on all new/edited Python files — all checks passed.
-- `cd apps/web && npx vitest run` — 30 files / 488 tests passed, exit 0.
+- `cd apps/web && npx vitest run --maxWorkers=2` — 30 files / 488 tests
+  passed, exit 0. Bounded workers are the reliable host command: the
+  unbounded run once produced a single failure in unrelated
+  `src/screens/diagnosis.test.tsx` (async finding navigation) that passes
+  in isolation and under bounded workers — a load-sensitive baseline flake,
+  not a tester-desk regression.
 - `cd apps/web && npx tsc --noEmit` — new tester-desk files clean; remaining
   errors are the pre-existing `@types/node` gap from the filtered install
   (`node:fs`, `node:path`, `process`, `__dirname` in unrelated tooling files).
 - `uv run pytest tests/unit -q` — 2148 passed, 13 failed: all 13 are
   sandbox-only `tempfile.mkdtemp` denials in
   `test_navigator_native_transport.py` (`/tmp` writes blocked); identical on
-  the intake tree, unrelated to this work.
-- Migrations `0075`–`0080` applied to `af_td_dev`; test suite runs against
+  the intake tree, unrelated to this work. Host reported 2161 unit + 32
+  tester-desk integration tests passing at `23f1d1c` with the full
+  workspace + desktop-runner dependencies installed.
+- Migrations `0075`–`0081` applied to `af_td_dev`; test suite runs against
   `af_td_test`.
 
 ## Dedicated environment
@@ -85,8 +126,6 @@ route prefix in `apps/api/src/accessforge_api/routes/tester_desk.py`:
   in tests are fixture data only.
 - Agency-controlled test URL: `AF21_BRIEF.targetUrl` is a fixture; no real
   checkout build exists.
-- Real-browser E2E: UI is proven through jsdom + Testing Library against the
-  real fetch client, not a driven browser at desktop/tablet/phone widths.
 - Full `pnpm install`: blocked by sandbox deny on `.vscode` paths inside
   `xmlbuilder@15.1.1` (pulled only by the guidepup voiceover AT-adapter).
   Filtered `pnpm --filter @accessforge/web ...` works; no temporary patch
@@ -94,9 +133,10 @@ route prefix in `apps/api/src/accessforge_api/routes/tester_desk.py`:
 
 ## Next agent
 
-1. Reproduce: `uv run pytest tests/integration/ -k tester_desk` (32 pass) and
-   `cd apps/web && npx vitest run` (488 pass) against `af_td_test`.
+1. Reproduce: `uv run pytest tests/integration/ -k tester_desk` (37 pass),
+   `cd apps/web && npx vitest run --maxWorkers=2` (488 pass) against
+   `af_td_test`, and `node tools/tester-desk-browser/check.mjs` (38 checks)
+   per `BROWSER.md`.
 2. To close the pilot for real: wire a payout provider implementing
-   `PayoutAdapter`, run the AF-21 scene with a consenting tester on
-   VoiceOver+Safari against an agency-controlled URL, and add a browser-driven
-   E2E once a display/browser session is available.
+   `PayoutAdapter` and run the AF-21 scene with a consenting tester on
+   VoiceOver+Safari against an agency-controlled URL.

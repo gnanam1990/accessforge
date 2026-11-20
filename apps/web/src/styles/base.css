@@ -129,6 +129,19 @@ samp,
   min-width: 0;
 }
 
+/* A grid or flex item's automatic minimum is its content's min-content size: a long workspace
+   name or a wide data table would push the whole page past 320px. Letting the items shrink hands
+   the constraint to wrapping (`.af-row`, `.af-header`) and the inner scroll regions
+   (`.af-table-scroll`) instead. */
+.af-shell > *,
+.af-body > *,
+.af-stack > *,
+.af-field > *,
+.af-header > *,
+.af-row > * {
+  min-width: 0;
+}
+
 .af-nav-list,
 .af-breadcrumbs-list {
   list-style: none;
@@ -511,6 +524,9 @@ a {
 
 .af-stack {
   display: grid;
+  /* minmax(0, 1fr): an auto track cannot shrink below a child's min-content (a wide table would
+     push the whole stack past the viewport at 320px); the scroll wrapper inside still clips it. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--af-space-4);
 }
 

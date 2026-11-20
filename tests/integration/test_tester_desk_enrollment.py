@@ -45,6 +45,15 @@ def test_t003_consenting_matching_tester_receives_the_assignment(desk: Desk) -> 
     assert offers.status_code == 200
     ids = [o["commissionId"] for o in offers.json()["items"]]
     assert commission["commissionId"] in ids
+    # The list pins the consent text too: a tester cannot be asked to accept
+    # terms the inbox never shows them.
+    listed = next(
+        o
+        for o in offers.json()["items"]
+        if o["commissionId"] == commission["commissionId"]
+    )
+    assert listed["consentTerms"]["version"] == 1
+    assert "consent" in listed["consentTerms"]["body"].lower()
 
     detail = tester.get(desk.path(f"/tester/offers/{commission['commissionId']}"))
     assert detail.status_code == 200
