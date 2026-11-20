@@ -1,32 +1,46 @@
 {
   "project": "AccessForge Tester Desk",
   "packVersion": "1.0",
-  "testedSha": null,
-  "targetBranch": null,
+  "testedSha": "25b4132",
+  "targetBranch": "devin/accessforge-tester-desk",
   "modules": [
     {
       "id": "M01",
       "title": "Commission and task contracts",
-      "state": "pending",
-      "owner": null,
-      "commands": [],
-      "evidence": [],
-      "nextAction": "Implement versioned commission authoring with environment, journey, fee and deliverable rubric pinned at publication. Bind each accepted assignment to its exact immutable brief revision."
+      "state": "accepted",
+      "owner": "devin (SWE-2 High, local)",
+      "commands": [
+        "uv run pytest tests/integration/test_tester_desk_commissions.py -q -> 5 passed (exit 0)",
+        "uv run pytest tests/integration/test_tester_desk_commissions.py tests/integration/test_tester_desk_enrollment.py -q -> 11 passed (exit 0)",
+        "uv run python scripts/migrate.py --database-url postgresql://af_td:af_td_local@localhost:5432/af_td_dev -> applied 0075,0076 (exit 0)"
+      ],
+      "evidence": [
+        "T-001 publish r18 5-step brief and reopen exact revision: test_commissions.py::test_t001_publish_and_reopen",
+        "T-002 fee change after acceptance still 20.00 on assignment: test_commissions.py::test_t002_fee_change_after_acceptance",
+        "DB immutability: trigger td_brief_revision_immutable on 0075; tested via test_brief_revision_immutable"
+      ],
+      "nextAction": "M01 verified at 25b4132; proceed to M03 evidence capture."
     },
     {
       "id": "M02",
       "title": "Tester eligibility and consent",
-      "state": "pending",
-      "owner": null,
-      "commands": [],
-      "evidence": [],
-      "nextAction": "Implement restricted enrollment, conflicts, scoped visibility, offer expiry and atomic assignment claims."
+      "state": "accepted",
+      "owner": "devin (SWE-2 High, local)",
+      "commands": [
+        "uv run pytest tests/integration/test_tester_desk_enrollment.py -q -> 6 passed (exit 0)"
+      ],
+      "evidence": [
+        "T-003 consenting Safari+VoiceOver tester claims assignment: test_enrollment.py::test_t003_...",
+        "T-004 raced claims -> single winner + credential access: test_enrollment.py::test_t004_race_two_claims_only_the_winner_reads_credentials",
+        "outsider/ineligible/expired/consent-missing refusal tests in same file"
+      ],
+      "nextAction": "M02 verified at 25b4132; proceed to M03 evidence capture."
     },
     {
       "id": "M03",
       "title": "Accessible evidence capture",
-      "state": "pending",
-      "owner": null,
+      "state": "in_progress",
+      "owner": "devin (SWE-2 High, local)",
       "commands": [],
       "evidence": [],
       "nextAction": "Build keyboard and reader-friendly drafts, step outcomes, permitted attachments and digest-backed uploads."
